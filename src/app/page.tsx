@@ -1,65 +1,84 @@
-import Image from "next/image";
+import Link from "next/link";
+import { ArrowRight, Sparkles } from "lucide-react";
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="flex flex-col min-h-screen font-[family-name:var(--font-geist-sans)] bg-black text-white">
+      {/* Header */}
+      <header className="w-full px-6 py-4 flex justify-between items-center max-w-7xl mx-auto">
+        <Link href="/" className="text-xl font-bold">UGC Creator</Link>
+        <nav className="hidden sm:flex items-center gap-6">
+          <Link href="/pricing" className="text-zinc-400 hover:text-white transition-colors">Pricing</Link>
+          <Link href="/create" className="bg-white text-black px-4 py-2 rounded-full text-sm font-medium hover:bg-zinc-200 transition-colors">
+            Start Creating
+          </Link>
+        </nav>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col items-center justify-center p-8 gap-16 sm:p-20">
+        <div className="flex flex-col gap-8 items-center text-center max-w-2xl">
+          <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-1.5 text-sm text-zinc-400">
+            <Sparkles className="w-4 h-4 text-purple-400" />
+            <span>AI Motion Transfer &amp; UGC Generator</span>
+          </div>
+
+          <h1 className="text-5xl sm:text-7xl font-bold tracking-tight bg-gradient-to-b from-white to-zinc-500 text-transparent bg-clip-text">
+            Turn any photo into <br /> a video star.
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+
+          <p className="text-lg text-zinc-400">
+            Create viral UGC ads by animating static photos with reference videos.
+            Powered by generative AI.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+          <div className="flex gap-4 items-center flex-col sm:flex-row">
+            <Link
+              href="/create"
+              className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-white text-black gap-2 hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 font-medium"
+            >
+              Start Creating
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+            <Link
+              href="/pricing"
+              className="rounded-full border border-solid border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44 text-zinc-400"
+            >
+              View Pricing
+            </Link>
+          </div>
         </div>
       </main>
+
+      {/* Footer */}
+      <footer className="w-full border-t border-zinc-800 py-12 px-6">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-4 gap-8">
+          <div className="sm:col-span-2">
+            <h3 className="text-lg font-semibold mb-3">UGC Creator</h3>
+            <p className="text-zinc-400 text-sm max-w-sm">
+              Create viral UGC ads by animating static photos with AI-powered motion transfer technology.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-medium mb-3">Product</h4>
+            <ul className="space-y-2 text-sm text-zinc-400">
+              <li><Link href="/create" className="hover:text-white transition-colors">Create Video</Link></li>
+              <li><Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link></li>
+            </ul>
+          </div>
+          <div>
+            <h4 className="font-medium mb-3">Company</h4>
+            <ul className="space-y-2 text-sm text-zinc-400">
+              <li><Link href="/contact" className="hover:text-white transition-colors">Contact</Link></li>
+              <li><Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link></li>
+              <li><Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link></li>
+            </ul>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto mt-8 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
+          <p>© 2026 UGC Creator. All rights reserved.</p>
+        </div>
+      </footer>
     </div>
   );
 }
