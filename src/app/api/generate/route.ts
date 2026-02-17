@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
 export async function POST(request: NextRequest) {
     try {
-        const { referenceVideoUrl, characterImageUrl } = await request.json();
+        const { referenceVideoUrl, characterImageUrl, duration = 10, characterOrientation = 'video', mode = '720p' } = await request.json();
 
         if (!referenceVideoUrl || !characterImageUrl) {
             return NextResponse.json(
                 { error: 'Missing referenceVideoUrl or characterImageUrl' },
+                { status: 400 }
+            );
+        }
+
+        // Validate Duration (Basic Sanity Check)
+        if (duration <= 0 || duration > 30) {
+            return NextResponse.json(
+                { error: 'Invalid duration. Must be between 1 and 30 seconds.' },
                 { status: 400 }
             );
         }
@@ -21,34 +30,105 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // Initialize Supabase client with user context
+        const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            {
+                global: { headers: { Authorization: request.headers.get('Authorization')! } },
+            }
+        );
+
+        // Get authenticated user
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please log in to generate videos' },
+                { status: 401 }
+            );
+        }
+
+        // Calculate Cost Dynamically
+        // 720p: 6 Credits per Second
+        // 1080p: 9 Credits per Second
+        const creditsPerSecond = mode === '1080p' ? 9 : 6;
+        const COST = Math.ceil(duration * creditsPerSecond);
+
+        // Deduct Credits
+        const { data: remainingCredits, error: creditError } = await supabase.rpc('deduct_credits', {
+            p_user_id: user.id,
+            p_cost: COST
+        });
+
+        if (creditError) {
+            console.error('Error checking credits:', creditError);
+            return NextResponse.json({
+                error: 'Failed to verify credits',
+                details: creditError.message,
+                hint: creditError.hint,
+                code: creditError.code
+            }, { status: 500 });
+        }
+
+        // RPC returns -1 if insufficient credits (implementation detail of our RPC)
+        if (remainingCredits === -1) {
+            return NextResponse.json(
+                { error: `Insufficient credits. This generation costs ${COST} credits.` },
+                { status: 402 }
+            );
+        }
+
         // Kie.ai API for Kling Motion Control (v2.6)
-        // Note: Replacing Replicate logic with direct fetch to Kie.ai
-        const response = await fetch('https://api.kie.ai/v1/videos/motion-control', {
+        // Updated to use the new endpoint and payload structure
+        const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${KIE_API_KEY}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: 'kling-v2.6',
-                image_url: characterImageUrl,
-                video_url: referenceVideoUrl,
-                duration: 30, // User requested 30s
-                guidance_scale: 0.5,
-                num_inference_steps: 50
+                model: 'kling-2.6/motion-control',
+                input: {
+                    prompt: "The cartoon character is dancing.",
+                    input_urls: [characterImageUrl],
+                    video_urls: [referenceVideoUrl],
+                    character_orientation: characterOrientation,
+                    mode: mode
+                }
             })
         });
 
         const data = await response.json();
 
-        if (!response.ok) {
-            throw new Error(data.error?.message || data.message || 'Failed to start generation on Kie.ai');
+        if (!response.ok || data.code !== 200) {
+            // Need to refund credits if API call fails
+            // For now, logging error. Ideal: call refund_credits RPC.
+            console.error('Kie.ai API failed after credit deduction', data);
+            throw new Error(data.msg || 'Failed to start generation on Kie.ai');
+        }
+
+        const taskId = data.data.taskId;
+
+        // Log Generation
+        const { error: logError } = await supabase.from('generations').insert({
+            user_id: user.id,
+            model: 'kling-2.6/motion-control',
+            duration: duration,
+            cost: COST,
+            prediction_id: taskId,
+            status: 'processing'
+        });
+
+        if (logError) {
+            console.error('Error logging generation:', logError);
+            // Non-critical error, proceed
         }
 
         return NextResponse.json({
             success: true,
-            predictionId: data.id, // Kie.ai returns a task/prediction ID
+            predictionId: taskId, // Kie.ai returns a task ID
             status: 'processing', // Initial status
+            remainingCredits: remainingCredits
         });
 
     } catch (error: any) {
@@ -80,7 +160,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        const response = await fetch(`https://api.kie.ai/v1/videos/${predictionId}`, {
+        const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
             headers: {
                 'Authorization': `Bearer ${KIE_API_KEY}`,
             },
@@ -88,21 +168,34 @@ export async function GET(request: NextRequest) {
 
         const data = await response.json();
 
-        if (!response.ok) {
-            throw new Error(data.error?.message || 'Failed to check status');
+        if (!response.ok || data.code !== 200) {
+            throw new Error(data.msg || 'Failed to check status');
         }
 
         // Map Kie.ai status to our app's status
-        // Kie might use 'completed' instead of 'succeeded'
-        let status = data.status;
-        if (status === 'completed') status = 'succeeded';
+        // Kie uses 'waiting', 'success', 'fail'
+        let status = data.data.state;
+        let output = null;
+        let error = null;
 
-        const output = data.result?.video_url || data.output || null;
+        if (status === 'success') {
+            status = 'succeeded';
+            // resultJson is a stringified JSON
+            try {
+                const result = JSON.parse(data.data.resultJson);
+                output = result.resultUrls?.[0] || null;
+            } catch (e) {
+                console.error('Error parsing resultJson:', e);
+            }
+        } else if (status === 'fail') {
+            status = 'failed';
+            error = data.data.failMsg || 'Unknown error';
+        }
 
         return NextResponse.json({
             status: status,
             output: output,
-            error: data.error,
+            error: error,
         });
 
     } catch (error) {

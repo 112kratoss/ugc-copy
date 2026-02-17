@@ -6,13 +6,13 @@ import { ArrowLeft, Check, Sparkles, Zap, Crown } from "lucide-react";
 const plans = [
     {
         name: "Starter",
-        price: 9,
-        credits: 3,
-        perVideo: "3.00",
+        price: 5,
+        credits: 500,
         description: "Perfect for trying out our service",
         features: [
-            "3 video generations",
-            "Up to 30 seconds per video",
+            "500 Credits included",
+            "Approx. 50 seconds of video",
+            "Starts at 6 Credits per second cost",
             "HD quality output",
             "Download in MP4 format",
             "Email support",
@@ -22,15 +22,14 @@ const plans = [
     },
     {
         name: "Creator",
-        price: 29,
-        credits: 15,
-        perVideo: "1.93",
+        price: 20,
+        credits: 2000,
         description: "Best value for content creators",
         features: [
-            "15 video generations",
-            "Up to 30 seconds per video",
+            "2,000 Credits included",
+            "Approx. 3.3 minutes of video",
+            "Starts at 6 Credits per second cost",
             "HD quality output",
-            "Download in MP4 format",
             "Priority processing",
             "Priority email support",
         ],
@@ -39,15 +38,14 @@ const plans = [
     },
     {
         name: "Pro",
-        price: 79,
-        credits: 50,
-        perVideo: "1.58",
+        price: 100,
+        credits: 10000,
         description: "For professional creators & agencies",
         features: [
-            "50 video generations",
-            "Up to 30 seconds per video",
+            "10,000 Credits included",
+            "Approx. 16.6 minutes of video",
+            "Starts at 6 Credits per second cost",
             "HD quality output",
-            "Download in MP4 format",
             "Priority processing",
             "Dedicated support",
             "Commercial usage rights",
@@ -84,8 +82,8 @@ export default function Pricing() {
                         <div
                             key={plan.name}
                             className={`relative rounded-2xl p-8 ${plan.popular
-                                    ? "bg-gradient-to-b from-purple-900/50 to-zinc-900 border-2 border-purple-500"
-                                    : "bg-zinc-900 border border-zinc-800"
+                                ? "bg-gradient-to-b from-purple-900/50 to-zinc-900 border-2 border-purple-500"
+                                : "bg-zinc-900 border border-zinc-800"
                                 }`}
                         >
                             {plan.popular && (
@@ -106,18 +104,15 @@ export default function Pricing() {
                                 <span className="text-zinc-400 ml-2">USD</span>
                             </div>
 
-                            <p className="text-zinc-400 mb-2">{plan.description}</p>
-                            <p className="text-sm text-zinc-500 mb-6">
-                                ${plan.perVideo} per video
-                            </p>
+                            <p className="text-zinc-400 mb-6">{plan.description}</p>
 
                             <button
                                 className={`w-full py-3 px-6 rounded-xl font-medium transition-all ${plan.popular
-                                        ? "bg-purple-500 hover:bg-purple-600 text-white"
-                                        : "bg-zinc-800 hover:bg-zinc-700 text-white"
+                                    ? "bg-purple-500 hover:bg-purple-600 text-white"
+                                    : "bg-zinc-800 hover:bg-zinc-700 text-white"
                                     }`}
                             >
-                                Get {plan.credits} Credits
+                                Get {plan.credits.toLocaleString()} Credits
                             </button>
 
                             <ul className="mt-8 space-y-4">
@@ -140,8 +135,8 @@ export default function Pricing() {
                         <div className="bg-zinc-900 rounded-xl p-6 border border-zinc-800">
                             <h3 className="text-lg font-semibold mb-2">What are credits?</h3>
                             <p className="text-zinc-400">
-                                Credits are used to generate videos. Each video generation costs 1 credit,
-                                regardless of the video length (up to 30 seconds).
+                                Credits are used to generate videos. The cost depends on the quality you choose: <strong>6 credits per second</strong> for Standard (720p) and <strong>9 credits per second</strong> for Pro (1080p).
+                                For example, a 5-second 720p video costs 30 credits.
                             </p>
                         </div>
 
@@ -149,6 +144,14 @@ export default function Pricing() {
                             <h3 className="text-lg font-semibold mb-2">Do credits expire?</h3>
                             <p className="text-zinc-400">
                                 No, your credits never expire as long as your account is active. Use them whenever you&apos;re ready.
+                            </p>
+                        </div>
+
+                        <div className="bg-zinc-900 rounded-xl p-6 border border-zinc-800">
+                            <h3 className="text-lg font-semibold mb-2">What happens if I upload a long video?</h3>
+                            <p className="text-zinc-400">
+                                Currently, we support video generation up to 30 seconds. If you upload a longer video,
+                                only the first 30 seconds will be processed, costing 300 credits.
                             </p>
                         </div>
 
