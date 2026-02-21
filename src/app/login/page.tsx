@@ -39,8 +39,9 @@ export default function LoginPage() {
                 setLoading(false); // Stop loading since we're just showing a message
                 return;
             }
-        } catch (err: any) {
-            setError(err.message);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'An error occurred';
+            setError(message);
         } finally {
             if (isLogin) setLoading(false);
         }
@@ -56,8 +57,9 @@ export default function LoginPage() {
                 },
             });
             if (error) throw error;
-        } catch (err: any) {
-            setError(err.message);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'An error occurred';
+            setError(message);
             setLoading(false);
         }
     };

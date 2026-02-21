@@ -131,10 +131,11 @@ export async function POST(request: NextRequest) {
             remainingCredits: remainingCredits
         });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Error starting video generation:', error);
+        const message = error instanceof Error ? error.message : 'Failed to start video generation';
         return NextResponse.json(
-            { error: error.message || 'Failed to start video generation' },
+            { error: message || 'Failed to start video generation' },
             { status: 500 }
         );
     }
@@ -160,6 +161,30 @@ export async function GET(request: NextRequest) {
     }
 
     try {
+        // Initialize Supabase client
+        const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            {
+                global: { headers: { Authorization: request.headers.get('Authorization')! } },
+            }
+        );
+
+        // 1. Check local database first (Cache hit logic)
+        const { data: localGeneration } = await supabase
+            .from('generations')
+            .select('*')
+            .eq('prediction_id', predictionId)
+            .single();
+
+        if (localGeneration?.status === 'succeeded' && localGeneration?.output_url) {
+            return NextResponse.json({
+                status: 'succeeded',
+                output: localGeneration.output_url,
+            });
+        }
+
+        // 2. Query Kie.ai
         const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
             headers: {
                 'Authorization': `Bearer ${KIE_API_KEY}`,
@@ -183,13 +208,64 @@ export async function GET(request: NextRequest) {
             // resultJson is a stringified JSON
             try {
                 const result = JSON.parse(data.data.resultJson);
-                output = result.resultUrls?.[0] || null;
+                const tempUrl = result.resultUrls?.[0] || null;
+
+                if (tempUrl) {
+                    // 3. Persist Video -> Download & Upload to Supabase
+                    console.log('Generating finished, persisting video...');
+
+                    // Fetch video blob
+                    const videoRes = await fetch(tempUrl);
+                    if (!videoRes.ok) throw new Error('Failed to download video from Kie');
+                    const videoBlob = await videoRes.blob();
+
+                    // Upload to Supabase Storage
+                    const fileName = `generated_${predictionId}.mp4`;
+                    const { error: uploadError } = await supabase.storage
+                        .from('generated_videos')
+                        .upload(fileName, videoBlob, {
+                            contentType: 'video/mp4',
+                            upsert: true
+                        });
+
+                    if (uploadError) {
+                        console.error('Upload to Supabase failed:', uploadError);
+                        // Fallback to temp URL if upload fails, but try to proceed
+                        output = tempUrl;
+                    } else {
+                        // Get Public URL
+                        const { data: publicDesc } = supabase.storage
+                            .from('generated_videos')
+                            .getPublicUrl(fileName);
+
+                        output = publicDesc.publicUrl;
+
+                        // 4. Update Database
+                        await supabase
+                            .from('generations')
+                            .update({
+                                status: 'succeeded',
+                                output_url: output
+                            })
+                            .eq('prediction_id', predictionId);
+                    }
+                }
+
             } catch (e) {
-                console.error('Error parsing resultJson:', e);
+                console.error('Error persisting video:', e);
+                // Return temp URL if persistence fails
+                const result = JSON.parse(data.data.resultJson);
+                output = result.resultUrls?.[0] || null;
             }
         } else if (status === 'fail') {
             status = 'failed';
             error = data.data.failMsg || 'Unknown error';
+
+            // Update DB on failure too
+            await supabase
+                .from('generations')
+                .update({ status: 'failed' })
+                .eq('prediction_id', predictionId);
         }
 
         return NextResponse.json({

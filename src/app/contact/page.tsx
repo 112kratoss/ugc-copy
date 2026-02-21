@@ -28,13 +28,6 @@ export default function Contact() {
     return (
         <div className="min-h-screen bg-black text-white">
             <div className="max-w-4xl mx-auto px-6 py-16">
-                <Link
-                    href="/"
-                    className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
-                >
-                    <ArrowLeft className="w-4 h-4" />
-                    Back to Home
-                </Link>
 
                 <div className="text-center mb-12">
                     <h1 className="text-4xl sm:text-5xl font-bold mb-4 bg-gradient-to-b from-white to-zinc-500 text-transparent bg-clip-text">

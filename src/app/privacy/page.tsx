@@ -5,13 +5,6 @@ export default function PrivacyPolicy() {
     return (
         <div className="min-h-screen bg-black text-white">
             <div className="max-w-4xl mx-auto px-6 py-16">
-                <Link
-                    href="/"
-                    className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
-                >
-                    <ArrowLeft className="w-4 h-4" />
-                    Back to Home
-                </Link>
 
                 <h1 className="text-4xl font-bold mb-4">Privacy Policy</h1>
                 <p className="text-zinc-400 mb-12">Last updated: February 9, 2026</p>

@@ -4,16 +4,6 @@ import { ArrowRight, Sparkles } from "lucide-react";
 export default function Home() {
   return (
     <div className="flex flex-col min-h-screen font-[family-name:var(--font-geist-sans)] bg-black text-white">
-      {/* Header */}
-      <header className="w-full px-6 py-4 flex justify-between items-center max-w-7xl mx-auto">
-        <Link href="/" className="text-xl font-bold">UGC Creator</Link>
-        <nav className="hidden sm:flex items-center gap-6">
-          <Link href="/pricing" className="text-zinc-400 hover:text-white transition-colors">Pricing</Link>
-          <Link href="/create" className="bg-white text-black px-4 py-2 rounded-full text-sm font-medium hover:bg-zinc-200 transition-colors">
-            Start Creating
-          </Link>
-        </nav>
-      </header>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col items-center justify-center p-8 gap-16 sm:p-20">

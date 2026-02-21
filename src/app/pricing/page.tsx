@@ -1,10 +1,15 @@
 'use client';
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Sparkles, Zap, Crown } from "lucide-react";
+import Script from "next/script";
+import { ArrowLeft, Check, Sparkles, Zap, Crown, Loader2 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 
 const plans = [
     {
+        id: "starter",
         name: "Starter",
         price: 5,
         credits: 500,
@@ -21,6 +26,7 @@ const plans = [
         popular: false,
     },
     {
+        id: "creator",
         name: "Creator",
         price: 20,
         credits: 2000,
@@ -37,6 +43,7 @@ const plans = [
         popular: true,
     },
     {
+        id: "pro",
         name: "Pro",
         price: 100,
         credits: 10000,
@@ -56,8 +63,120 @@ const plans = [
 ];
 
 export default function Pricing() {
+    const [userId, setUserId] = useState<string | null>(null);
+    const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
+    const router = useRouter();
+
+    useEffect(() => {
+        const fetchUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                setUserId(user.id);
+            }
+        };
+        fetchUser();
+    }, []);
+
+    const handlePayment = async (planId: string) => {
+        if (!userId) {
+            router.push('/login?redirect=/pricing');
+            return;
+        }
+
+        try {
+            setLoadingPlan(planId);
+
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+
+            if (!token) {
+                throw new Error("Authentication token not found. Please log in again.");
+            }
+
+            // 1. Create order on backend
+            const orderRes = await fetch('/api/razorpay/order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ planId, userId }),
+            });
+
+            const orderData = await orderRes.json();
+
+            if (!orderRes.ok) {
+                throw new Error(orderData.error || 'Failed to create order');
+            }
+
+            // 2. Initialize Razorpay Checkout
+            const options = {
+                key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, // Ensure you add this to .env.local
+                amount: orderData.amount,
+                currency: orderData.currency,
+                name: 'UGC Creator',
+                description: `Purchase ${planId} credits`,
+                order_id: orderData.orderId,
+                handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
+                    // 3. Verify Payment
+                    try {
+                        const verifyRes = await fetch('/api/razorpay/verify', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({
+                                razorpay_payment_id: response.razorpay_payment_id,
+                                razorpay_order_id: response.razorpay_order_id,
+                                razorpay_signature: response.razorpay_signature,
+                                userId,
+                            }),
+                        });
+
+                        const verifyData = await verifyRes.json();
+
+                        if (verifyRes.ok && verifyData.success) {
+                            alert("Payment successful! Credits added to your account.");
+                            router.push('/'); // Redirect to home or dashboard after success
+                        } else {
+                            alert("Payment verification failed. Please contact support.");
+                        }
+                    } catch (err) {
+                        console.error("Verification error:", err);
+                        alert("An error occurred while verifying the payment.");
+                    }
+                },
+                theme: {
+                    color: '#a855f7', // purple-500
+                },
+            };
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const rzp = new (window as any).Razorpay(options);
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            rzp.on('payment.failed', function (response: any) {
+                console.error("Payment failed:", response.error ? response.error.description : response);
+                alert(`Payment failed: ${response.error ? response.error.description : 'Please try again.'}`);
+            });
+
+            rzp.open();
+
+        } catch (error: unknown) {
+            console.error("Payment initiation error:", error);
+            alert(error instanceof Error ? error.message : "An error occurred while initiating payment.");
+        } finally {
+            setLoadingPlan(null);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-black text-white">
+            <Script
+                id="razorpay-checkout-js"
+                src="https://checkout.razorpay.com/v1/checkout.js"
+            />
             <div className="max-w-6xl mx-auto px-6 py-16">
                 <Link
                     href="/"
@@ -80,7 +199,7 @@ export default function Pricing() {
                 <div className="grid md:grid-cols-3 gap-8 mb-16">
                     {plans.map((plan) => (
                         <div
-                            key={plan.name}
+                            key={plan.id}
                             className={`relative rounded-2xl p-8 ${plan.popular
                                 ? "bg-gradient-to-b from-purple-900/50 to-zinc-900 border-2 border-purple-500"
                                 : "bg-zinc-900 border border-zinc-800"
@@ -107,12 +226,21 @@ export default function Pricing() {
                             <p className="text-zinc-400 mb-6">{plan.description}</p>
 
                             <button
-                                className={`w-full py-3 px-6 rounded-xl font-medium transition-all ${plan.popular
-                                    ? "bg-purple-500 hover:bg-purple-600 text-white"
-                                    : "bg-zinc-800 hover:bg-zinc-700 text-white"
+                                onClick={() => handlePayment(plan.id)}
+                                disabled={loadingPlan === plan.id}
+                                className={`w-full py-3 px-6 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${plan.popular
+                                    ? "bg-purple-500 hover:bg-purple-600 text-white disabled:bg-purple-500/50"
+                                    : "bg-zinc-800 hover:bg-zinc-700 text-white disabled:bg-zinc-800/50"
                                     }`}
                             >
-                                Get {plan.credits.toLocaleString()} Credits
+                                {loadingPlan === plan.id ? (
+                                    <>
+                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                        Processing...
+                                    </>
+                                ) : (
+                                    `Get ${plan.credits.toLocaleString()} Credits`
+                                )}
                             </button>
 
                             <ul className="mt-8 space-y-4">
