@@ -22,6 +22,7 @@ export default function CreatePage() {
     const [duration, setDuration] = useState<number>(0);
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
+    const [prompt, setPrompt] = useState<string>('The cartoon character is dancing.');
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -250,7 +251,8 @@ export default function CreatePage() {
                     referenceVideoUrl: videoUrl,
                     duration: effectiveDuration,
                     characterOrientation,
-                    mode
+                    mode,
+                    prompt
                 })
             });
 
@@ -438,6 +440,19 @@ export default function CreatePage() {
                     </div>
                     <p className="text-xs text-zinc-500 mt-2">
                         1080p may take longer to generate.
+                    </p>
+                </div>
+
+                <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 md:col-span-2">
+                    <h3 className="text-zinc-300 font-medium mb-3">Text Prompt (Optional)</h3>
+                    <textarea
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        placeholder="e.g., The cartoon character is dancing happily..."
+                        className="w-full bg-zinc-800 text-white rounded-lg p-4 border border-zinc-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none resize-y min-h-[100px] placeholder:text-zinc-500"
+                    />
+                    <p className="text-xs text-zinc-500 mt-2">
+                        Describe what the character is doing to guide the AI generation.
                     </p>
                 </div>
             </motion.div>

@@ -5,7 +5,7 @@ const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
 export async function POST(request: NextRequest) {
     try {
-        const { referenceVideoUrl, characterImageUrl, duration = 10, characterOrientation = 'video', mode = '720p' } = await request.json();
+        const { referenceVideoUrl, characterImageUrl, duration = 10, characterOrientation = 'video', mode = '720p', prompt = '' } = await request.json();
 
         if (!referenceVideoUrl || !characterImageUrl) {
             return NextResponse.json(
@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
             body: JSON.stringify({
                 model: 'kling-2.6/motion-control',
                 input: {
-                    prompt: "The cartoon character is dancing.",
+                    prompt: prompt.trim() || "The cartoon character is dancing.",
                     input_urls: [characterImageUrl],
                     video_urls: [referenceVideoUrl],
                     character_orientation: characterOrientation,
