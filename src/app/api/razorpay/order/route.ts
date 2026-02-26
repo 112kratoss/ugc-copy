@@ -3,10 +3,10 @@ import Razorpay from 'razorpay';
 import { createClient } from '@supabase/supabase-js';
 
 // Define pricing tiers securely on the server
-const PRICING_PLANS: Record<string, { priceUsd: number; credits: number }> = {
-    starter: { priceUsd: 5, credits: 500 },
-    creator: { priceUsd: 20, credits: 2000 },
-    pro: { priceUsd: 100, credits: 10000 },
+const PRICING_PLANS: Record<string, { priceUsd: number; priceInr: number; credits: number }> = {
+    starter: { priceUsd: 5, priceInr: 415, credits: 500 }, // Approx 83 INR per USD
+    creator: { priceUsd: 20, priceInr: 1660, credits: 2000 },
+    pro: { priceUsd: 100, priceInr: 8300, credits: 10000 },
 };
 
 
@@ -34,16 +34,14 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Invalid planId' }, { status: 400 });
         }
 
-        // Amount in subunits (e.g., paise or cents). Assuming USD, so multiply by 100.
-        // If Razorpay is set up for INR, you might need to convert USD to INR.
-        // Assuming USD for now based on the pricing page.
-        const amountInSubunits = plan.priceUsd * 100;
+        // Amount in subunits (paise). Razorpay needs INR for UPI.
+        const amountInSubunits = plan.priceInr * 100;
 
         // Create order in Razorpay
         const shortUserId = userId.substring(0, 8);
         const orderOptions = {
             amount: amountInSubunits,
-            currency: 'USD',
+            currency: 'INR',
             receipt: `rcpt_${shortUserId}_${Date.now()}`,
         };
 
@@ -88,7 +86,7 @@ export async function POST(req: Request) {
         return NextResponse.json({
             orderId: razorpayOrder.id,
             amount: amountInSubunits,
-            currency: 'USD',
+            currency: 'INR',
         });
     } catch (error: unknown) {
         console.error('Razorpay Order Error:', error);
