@@ -80,6 +80,9 @@ export default function Navbar() {
                             <Link href="/create" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105 hidden sm:block">
                                 Create Video
                             </Link>
+                            <Link href="/creations" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105 hidden sm:block">
+                                My Creations
+                            </Link>
 
                             {credits !== null && (
                                 <Link
