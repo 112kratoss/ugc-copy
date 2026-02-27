@@ -1,5 +1,14 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Privacy Policy | UGC copy",
+    description: "Privacy Policy for UGC copy. Learn how we collect, use, and protect your data while using our AI video generation services.",
+    alternates: {
+        canonical: '/privacy',
+    }
+};
 
 export default function PrivacyPolicy() {
     return (

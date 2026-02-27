@@ -179,6 +179,7 @@ export default function CreationsPage() {
                                         <video
                                             src={gen.output_url!}
                                             className="w-full h-full object-cover"
+                                            controls
                                             muted
                                             loop
                                             playsInline

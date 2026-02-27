@@ -18,20 +18,42 @@ export default function CreatePage() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationStatus, setGenerationStatus] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [videoError, setVideoError] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [duration, setDuration] = useState<number>(0);
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
     const [prompt, setPrompt] = useState<string>('The cartoon character is dancing.');
+    const [isDraggingImage, setIsDraggingImage] = useState(false);
+    const [isDraggingVideo, setIsDraggingVideo] = useState(false);
+
+    const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB in bytes
+
+    const processImageFile = async (file: File) => {
+        if (!file.type.startsWith('image/')) return;
+        setCharacterImageFile(file);
+        const url = URL.createObjectURL(file);
+        setCharacterImage(url);
+        await localforage.setItem('characterImageFile', file);
+    };
+
+    const processVideoFile = async (file: File) => {
+        if (!file.type.startsWith('video/')) return;
+        if (file.size > MAX_FILE_SIZE) {
+            setVideoError('File size exceeds 100MB. Please upload a smaller video.');
+            return;
+        }
+        setVideoError(null);
+        setReferenceVideoFile(file);
+        const url = URL.createObjectURL(file);
+        setReferenceVideo(url);
+        await localforage.setItem('referenceVideoFile', file);
+    };
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            setCharacterImageFile(file);
-            const url = URL.createObjectURL(file);
-            setCharacterImage(url);
-            await localforage.setItem('characterImageFile', file);
-            // Reset input value to allow selecting the same file again after clearing
+            await processImageFile(file);
             e.target.value = '';
         }
     };
@@ -39,13 +61,37 @@ export default function CreatePage() {
     const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            setReferenceVideoFile(file);
-            const url = URL.createObjectURL(file);
-            setReferenceVideo(url);
-            await localforage.setItem('referenceVideoFile', file);
-            // Reset input value to allow selecting the same file again after clearing
+            await processVideoFile(file);
             e.target.value = '';
         }
+    };
+
+    const handleDragOver = (e: React.DragEvent, setDragging: (v: boolean) => void) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(true);
+    };
+
+    const handleDragLeave = (e: React.DragEvent, setDragging: (v: boolean) => void) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(false);
+    };
+
+    const handleImageDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingImage(false);
+        const file = e.dataTransfer.files?.[0];
+        if (file) await processImageFile(file);
+    };
+
+    const handleVideoDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingVideo(false);
+        const file = e.dataTransfer.files?.[0];
+        if (file) await processVideoFile(file);
     };
 
     const handleClearImage = async (e: React.MouseEvent) => {
@@ -60,11 +106,24 @@ export default function CreatePage() {
         setReferenceVideoFile(null);
         setReferenceVideo(null);
         setDuration(0);
+        setVideoError(null);
         await localforage.removeItem('referenceVideoFile');
     };
 
-    const handleVideoMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
-        setDuration(e.currentTarget.duration);
+    const MAX_VIDEO_DURATION = 30; // seconds
+
+    const handleVideoMetadata = async (e: React.SyntheticEvent<HTMLVideoElement>) => {
+        const videoDuration = e.currentTarget.duration;
+        if (videoDuration > MAX_VIDEO_DURATION) {
+            setVideoError(`Video length should be under ${MAX_VIDEO_DURATION}s. Your video is ${Math.round(videoDuration)}s.`);
+            setReferenceVideoFile(null);
+            setReferenceVideo(null);
+            setDuration(0);
+            await localforage.removeItem('referenceVideoFile');
+            return;
+        }
+        setVideoError(null);
+        setDuration(videoDuration);
     };
 
     // Helper for Supabase Upload
@@ -346,7 +405,15 @@ export default function CreatePage() {
                         <p className="text-sm text-zinc-500 mb-2">High-res, full body photo works best.</p>
                     </div>
 
-                    <label className="group flex flex-col items-center justify-center w-full h-[320px] border border-dashed border-zinc-700/50 rounded-2xl cursor-pointer hover:border-purple-500/50 hover:bg-purple-500/5 transition-all bg-black/40 overflow-hidden relative">
+                    <label
+                        className={`group flex flex-col items-center justify-center w-full h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingImage
+                                ? 'border-purple-400 bg-purple-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
+                                : 'border-zinc-700/50 hover:border-purple-500/50 hover:bg-purple-500/5'
+                            }`}
+                        onDragOver={(e) => handleDragOver(e, setIsDraggingImage)}
+                        onDragLeave={(e) => handleDragLeave(e, setIsDraggingImage)}
+                        onDrop={handleImageDrop}
+                    >
                         {characterImage ? (
                             <div className="w-full h-full flex items-center justify-center bg-black/50">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -363,9 +430,9 @@ export default function CreatePage() {
                                 </button>
                             </div>
                         ) : (
-                            <div className="flex flex-col items-center gap-2 text-zinc-500">
-                                <Upload className="w-8 h-8" />
-                                <span className="text-sm">Click to upload image</span>
+                            <div className="flex flex-col items-center gap-3 text-zinc-500">
+                                <Upload className={`w-8 h-8 transition-colors ${isDraggingImage ? 'text-purple-400' : ''}`} />
+                                <span className="text-sm">{isDraggingImage ? 'Drop image here' : 'Click or drag & drop image'}</span>
                             </div>
                         )}
                         <input
@@ -375,6 +442,7 @@ export default function CreatePage() {
                             className="hidden"
                         />
                     </label>
+                    <p className="text-xs text-zinc-600 mt-1">Supported formats: JPG, PNG, WEBP &nbsp;|&nbsp; Max size: 100MB</p>
                 </motion.div>
 
                 {/* Reference Video Upload */}
@@ -392,12 +460,21 @@ export default function CreatePage() {
                         <p className="text-sm text-zinc-500 mb-2">The desired motion or action.</p>
                     </div>
 
-                    <label className="group flex flex-col items-center justify-center w-full h-[320px] border border-dashed border-zinc-700/50 rounded-2xl cursor-pointer hover:border-pink-500/50 hover:bg-pink-500/5 transition-all bg-black/40 overflow-hidden relative">
+                    <label
+                        className={`group flex flex-col items-center justify-center w-full h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingVideo
+                                ? 'border-pink-400 bg-pink-500/10 shadow-[0_0_30px_-5px_rgba(236,72,153,0.3)]'
+                                : 'border-zinc-700/50 hover:border-pink-500/50 hover:bg-pink-500/5'
+                            }`}
+                        onDragOver={(e) => handleDragOver(e, setIsDraggingVideo)}
+                        onDragLeave={(e) => handleDragLeave(e, setIsDraggingVideo)}
+                        onDrop={handleVideoDrop}
+                    >
                         {referenceVideo ? (
                             <div className="w-full h-full flex items-center justify-center bg-black/50 relative">
                                 <video
                                     src={referenceVideo}
                                     className="w-full h-full object-contain"
+                                    controls
                                     autoPlay
                                     loop
                                     muted
@@ -411,9 +488,9 @@ export default function CreatePage() {
                                 </button>
                             </div>
                         ) : (
-                            <div className="flex flex-col items-center gap-2 text-zinc-500">
-                                <Upload className="w-8 h-8" />
-                                <span className="text-sm">Click to upload video</span>
+                            <div className="flex flex-col items-center gap-3 text-zinc-500">
+                                <Upload className={`w-8 h-8 transition-colors ${isDraggingVideo ? 'text-pink-400' : ''}`} />
+                                <span className="text-sm">{isDraggingVideo ? 'Drop video here' : 'Click or drag & drop video'}</span>
                             </div>
                         )}
                         <input
@@ -423,6 +500,12 @@ export default function CreatePage() {
                             className="hidden"
                         />
                     </label>
+                    <p className="text-xs text-zinc-600 mt-1">Supported formats: MP4, MOV, WEBM &nbsp;|&nbsp; Max size: 100MB &nbsp;|&nbsp; Max duration: 30s</p>
+                    {videoError && (
+                        <div className="mt-2 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl">
+                            <p className="text-sm text-red-400">{videoError}</p>
+                        </div>
+                    )}
                 </motion.div>
             </div>
 

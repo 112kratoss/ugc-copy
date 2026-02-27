@@ -11,3 +11,32 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Markdown Content Styling */
+.markdown-content h2 {
+  @apply text-3xl font-bold mt-12 mb-6;
+}
+
+.markdown-content h3 {
+  @apply text-2xl font-semibold mt-8 mb-4;
+}
+
+.markdown-content p {
+  @apply leading-relaxed mb-6 text-zinc-300;
+}
+
+.markdown-content ul {
+  @apply list-disc list-inside space-y-2 mb-6 text-zinc-300 ml-4;
+}
+
+.markdown-content li {
+  @apply pl-2;
+}
+
+.markdown-content strong {
+  @apply text-white font-semibold;
+}
+
+.markdown-content a {
+  @apply text-purple-400 hover:text-purple-300 underline underline-offset-4;
+}

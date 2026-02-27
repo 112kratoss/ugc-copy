@@ -71,6 +71,9 @@ export default function Navbar() {
                 </div>
 
                 <nav className="flex items-center gap-6">
+                    <Link href="/blog" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105 hidden sm:block">
+                        Blog
+                    </Link>
                     <Link href="/pricing" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105 hidden sm:block">
                         Pricing
                     </Link>

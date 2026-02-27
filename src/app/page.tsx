@@ -1,9 +1,37 @@
 import Link from "next/link";
 import { ArrowRight, Sparkles, Play, Zap, Shield } from "lucide-react";
+import { Metadata } from "next";
+import Script from "next/script";
+
+export const metadata: Metadata = {
+  title: "UGC copy - Turn Any Photo Into a Video Star",
+  description: "Experience next-gen AI motion transfer. Generate broadcast-quality viral UGC ads in minutes, powered by state-of-the-art generative AI.",
+  alternates: {
+    canonical: '/',
+  }
+};
 
 export default function Home() {
   return (
     <div className="flex flex-col min-h-screen font-[family-name:var(--font-geist-sans)] bg-black text-white selection:bg-purple-500/30 overflow-hidden">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "SoftwareApplication",
+            "name": "UGC copy",
+            "operatingSystem": "Web",
+            "applicationCategory": "MultimediaApplication",
+            "offers": {
+              "@type": "Offer",
+              "price": "5.00",
+              "priceCurrency": "USD"
+            },
+            "description": "Create viral UGC ads by animating static photos with reference videos. Turn any photo into a video star with our AI-powered motion transfer technology."
+          })
+        }}
+      />
 
       {/* Deep Space Background Effects */}
       <div className="fixed inset-0 z-0 pointer-events-none">

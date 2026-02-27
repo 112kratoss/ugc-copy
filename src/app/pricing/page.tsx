@@ -177,6 +177,52 @@ export default function Pricing() {
                 id="razorpay-checkout-js"
                 src="https://checkout.razorpay.com/v1/checkout.js"
             />
+            {/* FAQ Schema Markup */}
+            <script
+                type="application/ld+json"
+                dangerouslySetInnerHTML={{
+                    __html: JSON.stringify({
+                        "@context": "https://schema.org",
+                        "@type": "FAQPage",
+                        "mainEntity": [{
+                            "@type": "Question",
+                            "name": "What are credits?",
+                            "acceptedAnswer": {
+                                "@type": "Answer",
+                                "text": "Credits are used to generate videos. The cost depends on the quality you choose: 6 credits per second for Standard (720p) and 9 credits per second for Pro (1080p). For example, a 5-second 720p video costs 30 credits."
+                            }
+                        }, {
+                            "@type": "Question",
+                            "name": "Do credits expire?",
+                            "acceptedAnswer": {
+                                "@type": "Answer",
+                                "text": "No, your credits never expire as long as your account is active. Use them whenever you're ready."
+                            }
+                        }, {
+                            "@type": "Question",
+                            "name": "What happens if I upload a long video?",
+                            "acceptedAnswer": {
+                                "@type": "Answer",
+                                "text": "Currently, we support video generation up to 30 seconds. If you upload a longer video, only the first 30 seconds will be processed, costing 300 credits."
+                            }
+                        }, {
+                            "@type": "Question",
+                            "name": "What payment methods do you accept?",
+                            "acceptedAnswer": {
+                                "@type": "Answer",
+                                "text": "We accept all major credit/debit cards, UPI, net banking, and popular digital wallets through our secure payment partners."
+                            }
+                        }, {
+                            "@type": "Question",
+                            "name": "How long does video generation take?",
+                            "acceptedAnswer": {
+                                "@type": "Answer",
+                                "text": "Most videos are generated within 2-5 minutes depending on length and current demand. Priority processing is available in Creator and Pro plans."
+                            }
+                        }]
+                    })
+                }}
+            />
             <div className="max-w-6xl mx-auto px-6 py-16">
                 <Link
                     href="/"
