@@ -14,12 +14,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "UGC Creator - AI Video Generation & Motion Transfer",
+  title: "UGC copy - AI Video Generation & Motion Transfer",
   description: "Create viral UGC ads by animating static photos with reference videos. Turn any photo into a video star with our AI-powered motion transfer technology.",
-  keywords: ["AI video generation", "UGC creator", "motion transfer", "video animation", "AI content creation"],
-  authors: [{ name: "UGC Creator" }],
+  keywords: ["AI video generation", "UGC copy", "motion transfer", "video animation", "AI content creation"],
+  authors: [{ name: "UGC copy" }],
   openGraph: {
-    title: "UGC Creator - AI Video Generation",
+    title: "UGC copy - AI Video Generation",
     description: "Turn any photo into a video star with AI-powered motion transfer",
     type: "website",
   },

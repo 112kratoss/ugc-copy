@@ -66,7 +66,7 @@ export default function Navbar() {
             <div className="max-w-7xl mx-auto px-6 h-16 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <Link href="/" className="text-xl font-bold tracking-tight bg-gradient-to-br from-white via-purple-100 to-pink-200 text-transparent bg-clip-text drop-shadow-sm hover:opacity-90 transition-opacity">
-                        UGC Creator
+                        UGC copy
                     </Link>
                 </div>
 
