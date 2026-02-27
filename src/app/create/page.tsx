@@ -26,6 +26,7 @@ export default function CreatePage() {
     const [prompt, setPrompt] = useState<string>('The cartoon character is dancing.');
     const [isDraggingImage, setIsDraggingImage] = useState(false);
     const [isDraggingVideo, setIsDraggingVideo] = useState(false);
+    const [userCredits, setUserCredits] = useState<number | null>(null);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB in bytes
 
@@ -147,7 +148,7 @@ export default function CreatePage() {
         return data.publicUrl;
     };
 
-    // Verify authentication
+    // Verify authentication & fetch credits
     useEffect(() => {
         const checkUser = async () => {
             try {
@@ -157,6 +158,16 @@ export default function CreatePage() {
                     return;
                 }
                 setIsLoadingUser(false);
+
+                // Fetch user credits
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('credits')
+                    .eq('id', user.id)
+                    .single();
+                if (profile) {
+                    setUserCredits(profile.credits);
+                }
             } catch (err) {
                 console.error('Auth check error:', err);
                 router.push('/login?returnUrl=/create');
@@ -297,10 +308,10 @@ export default function CreatePage() {
             // For now, let's just handle the "New Generation" flow correctly.
 
             if (characterImageFile) {
-                imageUrl = await uploadToSupabase(characterImageFile, 'images');
+                imageUrl = await uploadToSupabase(characterImageFile, 'uploads');
             }
             if (referenceVideoFile) {
-                videoUrl = await uploadToSupabase(referenceVideoFile, 'videos');
+                videoUrl = await uploadToSupabase(referenceVideoFile, 'uploads');
             }
 
             // If we still have base64 data URLs here, the API will fail.
@@ -407,8 +418,8 @@ export default function CreatePage() {
 
                     <label
                         className={`group flex flex-col items-center justify-center w-full h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingImage
-                                ? 'border-purple-400 bg-purple-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
-                                : 'border-zinc-700/50 hover:border-purple-500/50 hover:bg-purple-500/5'
+                            ? 'border-purple-400 bg-purple-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
+                            : 'border-zinc-700/50 hover:border-purple-500/50 hover:bg-purple-500/5'
                             }`}
                         onDragOver={(e) => handleDragOver(e, setIsDraggingImage)}
                         onDragLeave={(e) => handleDragLeave(e, setIsDraggingImage)}
@@ -462,8 +473,8 @@ export default function CreatePage() {
 
                     <label
                         className={`group flex flex-col items-center justify-center w-full h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingVideo
-                                ? 'border-pink-400 bg-pink-500/10 shadow-[0_0_30px_-5px_rgba(236,72,153,0.3)]'
-                                : 'border-zinc-700/50 hover:border-pink-500/50 hover:bg-pink-500/5'
+                            ? 'border-pink-400 bg-pink-500/10 shadow-[0_0_30px_-5px_rgba(236,72,153,0.3)]'
+                            : 'border-zinc-700/50 hover:border-pink-500/50 hover:bg-pink-500/5'
                             }`}
                         onDragOver={(e) => handleDragOver(e, setIsDraggingVideo)}
                         onDragLeave={(e) => handleDragLeave(e, setIsDraggingVideo)}
@@ -610,28 +621,54 @@ export default function CreatePage() {
                 transition={{ delay: 0.2 }}
                 className="mt-8 flex flex-col items-center gap-4 w-full max-w-2xl mx-auto"
             >
-                <button
-                    onClick={handleGenerate}
-                    disabled={(!characterImage && !characterImageFile) || (!referenceVideo && !referenceVideoFile) || isGenerating}
-                    className="flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-full font-medium text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed w-full justify-center"
-                >
-                    {isGenerating ? (
+                {(() => {
+                    const estimatedCost = duration > 0 ? Math.ceil(duration * (mode === '1080p' ? 9 : 6)) : 0;
+                    const hasEnoughCredits = userCredits !== null && estimatedCost > 0 && userCredits >= estimatedCost;
+                    const insufficientCredits = userCredits !== null && estimatedCost > 0 && userCredits < estimatedCost;
+
+                    return (
                         <>
-                            <Loader2 className="w-5 h-5 animate-spin" />
-                            Generating...
+                            {insufficientCredits ? (
+                                <div className="flex flex-col items-center gap-4 px-6 py-6 bg-gradient-to-b from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-2xl w-full max-w-md">
+                                    <div className="flex items-center gap-2">
+                                        <Sparkles className="w-5 h-5 text-yellow-400" />
+                                        <p className="text-base font-semibold text-white">Not enough credits</p>
+                                    </div>
+                                    <p className="text-sm text-zinc-400 text-center">This video costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits} credits</strong>.</p>
+                                    <Link href="/pricing" className="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-full transition-all flex items-center gap-2 hover:opacity-90 hover:scale-105 font-semibold text-sm shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
+                                        <Sparkles className="w-4 h-4" />
+                                        Top Up Credits
+                                    </Link>
+                                </div>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={handleGenerate}
+                                        disabled={(!characterImage && !characterImageFile) || (!referenceVideo && !referenceVideoFile) || isGenerating || !hasEnoughCredits}
+                                        className="flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-full font-medium text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed w-full justify-center"
+                                    >
+                                        {isGenerating ? (
+                                            <>
+                                                <Loader2 className="w-5 h-5 animate-spin" />
+                                                Generating...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Sparkles className="w-5 h-5" />
+                                                Generate Video ({duration > 0 ? `${Math.ceil(duration)}s` : ''})
+                                            </>
+                                        )}
+                                    </button>
+                                    {duration > 0 && !isGenerating && (
+                                        <p className="text-xs text-zinc-500">
+                                            Cost: {estimatedCost} Credits
+                                        </p>
+                                    )}
+                                </>
+                            )}
                         </>
-                    ) : (
-                        <>
-                            <Sparkles className="w-5 h-5" />
-                            Generate Video ({duration > 0 ? `${Math.ceil(duration)}s` : ''})
-                        </>
-                    )}
-                </button>
-                {duration > 0 && !isGenerating && (
-                    <p className="text-xs text-zinc-500">
-                        Cost: {Math.ceil(duration * (mode === '1080p' ? 9 : 6))} Credits
-                    </p>
-                )}
+                    );
+                })()}
 
                 {/* Progress Bar System */}
                 {isGenerating && generationStatus && (
@@ -654,15 +691,23 @@ export default function CreatePage() {
                     </div>
                 )}
 
-                {error && (
+                {error && !error.toLowerCase().includes('insufficient') && (
                     <div className="flex flex-col items-center gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl mt-4">
                         <p className="text-sm text-red-400 text-center">{error}</p>
-                        {error.toLowerCase().includes('insufficient') && (
-                            <Link href="/pricing" className="mt-2 px-6 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-full transition-colors flex items-center gap-2 hover:opacity-90 font-medium text-sm">
-                                <Sparkles className="w-4 h-4 text-yellow-400" />
-                                Top Up Credits
-                            </Link>
-                        )}
+                    </div>
+                )}
+
+                {error && error.toLowerCase().includes('insufficient') && (
+                    <div className="flex flex-col items-center gap-4 px-6 py-6 bg-gradient-to-b from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-2xl mt-4 max-w-md w-full">
+                        <div className="flex items-center gap-2">
+                            <Sparkles className="w-5 h-5 text-yellow-400" />
+                            <p className="text-base font-semibold text-white">You&apos;re out of credits!</p>
+                        </div>
+                        <p className="text-sm text-zinc-400 text-center">Top up your credits to continue creating amazing videos.</p>
+                        <Link href="/pricing" className="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-full transition-all flex items-center gap-2 hover:opacity-90 hover:scale-105 font-semibold text-sm shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
+                            <Sparkles className="w-4 h-4" />
+                            Top Up Credits
+                        </Link>
                     </div>
                 )}
             </motion.div>
