@@ -214,48 +214,51 @@ export async function GET(request: NextRequest) {
                     // 3. Persist Video -> Download & Upload to Supabase
                     console.log('Generating finished, persisting video...');
 
-                    // Fetch video blob
-                    const videoRes = await fetch(tempUrl);
-                    if (!videoRes.ok) throw new Error('Failed to download video from Kie');
-                    const videoBlob = await videoRes.blob();
+                    try {
+                        // Fetch video blob
+                        const videoRes = await fetch(tempUrl);
+                        if (!videoRes.ok) throw new Error('Failed to download video from Kie');
+                        const videoBlob = await videoRes.blob();
 
-                    // Upload to Supabase Storage
-                    const fileName = `generated_${predictionId}.mp4`;
-                    const { error: uploadError } = await supabase.storage
-                        .from('generated_videos')
-                        .upload(fileName, videoBlob, {
-                            contentType: 'video/mp4',
-                            upsert: true
-                        });
-
-                    if (uploadError) {
-                        console.error('Upload to Supabase failed:', uploadError);
-                        // Fallback to temp URL if upload fails, but try to proceed
-                        output = tempUrl;
-                    } else {
-                        // Get Public URL
-                        const { data: publicDesc } = supabase.storage
+                        // Upload to Supabase Storage
+                        const fileName = `generated_${predictionId}.mp4`;
+                        const { error: uploadError } = await supabase.storage
                             .from('generated_videos')
-                            .getPublicUrl(fileName);
+                            .upload(fileName, videoBlob, {
+                                contentType: 'video/mp4',
+                                upsert: true
+                            });
 
-                        output = publicDesc.publicUrl;
+                        if (uploadError) {
+                            console.error('Upload to Supabase failed:', uploadError);
+                            // Fallback to temp URL if upload fails, but try to proceed
+                            output = tempUrl;
+                        } else {
+                            // Get Public URL
+                            const { data: publicDesc } = supabase.storage
+                                .from('generated_videos')
+                                .getPublicUrl(fileName);
 
-                        // 4. Update Database
-                        await supabase
-                            .from('generations')
-                            .update({
-                                status: 'succeeded',
-                                output_url: output
-                            })
-                            .eq('prediction_id', predictionId);
+                            output = publicDesc.publicUrl;
+                        }
+                    } catch (e) {
+                        console.error('Error persisting video to storage:', e);
+                        output = tempUrl;
                     }
+
+                    // 4. ALWAYS Update Database with the URL (either Supabase or Temp URL)
+                    await supabase
+                        .from('generations')
+                        .update({
+                            status: 'succeeded',
+                            output_url: output
+                        })
+                        .eq('prediction_id', predictionId);
                 }
 
             } catch (e) {
-                console.error('Error persisting video:', e);
-                // Return temp URL if persistence fails
-                const result = JSON.parse(data.data.resultJson);
-                output = result.resultUrls?.[0] || null;
+                console.error('Error handling success status:', e);
+                // Can't do much if resultJson is missing/malformed and we don't have output
             }
         } else if (status === 'fail') {
             status = 'failed';
