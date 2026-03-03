@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Upload, Sparkles, Loader2, Download, X } from 'lucide-react';
+import { ArrowLeft, Upload, Sparkles, Loader2, Download, X, Link2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import localforage from 'localforage';
@@ -27,6 +27,9 @@ export default function CreatePage() {
     const [isDraggingImage, setIsDraggingImage] = useState(false);
     const [isDraggingVideo, setIsDraggingVideo] = useState(false);
     const [userCredits, setUserCredits] = useState<number | null>(null);
+    const [linkInput, setLinkInput] = useState<string>('');
+    const [isResolvingLink, setIsResolvingLink] = useState(false);
+    const [resolvedVideoUrl, setResolvedVideoUrl] = useState<string | null>(null);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB in bytes
 
@@ -106,9 +109,55 @@ export default function CreatePage() {
         e.preventDefault();
         setReferenceVideoFile(null);
         setReferenceVideo(null);
+        setResolvedVideoUrl(null);
+        setLinkInput('');
         setDuration(0);
         setVideoError(null);
         await localforage.removeItem('referenceVideoFile');
+    };
+
+    const handleResolveLink = async () => {
+        if (!linkInput.trim()) return;
+
+        setIsResolvingLink(true);
+        setVideoError(null);
+        setReferenceVideoFile(null);
+        setReferenceVideo(null);
+        setResolvedVideoUrl(null);
+        setDuration(0);
+
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) {
+                setVideoError('Please log in to import videos.');
+                return;
+            }
+
+            const res = await fetch('/api/resolve-video', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({ url: linkInput.trim() }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok || !data.success) {
+                setVideoError(data.error || 'Failed to import video from link.');
+                return;
+            }
+
+            // Set the resolved URL — this triggers the video player to show
+            setResolvedVideoUrl(data.videoUrl);
+            setReferenceVideo(data.videoUrl);
+        } catch (err) {
+            console.error('Error resolving link:', err);
+            setVideoError('Failed to import video. Please try again.');
+        } finally {
+            setIsResolvingLink(false);
+        }
     };
 
     const MAX_VIDEO_DURATION = 30; // seconds
@@ -312,6 +361,9 @@ export default function CreatePage() {
             }
             if (referenceVideoFile) {
                 videoUrl = await uploadToSupabase(referenceVideoFile, 'uploads');
+            } else if (resolvedVideoUrl) {
+                // Already uploaded to Supabase via /api/resolve-video — use directly
+                videoUrl = resolvedVideoUrl;
             }
 
             // If we still have base64 data URLs here, the API will fail.
@@ -512,6 +564,40 @@ export default function CreatePage() {
                         />
                     </label>
                     <p className="text-xs text-zinc-600 mt-1">Supported formats: MP4, MOV, WEBM &nbsp;|&nbsp; Max size: 100MB &nbsp;|&nbsp; Max duration: 30s</p>
+
+                    {/* Link Import Section */}
+                    <div className="mt-3 pt-3 border-t border-white/5">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Link2 className="w-3.5 h-3.5 text-pink-400" />
+                            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Or import from link</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={linkInput}
+                                onChange={(e) => setLinkInput(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleResolveLink()}
+                                placeholder="Paste Instagram, TikTok, or YouTube link..."
+                                className="flex-1 bg-black/50 text-white text-sm rounded-xl px-4 py-2.5 border border-white/10 focus:border-pink-500/50 focus:ring-2 focus:ring-pink-500/10 outline-none placeholder:text-zinc-600 transition-all"
+                                disabled={isResolvingLink}
+                            />
+                            <button
+                                onClick={handleResolveLink}
+                                disabled={isResolvingLink || !linkInput.trim()}
+                                className="px-5 py-2.5 bg-gradient-to-r from-pink-600 to-purple-600 text-white text-sm font-semibold rounded-xl hover:opacity-90 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
+                            >
+                                {isResolvingLink ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        Importing...
+                                    </>
+                                ) : (
+                                    'Import'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+
                     {videoError && (
                         <div className="mt-2 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl">
                             <p className="text-sm text-red-400">{videoError}</p>
