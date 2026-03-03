@@ -234,7 +234,7 @@ export default function CreatePage() {
 
 
     const pollPrediction = async (predictionId: string, accessToken: string, initialElapsedSeconds = 0): Promise<string> => {
-        const maxAttempts = 120; // 10 minutes max
+        const maxAttempts = 240; // 20 minutes max
         let attempts = 0;
         const startTime = Date.now() - (initialElapsedSeconds * 1000);
 
