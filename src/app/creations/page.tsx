@@ -175,10 +175,10 @@ export default function CreationsPage() {
                                     className="group bg-zinc-900/30 rounded-2xl border border-white/5 overflow-hidden backdrop-blur-sm hover:border-purple-500/30 hover:shadow-[0_0_30px_-10px_rgba(168,85,247,0.2)] transition-all duration-300"
                                 >
                                     {/* Video Player */}
-                                    <div className="aspect-video bg-black/60 relative overflow-hidden">
+                                    <div className="bg-black relative overflow-hidden rounded-t-2xl">
                                         <video
                                             src={gen.output_url!}
-                                            className="w-full h-full object-cover"
+                                            className="w-full h-auto block"
                                             controls
                                             muted
                                             loop
