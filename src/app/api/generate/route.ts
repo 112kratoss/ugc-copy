@@ -80,6 +80,10 @@ export async function POST(request: NextRequest) {
 
         // Kie.ai API for Kling Motion Control (v2.6)
         // Updated to use the new endpoint and payload structure
+        // Build the webhook callback URL for this Supabase project
+        const webhookSecret = process.env.WEBHOOK_SECRET ?? 'kd92mxp4n7qbt1ej';
+        const callBackUrl = `https://ildfmhozpibwiopeavfg.supabase.co/functions/v1/kie-webhook?secret=${webhookSecret}`;
+
         const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
             method: 'POST',
             headers: {
@@ -88,6 +92,7 @@ export async function POST(request: NextRequest) {
             },
             body: JSON.stringify({
                 model: 'kling-2.6/motion-control',
+                callBackUrl,
                 input: {
                     prompt: prompt.trim() || "The cartoon character is dancing.",
                     input_urls: [characterImageUrl],

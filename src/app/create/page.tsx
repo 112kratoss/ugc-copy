@@ -270,7 +270,7 @@ export default function CreatePage() {
             attempts++;
         }
 
-        throw new Error('Generation timed out');
+        throw new Error('__GENERATION_TIMEOUT__');
     };
     // ----------------------------------------------
 
@@ -361,8 +361,16 @@ export default function CreatePage() {
 
         } catch (err) {
             console.error('Generation error:', err);
-            setError(err instanceof Error ? err.message : 'Something went wrong');
-            setGenerationStatus(null);
+            const msg = err instanceof Error ? err.message : 'Something went wrong';
+            if (msg === '__GENERATION_TIMEOUT__') {
+                // Video is still being processed server-side via webhook.
+                // Show a friendly message instead of an error.
+                setGenerationStatus('⏳ Still processing... (100%)');
+                setError('__TIMEOUT_INFO__');
+            } else {
+                setError(msg);
+                setGenerationStatus(null);
+            }
         } finally {
             setIsGenerating(false);
         }
@@ -691,7 +699,14 @@ export default function CreatePage() {
                     </div>
                 )}
 
-                {error && !error.toLowerCase().includes('insufficient') && (
+                {error === '__TIMEOUT_INFO__' && (
+                    <div className="flex flex-col items-center gap-3 px-5 py-4 bg-teal-500/10 border border-teal-500/20 rounded-xl mt-4 text-center">
+                        <p className="text-sm text-teal-300 font-semibold">⏳ Your video is still being generated!</p>
+                        <p className="text-xs text-zinc-400">This generation is taking longer than usual. Your video will automatically appear in <Link href="/creations" className="text-purple-400 underline hover:text-purple-300">My Creations</Link> once it&apos;s ready — you don&apos;t need to keep this page open.</p>
+                    </div>
+                )}
+
+                {error && error !== '__TIMEOUT_INFO__' && !error.toLowerCase().includes('insufficient') && (
                     <div className="flex flex-col items-center gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl mt-4">
                         <p className="text-sm text-red-400 text-center">{error}</p>
                     </div>
