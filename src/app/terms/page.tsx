@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -22,7 +20,7 @@ export default function TermsOfService() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">1. Acceptance of Terms</h2>
                         <p>
-                            By accessing and using UGC Creator (&ldquo;the Service&rdquo;), you accept and agree to be bound by
+                            By accessing and using UGC copy (&ldquo;the Service&rdquo;), you accept and agree to be bound by
                             these Terms of Service. If you do not agree to these terms, please do not use our Service.
                         </p>
                     </section>
@@ -30,7 +28,7 @@ export default function TermsOfService() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">2. Description of Service</h2>
                         <p>
-                            UGC Creator is an AI-powered platform that enables users to create video content by
+                            UGC copy is an AI-powered platform that enables users to create video content by
                             animating static images using reference videos. The Service uses generative AI technology
                             to transfer motion from reference videos to user-provided images.
                         </p>
@@ -133,7 +131,7 @@ export default function TermsOfService() {
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC Creator. All rights reserved.</p>
+                    <p>© 2026 UGC copy. All rights reserved.</p>
                 </div>
             </div>
         </div>

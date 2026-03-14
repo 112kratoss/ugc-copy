@@ -114,7 +114,7 @@ export default function Pricing() {
                 key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, // Ensure you add this to .env.local
                 amount: orderData.amount,
                 currency: orderData.currency,
-                name: 'UGC Creator',
+                name: 'UGC copy',
                 description: `Purchase ${planId} credits`,
                 order_id: orderData.orderId,
                 handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
@@ -365,7 +365,7 @@ export default function Pricing() {
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC Creator. All rights reserved.</p>
+                    <p>© 2026 UGC copy. All rights reserved.</p>
                     <div className="flex justify-center gap-6 mt-4">
                         <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
                         <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>

@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -22,7 +20,7 @@ export default function PrivacyPolicy() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">1. Introduction</h2>
                         <p>
-                            UGC Creator (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;) is committed to protecting your privacy.
+                            UGC copy (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;) is committed to protecting your privacy.
                             This Privacy Policy explains how we collect, use, disclose, and safeguard your
                             information when you use our AI video generation service.
                         </p>
@@ -91,10 +89,10 @@ export default function PrivacyPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">5. Third-Party Services</h2>
                         <p className="mb-4">We use trusted third-party services for:</p>
                         <ul className="list-disc list-inside space-y-2 ml-4">
-                            <li><strong>Payment Processing:</strong> Stripe/Razorpay - for secure payment handling</li>
+                            <li><strong>Payment Processing:</strong> Razorpay - for secure payment handling</li>
                             <li><strong>Cloud Storage:</strong> Supabase - for file storage</li>
                             <li><strong>AI Processing:</strong> Kie.ai - for video generation</li>
-                            <li><strong>Analytics:</strong> To understand service usage (anonymized)</li>
+                            <li><strong>Service Improvement:</strong> To understand how our Service is used and improve performance</li>
                         </ul>
                         <p className="mt-4">
                             These providers have their own privacy policies and are bound by data protection agreements.
@@ -123,7 +121,7 @@ export default function PrivacyPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">7. Cookies</h2>
                         <p>
                             We use essential cookies to maintain your session and preferences.
-                            We may also use analytics cookies to understand how our Service is used.
+                            We may use essential cookies required for the Service to function properly.
                             You can control cookies through your browser settings.
                         </p>
                     </section>
@@ -171,7 +169,7 @@ export default function PrivacyPolicy() {
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC Creator. All rights reserved.</p>
+                    <p>© 2026 UGC copy. All rights reserved.</p>
                 </div>
             </div>
         </div>

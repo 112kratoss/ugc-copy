@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { ArrowRight, Sparkles, Play, Zap, Shield } from "lucide-react";
 import { Metadata } from "next";
-import Script from "next/script";
 
 export const metadata: Metadata = {
   title: "UGC copy - Turn Any Photo Into a Video Star",
-  description: "Experience next-gen AI motion transfer. Generate broadcast-quality viral UGC ads in minutes, powered by state-of-the-art generative AI.",
+  description: "Experience next-gen AI creation. Generate stunning images, viral videos, and broadcast-quality UGC ads in minutes, powered by state-of-the-art generative AI.",
   alternates: {
     canonical: '/',
   }
@@ -25,10 +24,10 @@ export default function Home() {
             "applicationCategory": "MultimediaApplication",
             "offers": {
               "@type": "Offer",
-              "price": "5.00",
-              "priceCurrency": "USD"
+              "price": "415.00",
+              "priceCurrency": "INR"
             },
-            "description": "Create viral UGC ads by animating static photos with reference videos. Turn any photo into a video star with our AI-powered motion transfer technology."
+            "description": "Create viral UGC ads, generate stunning images, and animate static photos with our AI-powered creation suite."
           })
         }}
       />
@@ -50,20 +49,20 @@ export default function Home() {
           {/* Badge */}
           <div className="group flex items-center gap-2 bg-zinc-950/80 border border-purple-500/30 rounded-full px-5 py-2 text-sm text-zinc-300 backdrop-blur-md hover:bg-zinc-900/80 transition-all hover:border-purple-400 hover:shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)] cursor-default">
             <Sparkles className="w-4 h-4 text-purple-400 group-hover:text-purple-300 transition-colors" />
-            <span className="font-medium tracking-wide">Next-Gen AI Motion Transfer</span>
+            <span className="font-medium tracking-wide">Next-Gen AI Video & Image Creation</span>
           </div>
 
           {/* Headline */}
           <h1 className="text-6xl sm:text-8xl md:text-9xl font-extrabold tracking-tighter leading-[1.1]">
-            <span className="block text-white drop-shadow-md">Turn any photo</span>
+            <span className="block text-white drop-shadow-md">From imagination</span>
             <span className="block bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 text-transparent bg-clip-text pb-2">
-              into a video star.
+              to reality.
             </span>
           </h1>
 
           {/* Subtext */}
           <p className="text-xl sm:text-2xl text-zinc-400 max-w-2xl font-light leading-relaxed">
-            Create ultra-realistic <strong className="text-zinc-200 font-medium">viral UGC ads</strong> by animating static photos with reference videos. Powered by state-of-the-art generative AI.
+            Generate <strong className="text-zinc-200 font-medium">stunning images</strong>, create original videos, and animate photos into viral UGC ads. All powered by state-of-the-art generative AI.
           </p>
 
           {/* Buttons */}
@@ -103,7 +102,7 @@ export default function Home() {
               <Sparkles className="w-6 h-6 text-pink-400" />
             </div>
             <h3 className="text-xl font-bold text-zinc-200">Hyper Realistic</h3>
-            <p className="text-zinc-400 leading-relaxed">Our advanced Kling AI model captures every micro-expression flawlessly.</p>
+            <p className="text-zinc-400 leading-relaxed">Our advanced suite of AI models handles everything from photorealistic images to expressive video.</p>
           </div>
 
           <div className="flex flex-col gap-4 p-8 rounded-3xl bg-zinc-900/40 border border-white/5 backdrop-blur-sm hover:bg-zinc-900/60 transition-colors">
@@ -120,15 +119,15 @@ export default function Home() {
       <footer className="w-full border-t border-white/10 py-16 px-6 relative z-10 bg-black/80 backdrop-blur-lg">
         <div className="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-4 gap-12">
           <div className="sm:col-span-2">
-            <h3 className="text-2xl font-bold mb-4 tracking-tight bg-gradient-to-r from-purple-400 to-pink-500 text-transparent bg-clip-text inline-block">UGC Creator</h3>
+            <h3 className="text-2xl font-bold mb-4 tracking-tight bg-gradient-to-r from-purple-400 to-pink-500 text-transparent bg-clip-text inline-block">UGC copy</h3>
             <p className="text-zinc-400 text-base max-w-sm leading-relaxed">
-              Create viral UGC ads by animating static photos with state-of-the-art AI motion transfer technology.
+              Create stunning images, original videos, and viral UGC ads with state-of-the-art AI technology.
             </p>
           </div>
           <div>
             <h4 className="font-semibold text-lg mb-5 text-zinc-200">Product</h4>
             <ul className="space-y-3 text-base text-zinc-400">
-              <li><Link href="/create" className="hover:text-purple-400 transition-colors">Create Video</Link></li>
+              <li><Link href="/create" className="hover:text-purple-400 transition-colors">Creation Hub</Link></li>
               <li><Link href="/pricing" className="hover:text-purple-400 transition-colors">Pricing</Link></li>
               <li><Link href="/login" className="hover:text-purple-400 transition-colors">Log In</Link></li>
             </ul>
@@ -143,7 +142,7 @@ export default function Home() {
           </div>
         </div>
         <div className="max-w-7xl mx-auto mt-16 pt-8 border-t border-white/5 text-center text-zinc-600 text-sm">
-          <p>© {new Date().getFullYear()} UGC Creator. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} UGC copy. All rights reserved.</p>
         </div>
       </footer>
     </div>

@@ -33,7 +33,33 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        return NextResponse.json({ generations });
+        // Convert storage paths to signed URLs
+        const generationsWithUrls = await Promise.all(
+            (generations || []).map(async (gen) => {
+                if (!gen.output_url) return gen;
+
+                // Check if the output_url is a storage path (not an http URL)
+                if (gen.output_url.startsWith('generated_videos/')) {
+                    const filePath = gen.output_url.replace('generated_videos/', '');
+                    const { data } = await supabase.storage
+                        .from('generated_videos')
+                        .createSignedUrl(filePath, 3600);
+                    return { ...gen, output_url: data?.signedUrl || gen.output_url };
+                }
+                if (gen.output_url.startsWith('generated_images/')) {
+                    const filePath = gen.output_url.replace('generated_images/', '');
+                    const { data } = await supabase.storage
+                        .from('generated_images')
+                        .createSignedUrl(filePath, 3600);
+                    return { ...gen, output_url: data?.signedUrl || gen.output_url };
+                }
+
+                // Legacy: already a full URL, return as-is
+                return gen;
+            })
+        );
+
+        return NextResponse.json({ generations: generationsWithUrls });
     } catch (error) {
         console.error('Error in generations API:', error);
         return NextResponse.json(

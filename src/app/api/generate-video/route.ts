@@ -3,12 +3,6 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
-// ─── Model Config Registry ───────────────────────────────────────────────────
-const MOTION_MODEL_CONFIG: Record<string, { modelId: string; maxDuration: number }> = {
-    'kling-2.6': { modelId: 'kling-2.6/motion-control', maxDuration: 30 },
-    'kling-3.0': { modelId: 'kling-3.0/motion-control', maxDuration: 30 },
-};
-
 export async function POST(request: NextRequest) {
     let refundState: {
         supabase: SupabaseClient;
@@ -29,36 +23,31 @@ export async function POST(request: NextRequest) {
 
     try {
         const {
-            model = 'kling-2.6',
-            referenceVideoUrl,
-            characterImageUrl,
-            duration = 10,
-            characterOrientation = 'video',
-            mode = '720p',
-            prompt = ''
+            isMultiShot,
+            prompt,
+            multiPrompts,
+            startImageUrl = null,
+            endImageUrl = null,
+            mode = 'std',
+            aspectRatio = '16:9',
+            sound = false,
+            duration = 5 // for single shot
         } = await request.json();
 
-        if (!referenceVideoUrl || !characterImageUrl) {
-            return NextResponse.json(
-                { error: 'Missing referenceVideoUrl or characterImageUrl' },
-                { status: 400 }
-            );
-        }
-
-        const modelConfig = MOTION_MODEL_CONFIG[model];
-        if (!modelConfig) {
-            return NextResponse.json(
-                { error: `Unsupported model: ${model}` },
-                { status: 400 }
-            );
-        }
-
-        // Validate Duration
-        if (duration <= 0 || duration > modelConfig.maxDuration) {
-            return NextResponse.json(
-                { error: `Invalid duration. Must be between 1 and ${modelConfig.maxDuration} seconds.` },
-                { status: 400 }
-            );
+        // Validation
+        if (isMultiShot) {
+            if (!multiPrompts || multiPrompts.length === 0) {
+                return NextResponse.json({ error: 'At least one shot is required for multi-shot mode' }, { status: 400 });
+            }
+            for (const shot of multiPrompts) {
+                if (!shot.prompt || shot.prompt.trim().length === 0) {
+                    return NextResponse.json({ error: 'All shots must have a text prompt' }, { status: 400 });
+                }
+            }
+        } else {
+            if (!prompt || prompt.trim().length === 0) {
+                return NextResponse.json({ error: 'A prompt is required for single shot video' }, { status: 400 });
+            }
         }
 
         if (!KIE_API_KEY) {
@@ -87,16 +76,16 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Calculate Cost Dynamically
-        let creditsPerSecond = 0;
-        if (model === 'kling-3.0') {
-            creditsPerSecond = mode === '1080p' ? 20 : 12;
-        } else {
-            // kling-2.6
-            creditsPerSecond = mode === '1080p' ? 9 : 6;
+        // Calculate Cost Dynamically (Kling 3.0 tokens per second)
+        let creditsPerSecond = 20; // std, no audio
+        if (mode === 'std' && sound) creditsPerSecond = 30;
+        if (mode === 'pro' && !sound) creditsPerSecond = 27;
+        if (mode === 'pro' && sound) creditsPerSecond = 40;
+        let totalDuration = duration;
+        if (isMultiShot) {
+            totalDuration = multiPrompts.reduce((acc: number, curr: { duration?: number }) => acc + (curr.duration || 3), 0);
         }
-        
-        const COST = Math.ceil(duration * creditsPerSecond);
+        const COST = Math.ceil(totalDuration * creditsPerSecond);
 
         // Deduct Credits
         const { data: remainingCredits, error: creditError } = await supabase.rpc('deduct_credits', {
@@ -109,8 +98,6 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({
                 error: 'Failed to verify credits',
                 details: creditError.message,
-                hint: creditError.hint,
-                code: creditError.code
             }, { status: 500 });
         }
 
@@ -128,10 +115,35 @@ export async function POST(request: NextRequest) {
             shouldRefund: true,
         };
 
-        // Build webhook callback URL
-        const webhookSecret = process.env.WEBHOOK_SECRET ?? 'kd92mxp4n7qbt1ej';
-        const callBackUrl = `https://ildfmhozpibwiopeavfg.supabase.co/functions/v1/kie-webhook?secret=${webhookSecret}`;
+        // Build input object for Kling 3.0
+        const input: Record<string, unknown> = {
+            mode: mode,
+            aspect_ratio: aspectRatio,
+            sound: sound,
+        };
 
+        if (isMultiShot) {
+            input.multi_shots = true;
+            input.multi_prompt = multiPrompts.map((p: { prompt: string; duration: number }) => ({
+                prompt: p.prompt.trim(),
+                duration: p.duration
+            }));
+        } else {
+            input.prompt = prompt.trim();
+            input.duration = duration;
+        }
+
+        // Handle Image URLs mapping
+        if (startImageUrl && endImageUrl && !isMultiShot) {
+            input.image_urls = [startImageUrl, endImageUrl];
+        } else if (startImageUrl) {
+            input.image_urls = [startImageUrl];
+        } else if (endImageUrl && !isMultiShot) {
+            // End image only is usually defined as ["", "end_url"]
+            input.image_urls = ["", endImageUrl];
+        }
+
+        // Call Kie.ai API
         const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
             method: 'POST',
             headers: {
@@ -139,15 +151,8 @@ export async function POST(request: NextRequest) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: modelConfig.modelId,
-                callBackUrl,
-                input: {
-                    prompt: prompt.trim() || "The cartoon character is dancing.",
-                    input_urls: [characterImageUrl],
-                    video_urls: [referenceVideoUrl],
-                    character_orientation: characterOrientation,
-                    mode: mode
-                }
+                model: 'kling-3.0/video',
+                input,
             })
         });
 
@@ -172,14 +177,14 @@ export async function POST(request: NextRequest) {
         const taskId = data.data.taskId;
         refundState.shouldRefund = false;
 
-        // Log Generation with the model key (e.g. 'kling-3.0')
+        // Log Generation
         const { error: logError } = await supabase.from('generations').insert({
             user_id: user.id,
-            model: modelConfig.modelId,
-            duration: duration,
+            model: 'kling-3.0/video',
             cost: COST,
+            duration: totalDuration,
             prediction_id: taskId,
-            status: 'processing'
+            status: 'processing',
         });
 
         if (logError) {
@@ -190,7 +195,8 @@ export async function POST(request: NextRequest) {
             success: true,
             predictionId: taskId,
             status: 'processing',
-            remainingCredits: remainingCredits
+            remainingCredits,
+            cost: COST
         });
 
     } catch (error: unknown) {
@@ -198,29 +204,23 @@ export async function POST(request: NextRequest) {
         console.error('Error starting video generation:', error);
         const message = error instanceof Error ? error.message : 'Failed to start video generation';
         return NextResponse.json(
-            { error: message || 'Failed to start video generation' },
+            { error: message },
             { status: 500 }
         );
     }
 }
 
-// GET endpoint to check prediction status
+// GET endpoint to check video generation status
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const predictionId = searchParams.get('id');
 
     if (!predictionId) {
-        return NextResponse.json(
-            { error: 'Missing prediction ID' },
-            { status: 400 }
-        );
+        return NextResponse.json({ error: 'Missing prediction ID' }, { status: 400 });
     }
 
     if (!KIE_API_KEY) {
-        return NextResponse.json(
-            { error: 'Server configuration error: API key missing' },
-            { status: 500 }
-        );
+        return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
     try {
@@ -235,7 +235,7 @@ export async function GET(request: NextRequest) {
         // Get authenticated user for storage scoping
         const { data: { user } } = await supabase.auth.getUser();
 
-        // 1. Check local database first (Cache hit logic)
+        // Check local DB cache first
         const { data: localGeneration } = await supabase
             .from('generations')
             .select('*')
@@ -261,11 +261,9 @@ export async function GET(request: NextRequest) {
             });
         }
 
-        // 2. Query Kie.ai
+        // Query Kie.ai for status
         const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
-            headers: {
-                'Authorization': `Bearer ${KIE_API_KEY}`,
-            },
+            headers: { 'Authorization': `Bearer ${KIE_API_KEY}` },
         });
 
         const data = await response.json();
@@ -285,15 +283,14 @@ export async function GET(request: NextRequest) {
                 const tempUrl = result.resultUrls?.[0] || null;
 
                 if (tempUrl) {
-                    console.log('Generating finished, persisting video...');
+                    // Persist video to Supabase Storage
                     const userId = user?.id || localGeneration?.user_id;
-
                     try {
                         const videoRes = await fetch(tempUrl);
                         if (!videoRes.ok) throw new Error('Failed to download video from Kie');
                         const videoBlob = await videoRes.blob();
-
                         const fileName = `${userId}/generated_${predictionId}.mp4`;
+
                         const { error: uploadError } = await supabase.storage
                             .from('generated_videos')
                             .upload(fileName, videoBlob, {
@@ -302,12 +299,11 @@ export async function GET(request: NextRequest) {
                             });
 
                         if (uploadError) {
-                            console.error('Upload to Supabase failed:', uploadError);
+                            console.error('Upload to Supabase Storage failed:', uploadError);
                             output = tempUrl;
                         } else {
                             // Store the storage path, not a public URL
                             const storagePath = `generated_videos/${fileName}`;
-                            // Generate a signed URL for the client
                             const { data: signedData } = await supabase.storage
                                 .from('generated_videos')
                                 .createSignedUrl(fileName, 3600);
@@ -323,6 +319,7 @@ export async function GET(request: NextRequest) {
                         output = tempUrl;
                     }
 
+                    // Update DB if we fell back to tempUrl
                     if (!output || output === tempUrl) {
                         await supabase
                             .from('generations')
@@ -330,14 +327,12 @@ export async function GET(request: NextRequest) {
                             .eq('prediction_id', predictionId);
                     }
                 }
-
             } catch (e) {
                 console.error('Error handling success status:', e);
             }
         } else if (status === 'fail') {
             status = 'failed';
             error = data.data.failMsg || 'Unknown error';
-
             await supabase
                 .from('generations')
                 .update({ status: 'failed' })
@@ -350,10 +345,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ status, output, error });
 
     } catch (error) {
-        console.error('Error fetching prediction:', error);
-        return NextResponse.json(
-            { error: 'Failed to fetch prediction status' },
-            { status: 500 }
-        );
+        console.error('Error fetching video status:', error);
+        return NextResponse.json({ error: 'Failed to fetch generation status' }, { status: 500 });
     }
 }
