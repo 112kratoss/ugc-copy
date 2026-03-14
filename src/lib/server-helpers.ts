@@ -30,13 +30,13 @@ export function createServiceClient(): SupabaseClient {
     );
 }
 
-type MediaBucket = 'generated_images' | 'generated_videos';
+export type MediaBucket = 'generated_images' | 'generated_videos';
 
-function isMediaBucket(bucket: string): bucket is MediaBucket {
+export function isMediaBucket(bucket: string): bucket is MediaBucket {
     return bucket === 'generated_images' || bucket === 'generated_videos';
 }
 
-function extractStorageLocation(outputUrl: string): { bucket: MediaBucket; filePath: string } | null {
+export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket; filePath: string } | null {
     if (outputUrl.startsWith('generated_images/')) {
         return {
             bucket: 'generated_images',
@@ -81,7 +81,7 @@ export async function signStoredMediaUrl(
     adminSupabase: SupabaseClient,
     outputUrl: string
 ): Promise<string> {
-    const location = extractStorageLocation(outputUrl);
+    const location = getStoredMediaLocation(outputUrl);
 
     if (!location) {
         return outputUrl;
@@ -97,6 +97,38 @@ export async function signStoredMediaUrl(
     }
 
     return data.signedUrl;
+}
+
+export function buildMediaProxyUrl(bucket: MediaBucket, filePath: string): string {
+    const params = new URLSearchParams({
+        bucket,
+        path: filePath,
+    });
+
+    return `/api/media?${params.toString()}`;
+}
+
+/**
+ * Resolves storage-backed media to a working URL.
+ * Prefers a signed Supabase URL, but falls back to the app's same-origin proxy
+ * when signing is unavailable in the current deployment.
+ */
+export async function resolveStoredMediaUrl(
+    adminSupabase: SupabaseClient,
+    outputUrl: string
+): Promise<string> {
+    const location = getStoredMediaLocation(outputUrl);
+
+    if (!location) {
+        return outputUrl;
+    }
+
+    const signedUrl = await signStoredMediaUrl(adminSupabase, outputUrl);
+    if (signedUrl !== outputUrl) {
+        return signedUrl;
+    }
+
+    return buildMediaProxyUrl(location.bucket, location.filePath);
 }
 
 // ─── Authentication ───────────────────────────────────────────────────────────

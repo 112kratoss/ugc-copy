@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createServiceClient, signStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 export async function GET(request: NextRequest) {
     try {
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
                 if (!gen.output_url) return gen;
                 return {
                     ...gen,
-                    output_url: await signStoredMediaUrl(adminSupabase, gen.output_url),
+                    output_url: await resolveStoredMediaUrl(adminSupabase, gen.output_url),
                 };
             })
         );

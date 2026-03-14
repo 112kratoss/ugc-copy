@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { createServiceClient, signStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -234,7 +234,7 @@ export async function GET(request: NextRequest) {
         if (localGeneration?.status === 'succeeded' && localGeneration?.output_url) {
             return NextResponse.json({
                 status: 'succeeded',
-                output: await signStoredMediaUrl(adminSupabase, localGeneration.output_url),
+                output: await resolveStoredMediaUrl(adminSupabase, localGeneration.output_url),
             });
         }
 
