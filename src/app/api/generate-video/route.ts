@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient, signStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -224,6 +225,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
+        const adminSupabase = createServiceClient();
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -243,21 +245,9 @@ export async function GET(request: NextRequest) {
             .single();
 
         if (localGeneration?.status === 'succeeded' && localGeneration?.output_url) {
-            // Generate a signed URL for the stored path
-            const storagePath = localGeneration.output_url;
-            if (storagePath.startsWith('generated_videos/')) {
-                const filePath = storagePath.replace('generated_videos/', '');
-                const { data: signedData } = await supabase.storage
-                    .from('generated_videos')
-                    .createSignedUrl(filePath, 3600);
-                return NextResponse.json({
-                    status: 'succeeded',
-                    output: signedData?.signedUrl || storagePath,
-                });
-            }
             return NextResponse.json({
                 status: 'succeeded',
-                output: localGeneration.output_url,
+                output: await signStoredMediaUrl(adminSupabase, localGeneration.output_url),
             });
         }
 

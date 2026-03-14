@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServiceClient, signStoredMediaUrl } from '@/lib/server-helpers';
 
 export async function GET(request: NextRequest) {
     try {
+        const adminSupabase = createServiceClient();
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -37,25 +39,10 @@ export async function GET(request: NextRequest) {
         const generationsWithUrls = await Promise.all(
             (generations || []).map(async (gen) => {
                 if (!gen.output_url) return gen;
-
-                // Check if the output_url is a storage path (not an http URL)
-                if (gen.output_url.startsWith('generated_videos/')) {
-                    const filePath = gen.output_url.replace('generated_videos/', '');
-                    const { data } = await supabase.storage
-                        .from('generated_videos')
-                        .createSignedUrl(filePath, 3600);
-                    return { ...gen, output_url: data?.signedUrl || gen.output_url };
-                }
-                if (gen.output_url.startsWith('generated_images/')) {
-                    const filePath = gen.output_url.replace('generated_images/', '');
-                    const { data } = await supabase.storage
-                        .from('generated_images')
-                        .createSignedUrl(filePath, 3600);
-                    return { ...gen, output_url: data?.signedUrl || gen.output_url };
-                }
-
-                // Legacy: already a full URL, return as-is
-                return gen;
+                return {
+                    ...gen,
+                    output_url: await signStoredMediaUrl(adminSupabase, gen.output_url),
+                };
             })
         );
 

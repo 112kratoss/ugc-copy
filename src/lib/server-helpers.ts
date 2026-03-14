@@ -30,6 +30,75 @@ export function createServiceClient(): SupabaseClient {
     );
 }
 
+type MediaBucket = 'generated_images' | 'generated_videos';
+
+function isMediaBucket(bucket: string): bucket is MediaBucket {
+    return bucket === 'generated_images' || bucket === 'generated_videos';
+}
+
+function extractStorageLocation(outputUrl: string): { bucket: MediaBucket; filePath: string } | null {
+    if (outputUrl.startsWith('generated_images/')) {
+        return {
+            bucket: 'generated_images',
+            filePath: outputUrl.replace('generated_images/', ''),
+        };
+    }
+
+    if (outputUrl.startsWith('generated_videos/')) {
+        return {
+            bucket: 'generated_videos',
+            filePath: outputUrl.replace('generated_videos/', ''),
+        };
+    }
+
+    try {
+        const url = new URL(outputUrl);
+        const match = url.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)$/);
+
+        if (!match) {
+            return null;
+        }
+
+        const [, bucket, rawPath] = match;
+        if (!isMediaBucket(bucket)) {
+            return null;
+        }
+
+        return {
+            bucket,
+            filePath: decodeURIComponent(rawPath),
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Converts stored media paths and legacy Supabase storage URLs into a fresh signed URL.
+ * Returns the original value for non-storage URLs such as provider temp URLs.
+ */
+export async function signStoredMediaUrl(
+    adminSupabase: SupabaseClient,
+    outputUrl: string
+): Promise<string> {
+    const location = extractStorageLocation(outputUrl);
+
+    if (!location) {
+        return outputUrl;
+    }
+
+    const { data, error } = await adminSupabase.storage
+        .from(location.bucket)
+        .createSignedUrl(location.filePath, 3600);
+
+    if (error || !data?.signedUrl) {
+        console.error(`Failed to sign media URL for ${location.bucket}/${location.filePath}:`, error);
+        return outputUrl;
+    }
+
+    return data.signedUrl;
+}
+
 // ─── Authentication ───────────────────────────────────────────────────────────
 
 export interface AuthResult {
