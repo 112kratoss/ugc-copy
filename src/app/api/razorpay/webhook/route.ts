@@ -1,17 +1,9 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 
-// Use RAZORPAY_WEBHOOK_SECRET (configured in Razorpay Dashboard) — NOT the API key_secret
-const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
-
-// Use the service_role key because webhooks come from Razorpay (no user auth header)
-const supabaseAdmin = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 export async function POST(req: Request) {
     try {
+        const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
         if (!WEBHOOK_SECRET) {
             console.error('RAZORPAY_WEBHOOK_SECRET not configured');
             return new Response('Webhook secret not configured', { status: 500 });
@@ -19,6 +11,12 @@ export async function POST(req: Request) {
 
         const body = await req.text();
         const signature = req.headers.get('x-razorpay-signature');
+
+        // Create admin client inside handler to avoid build-time crashes
+        const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
 
         if (!signature) {
             return new Response('Missing signature', { status: 400 });
