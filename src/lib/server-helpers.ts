@@ -87,16 +87,21 @@ export async function signStoredMediaUrl(
         return outputUrl;
     }
 
-    const { data, error } = await adminSupabase.storage
-        .from(location.bucket)
-        .createSignedUrl(location.filePath, 3600);
+    try {
+        const { data, error } = await adminSupabase.storage
+            .from(location.bucket)
+            .createSignedUrl(location.filePath, 3600);
 
-    if (error || !data?.signedUrl) {
-        console.error(`Failed to sign media URL for ${location.bucket}/${location.filePath}:`, error);
+        if (error || !data?.signedUrl) {
+            console.error(`Failed to sign media URL for ${location.bucket}/${location.filePath}:`, error);
+            return outputUrl;
+        }
+
+        return data.signedUrl;
+    } catch (err) {
+        console.error(`Error signing media URL for ${location.bucket}/${location.filePath}:`, err);
         return outputUrl;
     }
-
-    return data.signedUrl;
 }
 
 export function buildMediaProxyUrl(bucket: MediaBucket, filePath: string): string {
@@ -123,9 +128,13 @@ export async function resolveStoredMediaUrl(
         return outputUrl;
     }
 
-    const signedUrl = await signStoredMediaUrl(adminSupabase, outputUrl);
-    if (signedUrl !== outputUrl) {
-        return signedUrl;
+    try {
+        const signedUrl = await signStoredMediaUrl(adminSupabase, outputUrl);
+        if (signedUrl !== outputUrl) {
+            return signedUrl;
+        }
+    } catch (err) {
+        console.error('resolveStoredMediaUrl: signing failed, falling back to proxy:', err);
     }
 
     return buildMediaProxyUrl(location.bucket, location.filePath);
