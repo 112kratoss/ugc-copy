@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
-import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp } from 'lucide-react';
+import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- Types ---
@@ -19,6 +19,7 @@ interface FeedItem {
     url: string;
     model: string;
     title: string;
+    prompt: string;
     category: string;
     saveCount: number;
     remixCount: number;
@@ -50,6 +51,7 @@ export default function ShowcasePage() {
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [user, setUser] = useState<User | null>(null);
+    const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null);
 
     // Initial auth check
     useEffect(() => {
@@ -170,6 +172,14 @@ export default function ShowcasePage() {
         }
     };
 
+    const openPreview = (item: FeedItem) => {
+        setSelectedItem(item);
+    };
+
+    const closePreview = () => {
+        setSelectedItem(null);
+    };
+
     return (
         <div className="min-h-screen bg-black text-white p-6 sm:p-8 font-[family-name:var(--font-geist-sans)]">
             <div className="fixed inset-0 z-0 pointer-events-none">
@@ -250,7 +260,11 @@ export default function ShowcasePage() {
                                     className="group relative bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden hover:border-purple-500/50 transition-colors"
                                 >
                                     {/* Media */}
-                                    <div className="aspect-[4/5] relative bg-black overflow-hidden">
+                                    <button
+                                        type="button"
+                                        onClick={() => openPreview(item)}
+                                        className="aspect-[4/5] relative bg-black overflow-hidden block w-full text-left"
+                                    >
                                         {item.category === 'video' || item.category === 'motion' ? (
                                             <video 
                                                 src={item.url} 
@@ -262,6 +276,7 @@ export default function ShowcasePage() {
                                                 onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
                                             />
                                         ) : (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
                                             <img 
                                                 src={item.url} 
                                                 alt={item.title} 
@@ -285,7 +300,7 @@ export default function ShowcasePage() {
                                                 <p className="text-xs text-zinc-300 mt-1">by {item.creator.name}</p>
                                             </div>
                                         </div>
-                                    </div>
+                                    </button>
 
                                     {/* Action Bar */}
                                     <div className="p-4 bg-zinc-900 border-t border-zinc-800 flex items-center justify-between">
@@ -324,6 +339,69 @@ export default function ShowcasePage() {
                     </div>
                 )}
             </div>
+
+            <AnimatePresence>
+                {selectedItem && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                        onClick={closePreview}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-zinc-900 border border-white/10 p-6 rounded-3xl max-w-3xl w-full flex flex-col gap-6 shadow-2xl relative"
+                        >
+                            <button
+                                type="button"
+                                onClick={closePreview}
+                                className="absolute top-4 right-4 p-2 z-10 bg-black/50 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+
+                            <div className="pr-12">
+                                <h2 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
+                                    {selectedItem.title}
+                                </h2>
+                                <p className="mt-1 text-sm text-zinc-400">
+                                    by {selectedItem.creator.name}
+                                </p>
+                            </div>
+
+                            <div className="rounded-xl overflow-hidden border border-white/5 bg-black/50 flex items-center justify-center flex-1 min-h-[300px]">
+                                {selectedItem.category === 'video' || selectedItem.category === 'motion' ? (
+                                    <video
+                                        src={selectedItem.url}
+                                        controls
+                                        autoPlay
+                                        loop
+                                        className="max-h-[60vh] object-contain rounded-xl w-full"
+                                    />
+                                ) : (
+                                    /* eslint-disable-next-line @next/next/no-img-element */
+                                    <img
+                                        src={selectedItem.url}
+                                        alt={selectedItem.title}
+                                        className="max-h-[60vh] object-contain rounded-xl"
+                                    />
+                                )}
+                            </div>
+
+                            <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col gap-2">
+                                <div className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Prompt</div>
+                                <p className="text-sm text-zinc-300 leading-relaxed max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                                    {selectedItem.prompt || 'No prompt available'}
+                                </p>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
