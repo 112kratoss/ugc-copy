@@ -157,15 +157,21 @@ function CreateImageContent() {
                  if (data.title) setRemixTitle(data.title);
                  if (data.prompt) setPrompt(data.prompt);
                  
-                 // Handle the preview URL
-                 if (data.output_url) {
-                     if (data.output_url.startsWith('http')) {
-                         setRemixImageUrl(data.output_url);
-                     } else {
-                         const bucket = data.output_url.startsWith('generated_videos/') ? 'generated_videos' : 'generated_images';
-                         const path = data.output_url.replace(/^generated_(images|videos)\//, '');
-                         setRemixImageUrl(`/api/media?bucket=${bucket}&path=${encodeURIComponent(path)}`);
+                 // Handle the preview URL via server-side signed URL
+                 try {
+                     const session = await supabase.auth.getSession();
+                     const token = session.data.session?.access_token;
+                     if (token) {
+                         const previewRes = await fetch(`/api/showcase/preview?id=${remixId}`, {
+                             headers: { 'Authorization': `Bearer ${token}` }
+                         });
+                         if (previewRes.ok) {
+                             const previewData = await previewRes.json();
+                             if (previewData.url) setRemixImageUrl(previewData.url);
+                         }
                      }
+                 } catch (e) {
+                     console.error('Failed to load preview URL:', e);
                  }
                  
                  const settings = data.workflow_settings as ImageWorkflowSettings | null;
