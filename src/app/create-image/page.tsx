@@ -164,8 +164,7 @@ function CreateImageContent() {
                      } else {
                          const bucket = data.output_url.startsWith('generated_videos/') ? 'generated_videos' : 'generated_images';
                          const path = data.output_url.replace(/^generated_(images|videos)\//, '');
-                         const { data: signedData } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
-                         if (signedData?.signedUrl) setRemixImageUrl(signedData.signedUrl);
+                         setRemixImageUrl(`/api/media?bucket=${bucket}&path=${encodeURIComponent(path)}`);
                      }
                  }
                  
