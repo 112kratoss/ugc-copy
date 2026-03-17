@@ -177,6 +177,13 @@ export async function POST(request: NextRequest) {
 
         const taskId = data.data.taskId;
         refundState.shouldRefund = false;
+        const remixMultiPrompts = isMultiShot
+            ? multiPrompts.map((shot: { id?: string; prompt: string; duration: number }, index: number) => ({
+                id: shot.id || `${index + 1}`,
+                prompt: shot.prompt.trim(),
+                duration: shot.duration,
+            }))
+            : undefined;
 
         // Log Generation
         const { error: logError } = await supabase.from('generations').insert({
@@ -194,6 +201,7 @@ export async function POST(request: NextRequest) {
                 aspectRatio,
                 sound,
                 duration: totalDuration,
+                multiPrompts: remixMultiPrompts,
             },
         });
 

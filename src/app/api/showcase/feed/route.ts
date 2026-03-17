@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+
+interface ProfileSummary {
+    id: string;
+    display_name: string | null;
+    avatar_url: string | null;
+}
 
 export async function GET(request: NextRequest) {
     try {
@@ -10,12 +17,8 @@ export async function GET(request: NextRequest) {
         const limit = parseInt(searchParams.get('limit') || '20', 10);
         const offset = (page - 1) * limit;
 
-        // Use service role to bypass RLS for aggregating the feed,
-        // but we'll manually enforce only fetching public generations
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-        );
+        // Use service role to aggregate the public feed and resolve media URLs.
+        const adminSupabase = createServiceClient();
 
         // Optional authenticated user context to check if they saved an item
         const authHeader = request.headers.get('Authorization');
@@ -31,7 +34,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Build base query
-        let query = supabase
+        let query = adminSupabase
             .from('generations')
             .select(`
                 id, 
@@ -82,7 +85,7 @@ export async function GET(request: NextRequest) {
 
         // Get signed URLs, "hasSaved" status, AND user profiles
         let savedGenerationIds: Set<string> = new Set();
-        let profilesMap: Record<string, any> = {};
+        const profilesMap: Record<string, ProfileSummary> = {};
 
         if (generations && generations.length > 0) {
             const genIds = generations.map(g => g.id);
@@ -90,7 +93,7 @@ export async function GET(request: NextRequest) {
             
             // Fetch saves
             if (userId) {
-                const { data: saves } = await supabase
+                const { data: saves } = await adminSupabase
                     .from('showcase_saves')
                     .select('generation_id')
                     .eq('user_id', userId)
@@ -103,9 +106,9 @@ export async function GET(request: NextRequest) {
 
             // Fetch profiles
             if (userIds.length > 0) {
-                const { data: profiles } = await supabase
+                const { data: profiles } = await adminSupabase
                     .from('profiles')
-                    .select('id, email, display_name, avatar_url')
+                    .select('id, display_name, avatar_url')
                     .in('id', userIds);
                 
                 if (profiles) {
@@ -118,33 +121,13 @@ export async function GET(request: NextRequest) {
 
         // Map and sign URLs
         const feedItems = await Promise.all((generations || []).map(async (gen) => {
-            let finalUrl = gen.output_url;
-
-            // Generate signed URL if it's a private storage path
-            if (gen.output_url && !gen.output_url.startsWith('http')) {
-                // Determine bucket based on typical paths
-                let bucket = 'generated_images';
-                if (gen.output_url.startsWith('generated_videos/')) bucket = 'generated_videos';
-
-                const fileName = gen.output_url.split('/').pop() || '';
-                const idFolder = gen.output_url.split('/')[1]; // usually user_id
-                const path = bucket === 'generated_images' ? `${idFolder}/${fileName}` : fileName;
-                
-                // For videos, the path structure might be simpler in generated_videos
-                const finalPath = bucket === 'generated_videos' ? (gen.output_url.replace('generated_videos/', '')) : path;
-
-                const { data: signedData } = await supabase.storage
-                    .from(bucket)
-                    .createSignedUrl(finalPath, 3600);
-                
-                if (signedData?.signedUrl) {
-                    finalUrl = signedData.signedUrl;
-                }
-            }
+            const finalUrl = gen.output_url
+                ? await resolveStoredMediaUrl(adminSupabase, gen.output_url)
+                : gen.output_url;
 
             // Fallback display name from our manually fetched profiles
             const profile = gen.user_id ? profilesMap[gen.user_id] : null;
-            const displayName = profile?.display_name || profile?.email?.split('@')[0] || 'Anonymous';
+            const displayName = profile?.display_name || 'Anonymous';
 
             return {
                 id: gen.id,

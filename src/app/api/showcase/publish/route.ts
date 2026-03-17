@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+type ShowcaseCategory = 'image' | 'video' | 'motion' | 'ugc-ad';
+
+function detectCategoryFromModel(model: string): ShowcaseCategory {
+    if (model.includes('banana')) return 'image';
+    if (model === 'kling-3.0/video' || model.includes('/video')) return 'video';
+    if (model.startsWith('kling-')) return 'motion';
+    return 'image';
+}
+
 export async function POST(request: NextRequest) {
     try {
         const supabase = createClient(
@@ -23,7 +32,7 @@ export async function POST(request: NextRequest) {
         // Verify ownership
         const { data: generation, error: fetchError } = await supabase
             .from('generations')
-            .select('id, user_id, status, model')
+            .select('id, user_id, status, model, category')
             .eq('id', generationId)
             .single();
 
@@ -40,16 +49,13 @@ export async function POST(request: NextRequest) {
         }
 
         // Auto-detect category if not provided
-        let detectedCategory = category;
+        let detectedCategory: ShowcaseCategory | undefined = category ?? generation.category ?? undefined;
         if (!detectedCategory && isPublic) {
-            if (generation.model.includes('banana')) detectedCategory = 'image';
-            else if (generation.model.includes('video')) detectedCategory = 'video';
-            else if (generation.model.includes('motion')) detectedCategory = 'motion';
-            else detectedCategory = 'image'; // fallback
+            detectedCategory = detectCategoryFromModel(generation.model);
         }
 
         // Build update payload
-        const updatePayload: any = { is_public: isPublic };
+        const updatePayload: { is_public: boolean; [key: string]: unknown } = { is_public: isPublic };
         
         // Only update these if making it public (or if explicitly passed)
         if (isPublic) {

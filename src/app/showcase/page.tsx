@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -48,7 +49,7 @@ export default function ShowcasePage() {
     const [sort, setSort] = useState('recent');
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
-    const [user, setUser] = useState<any>(null);
+    const [user, setUser] = useState<User | null>(null);
 
     // Initial auth check
     useEffect(() => {
@@ -63,7 +64,7 @@ export default function ShowcasePage() {
             else setIsLoadingMore(true);
 
             const { data: { session } } = await supabase.auth.getSession();
-            const headers: any = {};
+            const headers: Record<string, string> = {};
             if (session) headers['Authorization'] = `Bearer ${session.access_token}`;
 
             const res = await fetch(`/api/showcase/feed?category=${category}&sort=${sort}&page=${pageNum}&limit=12`, {
@@ -103,17 +104,24 @@ export default function ShowcasePage() {
             return;
         }
 
-        // Optimistic UI update
-        setItems(prev => prev.map(item => {
-            if (item.id === id) {
+        const applySavedState = (savedState: boolean) => {
+            setItems(prev => prev.map(item => {
+                if (item.id !== id) {
+                    return item;
+                }
+
+                const countDelta =
+                    item.hasSaved === savedState ? 0 : savedState ? 1 : -1;
+
                 return {
                     ...item,
-                    hasSaved: !currentSavedState,
-                    saveCount: item.saveCount + (currentSavedState ? -1 : 1)
+                    hasSaved: savedState,
+                    saveCount: Math.max(0, item.saveCount + countDelta)
                 };
-            }
-            return item;
-        }));
+            }));
+        };
+
+        applySavedState(!currentSavedState);
 
         try {
             const { data: { session } } = await supabase.auth.getSession();
@@ -126,22 +134,13 @@ export default function ShowcasePage() {
                 body: JSON.stringify({ generationId: id })
             });
             const data = await res.json();
-            
-            // Revert if failed
+
             if (!data.success) {
-                setItems(prev => prev.map(item => {
-                    if (item.id === id) {
-                        return {
-                            ...item,
-                            hasSaved: currentSavedState,
-                            saveCount: item.saveCount + (currentSavedState ? 1 : -1)
-                        };
-                    }
-                    return item;
-                }));
+                applySavedState(currentSavedState);
             }
         } catch (error) {
             console.error('Save failed:', error);
+            applySavedState(currentSavedState);
         }
     };
 

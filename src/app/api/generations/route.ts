@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
 
         const { data: generations, error } = await supabase
             .from('generations')
-            .select('id, output_url, status, created_at, duration, cost, model')
+            .select('id, output_url, status, created_at, duration, cost, model, is_public')
             .eq('user_id', user.id)
             .order('created_at', { ascending: false });
 

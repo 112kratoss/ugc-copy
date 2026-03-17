@@ -40,6 +40,13 @@ const IMAGE_MODELS = {
 
 type ModelId = keyof typeof IMAGE_MODELS;
 
+interface ImageWorkflowSettings {
+    model?: ModelId;
+    aspectRatio?: string;
+    resolution?: string;
+    googleSearch?: boolean;
+}
+
 export default function CreateImagePage() {
     return (
         <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>}>
@@ -148,10 +155,10 @@ function CreateImageContent() {
                  if (data.title) setRemixTitle(data.title);
                  if (data.prompt) setPrompt(data.prompt);
                  
-                 const settings = data.workflow_settings as any;
+                 const settings = data.workflow_settings as ImageWorkflowSettings | null;
                  if (settings) {
-                     if (settings.model && IMAGE_MODELS[settings.model as ModelId]) {
-                         setSelectedModel(settings.model as ModelId);
+                     if (settings.model && IMAGE_MODELS[settings.model]) {
+                         setSelectedModel(settings.model);
                      }
                      if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
                      if (settings.resolution) setResolution(settings.resolution);

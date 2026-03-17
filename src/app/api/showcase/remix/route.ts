@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createServiceClient } from '@/lib/server-helpers';
 
 export async function POST(request: NextRequest) {
     try {
@@ -22,39 +21,19 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
         }
 
-        const adminSupabase = createServiceClient();
-
-        // 1. Fetch the generation details (only if public!)
-        const { data: generation, error: fetchError } = await adminSupabase
+        const { data: generation, error: fetchError } = await supabase
             .from('generations')
-            .select('id, category, prompt, workflow_settings, is_public, user_id')
+            .select('id, category, prompt, workflow_settings')
             .eq('id', generationId)
+            .eq('is_public', true)
             .single();
 
         if (fetchError || !generation) {
-            return NextResponse.json({ error: 'Generation not found' }, { status: 404 });
-        }
-
-        if (!generation.is_public && generation.user_id !== user.id) {
-             // Technically RLS should prevent this, but since we are using adminSupabase to fetch 
-             // (to avoid RLS issues when incrementing), we must manually check. 
-             // Actually, wait, let's just use the normal client for fetching to respect RLS! 
-             // Fixed below:
-        }
-
-        const { data: publicCheck, error: rlsError } = await supabase
-            .from('generations')
-            .select('id')
-            .eq('id', generationId)
-            .single();
-
-        if (rlsError || !publicCheck) {
             return NextResponse.json({ error: 'Generation is private or not found' }, { status: 404 });
         }
 
-
         // 2. Increment the remix count atomically using our RPC function
-        const { error: rpcError } = await adminSupabase.rpc('increment_remix_count', {
+        const { error: rpcError } = await supabase.rpc('increment_remix_count', {
             p_generation_id: generationId
         });
 

@@ -21,6 +21,15 @@ interface MultiShot {
     duration: number;
 }
 
+interface VideoWorkflowSettings {
+    isMultiShot?: boolean;
+    multiPrompts?: MultiShot[];
+    mode?: 'std' | 'pro';
+    aspectRatio?: string;
+    sound?: boolean;
+    duration?: number;
+}
+
 export default function CreateVideoPage() {
     return (
         <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>}>
@@ -103,12 +112,16 @@ function CreateVideoContent() {
 
                  if (data.title) setRemixTitle(data.title);
                  
-                 const settings = data.workflow_settings as any;
+                 const settings = data.workflow_settings as VideoWorkflowSettings | null;
                  if (settings) {
                      if (settings.isMultiShot !== undefined) {
                          setIsMultiShot(settings.isMultiShot);
                          if (settings.isMultiShot && settings.multiPrompts) {
-                             setMultiPrompts(settings.multiPrompts);
+                             setMultiPrompts(settings.multiPrompts.map((shot, index) => ({
+                                 id: shot.id || `${index + 1}`,
+                                 prompt: shot.prompt,
+                                 duration: shot.duration,
+                             })));
                          } else {
                              if (data.prompt) setPrompt(data.prompt);
                              if (settings.duration) setSingleDuration(settings.duration);

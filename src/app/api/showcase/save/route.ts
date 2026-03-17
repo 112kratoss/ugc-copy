@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createServiceClient } from '@/lib/server-helpers';
 
 export async function POST(request: NextRequest) {
     try {
@@ -21,11 +20,22 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
         }
 
-        // We use the service role client exclusively for the RPC call
-        const adminSupabase = createServiceClient();
+        const { data: generation, error: fetchError } = await supabase
+            .from('generations')
+            .select('id, is_public')
+            .eq('id', generationId)
+            .single();
 
-        // Call our custom Postgres function to handle the upsert/delete and increment/decrement atomically
-        const { data: isSaved, error: rpcError } = await adminSupabase.rpc('toggle_showcase_save', {
+        if (fetchError || !generation) {
+            return NextResponse.json({ error: 'Generation not found' }, { status: 404 });
+        }
+
+        if (!generation.is_public) {
+            return NextResponse.json({ error: 'Only public showcase items can be saved' }, { status: 400 });
+        }
+
+        // Toggle save atomically using the authenticated user's context.
+        const { data: isSaved, error: rpcError } = await supabase.rpc('toggle_showcase_save', {
             p_generation_id: generationId,
             p_user_id: user.id
         });

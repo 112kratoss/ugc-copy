@@ -35,6 +35,12 @@ const MOTION_MODELS = {
 
 type ModelId = keyof typeof MOTION_MODELS;
 
+interface MotionWorkflowSettings {
+    model?: ModelId;
+    mode?: '720p' | '1080p';
+    characterOrientation?: 'video' | 'image';
+}
+
 export default function CreatePage() {
     return (
         <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>}>
@@ -222,10 +228,10 @@ function CreateMotionContent() {
                  if (data.title) setRemixTitle(data.title);
                  if (data.prompt) setPrompt(data.prompt);
                  
-                 const settings = data.workflow_settings as any;
+                 const settings = data.workflow_settings as MotionWorkflowSettings | null;
                  if (settings) {
-                     if (settings.model && MOTION_MODELS[settings.model as ModelId]) {
-                         setSelectedModel(settings.model as ModelId);
+                     if (settings.model && MOTION_MODELS[settings.model]) {
+                         setSelectedModel(settings.model);
                      }
                      if (settings.mode) setMode(settings.mode);
                      if (settings.characterOrientation) setCharacterOrientation(settings.characterOrientation);

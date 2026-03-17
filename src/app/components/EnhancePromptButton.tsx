@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -77,10 +77,12 @@ export default function EnhancePromptButton({
         }
     };
 
-    // Auto-dismiss error after 5 seconds
-    if (error) {
-        setTimeout(() => setError(null), 5000);
-    }
+    useEffect(() => {
+        if (!error) return;
+
+        const timeoutId = window.setTimeout(() => setError(null), 5000);
+        return () => window.clearTimeout(timeoutId);
+    }, [error]);
 
     return (
         <div className="flex flex-col gap-1.5 mb-2">

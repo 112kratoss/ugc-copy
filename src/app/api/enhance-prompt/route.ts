@@ -142,7 +142,6 @@ export async function POST(request: NextRequest) {
                 await adminSupabase
                     .from('ai_usage_events')
                     .update({
-                        status: 'failed',
                         error_message:
                             enhanceError instanceof Error
                                 ? enhanceError.message.substring(0, 1000)
