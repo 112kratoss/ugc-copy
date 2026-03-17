@@ -23,11 +23,13 @@ cd "/Users/athuls/UGC copy/ugc-app" && npx supabase start
      ```
      NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
      NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH
+     SUPABASE_SERVICE_ROLE_KEY=sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz
      ```
    - The production keys should be commented out:
      ```
      # NEXT_PUBLIC_SUPABASE_URL=https://ildfmhozpibwiopeavfg.supabase.co
      # NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbG...
+     # SUPABASE_SERVICE_ROLE_KEY=eyJhbG...
      ```
 
 3. Start the Next.js dev server:

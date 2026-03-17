@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check } from 'lucide-react';
+import { ArrowLeft, Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
@@ -78,6 +78,8 @@ function CreateMotionContent() {
     const remixId = searchParams.get('remix');
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
+    const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
+    const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
     const model = MOTION_MODELS[selectedModel];
@@ -216,7 +218,7 @@ function CreateMotionContent() {
              try {
                  const { data, error } = await supabase
                      .from('generations')
-                     .select('title, prompt, workflow_settings')
+                     .select('title, prompt, workflow_settings, output_url')
                      .eq('id', remixId)
                      .single();
 
@@ -227,6 +229,18 @@ function CreateMotionContent() {
 
                  if (data.title) setRemixTitle(data.title);
                  if (data.prompt) setPrompt(data.prompt);
+                 
+                 // Handle the preview URL
+                 if (data.output_url) {
+                     if (data.output_url.startsWith('http')) {
+                         setRemixVideoUrl(data.output_url);
+                     } else {
+                         const bucket = data.output_url.startsWith('generated_videos/') ? 'generated_videos' : 'generated_images';
+                         const path = data.output_url.replace(/^generated_(images|videos)\//, '');
+                         const { data: signedData } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
+                         if (signedData?.signedUrl) setRemixVideoUrl(signedData.signedUrl);
+                     }
+                 }
                  
                  const settings = data.workflow_settings as MotionWorkflowSettings | null;
                  if (settings) {
@@ -415,17 +429,29 @@ function CreateMotionContent() {
                             initial={{ opacity: 0, height: 0, marginBottom: 0 }}
                             animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
                             exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center gap-3 overflow-hidden backdrop-blur-md"
+                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center justify-between overflow-hidden backdrop-blur-md"
                         >
-                            <div className="p-2 bg-purple-500/20 rounded-full">
-                                <Sparkles className="w-5 h-5 text-purple-400" />
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-purple-500/20 rounded-full">
+                                    <Sparkles className="w-5 h-5 text-purple-400" />
+                                </div>
+                                <div>
+                                    <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
+                                    <p className="text-xs text-purple-300/80">
+                                        Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}.
+                                    </p>
+                                </div>
                             </div>
-                            <div>
-                                <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
-                                <p className="text-xs text-purple-300/80">
-                                    Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}. Modify as needed!
-                                </p>
-                            </div>
+                            
+                            {remixVideoUrl && (
+                                <button
+                                    onClick={() => setIsPreviewModalOpen(true)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded-xl transition-colors text-sm font-medium text-purple-300"
+                                >
+                                    <Play className="w-4 h-4" />
+                                    View Original
+                                </button>
+                            )}
                         </motion.div>
                     )}
                 </AnimatePresence>

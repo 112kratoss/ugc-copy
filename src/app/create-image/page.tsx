@@ -78,6 +78,8 @@ function CreateImageContent() {
     const remixId = searchParams.get('remix');
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
+    const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
+    const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
     const model = IMAGE_MODELS[selectedModel];
 
@@ -143,7 +145,7 @@ function CreateImageContent() {
              try {
                  const { data, error } = await supabase
                      .from('generations')
-                     .select('title, prompt, workflow_settings')
+                     .select('title, prompt, workflow_settings, output_url')
                      .eq('id', remixId)
                      .single();
 
@@ -154,6 +156,18 @@ function CreateImageContent() {
 
                  if (data.title) setRemixTitle(data.title);
                  if (data.prompt) setPrompt(data.prompt);
+                 
+                 // Handle the preview URL
+                 if (data.output_url) {
+                     if (data.output_url.startsWith('http')) {
+                         setRemixImageUrl(data.output_url);
+                     } else {
+                         const bucket = data.output_url.startsWith('generated_videos/') ? 'generated_videos' : 'generated_images';
+                         const path = data.output_url.replace(/^generated_(images|videos)\//, '');
+                         const { data: signedData } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
+                         if (signedData?.signedUrl) setRemixImageUrl(signedData.signedUrl);
+                     }
+                 }
                  
                  const settings = data.workflow_settings as ImageWorkflowSettings | null;
                  if (settings) {
@@ -412,17 +426,29 @@ function CreateImageContent() {
                             initial={{ opacity: 0, height: 0, marginBottom: 0 }}
                             animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
                             exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center gap-3 overflow-hidden backdrop-blur-md"
+                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center justify-between overflow-hidden backdrop-blur-md"
                         >
-                            <div className="p-2 bg-purple-500/20 rounded-full">
-                                <Sparkles className="w-5 h-5 text-purple-400" />
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-purple-500/20 rounded-full">
+                                    <Sparkles className="w-5 h-5 text-purple-400" />
+                                </div>
+                                <div>
+                                    <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
+                                    <p className="text-xs text-purple-300/80">
+                                        Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}.
+                                    </p>
+                                </div>
                             </div>
-                            <div>
-                                <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
-                                <p className="text-xs text-purple-300/80">
-                                    Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}. Modify as needed!
-                                </p>
-                            </div>
+                            
+                            {remixImageUrl && (
+                                <button
+                                    onClick={() => setIsPreviewModalOpen(true)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded-xl transition-colors text-sm font-medium text-purple-300"
+                                >
+                                    <ImageIcon className="w-4 h-4" />
+                                    View Original
+                                </button>
+                            )}
                         </motion.div>
                     )}
                 </AnimatePresence>
@@ -775,6 +801,50 @@ function CreateImageContent() {
                     </motion.div>
                 )}
             </div>
+
+            {/* Remix Preview Modal */}
+            <AnimatePresence>
+                {isPreviewModalOpen && remixImageUrl && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                        onClick={() => setIsPreviewModalOpen(false)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-zinc-900 border border-white/10 p-6 rounded-3xl max-w-2xl w-full flex flex-col gap-6 shadow-2xl relative"
+                        >
+                            <button
+                                onClick={() => setIsPreviewModalOpen(false)}
+                                className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                            
+                            <h2 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
+                                Original Creation
+                            </h2>
+                            
+                            <div className="rounded-xl overflow-hidden border border-white/5 bg-black/50 flex items-center justify-center flex-1 min-h-[300px]">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={remixImageUrl} alt="Original" className="max-h-[60vh] object-contain rounded-xl" />
+                            </div>
+                            
+                            <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col gap-2">
+                                <div className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Prompt</div>
+                                <p className="text-sm text-zinc-300 leading-relaxed max-h-32 overflow-y-auto pr-2 custom-scrollbar">
+                                    {prompt || "No prompt available"}
+                                </p>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
