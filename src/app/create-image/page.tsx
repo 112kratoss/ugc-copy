@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 
 // ─── Model Registry ─────────────────────────────────────────────────────────
 const IMAGE_MODELS = {
@@ -40,6 +41,14 @@ const IMAGE_MODELS = {
 type ModelId = keyof typeof IMAGE_MODELS;
 
 export default function CreateImagePage() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>}>
+            <CreateImageContent />
+        </Suspense>
+    );
+}
+
+function CreateImageContent() {
     const router = useRouter();
     const [isLoadingUser, setIsLoadingUser] = useState(true);
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
@@ -56,6 +65,12 @@ export default function CreateImagePage() {
     const [userCredits, setUserCredits] = useState<number | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    
+    // Remix State
+    const searchParams = useSearchParams();
+    const remixId = searchParams.get('remix');
+    const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
+    const [remixTitle, setRemixTitle] = useState<string | null>(null);
 
     const model = IMAGE_MODELS[selectedModel];
 
@@ -109,6 +124,48 @@ export default function CreateImagePage() {
         };
         checkUser();
     }, [router]);
+
+    // Handle Remix Pre-fill
+    useEffect(() => {
+        if (!remixId) return;
+
+        const fetchRemixData = async () => {
+             const { data: { session } } = await supabase.auth.getSession();
+             if (!session) return;
+
+             try {
+                 const { data, error } = await supabase
+                     .from('generations')
+                     .select('title, prompt, workflow_settings')
+                     .eq('id', remixId)
+                     .single();
+
+                 if (error || !data) {
+                     console.error('Failed to load remix data');
+                     return;
+                 }
+
+                 if (data.title) setRemixTitle(data.title);
+                 if (data.prompt) setPrompt(data.prompt);
+                 
+                 const settings = data.workflow_settings as any;
+                 if (settings) {
+                     if (settings.model && IMAGE_MODELS[settings.model as ModelId]) {
+                         setSelectedModel(settings.model as ModelId);
+                     }
+                     if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
+                     if (settings.resolution) setResolution(settings.resolution);
+                     if (settings.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
+                 }
+             } catch (err) {
+                 console.error('Error fetching remix:', err);
+             } finally {
+                 setIsRemixLoading(false);
+             }
+        };
+
+        fetchRemixData();
+    }, [remixId]);
 
     const processImageFiles = (files: FileList | File[]) => {
         const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
@@ -341,6 +398,28 @@ export default function CreateImagePage() {
                     )}
                 </div>
 
+                {/* Remix Banner */}
+                <AnimatePresence>
+                    {remixId && !isRemixLoading && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                            animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
+                            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center gap-3 overflow-hidden backdrop-blur-md"
+                        >
+                            <div className="p-2 bg-purple-500/20 rounded-full">
+                                <Sparkles className="w-5 h-5 text-purple-400" />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
+                                <p className="text-xs text-purple-300/80">
+                                    Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}. Modify as needed!
+                                </p>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
                 {/* ─── Model Selector (Dropdown) ────────────────────────────────── */}
                 <motion.div
                     initial={{ opacity: 0, y: 16 }}
@@ -436,6 +515,15 @@ export default function CreateImagePage() {
                                 <span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] border border-blue-500/30">1</span>
                                 Your Prompt
                             </h2>
+                            <EnhancePromptButton
+                                prompt={prompt}
+                                onEnhanced={(text) => setPrompt(text)}
+                                onCreditsUpdate={(c) => setUserCredits(c)}
+                                medium="image"
+                                selectedModel={selectedModel}
+                                context={{ modelId: selectedModel, aspectRatio, resolution, googleSearch }}
+                                disabled={isGenerating}
+                            />
                             <textarea
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}

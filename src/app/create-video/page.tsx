@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 
 const MODES = [
     { value: 'std', label: 'Standard (720p)' },
@@ -21,6 +22,14 @@ interface MultiShot {
 }
 
 export default function CreateVideoPage() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>}>
+            <CreateVideoContent />
+        </Suspense>
+    );
+}
+
+function CreateVideoContent() {
     const router = useRouter();
     const [isLoadingUser, setIsLoadingUser] = useState(true);
     const [userCredits, setUserCredits] = useState<number | null>(null);
@@ -48,6 +57,12 @@ export default function CreateVideoPage() {
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    // Remix State
+    const searchParams = useSearchParams();
+    const remixId = searchParams.get('remix');
+    const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
+    const [remixTitle, setRemixTitle] = useState<string | null>(null);
+
     useEffect(() => {
         const checkUser = async () => {
             try {
@@ -65,6 +80,60 @@ export default function CreateVideoPage() {
         };
         checkUser();
     }, [router]);
+
+    // Handle Remix Pre-fill
+    useEffect(() => {
+        if (!remixId) return;
+
+        const fetchRemixData = async () => {
+             const { data: { session } } = await supabase.auth.getSession();
+             if (!session) return;
+
+             try {
+                 const { data, error } = await supabase
+                     .from('generations')
+                     .select('title, prompt, workflow_settings')
+                     .eq('id', remixId)
+                     .single();
+
+                 if (error || !data) {
+                     console.error('Failed to load remix data');
+                     return;
+                 }
+
+                 if (data.title) setRemixTitle(data.title);
+                 
+                 const settings = data.workflow_settings as any;
+                 if (settings) {
+                     if (settings.isMultiShot !== undefined) {
+                         setIsMultiShot(settings.isMultiShot);
+                         if (settings.isMultiShot && settings.multiPrompts) {
+                             setMultiPrompts(settings.multiPrompts);
+                         } else {
+                             if (data.prompt) setPrompt(data.prompt);
+                             if (settings.duration) setSingleDuration(settings.duration);
+                         }
+                     } else {
+                        // Fallback for older generations where isMultiShot wasn't saved explicitly
+                        if (data.prompt) setPrompt(data.prompt);
+                        if (settings.duration) setSingleDuration(settings.duration);
+                     }
+                     
+                     if (settings.mode) setMode(settings.mode);
+                     if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
+                     if (settings.sound !== undefined) setSound(settings.sound);
+                 } else if (data.prompt) {
+                     setPrompt(data.prompt);
+                 }
+             } catch (err) {
+                 console.error('Error fetching remix:', err);
+             } finally {
+                 setIsRemixLoading(false);
+             }
+        };
+
+        fetchRemixData();
+    }, [remixId]);
 
     // Derived Cost mapping based on mode, sound, and total duration (Kling 3.0 specs)
     let creditsPerSecond = 20; // std, no audio
@@ -270,6 +339,28 @@ export default function CreateVideoPage() {
                     )}
                 </div>
 
+                {/* Remix Banner */}
+                <AnimatePresence>
+                    {remixId && !isRemixLoading && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                            animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
+                            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center gap-3 overflow-hidden backdrop-blur-md"
+                        >
+                            <div className="p-2 bg-purple-500/20 rounded-full">
+                                <Sparkles className="w-5 h-5 text-purple-400" />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
+                                <p className="text-xs text-purple-300/80">
+                                    Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}. Modify as needed!
+                                </p>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
                 <div className="grid lg:grid-cols-12 gap-8">
                     {/* Main Controls (Left) */}
                     <div className="lg:col-span-8 flex flex-col gap-6">
@@ -302,6 +393,15 @@ export default function CreateVideoPage() {
                                     className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm"
                                 >
                                     <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Prompt</h2>
+                                    <EnhancePromptButton
+                                        prompt={prompt}
+                                        onEnhanced={(text) => setPrompt(text)}
+                                        onCreditsUpdate={(c) => setUserCredits(c)}
+                                        medium="video"
+                                        selectedModel="kling-3.0/video"
+                                        context={{ mode, aspectRatio, duration: singleDuration, sound }}
+                                        disabled={isGenerating}
+                                    />
                                     <textarea
                                         value={prompt}
                                         onChange={(e) => setPrompt(e.target.value)}
@@ -349,6 +449,15 @@ export default function CreateVideoPage() {
                                                         </button>
                                                     )}
                                                 </div>
+                                                <EnhancePromptButton
+                                                    prompt={shot.prompt}
+                                                    onEnhanced={(text) => updateShot(shot.id, 'prompt', text)}
+                                                    onCreditsUpdate={(c) => setUserCredits(c)}
+                                                    medium="video"
+                                                    selectedModel="kling-3.0/video"
+                                                    context={{ mode, aspectRatio, duration: shot.duration, sound, shotIndex: index }}
+                                                    disabled={isGenerating}
+                                                />
                                                 <textarea
                                                     value={shot.prompt}
                                                     onChange={(e) => updateShot(shot.id, 'prompt', e.target.value)}

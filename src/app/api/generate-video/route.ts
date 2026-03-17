@@ -186,6 +186,15 @@ export async function POST(request: NextRequest) {
             duration: totalDuration,
             prediction_id: taskId,
             status: 'processing',
+            prompt: isMultiShot ? (multiPrompts?.[0]?.prompt || '') : (prompt || '').trim(),
+            category: 'video',
+            workflow_settings: {
+                isMultiShot,
+                mode,
+                aspectRatio,
+                sound,
+                duration: totalDuration,
+            },
         });
 
         if (logError) {

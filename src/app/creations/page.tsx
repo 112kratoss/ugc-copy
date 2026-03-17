@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Clock, Zap, Film, Loader2 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 
 interface Generation {
@@ -15,6 +15,7 @@ interface Generation {
     duration: number;
     cost: number;
     model: string;
+    is_public?: boolean;
 }
 
 type FilterType = 'all' | 'images' | 'videos';
@@ -24,6 +25,13 @@ export default function CreationsPage() {
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [filter, setFilter] = useState<FilterType>('all');
+
+    // Publish Modal State
+    const [publishModalOpen, setPublishModalOpen] = useState(false);
+    const [selectedGen, setSelectedGen] = useState<Generation | null>(null);
+    const [publishTitle, setPublishTitle] = useState('');
+    const [publishDesc, setPublishDesc] = useState('');
+    const [isPublishing, setIsPublishing] = useState(false);
 
     useEffect(() => {
         const fetchCreations = async () => {
@@ -48,6 +56,67 @@ export default function CreationsPage() {
 
         fetchCreations();
     }, [router]);
+
+    const handlePublishSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedGen) return;
+
+        setIsPublishing(true);
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const res = await fetch('/api/showcase/publish', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`
+                },
+                body: JSON.stringify({
+                    generationId: selectedGen.id,
+                    isPublic: true,
+                    title: publishTitle.trim() || undefined,
+                    description: publishDesc.trim() || undefined,
+                })
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                // Optimistically update the local list
+                setGenerations(prev => prev.map(g => g.id === selectedGen.id ? { ...g, is_public: true } : g));
+                setPublishModalOpen(false);
+            } else {
+                alert(data.error || 'Failed to publish');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Failed to publish');
+        } finally {
+            setIsPublishing(false);
+        }
+    };
+
+    const handleUnpublish = async (generationId: string) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const res = await fetch('/api/showcase/publish', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`
+                },
+                body: JSON.stringify({
+                    generationId,
+                    isPublic: false
+                })
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                setGenerations(prev => prev.map(g => g.id === generationId ? { ...g, is_public: false } : g));
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    };
 
     const formatDate = (dateStr: string) =>
         new Date(dateStr).toLocaleDateString('en-US', {
@@ -212,6 +281,34 @@ export default function CreationsPage() {
                                                 {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
                                             </div>
                                         </div>
+                                        
+                                        {/* Action Bar */}
+                                        <div className="p-4 pt-0 flex gap-2">
+                                            {gen.is_public ? (
+                                                <button 
+                                                    onClick={() => handleUnpublish(gen.id)}
+                                                    className="w-full flex items-center justify-center gap-2 py-2 bg-green-500/10 text-green-400 hover:bg-red-500/10 hover:text-red-400 border border-green-500/20 hover:border-red-500/20 rounded-xl text-sm font-medium transition-all group/pub"
+                                                >
+                                                    <CheckCircle2 className="w-4 h-4 group-hover/pub:hidden" />
+                                                    <X className="w-4 h-4 hidden group-hover/pub:block" />
+                                                    <span className="group-hover/pub:hidden">Published</span>
+                                                    <span className="hidden group-hover/pub:inline">Unpublish</span>
+                                                </button>
+                                            ) : (
+                                                <button 
+                                                    onClick={() => {
+                                                        setSelectedGen(gen);
+                                                        setPublishTitle('');
+                                                        setPublishDesc('');
+                                                        setPublishModalOpen(true);
+                                                    }}
+                                                    className="w-full flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
+                                                >
+                                                    <Globe className="w-4 h-4" />
+                                                    Publish to Showcase
+                                                </button>
+                                            )}
+                                        </div>
                                     </motion.div>
                                 );
                             })}
@@ -240,6 +337,83 @@ export default function CreationsPage() {
                     </div>
                 )}
             </div>
+
+            {/* Publish Modal */}
+            <AnimatePresence>
+                {publishModalOpen && selectedGen && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => setPublishModalOpen(false)}
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, y: 20 }}
+                            animate={{ scale: 1, y: 0 }}
+                            exit={{ scale: 0.95, y: 20 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-md shadow-2xl"
+                        >
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-xl font-bold flex items-center gap-2">
+                                    <Globe className="w-5 h-5 text-purple-400" />
+                                    Publish to Showcase
+                                </h3>
+                                <button onClick={() => setPublishModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors">
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                            
+                            <p className="text-sm text-zinc-400 mb-6">
+                                Share your creation with the community! This will make it visible on the public feed and allow others to remix it.
+                            </p>
+
+                            <form onSubmit={handlePublishSubmit} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Title (Optional)</label>
+                                    <input
+                                        type="text"
+                                        value={publishTitle}
+                                        onChange={(e) => setPublishTitle(e.target.value)}
+                                        placeholder="Give your creation a name"
+                                        className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors"
+                                        maxLength={60}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Description (Optional)</label>
+                                    <textarea
+                                        value={publishDesc}
+                                        onChange={(e) => setPublishDesc(e.target.value)}
+                                        placeholder="Share the story behind this, or some tips."
+                                        rows={3}
+                                        className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors resize-none"
+                                        maxLength={200}
+                                    />
+                                </div>
+
+                                <div className="pt-4 flex gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPublishModalOpen(false)}
+                                        className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-medium transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isPublishing}
+                                        className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-xl font-medium transition-all shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)] disabled:opacity-50 flex justify-center items-center"
+                                    >
+                                        {isPublishing ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Publish Now'}
+                                    </button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

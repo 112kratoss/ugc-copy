@@ -127,6 +127,7 @@ export default function Home() {
           <div>
             <h4 className="font-semibold text-lg mb-5 text-zinc-200">Product</h4>
             <ul className="space-y-3 text-base text-zinc-400">
+              <li><Link href="/showcase" className="hover:text-purple-400 transition-colors">Community Showcase</Link></li>
               <li><Link href="/create" className="hover:text-purple-400 transition-colors">Creation Hub</Link></li>
               <li><Link href="/pricing" className="hover:text-purple-400 transition-colors">Pricing</Link></li>
               <li><Link href="/login" className="hover:text-purple-400 transition-colors">Log In</Link></li>

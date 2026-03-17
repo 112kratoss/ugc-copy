@@ -180,7 +180,15 @@ export async function POST(request: NextRequest) {
             duration: duration,
             cost: COST,
             prediction_id: taskId,
-            status: 'processing'
+            status: 'processing',
+            prompt: (prompt || '').trim(),
+            category: 'motion',
+            workflow_settings: {
+                model,
+                characterOrientation,
+                mode,
+                duration,
+            },
         });
 
         if (logError) {

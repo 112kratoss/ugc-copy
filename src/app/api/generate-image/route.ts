@@ -174,6 +174,15 @@ export async function POST(request: NextRequest) {
             cost,
             prediction_id: taskId,
             status: 'processing',
+            prompt: prompt.trim(),
+            category: 'image',
+            workflow_settings: {
+                model,
+                aspectRatio,
+                resolution,
+                outputFormat,
+                googleSearch,
+            },
         });
 
         if (logError) {

@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import localforage from 'localforage';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
@@ -35,6 +36,14 @@ const MOTION_MODELS = {
 type ModelId = keyof typeof MOTION_MODELS;
 
 export default function CreatePage() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>}>
+            <CreateMotionContent />
+        </Suspense>
+    );
+}
+
+function CreateMotionContent() {
     const router = useRouter();
     const [isLoadingUser, setIsLoadingUser] = useState(true);
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
@@ -57,6 +66,12 @@ export default function CreatePage() {
     const [isDraggingImage, setIsDraggingImage] = useState(false);
     const [isDraggingVideo, setIsDraggingVideo] = useState(false);
     const [userCredits, setUserCredits] = useState<number | null>(null);
+
+    // Remix State
+    const searchParams = useSearchParams();
+    const remixId = searchParams.get('remix');
+    const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
+    const [remixTitle, setRemixTitle] = useState<string | null>(null);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
     const model = MOTION_MODELS[selectedModel];
@@ -183,6 +198,47 @@ export default function CreatePage() {
         };
         checkUser();
     }, [router]);
+
+    // Handle Remix Pre-fill
+    useEffect(() => {
+        if (!remixId) return;
+
+        const fetchRemixData = async () => {
+             const { data: { session } } = await supabase.auth.getSession();
+             if (!session) return;
+
+             try {
+                 const { data, error } = await supabase
+                     .from('generations')
+                     .select('title, prompt, workflow_settings')
+                     .eq('id', remixId)
+                     .single();
+
+                 if (error || !data) {
+                     console.error('Failed to load remix data');
+                     return;
+                 }
+
+                 if (data.title) setRemixTitle(data.title);
+                 if (data.prompt) setPrompt(data.prompt);
+                 
+                 const settings = data.workflow_settings as any;
+                 if (settings) {
+                     if (settings.model && MOTION_MODELS[settings.model as ModelId]) {
+                         setSelectedModel(settings.model as ModelId);
+                     }
+                     if (settings.mode) setMode(settings.mode);
+                     if (settings.characterOrientation) setCharacterOrientation(settings.characterOrientation);
+                 }
+             } catch (err) {
+                 console.error('Error fetching remix:', err);
+             } finally {
+                 setIsRemixLoading(false);
+             }
+        };
+
+        fetchRemixData();
+    }, [remixId]);
 
     // Generation Recovery & Persistence
     useEffect(() => {
@@ -345,6 +401,28 @@ export default function CreatePage() {
                         </div>
                     )}
                 </div>
+
+                {/* Remix Banner */}
+                <AnimatePresence>
+                    {remixId && !isRemixLoading && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                            animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
+                            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center gap-3 overflow-hidden backdrop-blur-md"
+                        >
+                            <div className="p-2 bg-purple-500/20 rounded-full">
+                                <Sparkles className="w-5 h-5 text-purple-400" />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
+                                <p className="text-xs text-purple-300/80">
+                                    Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}. Modify as needed!
+                                </p>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 {/* ─── Model Selector Dropdown ───────────────────────────────────── */}
                 <div className="mb-8 relative" ref={dropdownRef}>
@@ -559,6 +637,15 @@ export default function CreatePage() {
 
                 <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-8 md:col-span-2 backdrop-blur-sm">
                     <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Prompt Configuration</h3>
+                    <EnhancePromptButton
+                        prompt={prompt}
+                        onEnhanced={(text) => setPrompt(text)}
+                        onCreditsUpdate={(c) => setUserCredits(c)}
+                        medium="motion"
+                        selectedModel={selectedModel}
+                        context={{ modelId: selectedModel, characterOrientation, mode }}
+                        disabled={isGenerating}
+                    />
                     <textarea
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}
