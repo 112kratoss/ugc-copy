@@ -86,23 +86,86 @@ export const IMAGE_MODELS = {
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
 
-// ─── Video Models (Kling Advanced) ────────────────────────────────────────────
+// ─── Video Models ─────────────────────────────────────────────────────────────
 
 export const VIDEO_MODELS = {
     'kling-3.0-video': {
         id: 'kling-3.0-video' as const,
         displayName: 'Kling 3.0 Cinematic',
-        description: 'Advanced video generation engine',
-        modes: ['std', 'pro'] as const,
+        description: 'Advanced video generation engine with single-shot and multi-shot support',
+        provider: 'kling' as const,
+        apiModelId: 'kling-3.0/video',
+        enhancerModelId: 'kling-3.0/video',
+        supportsMultiShot: true,
+        supportsSound: true,
+        supportsFixedLens: false,
         aspectRatios: ['16:9', '9:16', '1:1'] as const,
         durations: [5, 10] as const,
+        resolutions: [] as const,
+        modeOptions: [
+            { value: 'std', label: 'Standard (720p)' },
+            { value: 'pro', label: 'Pro (1080p, High Quality)' },
+        ] as const,
         /** Credits per second, keyed by mode + sound */
         pricing: {
             std: { noSound: 20, withSound: 30 },
             pro: { noSound: 27, withSound: 40 },
         },
     },
+    'seedance-1.5-pro': {
+        id: 'seedance-1.5-pro' as const,
+        displayName: 'Seedance 1.5 Pro',
+        description: 'ByteDance video model with resolution, duration, and audio controls',
+        provider: 'seedance' as const,
+        apiModelId: 'bytedance/seedance-1.5-pro',
+        enhancerModelId: 'seedance-1.5-pro',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: true,
+        aspectRatios: ['1:1', '21:9', '4:3', '3:4', '16:9', '9:16'] as const,
+        durations: [4, 8, 12] as const,
+        modeOptions: [] as const,
+        resolutions: ['480p', '720p', '1080p'] as const,
+        pricing: {
+            '480p': {
+                noSound: { 4: 7, 8: 14, 12: 19 },
+                withSound: { 4: 14, 8: 28, 12: 38 },
+            },
+            '720p': {
+                noSound: { 4: 14, 8: 28, 12: 42 },
+                withSound: { 4: 28, 8: 56, 12: 84 },
+            },
+            '1080p': {
+                noSound: { 4: 30, 8: 60, 12: 90 },
+                withSound: { 4: 60, 8: 120, 12: 180 },
+            },
+        },
+    },
+    'veo-3.1': {
+        id: 'veo-3.1' as const,
+        displayName: 'Veo 3.1',
+        description: 'Google-class video generation with fast and quality variants',
+        provider: 'veo' as const,
+        apiModelId: '' as const,
+        enhancerModelId: 'veo-3.1',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', 'Auto'] as const,
+        durations: [8] as const,
+        resolutions: [] as const,
+        modeOptions: [
+            { value: 'veo3_fast', label: 'Fast' },
+            { value: 'veo3', label: 'Quality' },
+        ] as const,
+        pricing: {
+            veo3_fast: 60,
+            veo3: 250,
+        },
+    },
 } as const;
+
+export type VideoModelId = keyof typeof VIDEO_MODELS;
 
 // ─── Pricing Helpers ──────────────────────────────────────────────────────────
 
@@ -127,13 +190,35 @@ export function getImageCost(
 
 /** Calculate credits for a video generation. */
 export function getVideoCost(
-    mode: 'std' | 'pro',
-    sound: boolean,
-    durationSeconds: number
+    modelId: VideoModelId,
+    options: {
+        mode?: string;
+        sound?: boolean;
+        durationSeconds?: number;
+        resolution?: string;
+    }
 ): number {
-    const pricing = VIDEO_MODELS['kling-3.0-video'].pricing[mode];
-    const perSecond = sound ? pricing.withSound : pricing.noSound;
-    return Math.ceil(durationSeconds * perSecond);
+    if (modelId === 'kling-3.0-video') {
+        const mode = options.mode === 'pro' ? 'pro' : 'std';
+        const durationSeconds = options.durationSeconds ?? 0;
+        const pricing = VIDEO_MODELS['kling-3.0-video'].pricing[mode];
+        const perSecond = options.sound ? pricing.withSound : pricing.noSound;
+        return Math.ceil(durationSeconds * perSecond);
+    }
+
+    if (modelId === 'seedance-1.5-pro') {
+        const pricingTable = VIDEO_MODELS['seedance-1.5-pro'].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '720p';
+        const durationSeconds = Math.round(options.durationSeconds ?? 8) as 4 | 8 | 12;
+        const pricing = VIDEO_MODELS['seedance-1.5-pro'].pricing[resolution];
+        const durationKey = durationSeconds in pricing.noSound ? durationSeconds : 8;
+        return options.sound ? pricing.withSound[durationKey] : pricing.noSound[durationKey];
+    }
+
+    const mode = options.mode === 'veo3' ? 'veo3' : 'veo3_fast';
+    return VIDEO_MODELS['veo-3.1'].pricing[mode];
 }
 
 // ─── Helpers to check model type ──────────────────────────────────────────────

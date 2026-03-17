@@ -1,8 +1,119 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { getVideoCost, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+
+type MultiPrompt = {
+    id?: string;
+    prompt: string;
+    duration: number;
+};
+
+function buildImageUrls(startImageUrl: string | null, endImageUrl: string | null): string[] {
+    const imageUrls: string[] = [];
+
+    if (startImageUrl) {
+        imageUrls.push(startImageUrl);
+    }
+
+    if (endImageUrl) {
+        imageUrls.push(endImageUrl);
+    }
+
+    return imageUrls;
+}
+
+function getWorkflowModelId(localGeneration: { workflow_settings?: unknown; model?: string } | null): VideoModelId {
+    const workflowSettings = localGeneration?.workflow_settings as { model?: string } | null;
+    const selectedModel = workflowSettings?.model;
+
+    if (selectedModel && selectedModel in VIDEO_MODELS) {
+        return selectedModel as VideoModelId;
+    }
+
+    if (localGeneration?.model === 'veo3' || localGeneration?.model === 'veo3_fast') {
+        return 'veo-3.1';
+    }
+
+    if (localGeneration?.model === 'bytedance/seedance-1.5-pro') {
+        return 'seedance-1.5-pro';
+    }
+
+    return 'kling-3.0-video';
+}
+
+function getFirstResultUrl(value: unknown): string | null {
+    if (Array.isArray(value)) {
+        return typeof value[0] === 'string' ? value[0] : null;
+    }
+
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
+                return parsed[0];
+            }
+        } catch {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+async function persistVideoOutput(
+    supabase: SupabaseClient,
+    predictionId: string,
+    userId: string | undefined,
+    tempUrl: string
+): Promise<string> {
+    try {
+        const videoRes = await fetch(tempUrl);
+        if (!videoRes.ok) {
+            throw new Error('Failed to download video from Kie');
+        }
+
+        const videoBlob = await videoRes.blob();
+        const fileName = `${userId}/generated_${predictionId}.mp4`;
+
+        const { error: uploadError } = await supabase.storage
+            .from('generated_videos')
+            .upload(fileName, videoBlob, {
+                contentType: 'video/mp4',
+                upsert: true,
+            });
+
+        if (uploadError) {
+            console.error('Upload to Supabase Storage failed:', uploadError);
+            await supabase
+                .from('generations')
+                .update({ status: 'succeeded', output_url: tempUrl })
+                .eq('prediction_id', predictionId);
+            return tempUrl;
+        }
+
+        const storagePath = `generated_videos/${fileName}`;
+        const { data: signedData } = await supabase.storage
+            .from('generated_videos')
+            .createSignedUrl(fileName, 3600);
+
+        await supabase
+            .from('generations')
+            .update({ status: 'succeeded', output_url: storagePath })
+            .eq('prediction_id', predictionId);
+
+        return signedData?.signedUrl || tempUrl;
+    } catch (error) {
+        console.error('Error persisting video to storage:', error);
+        await supabase
+            .from('generations')
+            .update({ status: 'succeeded', output_url: tempUrl })
+            .eq('prediction_id', predictionId);
+        return tempUrl;
+    }
+}
 
 export async function POST(request: NextRequest) {
     let refundState: {
@@ -24,6 +135,7 @@ export async function POST(request: NextRequest) {
 
     try {
         const {
+            model = 'kling-3.0-video',
             isMultiShot,
             prompt,
             multiPrompts,
@@ -32,23 +144,51 @@ export async function POST(request: NextRequest) {
             mode = 'std',
             aspectRatio = '16:9',
             sound = false,
-            duration = 5 // for single shot
+            duration = 5,
+            resolution = '720p',
+            fixedLens = false,
         } = await request.json();
 
-        // Validation
+        if (!(model in VIDEO_MODELS)) {
+            return NextResponse.json({ error: `Unsupported video model: ${model}` }, { status: 400 });
+        }
+
+        const selectedModel = VIDEO_MODELS[model as VideoModelId];
+        const soundEnabled = selectedModel.supportsSound ? sound : false;
+        const imageUrls = buildImageUrls(startImageUrl, endImageUrl);
+
+        if (isMultiShot && !selectedModel.supportsMultiShot) {
+            return NextResponse.json({ error: `${selectedModel.displayName} does not support multi-shot generation.` }, { status: 400 });
+        }
+
         if (isMultiShot) {
             if (!multiPrompts || multiPrompts.length === 0) {
                 return NextResponse.json({ error: 'At least one shot is required for multi-shot mode' }, { status: 400 });
             }
-            for (const shot of multiPrompts) {
+
+            for (const shot of multiPrompts as MultiPrompt[]) {
                 if (!shot.prompt || shot.prompt.trim().length === 0) {
                     return NextResponse.json({ error: 'All shots must have a text prompt' }, { status: 400 });
                 }
             }
-        } else {
-            if (!prompt || prompt.trim().length === 0) {
-                return NextResponse.json({ error: 'A prompt is required for single shot video' }, { status: 400 });
-            }
+        } else if (!prompt || prompt.trim().length === 0) {
+            return NextResponse.json({ error: 'A prompt is required for video generation' }, { status: 400 });
+        }
+
+        if (!(selectedModel.aspectRatios as readonly string[]).includes(aspectRatio)) {
+            return NextResponse.json({ error: `Unsupported aspect ratio for ${selectedModel.displayName}` }, { status: 400 });
+        }
+
+        if (selectedModel.modeOptions.length > 0 && !selectedModel.modeOptions.some((option) => option.value === mode)) {
+            return NextResponse.json({ error: `Unsupported mode for ${selectedModel.displayName}` }, { status: 400 });
+        }
+
+        if (selectedModel.resolutions.length > 0 && !(selectedModel.resolutions as readonly string[]).includes(resolution)) {
+            return NextResponse.json({ error: `Unsupported resolution for ${selectedModel.displayName}` }, { status: 400 });
+        }
+
+        if (!isMultiShot && selectedModel.provider !== 'veo' && !(selectedModel.durations as readonly number[]).includes(duration)) {
+            return NextResponse.json({ error: `Unsupported duration for ${selectedModel.displayName}` }, { status: 400 });
         }
 
         if (!KIE_API_KEY) {
@@ -59,7 +199,6 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Initialize Supabase client with user context
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -68,7 +207,6 @@ export async function POST(request: NextRequest) {
             }
         );
 
-        // Get authenticated user
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return NextResponse.json(
@@ -77,21 +215,20 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Calculate Cost Dynamically (Kling 3.0 tokens per second)
-        let creditsPerSecond = 20; // std, no audio
-        if (mode === 'std' && sound) creditsPerSecond = 30;
-        if (mode === 'pro' && !sound) creditsPerSecond = 27;
-        if (mode === 'pro' && sound) creditsPerSecond = 40;
-        let totalDuration = duration;
-        if (isMultiShot) {
-            totalDuration = multiPrompts.reduce((acc: number, curr: { duration?: number }) => acc + (curr.duration || 3), 0);
-        }
-        const COST = Math.ceil(totalDuration * creditsPerSecond);
+        const totalDuration = isMultiShot
+            ? (multiPrompts as MultiPrompt[]).reduce((acc, curr) => acc + (curr.duration || 3), 0)
+            : (selectedModel.provider === 'veo' ? selectedModel.durations[0] : duration);
 
-        // Deduct Credits
+        const cost = getVideoCost(model as VideoModelId, {
+            mode,
+            sound: soundEnabled,
+            durationSeconds: totalDuration,
+            resolution,
+        });
+
         const { data: remainingCredits, error: creditError } = await supabase.rpc('deduct_credits', {
             p_user_id: user.id,
-            p_cost: COST
+            p_cost: cost,
         });
 
         if (creditError) {
@@ -104,7 +241,7 @@ export async function POST(request: NextRequest) {
 
         if (remainingCredits === -1) {
             return NextResponse.json(
-                { error: `Insufficient credits. This generation costs ${COST} credits.` },
+                { error: `Insufficient credits. This generation costs ${cost} credits.` },
                 { status: 402 }
             );
         }
@@ -112,49 +249,78 @@ export async function POST(request: NextRequest) {
         refundState = {
             supabase,
             userId: user.id,
-            amount: COST,
+            amount: cost,
             shouldRefund: true,
         };
 
-        // Build input object for Kling 3.0
-        const input: Record<string, unknown> = {
-            mode: mode,
-            aspect_ratio: aspectRatio,
-            sound: sound,
-        };
+        let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
+        let body: Record<string, unknown>;
+        let providerModelId: string = selectedModel.apiModelId || mode;
 
-        if (isMultiShot) {
-            input.multi_shots = true;
-            input.multi_prompt = multiPrompts.map((p: { prompt: string; duration: number }) => ({
-                prompt: p.prompt.trim(),
-                duration: p.duration
-            }));
+        if (selectedModel.provider === 'kling') {
+            const input: Record<string, unknown> = {
+                mode,
+                aspect_ratio: aspectRatio,
+                sound: soundEnabled,
+            };
+
+            if (isMultiShot) {
+                input.multi_shots = true;
+                input.multi_prompt = (multiPrompts as MultiPrompt[]).map((shot) => ({
+                    prompt: shot.prompt.trim(),
+                    duration: shot.duration,
+                }));
+            } else {
+                input.prompt = prompt.trim();
+                input.duration = duration;
+            }
+
+            if (imageUrls.length > 0) {
+                input.image_urls = imageUrls;
+            }
+
+            body = {
+                model: selectedModel.apiModelId,
+                input,
+            };
+        } else if (selectedModel.provider === 'seedance') {
+            const input: Record<string, unknown> = {
+                prompt: prompt.trim(),
+                aspect_ratio: aspectRatio,
+                resolution,
+                duration: String(duration),
+                fixed_lens: fixedLens,
+                generate_audio: soundEnabled,
+            };
+
+            if (imageUrls.length > 0) {
+                input.input_urls = imageUrls;
+            }
+
+            body = {
+                model: selectedModel.apiModelId,
+                input,
+            };
         } else {
-            input.prompt = prompt.trim();
-            input.duration = duration;
+            endpoint = 'https://api.kie.ai/api/v1/veo/generate';
+            providerModelId = mode === 'veo3' ? 'veo3' : 'veo3_fast';
+
+            body = {
+                prompt: prompt.trim(),
+                model: providerModelId,
+                aspectRatio,
+                generationType: imageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO',
+                ...(imageUrls.length > 0 ? { imageUrls } : {}),
+            };
         }
 
-        // Handle Image URLs mapping
-        if (startImageUrl && endImageUrl && !isMultiShot) {
-            input.image_urls = [startImageUrl, endImageUrl];
-        } else if (startImageUrl) {
-            input.image_urls = [startImageUrl];
-        } else if (endImageUrl && !isMultiShot) {
-            // End image only is usually defined as ["", "end_url"]
-            input.image_urls = ["", endImageUrl];
-        }
-
-        // Call Kie.ai API
-        const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${KIE_API_KEY}`,
-                'Content-Type': 'application/json'
+                Authorization: `Bearer ${KIE_API_KEY}`,
+                'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-                model: 'kling-3.0/video',
-                input,
-            })
+            body: JSON.stringify(body),
         });
 
         let data;
@@ -178,30 +344,31 @@ export async function POST(request: NextRequest) {
         const taskId = data.data.taskId;
         refundState.shouldRefund = false;
         const remixMultiPrompts = isMultiShot
-            ? multiPrompts.map((shot: { id?: string; prompt: string; duration: number }, index: number) => ({
+            ? (multiPrompts as MultiPrompt[]).map((shot, index) => ({
                 id: shot.id || `${index + 1}`,
                 prompt: shot.prompt.trim(),
                 duration: shot.duration,
             }))
             : undefined;
 
-        // Log Generation
         const { error: logError } = await supabase.from('generations').insert({
             user_id: user.id,
-            model: 'kling-3.0/video',
-            cost: COST,
+            model: providerModelId,
+            cost,
             duration: totalDuration,
             prediction_id: taskId,
             status: 'processing',
-            prompt: isMultiShot ? (multiPrompts?.[0]?.prompt || '') : (prompt || '').trim(),
+            prompt: isMultiShot ? ((multiPrompts as MultiPrompt[])?.[0]?.prompt || '') : (prompt || '').trim(),
             category: 'video',
             workflow_settings: {
-                isMultiShot,
+                model,
                 mode,
                 aspectRatio,
-                sound,
+                sound: soundEnabled,
                 duration: totalDuration,
                 multiPrompts: remixMultiPrompts,
+                resolution,
+                fixedLens,
             },
         });
 
@@ -214,9 +381,8 @@ export async function POST(request: NextRequest) {
             predictionId: taskId,
             status: 'processing',
             remainingCredits,
-            cost: COST
+            cost,
         });
-
     } catch (error: unknown) {
         await refundIfNeeded();
         console.error('Error starting video generation:', error);
@@ -228,7 +394,6 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// GET endpoint to check video generation status
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const predictionId = searchParams.get('id');
@@ -251,10 +416,8 @@ export async function GET(request: NextRequest) {
             }
         );
 
-        // Get authenticated user for storage scoping
         const { data: { user } } = await supabase.auth.getUser();
 
-        // Check local DB cache first
         const { data: localGeneration } = await supabase
             .from('generations')
             .select('*')
@@ -268,89 +431,89 @@ export async function GET(request: NextRequest) {
             });
         }
 
-        // Query Kie.ai for status
-        const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
-            headers: { 'Authorization': `Bearer ${KIE_API_KEY}` },
-        });
+        const selectedModel = getWorkflowModelId(localGeneration);
+        let status = 'processing';
+        let output: string | null = null;
+        let error: string | null = null;
 
-        const data = await response.json();
+        if (selectedModel === 'veo-3.1') {
+            const response = await fetch(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
+                headers: { Authorization: `Bearer ${KIE_API_KEY}` },
+            });
 
-        if (!response.ok || data.code !== 200) {
-            throw new Error(data.msg || 'Failed to check status');
-        }
+            const data = await response.json();
 
-        let status = data.data.state;
-        let output = null;
-        let error = null;
+            if (!response.ok || data.code !== 200) {
+                throw new Error(data.msg || 'Failed to check status');
+            }
 
-        if (status === 'success') {
-            status = 'succeeded';
-            try {
-                const result = JSON.parse(data.data.resultJson);
-                const tempUrl = result.resultUrls?.[0] || null;
+            const successFlag = data.data?.successFlag;
+            const responseData = data.data?.response;
+
+            if (successFlag === 1) {
+                status = 'succeeded';
+                const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
 
                 if (tempUrl) {
-                    // Persist video to Supabase Storage
-                    const userId = user?.id || localGeneration?.user_id;
-                    try {
-                        const videoRes = await fetch(tempUrl);
-                        if (!videoRes.ok) throw new Error('Failed to download video from Kie');
-                        const videoBlob = await videoRes.blob();
-                        const fileName = `${userId}/generated_${predictionId}.mp4`;
-
-                        const { error: uploadError } = await supabase.storage
-                            .from('generated_videos')
-                            .upload(fileName, videoBlob, {
-                                contentType: 'video/mp4',
-                                upsert: true
-                            });
-
-                        if (uploadError) {
-                            console.error('Upload to Supabase Storage failed:', uploadError);
-                            output = tempUrl;
-                        } else {
-                            // Store the storage path, not a public URL
-                            const storagePath = `generated_videos/${fileName}`;
-                            const { data: signedData } = await supabase.storage
-                                .from('generated_videos')
-                                .createSignedUrl(fileName, 3600);
-                            output = signedData?.signedUrl || tempUrl;
-
-                            await supabase
-                                .from('generations')
-                                .update({ status: 'succeeded', output_url: storagePath })
-                                .eq('prediction_id', predictionId);
-                        }
-                    } catch (e) {
-                        console.error('Error persisting video to storage:', e);
-                        output = tempUrl;
-                    }
-
-                    // Update DB if we fell back to tempUrl
-                    if (!output || output === tempUrl) {
-                        await supabase
-                            .from('generations')
-                            .update({ status: 'succeeded', output_url: output })
-                            .eq('prediction_id', predictionId);
-                    }
+                    output = await persistVideoOutput(
+                        supabase,
+                        predictionId,
+                        user?.id || localGeneration?.user_id,
+                        tempUrl
+                    );
                 }
-            } catch (e) {
-                console.error('Error handling success status:', e);
+            } else if (successFlag === 2 || successFlag === 3) {
+                status = 'failed';
+                error = data.data?.errorMessage || data.msg || 'Unknown error';
+                await supabase
+                    .from('generations')
+                    .update({ status: 'failed' })
+                    .eq('prediction_id', predictionId);
+                await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
             }
-        } else if (status === 'fail') {
-            status = 'failed';
-            error = data.data.failMsg || 'Unknown error';
-            await supabase
-                .from('generations')
-                .update({ status: 'failed' })
-                .eq('prediction_id', predictionId);
+        } else {
+            const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
+                headers: { Authorization: `Bearer ${KIE_API_KEY}` },
+            });
 
-            // Refund credits for async failure (idempotent)
-            await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+            const data = await response.json();
+
+            if (!response.ok || data.code !== 200) {
+                throw new Error(data.msg || 'Failed to check status');
+            }
+
+            status = data.data.state;
+
+            if (status === 'success') {
+                status = 'succeeded';
+
+                try {
+                    const result = JSON.parse(data.data.resultJson);
+                    const tempUrl = getFirstResultUrl(result.resultUrls);
+
+                    if (tempUrl) {
+                        output = await persistVideoOutput(
+                            supabase,
+                            predictionId,
+                            user?.id || localGeneration?.user_id,
+                            tempUrl
+                        );
+                    }
+                } catch (parseError) {
+                    console.error('Error handling success status:', parseError);
+                }
+            } else if (status === 'fail') {
+                status = 'failed';
+                error = data.data.failMsg || 'Unknown error';
+                await supabase
+                    .from('generations')
+                    .update({ status: 'failed' })
+                    .eq('prediction_id', predictionId);
+                await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+            }
         }
 
         return NextResponse.json({ status, output, error });
-
     } catch (error) {
         console.error('Error fetching video status:', error);
         return NextResponse.json({ error: 'Failed to fetch generation status' }, { status: 500 });

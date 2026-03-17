@@ -40,16 +40,28 @@ describe('Model Pricing', () => {
 
     describe('getVideoCost', () => {
         it('std mode without sound', () => {
-            expect(getVideoCost('std', false, 5)).toBe(100); // 5 * 20
+            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: false, durationSeconds: 5 })).toBe(100);
         });
         it('std mode with sound', () => {
-            expect(getVideoCost('std', true, 5)).toBe(150); // 5 * 30
+            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: true, durationSeconds: 5 })).toBe(150);
         });
         it('pro mode without sound', () => {
-            expect(getVideoCost('pro', false, 10)).toBe(270); // 10 * 27
+            expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: false, durationSeconds: 10 })).toBe(270);
         });
         it('pro mode with sound', () => {
-            expect(getVideoCost('pro', true, 10)).toBe(400); // 10 * 40
+            expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: true, durationSeconds: 10 })).toBe(400);
+        });
+        it('seedance 720p 8s without sound', () => {
+            expect(getVideoCost('seedance-1.5-pro', { resolution: '720p', sound: false, durationSeconds: 8 })).toBe(28);
+        });
+        it('seedance 1080p 12s with sound', () => {
+            expect(getVideoCost('seedance-1.5-pro', { resolution: '1080p', sound: true, durationSeconds: 12 })).toBe(180);
+        });
+        it('veo 3.1 fast has flat pricing', () => {
+            expect(getVideoCost('veo-3.1', { mode: 'veo3_fast' })).toBe(60);
+        });
+        it('veo 3.1 quality has flat pricing', () => {
+            expect(getVideoCost('veo-3.1', { mode: 'veo3' })).toBe(250);
         });
     });
 });

@@ -76,6 +76,20 @@ const MODEL_ENHANCER_RULES: Record<string, string> = {
 - Duration can be 5 or 10 seconds — pace the described action accordingly.
 - Mention mood and atmosphere (tense, serene, energetic).`,
 
+    'seedance-1.5-pro': `Target model: Seedance 1.5 Pro for video generation.
+- This model supports text-to-video and image-to-video with up to two reference images.
+- Describe the motion and camera intent clearly, especially when fixed lens is disabled.
+- Keep prompts cinematic, grounded, and production-ready rather than abstract.
+- If audio is enabled, mention the sound design or ambience only when it materially helps the scene.
+- Match pacing to the selected duration of 4, 8, or 12 seconds.`,
+
+    'veo-3.1': `Target model: Veo 3.1 for video generation.
+- Focus on believable motion, strong scene continuity, and crisp visual direction.
+- Write as a single coherent clip, not a shot list.
+- If reference images are provided, describe how the image should come alive or transition.
+- Keep the prompt concise and specific so the model can preserve visual consistency.
+- Favour cinematic realism, clear camera intent, and a strong sense of atmosphere.`,
+
     'kling-2.6': `Target model: Kling 2.6 for motion transfer.
 - This model transfers motion from a reference video onto a character image.
 - CRUCIAL: Do NOT describe the motion itself (that comes from the reference video).
@@ -146,6 +160,8 @@ export const SUPPORTED_ENHANCEMENT_MODELS = new Set([
     'nano-banana-2',
     'nano-banana-pro',
     'kling-3.0/video',
+    'seedance-1.5-pro',
+    'veo-3.1',
     'kling-2.6',
     'kling-3.0',
 ]);

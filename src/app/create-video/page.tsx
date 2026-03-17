@@ -3,17 +3,11 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play } from 'lucide-react';
+import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-
-const MODES = [
-    { value: 'std', label: 'Standard (720p)' },
-    { value: 'pro', label: 'Pro (1080p, High Quality)' }
-];
-const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
-const SINGLE_SHOT_DURATIONS = [5, 10];
+import { getVideoCost, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 
 interface MultiShot {
     id: string;
@@ -22,12 +16,15 @@ interface MultiShot {
 }
 
 interface VideoWorkflowSettings {
+    model?: VideoModelId;
     isMultiShot?: boolean;
     multiPrompts?: MultiShot[];
-    mode?: 'std' | 'pro';
+    mode?: string;
     aspectRatio?: string;
     sound?: boolean;
     duration?: number;
+    resolution?: string;
+    fixedLens?: boolean;
 }
 
 export default function CreateVideoPage() {
@@ -40,15 +37,18 @@ export default function CreateVideoPage() {
 
 function CreateVideoContent() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const remixId = searchParams.get('remix');
+
     const [isLoadingUser, setIsLoadingUser] = useState(true);
     const [userCredits, setUserCredits] = useState<number | null>(null);
 
-    // Form State
+    const [selectedModel, setSelectedModel] = useState<VideoModelId>('kling-3.0-video');
     const [isMultiShot, setIsMultiShot] = useState(false);
     const [prompt, setPrompt] = useState('');
     const [singleDuration, setSingleDuration] = useState(5);
     const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
-        { id: '1', prompt: '', duration: 5 }
+        { id: '1', prompt: '', duration: 5 },
     ]);
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
     const [startImageUrl, setStartImageUrl] = useState<string | null>(null);
@@ -57,8 +57,9 @@ function CreateVideoContent() {
     const [mode, setMode] = useState('std');
     const [aspectRatio, setAspectRatio] = useState('16:9');
     const [sound, setSound] = useState(false);
+    const [resolution, setResolution] = useState('720p');
+    const [fixedLens, setFixedLens] = useState(false);
 
-    // UI/Generation State
     const [isDraggingStart, setIsDraggingStart] = useState(false);
     const [isDraggingEnd, setIsDraggingEnd] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -66,13 +67,37 @@ function CreateVideoContent() {
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    // Remix State
-    const searchParams = useSearchParams();
-    const remixId = searchParams.get('remix');
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+
+    const videoModel = VIDEO_MODELS[selectedModel];
+    const currentMode = videoModel.modeOptions.length > 0 && videoModel.modeOptions.some((option) => option.value === mode)
+        ? mode
+        : (videoModel.modeOptions[0]?.value || '');
+    const currentAspectRatio = (videoModel.aspectRatios as readonly string[]).includes(aspectRatio)
+        ? aspectRatio
+        : videoModel.aspectRatios[0];
+    const currentResolution = videoModel.resolutions.length > 0 && (videoModel.resolutions as readonly string[]).includes(resolution)
+        ? resolution
+        : (videoModel.resolutions[0] || '');
+    const currentDuration = (videoModel.durations as readonly number[]).includes(singleDuration)
+        ? singleDuration
+        : videoModel.durations[0];
+    const currentSound = videoModel.supportsSound ? sound : false;
+    const currentFixedLens = videoModel.supportsFixedLens ? fixedLens : false;
+    const currentIsMultiShot = videoModel.supportsMultiShot ? isMultiShot : false;
+    const totalDuration = currentIsMultiShot
+        ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
+        : (videoModel.provider === 'veo' ? videoModel.durations[0] : currentDuration);
+    const estimatedCost = getVideoCost(selectedModel, {
+        mode: currentMode,
+        sound: currentSound,
+        durationSeconds: totalDuration,
+        resolution: currentResolution,
+    });
+    const insufficientCredits = userCredits !== null && userCredits < estimatedCost;
 
     useEffect(() => {
         const checkUser = async () => {
@@ -92,126 +117,179 @@ function CreateVideoContent() {
         checkUser();
     }, [router]);
 
-    // Handle Remix Pre-fill
+    useEffect(() => {
+        if (videoModel.modeOptions?.length) {
+            if (!videoModel.modeOptions.some((option) => option.value === mode)) {
+                setMode(videoModel.modeOptions[0].value);
+            }
+        } else if (mode !== '') {
+            setMode('');
+        }
+
+        if (!(videoModel.aspectRatios as readonly string[]).includes(aspectRatio)) {
+            setAspectRatio(videoModel.aspectRatios[0]);
+        }
+
+        if (!(videoModel.durations as readonly number[]).includes(singleDuration)) {
+            setSingleDuration(videoModel.durations[0]);
+        }
+
+        if (videoModel.resolutions?.length) {
+            if (!(videoModel.resolutions as readonly string[]).includes(resolution)) {
+                setResolution(videoModel.resolutions[0]);
+            }
+        } else if (resolution !== '') {
+            setResolution('');
+        }
+
+        if (!videoModel.supportsSound) {
+            setSound(false);
+        }
+
+        if (!videoModel.supportsFixedLens) {
+            setFixedLens(false);
+        }
+
+        if (!videoModel.supportsMultiShot) {
+            setIsMultiShot(false);
+        }
+    }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution]);
+
     useEffect(() => {
         if (!remixId) return;
 
         const fetchRemixData = async () => {
-             const { data: { session } } = await supabase.auth.getSession();
-             if (!session) return;
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
 
-             try {
-                 const { data, error } = await supabase
-                     .from('generations')
-                     .select('title, prompt, workflow_settings, output_url')
-                     .eq('id', remixId)
-                     .single();
+            try {
+                const { data, error } = await supabase
+                    .from('generations')
+                    .select('title, prompt, workflow_settings, output_url')
+                    .eq('id', remixId)
+                    .single();
 
-                 if (error || !data) {
-                     console.error('Failed to load remix data');
-                     return;
-                 }
+                if (error || !data) {
+                    console.error('Failed to load remix data');
+                    return;
+                }
 
-                 if (data.title) setRemixTitle(data.title);
-                 
-                 // Handle the preview URL via server-side signed URL
-                 try {
-                     const session = await supabase.auth.getSession();
-                     const token = session.data.session?.access_token;
-                     if (token) {
-                         const previewRes = await fetch(`/api/showcase/preview?id=${remixId}`, {
-                             headers: { 'Authorization': `Bearer ${token}` }
-                         });
-                         if (previewRes.ok) {
-                             const previewData = await previewRes.json();
-                             if (previewData.url) setRemixVideoUrl(previewData.url);
-                         }
-                     }
-                 } catch (e) {
-                     console.error('Failed to load preview URL:', e);
-                 }
-                 
-                 const settings = data.workflow_settings as VideoWorkflowSettings | null;
-                 if (settings) {
-                     if (settings.isMultiShot !== undefined) {
-                         setIsMultiShot(settings.isMultiShot);
-                         if (settings.isMultiShot && settings.multiPrompts) {
-                             setMultiPrompts(settings.multiPrompts.map((shot, index) => ({
-                                 id: shot.id || `${index + 1}`,
-                                 prompt: shot.prompt,
-                                 duration: shot.duration,
-                             })));
-                         } else {
-                             if (data.prompt) setPrompt(data.prompt);
-                             if (settings.duration) setSingleDuration(settings.duration);
-                         }
-                     } else {
-                        // Fallback for older generations where isMultiShot wasn't saved explicitly
+                if (data.title) setRemixTitle(data.title);
+
+                try {
+                    const sessionData = await supabase.auth.getSession();
+                    const token = sessionData.data.session?.access_token;
+                    if (token) {
+                        const previewRes = await fetch(`/api/showcase/preview?id=${remixId}`, {
+                            headers: { Authorization: `Bearer ${token}` },
+                        });
+                        if (previewRes.ok) {
+                            const previewData = await previewRes.json();
+                            if (previewData.url) setRemixVideoUrl(previewData.url);
+                        }
+                    }
+                } catch (previewError) {
+                    console.error('Failed to load preview URL:', previewError);
+                }
+
+                const settings = data.workflow_settings as VideoWorkflowSettings | null;
+                if (settings?.model && settings.model in VIDEO_MODELS) {
+                    setSelectedModel(settings.model);
+                }
+
+                if (settings) {
+                    if (settings.isMultiShot !== undefined) {
+                        setIsMultiShot(settings.isMultiShot);
+                        if (settings.isMultiShot && settings.multiPrompts) {
+                            setMultiPrompts(settings.multiPrompts.map((shot, index) => ({
+                                id: shot.id || `${index + 1}`,
+                                prompt: shot.prompt,
+                                duration: shot.duration,
+                            })));
+                        } else {
+                            if (data.prompt) setPrompt(data.prompt);
+                            if (settings.duration) setSingleDuration(settings.duration);
+                        }
+                    } else {
                         if (data.prompt) setPrompt(data.prompt);
                         if (settings.duration) setSingleDuration(settings.duration);
-                     }
-                     
-                     if (settings.mode) setMode(settings.mode);
-                     if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
-                     if (settings.sound !== undefined) setSound(settings.sound);
-                 } else if (data.prompt) {
-                     setPrompt(data.prompt);
-                 }
-             } catch (err) {
-                 console.error('Error fetching remix:', err);
-             } finally {
-                 setIsRemixLoading(false);
-             }
+                    }
+
+                    if (settings.mode) setMode(settings.mode);
+                    if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
+                    if (settings.sound !== undefined) setSound(settings.sound);
+                    if (settings.resolution) setResolution(settings.resolution);
+                    if (settings.fixedLens !== undefined) setFixedLens(settings.fixedLens);
+                } else if (data.prompt) {
+                    setPrompt(data.prompt);
+                }
+            } catch (fetchError) {
+                console.error('Error fetching remix:', fetchError);
+            } finally {
+                setIsRemixLoading(false);
+            }
         };
 
         fetchRemixData();
     }, [remixId]);
 
-    // Derived Cost mapping based on mode, sound, and total duration (Kling 3.0 specs)
-    let creditsPerSecond = 20; // std, no audio
-    if (mode === 'std' && sound) creditsPerSecond = 30;
-    if (mode === 'pro' && !sound) creditsPerSecond = 27;
-    if (mode === 'pro' && sound) creditsPerSecond = 40;
-    
-    const totalDuration = isMultiShot ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0) : singleDuration;
-    const estimatedCost = Math.ceil(totalDuration * creditsPerSecond);
-    const insufficientCredits = userCredits !== null && userCredits < estimatedCost;
-
-    // Multi-shot handlers
     const addShot = () => {
         setMultiPrompts([...multiPrompts, { id: Math.random().toString(), prompt: '', duration: 5 }]);
     };
+
     const removeShot = (id: string) => {
         if (multiPrompts.length > 1) {
-            setMultiPrompts(multiPrompts.filter(p => p.id !== id));
+            setMultiPrompts(multiPrompts.filter((shot) => shot.id !== id));
         }
-    };
-    const updateShot = (id: string, field: 'prompt' | 'duration', value: string | number) => {
-        setMultiPrompts(multiPrompts.map(p => p.id === id ? { ...p, [field]: value } : p));
     };
 
-    // Image handlers
-    const handleImageDrop = (e: React.DragEvent, type: 'start' | 'end') => {
-        e.preventDefault();
-        if (type === 'start') { setIsDraggingStart(false); } else { setIsDraggingEnd(false); }
-        const file = e.dataTransfer.files?.[0];
+    const updateShot = (id: string, field: 'prompt' | 'duration', value: string | number) => {
+        setMultiPrompts(multiPrompts.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot));
+    };
+
+    const handleImageDrop = (event: React.DragEvent, type: 'start' | 'end') => {
+        event.preventDefault();
+        if (type === 'start') {
+            setIsDraggingStart(false);
+        } else {
+            setIsDraggingEnd(false);
+        }
+
+        const file = event.dataTransfer.files?.[0];
         if (file && file.type.startsWith('image/')) {
-            if (type === 'start') { setStartImageFile(file); setStartImageUrl(URL.createObjectURL(file)); }
-            else { setEndImageFile(file); setEndImageUrl(URL.createObjectURL(file)); }
+            if (type === 'start') {
+                setStartImageFile(file);
+                setStartImageUrl(URL.createObjectURL(file));
+            } else {
+                setEndImageFile(file);
+                setEndImageUrl(URL.createObjectURL(file));
+            }
         }
     };
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'start' | 'end') => {
-        const file = e.target.files?.[0];
+
+    const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>, type: 'start' | 'end') => {
+        const file = event.target.files?.[0];
         if (file && file.type.startsWith('image/')) {
-            if (type === 'start') { setStartImageFile(file); setStartImageUrl(URL.createObjectURL(file)); }
-            else { setEndImageFile(file); setEndImageUrl(URL.createObjectURL(file)); }
-            e.target.value = '';
+            if (type === 'start') {
+                setStartImageFile(file);
+                setStartImageUrl(URL.createObjectURL(file));
+            } else {
+                setEndImageFile(file);
+                setEndImageUrl(URL.createObjectURL(file));
+            }
+            event.target.value = '';
         }
     };
-    const clearImage = (e: React.MouseEvent, type: 'start' | 'end') => {
-        e.preventDefault();
-        if (type === 'start') { setStartImageFile(null); setStartImageUrl(null); }
-        else { setEndImageFile(null); setEndImageUrl(null); }
+
+    const clearImage = (event: React.MouseEvent, type: 'start' | 'end') => {
+        event.preventDefault();
+        if (type === 'start') {
+            setStartImageFile(null);
+            setStartImageUrl(null);
+        } else {
+            setEndImageFile(null);
+            setEndImageUrl(null);
+        }
     };
 
     const uploadToSupabase = async (file: File): Promise<string> => {
@@ -235,13 +313,13 @@ function CreateVideoContent() {
     };
 
     const pollPrediction = async (predictionId: string, accessToken: string): Promise<string> => {
-        const maxAttempts = 120; // 10 mins
+        const maxAttempts = 120;
         let attempts = 0;
         const startTime = Date.now();
 
         while (attempts < maxAttempts) {
             const response = await fetch(`/api/generate-video?id=${predictionId}`, {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
+                headers: { Authorization: `Bearer ${accessToken}` },
             });
             const data = await response.json();
 
@@ -258,20 +336,43 @@ function CreateVideoContent() {
             else statusMsg = 'Finalizing export...';
 
             setGenerationStatus(`${statusMsg} (${Math.round(progress)}%)`);
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise((resolve) => setTimeout(resolve, 5000));
             attempts++;
         }
+
         throw new Error('Video generation timed out.');
+    };
+
+    const handleSelectModel = (modelId: VideoModelId) => {
+        const nextModel = VIDEO_MODELS[modelId];
+
+        setSelectedModel(modelId);
+        setMode(nextModel.modeOptions[0]?.value || '');
+        setAspectRatio(nextModel.aspectRatios[0]);
+        setSingleDuration(nextModel.durations[0]);
+        setResolution(nextModel.resolutions[0] || '');
+        setSound(false);
+        setFixedLens(false);
+
+        if (!nextModel.supportsMultiShot) {
+            setIsMultiShot(false);
+        }
     };
 
     const handleGenerate = async () => {
         if (isMultiShot) {
-            if (multiPrompts.some(p => !p.prompt.trim())) { setError('All shots must have a prompt'); return; }
-        } else {
-            if (!prompt.trim()) { setError('Please enter a prompt'); return; }
+            if (multiPrompts.some((shot) => !shot.prompt.trim())) {
+                setError('All shots must have a prompt');
+                return;
+            }
+        } else if (!prompt.trim()) {
+            setError('Please enter a prompt');
+            return;
         }
+
         if (insufficientCredits) {
-            setError(`Insufficient credits. This costs ${estimatedCost} credits.`); return;
+            setError(`Insufficient credits. This costs ${estimatedCost} credits.`);
+            return;
         }
 
         setIsGenerating(true);
@@ -287,6 +388,7 @@ function CreateVideoContent() {
                 setGenerationStatus('Uploading start image... (2%)');
                 startUrl = await uploadToSupabase(startImageFile);
             }
+
             if (endImageFile && !isMultiShot) {
                 setGenerationStatus('Uploading end image... (4%)');
                 endUrl = await uploadToSupabase(endImageFile);
@@ -295,24 +397,33 @@ function CreateVideoContent() {
             setGenerationStatus('Starting AI generation... (5%)');
 
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) { router.push('/login?returnUrl=/create-video'); return; }
+            if (!session) {
+                router.push('/login?returnUrl=/create-video');
+                return;
+            }
 
             const payload = {
-                isMultiShot,
+                model: selectedModel,
+                isMultiShot: currentIsMultiShot,
                 prompt: prompt.trim(),
-                multiPrompts: multiPrompts,
-                duration: singleDuration,
+                multiPrompts,
+                duration: totalDuration,
                 startImageUrl: startUrl,
                 endImageUrl: endUrl,
-                mode,
-                aspectRatio,
-                sound
+                mode: currentMode,
+                aspectRatio: currentAspectRatio,
+                sound: currentSound,
+                resolution: currentResolution,
+                fixedLens: currentFixedLens,
             };
 
             const response = await fetch('/api/generate-video', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-                body: JSON.stringify(payload)
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify(payload),
             });
 
             const data = await response.json();
@@ -322,9 +433,8 @@ function CreateVideoContent() {
             setOutputVideo(outputUrl);
             setGenerationStatus('Video generated successfully! (100%)');
             if (data.remainingCredits !== undefined) setUserCredits(data.remainingCredits);
-
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Something went wrong');
+        } catch (generationError) {
+            setError(generationError instanceof Error ? generationError.message : 'Something went wrong');
             setGenerationStatus(null);
         } finally {
             setIsGenerating(false);
@@ -353,14 +463,13 @@ function CreateVideoContent() {
             </div>
 
             <div className="relative z-10 max-w-5xl mx-auto">
-                {/* Header */}
                 <div className="flex items-center gap-4 mb-8">
                     <Link href="/create" className="group p-3 rounded-full bg-zinc-900/50 border border-white/5 hover:bg-zinc-800 hover:border-white/10 transition-all backdrop-blur-md">
                         <ArrowLeft className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
                     </Link>
                     <div>
-                        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">Advanced Video</h1>
-                        <p className="text-sm text-zinc-500 font-medium tracking-wide">KLING 3.0 CINEMATIC ENGINE</p>
+                        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">Video Generation</h1>
+                        <p className="text-sm text-zinc-500 font-medium tracking-wide">{videoModel.displayName.toUpperCase()}</p>
                     </div>
                     {userCredits !== null && (
                         <div className="ml-auto flex items-center gap-2 px-4 py-2 bg-zinc-900/50 border border-white/5 rounded-full backdrop-blur-md">
@@ -371,7 +480,6 @@ function CreateVideoContent() {
                     )}
                 </div>
 
-                {/* Remix Banner */}
                 <AnimatePresence>
                     {remixId && !isRemixLoading && (
                         <motion.div
@@ -391,7 +499,7 @@ function CreateVideoContent() {
                                     </p>
                                 </div>
                             </div>
-                            
+
                             {remixVideoUrl && (
                                 <button
                                     onClick={() => setIsPreviewModalOpen(true)}
@@ -406,28 +514,42 @@ function CreateVideoContent() {
                 </AnimatePresence>
 
                 <div className="grid lg:grid-cols-12 gap-8">
-                    {/* Main Controls (Left) */}
                     <div className="lg:col-span-8 flex flex-col gap-6">
-
-                        {/* Mode Selector */}
-                        <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-2 flex gap-2 backdrop-blur-sm self-start">
-                            <button
-                                onClick={() => setIsMultiShot(false)}
-                                className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${!isMultiShot ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-zinc-500 hover:text-white'}`}
-                            >
-                                Single Shot
-                            </button>
-                            <button
-                                onClick={() => setIsMultiShot(true)}
-                                className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${isMultiShot ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-zinc-500 hover:text-white'}`}
-                            >
-                                Multi-Shot
-                            </button>
+                        <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-4 backdrop-blur-sm">
+                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Model</h2>
+                            <div className="grid sm:grid-cols-3 gap-3">
+                                {(Object.values(VIDEO_MODELS) as typeof VIDEO_MODELS[VideoModelId][]).map((modelOption) => (
+                                    <button
+                                        key={modelOption.id}
+                                        onClick={() => handleSelectModel(modelOption.id)}
+                                        className={`p-4 rounded-2xl border text-left transition-all ${selectedModel === modelOption.id ? 'bg-blue-500/15 border-blue-500/30 text-white' : 'bg-black/40 border-white/5 text-zinc-400 hover:border-white/10 hover:text-white'}`}
+                                    >
+                                        <div className="font-semibold text-sm">{modelOption.displayName}</div>
+                                        <div className="text-xs text-zinc-500 mt-1 leading-relaxed">{modelOption.description}</div>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
-                        {/* Prompt Area */}
+                        {videoModel.supportsMultiShot && (
+                            <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-2 flex gap-2 backdrop-blur-sm self-start">
+                                <button
+                                    onClick={() => setIsMultiShot(false)}
+                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${!currentIsMultiShot ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-zinc-500 hover:text-white'}`}
+                                >
+                                    Single Shot
+                                </button>
+                                <button
+                                    onClick={() => setIsMultiShot(true)}
+                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${currentIsMultiShot ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-zinc-500 hover:text-white'}`}
+                                >
+                                    Multi-Shot
+                                </button>
+                            </div>
+                        )}
+
                         <AnimatePresence mode="popLayout">
-                            {!isMultiShot ? (
+                            {!currentIsMultiShot ? (
                                 <motion.div
                                     key="single-shot"
                                     initial={{ opacity: 0, scale: 0.95 }}
@@ -440,29 +562,37 @@ function CreateVideoContent() {
                                     <EnhancePromptButton
                                         prompt={prompt}
                                         onEnhanced={(text) => setPrompt(text)}
-                                        onCreditsUpdate={(c) => setUserCredits(c)}
+                                        onCreditsUpdate={(credits) => setUserCredits(credits)}
                                         medium="video"
-                                        selectedModel="kling-3.0/video"
-                                        context={{ mode, aspectRatio, duration: singleDuration, sound }}
+                                        selectedModel={videoModel.enhancerModelId}
+                                        context={{ modelId: selectedModel, mode: currentMode, aspectRatio: currentAspectRatio, duration: totalDuration, sound: currentSound, resolution: currentResolution }}
                                         disabled={isGenerating}
                                     />
                                     <textarea
                                         value={prompt}
-                                        onChange={(e) => setPrompt(e.target.value)}
-                                        placeholder="Describe your scene in rich, cinematic detail..."
+                                        onChange={(event) => setPrompt(event.target.value)}
+                                        placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={2500}
                                         className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
                                     />
                                     <div className="mt-4 flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-3 flex-wrap">
                                             <span className="text-xs text-zinc-500 font-medium">Duration:</span>
-                                            {SINGLE_SHOT_DURATIONS.map(dur => (
-                                                <button
-                                                    key={dur}
-                                                    onClick={() => setSingleDuration(dur)}
-                                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${singleDuration === dur ? 'bg-white/10 text-white border border-white/20' : 'bg-black text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
-                                                >{dur} sec</button>
-                                            ))}
+                                            {videoModel.durations.length > 1 ? (
+                                                videoModel.durations.map((durationOption) => (
+                                                    <button
+                                                        key={durationOption}
+                                                        onClick={() => setSingleDuration(durationOption)}
+                                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${currentDuration === durationOption ? 'bg-white/10 text-white border border-white/20' : 'bg-black text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                                    >
+                                                        {durationOption} sec
+                                                    </button>
+                                                ))
+                                            ) : (
+                                                <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/10 text-white border border-white/20">
+                                                    {videoModel.durations[0]} sec fixed
+                                                </span>
+                                            )}
                                         </div>
                                         <span className="text-xs text-zinc-600">{prompt.length}/2500</span>
                                     </div>
@@ -496,24 +626,27 @@ function CreateVideoContent() {
                                                 <EnhancePromptButton
                                                     prompt={shot.prompt}
                                                     onEnhanced={(text) => updateShot(shot.id, 'prompt', text)}
-                                                    onCreditsUpdate={(c) => setUserCredits(c)}
+                                                    onCreditsUpdate={(credits) => setUserCredits(credits)}
                                                     medium="video"
-                                                    selectedModel="kling-3.0/video"
-                                                    context={{ mode, aspectRatio, duration: shot.duration, sound, shotIndex: index }}
+                                                    selectedModel={videoModel.enhancerModelId}
+                                                    context={{ modelId: selectedModel, mode: currentMode, aspectRatio: currentAspectRatio, duration: shot.duration, sound: currentSound, shotIndex: index }}
                                                     disabled={isGenerating}
                                                 />
                                                 <textarea
                                                     value={shot.prompt}
-                                                    onChange={(e) => updateShot(shot.id, 'prompt', e.target.value)}
+                                                    onChange={(event) => updateShot(shot.id, 'prompt', event.target.value)}
                                                     placeholder={`Describe shot ${index + 1}...`}
                                                     className="w-full bg-black/50 text-white rounded-2xl p-4 border border-white/10 focus:border-purple-500/50 outline-none resize-none min-h-[100px] text-sm mb-4"
                                                 />
                                                 <div className="flex items-center gap-3">
                                                     <span className="text-xs text-zinc-500 font-medium">Duration (1-12s):</span>
                                                     <input
-                                                        type="range" min="1" max="12" step="1"
+                                                        type="range"
+                                                        min="1"
+                                                        max="12"
+                                                        step="1"
                                                         value={shot.duration}
-                                                        onChange={(e) => updateShot(shot.id, 'duration', parseInt(e.target.value))}
+                                                        onChange={(event) => updateShot(shot.id, 'duration', parseInt(event.target.value))}
                                                         className="w-32 accent-purple-500"
                                                     />
                                                     <span className="text-xs font-bold text-white">{shot.duration}s</span>
@@ -532,7 +665,6 @@ function CreateVideoContent() {
                             )}
                         </AnimatePresence>
 
-                        {/* Images */}
                         <div className="grid sm:grid-cols-2 gap-4">
                             <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
                                 <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
@@ -540,101 +672,134 @@ function CreateVideoContent() {
                                 </h2>
                                 <label
                                     className={`group flex flex-col items-center justify-center w-full h-[140px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingStart ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
-                                    onDragOver={(e) => { e.preventDefault(); setIsDraggingStart(true); }}
-                                    onDragLeave={(e) => { e.preventDefault(); setIsDraggingStart(false); }}
-                                    onDrop={(e) => handleImageDrop(e, 'start')}
+                                    onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
+                                    onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
+                                    onDrop={(event) => handleImageDrop(event, 'start')}
                                 >
                                     {startImageUrl ? (
                                         <div className="w-full h-full relative">
                                             {/* eslint-disable-next-line @next/next/no-img-element */}
                                             <img src={startImageUrl} alt="Start frame" className="w-full h-full object-cover" />
-                                            <button onClick={(e) => clearImage(e, 'start')} className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
+                                            <button onClick={(event) => clearImage(event, 'start')} className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
                                         </div>
                                     ) : (
-                                        <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload Start Image</span></div>
+                                        <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload Reference Image</span></div>
                                     )}
-                                    <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'start')} className="hidden" />
+                                    <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event, 'start')} className="hidden" />
                                 </label>
                             </div>
 
-                            {!isMultiShot && (
+                            {!currentIsMultiShot && (
                                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
                                     <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
                                         End Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
                                     </h2>
                                     <label
                                         className={`group flex flex-col items-center justify-center w-full h-[140px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingEnd ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
-                                        onDragOver={(e) => { e.preventDefault(); setIsDraggingEnd(true); }}
-                                        onDragLeave={(e) => { e.preventDefault(); setIsDraggingEnd(false); }}
-                                        onDrop={(e) => handleImageDrop(e, 'end')}
+                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
+                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
+                                        onDrop={(event) => handleImageDrop(event, 'end')}
                                     >
                                         {endImageUrl ? (
                                             <div className="w-full h-full relative">
                                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                                 <img src={endImageUrl} alt="End frame" className="w-full h-full object-cover" />
-                                                <button onClick={(e) => clearImage(e, 'end')} className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
+                                                <button onClick={(event) => clearImage(event, 'end')} className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
                                             </div>
                                         ) : (
                                             <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload End Image</span></div>
                                         )}
-                                        <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'end')} className="hidden" />
+                                        <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event, 'end')} className="hidden" />
                                     </label>
                                 </motion.div>
                             )}
                         </div>
                     </div>
 
-                    {/* Sidebar / Configuration (Right) */}
                     <div className="lg:col-span-4 flex flex-col gap-6">
-
                         <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm space-y-6">
+                            {videoModel.modeOptions.length > 0 && (
+                                <div>
+                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">{selectedModel === 'veo-3.1' ? 'Model Variant' : 'Quality Mode'}</h2>
+                                    <div className="flex flex-col gap-2">
+                                        {videoModel.modeOptions.map((option) => (
+                                            <button
+                                                key={option.value}
+                                                onClick={() => setMode(option.value)}
+                                                className={`p-3 rounded-xl text-sm font-medium transition-all text-left ${currentMode === option.value ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                            >
+                                                {option.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
-                            {/* Quality Mode */}
+                            {videoModel.resolutions.length > 0 && (
+                                <div>
+                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Resolution</h2>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {videoModel.resolutions.map((resolutionOption) => (
+                                            <button
+                                                key={resolutionOption}
+                                                onClick={() => setResolution(resolutionOption)}
+                                                className={`py-2 rounded-xl text-xs font-bold transition-all ${currentResolution === resolutionOption ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                            >
+                                                {resolutionOption}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             <div>
-                                <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Model Quality</h2>
-                                <div className="flex flex-col gap-2">
-                                    {MODES.map(m => (
+                                <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Aspect Ratio</h2>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {videoModel.aspectRatios.map((ratio) => (
                                         <button
-                                            key={m.value} onClick={() => setMode(m.value)}
-                                            className={`p-3 rounded-xl text-sm font-medium transition-all text-left ${mode === m.value ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                            key={ratio}
+                                            onClick={() => setAspectRatio(ratio)}
+                                            className={`py-2 rounded-xl text-xs font-bold transition-all ${currentAspectRatio === ratio ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
                                         >
-                                            {m.label}
+                                            {ratio}
                                         </button>
                                     ))}
                                 </div>
                             </div>
 
-                            {/* Aspect Ratio */}
-                            <div>
-                                <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Aspect Ratio</h2>
-                                <div className="flex gap-2">
-                                    {ASPECT_RATIOS.map(ratio => (
-                                        <button
-                                            key={ratio} onClick={() => setAspectRatio(ratio)}
-                                            className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${aspectRatio === ratio ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
-                                        >{ratio}</button>
-                                    ))}
+                            {videoModel.supportsFixedLens && (
+                                <div>
+                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Camera</h2>
+                                    <button
+                                        onClick={() => setFixedLens(!fixedLens)}
+                                        className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${currentFixedLens ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
+                                    >
+                                        <span className="flex items-center gap-2">
+                                            <Camera className="w-4 h-4" />
+                                            Fixed Lens
+                                        </span>
+                                        <span>{currentFixedLens ? 'ON' : 'OFF'}</span>
+                                    </button>
                                 </div>
-                            </div>
+                            )}
 
-                            {/* Sound Effects */}
-                            <div>
-                                <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Audio</h2>
-                                <button
-                                    onClick={() => setSound(!sound)}
-                                    className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${sound ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
-                                >
-                                    <span className="flex items-center gap-2">
-                                        {sound ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                                        AI Sound Effects
-                                    </span>
-                                    <span>{sound ? 'ON' : 'OFF'}</span>
-                                </button>
-                            </div>
-
+                            {videoModel.supportsSound && (
+                                <div>
+                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Audio</h2>
+                                    <button
+                                        onClick={() => setSound(!sound)}
+                                        className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${currentSound ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
+                                    >
+                                        <span className="flex items-center gap-2">
+                                            {currentSound ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                                            AI Sound Effects
+                                        </span>
+                                        <span>{currentSound ? 'ON' : 'OFF'}</span>
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
-                        {/* Cost & Generate Button */}
                         <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm">
                             <div className="flex justify-between items-end mb-6">
                                 <div>
@@ -660,7 +825,7 @@ function CreateVideoContent() {
                                     disabled={isGenerating}
                                     className="w-full py-4 bg-gradient-to-r from-blue-600 to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl flex justify-center items-center gap-2 font-bold text-white shadow-[0_0_20px_-5px_rgba(59,130,246,0.3)] hover:shadow-[0_0_30px_-5px_rgba(59,130,246,0.5)] transition-all"
                                 >
-                                    {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Masterpiece</>}
+                                    {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Video</>}
                                 </button>
                             )}
 
@@ -673,18 +838,19 @@ function CreateVideoContent() {
                                     <div className="h-1.5 bg-black rounded-full overflow-hidden">
                                         <motion.div
                                             className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
-                                            initial={{ width: '0%' }} animate={{ width: `${getProgress()}%` }} transition={{ duration: 0.5 }}
+                                            initial={{ width: '0%' }}
+                                            animate={{ width: `${getProgress()}%` }}
+                                            transition={{ duration: 0.5 }}
                                         />
                                     </div>
                                 </div>
                             )}
+
                             {error && <p className="mt-4 text-xs text-red-400 text-center bg-red-400/10 py-2 rounded-lg">{error}</p>}
                         </div>
-
                     </div>
                 </div>
 
-                {/* Video Output */}
                 {outputVideo && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mt-12 bg-zinc-900/30 border border-green-500/20 rounded-3xl p-6 backdrop-blur-sm flex flex-col items-center">
                         <h2 className="text-xl font-bold text-green-400 mb-6 flex items-center gap-2">
@@ -693,15 +859,13 @@ function CreateVideoContent() {
                         <div className="w-full max-w-3xl rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-white/10 shadow-2xl">
                             <video src={outputVideo} controls autoPlay loop className="w-full h-full object-contain" />
                         </div>
-                        <a href={outputVideo} download="kling_generation.mp4" target="_blank" rel="noopener noreferrer" className="mt-6 px-8 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-full flex items-center gap-2 transition-all">
+                        <a href={outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="mt-6 px-8 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-full flex items-center gap-2 transition-all">
                             <Download className="w-4 h-4" /> Download Video
                         </a>
                     </motion.div>
                 )}
-
             </div>
 
-            {/* Remix Preview Modal */}
             <AnimatePresence>
                 {isPreviewModalOpen && remixVideoUrl && (
                     <motion.div
@@ -715,7 +879,7 @@ function CreateVideoContent() {
                             initial={{ scale: 0.95, opacity: 0, y: 20 }}
                             animate={{ scale: 1, opacity: 1, y: 0 }}
                             exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(event) => event.stopPropagation()}
                             className="bg-zinc-900 border border-white/10 p-6 rounded-3xl max-w-2xl w-full flex flex-col gap-6 shadow-2xl relative"
                         >
                             <button
@@ -724,25 +888,25 @@ function CreateVideoContent() {
                             >
                                 <X className="w-5 h-5" />
                             </button>
-                            
+
                             <h2 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
                                 Original Creation
                             </h2>
-                            
+
                             <div className="rounded-xl overflow-hidden border border-white/5 bg-black/50 flex items-center justify-center flex-1 min-h-[300px] relative group">
-                                <video 
-                                    src={remixVideoUrl} 
+                                <video
+                                    src={remixVideoUrl}
                                     controls
                                     autoPlay
                                     loop
                                     className="max-h-[60vh] object-contain rounded-xl w-full"
                                 />
                             </div>
-                            
+
                             <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col gap-2">
                                 <div className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Prompt</div>
                                 <p className="text-sm text-zinc-300 leading-relaxed max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                                    {isMultiShot ? multiPrompts.map(m => m.prompt).join(' | ') : prompt || "No prompt available"}
+                                    {isMultiShot ? multiPrompts.map((shot) => shot.prompt).join(' | ') : prompt || 'No prompt available'}
                                 </p>
                             </div>
                         </motion.div>
