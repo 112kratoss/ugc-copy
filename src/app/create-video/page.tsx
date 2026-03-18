@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera } from 'lucide-react';
+import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
@@ -66,6 +66,8 @@ function CreateVideoContent() {
     const [generationStatus, setGenerationStatus] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const modelDropdownRef = useRef<HTMLDivElement>(null);
 
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
@@ -116,6 +118,17 @@ function CreateVideoContent() {
         };
         checkUser();
     }, [router]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+                setIsModelDropdownOpen(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     useEffect(() => {
         if (videoModel.modeOptions?.length) {
@@ -347,6 +360,7 @@ function CreateVideoContent() {
         const nextModel = VIDEO_MODELS[modelId];
 
         setSelectedModel(modelId);
+        setIsModelDropdownOpen(false);
         setMode(nextModel.modeOptions[0]?.value || '');
         setAspectRatio(nextModel.aspectRatios[0]);
         setSingleDuration(nextModel.durations[0]);
@@ -515,21 +529,82 @@ function CreateVideoContent() {
 
                 <div className="grid lg:grid-cols-12 gap-8">
                     <div className="lg:col-span-8 flex flex-col gap-6">
-                        <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-4 backdrop-blur-sm">
-                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Model</h2>
-                            <div className="grid sm:grid-cols-3 gap-3">
-                                {(Object.values(VIDEO_MODELS) as typeof VIDEO_MODELS[VideoModelId][]).map((modelOption) => (
-                                    <button
-                                        key={modelOption.id}
-                                        onClick={() => handleSelectModel(modelOption.id)}
-                                        className={`p-4 rounded-2xl border text-left transition-all ${selectedModel === modelOption.id ? 'bg-blue-500/15 border-blue-500/30 text-white' : 'bg-black/40 border-white/5 text-zinc-400 hover:border-white/10 hover:text-white'}`}
+                        <motion.div
+                            initial={{ opacity: 0, y: 16 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="relative"
+                            ref={modelDropdownRef}
+                        >
+                            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Model</p>
+                            <button
+                                onClick={() => setIsModelDropdownOpen((prev) => !prev)}
+                                className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
+                            >
+                                <div className="flex items-center gap-3">
+                                    <Video className="w-4 h-4 text-white" />
+                                    <div className="text-left">
+                                        <div className="text-sm font-bold text-white">{videoModel.displayName}</div>
+                                        <p className="text-xs text-zinc-500 mt-0.5">{videoModel.description}</p>
+                                    </div>
+                                </div>
+                                <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            <AnimatePresence>
+                                {isModelDropdownOpen && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
+                                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                                        exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
+                                        transition={{ duration: 0.15 }}
+                                        className="absolute z-50 mt-2 w-full bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
+                                        style={{ transformOrigin: 'top' }}
                                     >
-                                        <div className="font-semibold text-sm">{modelOption.displayName}</div>
-                                        <div className="text-xs text-zinc-500 mt-1 leading-relaxed">{modelOption.description}</div>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
+                                        {(Object.values(VIDEO_MODELS) as typeof VIDEO_MODELS[VideoModelId][]).map((modelOption) => {
+                                            const isActive = selectedModel === modelOption.id;
+
+                                            return (
+                                                <button
+                                                    key={modelOption.id}
+                                                    onClick={() => handleSelectModel(modelOption.id)}
+                                                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
+                                                >
+                                                    <div className="flex-1 min-w-0">
+                                                        <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                            {modelOption.displayName}
+                                                        </span>
+                                                        <p className="text-xs text-zinc-500 mt-0.5">{modelOption.description}</p>
+                                                        <div className="flex flex-wrap gap-1.5 mt-2">
+                                                            {modelOption.supportsMultiShot && (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                                                                    Multi-shot
+                                                                </span>
+                                                            )}
+                                                            {modelOption.supportsSound && (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                                                                    Sound
+                                                                </span>
+                                                            )}
+                                                            {modelOption.supportsFixedLens && (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                                                                    Fixed Lens
+                                                                </span>
+                                                            )}
+                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
+                                                                {modelOption.durations.length > 1
+                                                                    ? `${modelOption.durations.join('/')}s`
+                                                                    : `${modelOption.durations[0]}s fixed`}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                                                </button>
+                                            );
+                                        })}
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </motion.div>
 
                         {videoModel.supportsMultiShot && (
                             <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-2 flex gap-2 backdrop-blur-sm self-start">
