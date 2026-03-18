@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X } from 'lucide-react';
+import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { isAudioModel, isImageModel } from '@/lib/models';
 import { supabase } from '@/lib/supabase';
 
 interface Generation {
@@ -12,13 +13,14 @@ interface Generation {
     output_url: string | null;
     status: string;
     created_at: string;
-    duration: number;
-    cost: number;
+    duration: number | null;
+    cost: number | null;
     model: string;
+    category?: string | null;
     is_public?: boolean;
 }
 
-type FilterType = 'all' | 'images' | 'videos';
+type FilterType = 'all' | 'images' | 'videos' | 'audio';
 
 export default function CreationsPage() {
     const router = useRouter();
@@ -124,21 +126,62 @@ export default function CreationsPage() {
             hour: '2-digit', minute: '2-digit',
         });
 
-    const IMAGE_MODELS = ['nano-banana-2', 'nano-banana-pro'];
-    const isImageModel = (model: string) => IMAGE_MODELS.includes(model);
+    const getGenerationCategory = (generation: Generation): 'image' | 'video' | 'audio' | 'motion' | 'ugc-ad' => {
+        if (generation.category === 'audio' || generation.category === 'image' || generation.category === 'motion' || generation.category === 'ugc-ad') {
+            return generation.category;
+        }
+
+        if (generation.category === 'video') {
+            return 'video';
+        }
+
+        if (isImageModel(generation.model)) {
+            return 'image';
+        }
+
+        if (isAudioModel(generation.model)) {
+            return 'audio';
+        }
+
+        return 'video';
+    };
+
+    const getMediaKind = (generation: Generation): 'image' | 'video' | 'audio' => {
+        const category = getGenerationCategory(generation);
+        if (category === 'image') return 'image';
+        if (category === 'audio') return 'audio';
+        return 'video';
+    };
+
+    const inferDownloadExtension = (generation: Generation): string => {
+        const mediaKind = getMediaKind(generation);
+        const fallback = mediaKind === 'image' ? 'jpg' : mediaKind === 'audio' ? 'mp3' : 'mp4';
+        if (!generation.output_url) return fallback;
+
+        try {
+            const pathname = new URL(generation.output_url, 'http://localhost').pathname;
+            const extension = pathname.split('.').pop();
+            return extension && extension.length <= 5 ? extension : fallback;
+        } catch {
+            return fallback;
+        }
+    };
 
     const successfulGenerations = generations.filter(g => g.status === 'succeeded' && g.output_url);
     const processingGenerations = generations.filter(g => g.status === 'processing');
     const failedGenerations = generations.filter(g => g.status === 'failed');
 
     const filteredSuccessful = successfulGenerations.filter(g => {
-        if (filter === 'images') return isImageModel(g.model);
-        if (filter === 'videos') return !isImageModel(g.model);
+        const mediaKind = getMediaKind(g);
+        if (filter === 'images') return mediaKind === 'image';
+        if (filter === 'videos') return mediaKind === 'video';
+        if (filter === 'audio') return mediaKind === 'audio';
         return true;
     });
 
-    const imageCount = successfulGenerations.filter(g => isImageModel(g.model)).length;
-    const videoCount = successfulGenerations.filter(g => !isImageModel(g.model)).length;
+    const imageCount = successfulGenerations.filter(g => getMediaKind(g) === 'image').length;
+    const videoCount = successfulGenerations.filter(g => getMediaKind(g) === 'video').length;
+    const audioCount = successfulGenerations.filter(g => getMediaKind(g) === 'audio').length;
 
     return (
         <div className="min-h-screen bg-black text-white">
@@ -171,6 +214,7 @@ export default function CreationsPage() {
                             { key: 'all', label: `All (${successfulGenerations.length})` },
                             { key: 'images', label: `🖼 Images (${imageCount})` },
                             { key: 'videos', label: `🎬 Videos (${videoCount})` },
+                            { key: 'audio', label: `🔊 Audio (${audioCount})` },
                         ] as { key: FilterType; label: string }[]).map(tab => (
                             <button
                                 key={tab.key}
@@ -253,7 +297,15 @@ export default function CreationsPage() {
                         )}
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                             {filteredSuccessful.map((gen, i) => {
-                                const isImage = isImageModel(gen.model);
+                                const mediaKind = getMediaKind(gen);
+                                const isImage = mediaKind === 'image';
+                                const isAudio = mediaKind === 'audio';
+                                const badgeClass = isImage
+                                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                    : isAudio
+                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                        : 'bg-purple-500/20 text-purple-300 border border-purple-500/30';
+                                const badgeLabel = isImage ? '🖼 Image' : isAudio ? '🔊 Audio' : '🎬 Video';
                                 return (
                                     <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
                                         className="group bg-zinc-900/30 rounded-2xl border border-white/5 overflow-hidden backdrop-blur-sm hover:border-purple-500/30 hover:shadow-[0_0_30px_-10px_rgba(168,85,247,0.2)] transition-all duration-300">
@@ -261,15 +313,28 @@ export default function CreationsPage() {
                                             {isImage ? (
                                                 // eslint-disable-next-line @next/next/no-img-element
                                                 <img src={gen.output_url!} alt="Generated image" className="w-full h-auto block" />
+                                            ) : isAudio ? (
+                                                <div className="p-6">
+                                                    <div className="mb-4 flex items-center gap-3 text-emerald-300">
+                                                        <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 p-3">
+                                                            <Volume2 className="w-5 h-5" />
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-sm font-semibold text-white">Audio generation</div>
+                                                            <div className="text-xs text-zinc-500">{gen.model}</div>
+                                                        </div>
+                                                    </div>
+                                                    <audio src={gen.output_url!} className="w-full" controls />
+                                                </div>
                                             ) : (
                                                 <video src={gen.output_url!} className="w-full h-auto block" controls muted loop playsInline
                                                     onMouseEnter={(e) => e.currentTarget.play()}
                                                     onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }} />
                                             )}
-                                            <div className={`absolute top-3 left-3 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider backdrop-blur-md ${isImage ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'}`}>
-                                                {isImage ? '🖼 Image' : '🎬 Video'}
+                                            <div className={`absolute top-3 left-3 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider backdrop-blur-md ${badgeClass}`}>
+                                                {badgeLabel}
                                             </div>
-                                            <a href={gen.output_url!} download={`creation_${gen.id}.${isImage ? 'jpg' : 'mp4'}`} target="_blank" rel="noopener noreferrer"
+                                            <a href={gen.output_url!} download={`creation_${gen.id}.${inferDownloadExtension(gen)}`} target="_blank" rel="noopener noreferrer"
                                                 className="absolute top-3 right-3 p-2 bg-black/60 hover:bg-purple-500/80 text-white rounded-full backdrop-blur-md transition-all opacity-0 group-hover:opacity-100 shadow-lg">
                                                 <Download className="w-4 h-4" />
                                             </a>
@@ -283,32 +348,34 @@ export default function CreationsPage() {
                                         </div>
                                         
                                         {/* Action Bar */}
-                                        <div className="p-4 pt-0 flex gap-2">
-                                            {gen.is_public ? (
-                                                <button 
-                                                    onClick={() => handleUnpublish(gen.id)}
-                                                    className="w-full flex items-center justify-center gap-2 py-2 bg-green-500/10 text-green-400 hover:bg-red-500/10 hover:text-red-400 border border-green-500/20 hover:border-red-500/20 rounded-xl text-sm font-medium transition-all group/pub"
-                                                >
-                                                    <CheckCircle2 className="w-4 h-4 group-hover/pub:hidden" />
-                                                    <X className="w-4 h-4 hidden group-hover/pub:block" />
-                                                    <span className="group-hover/pub:hidden">Published</span>
-                                                    <span className="hidden group-hover/pub:inline">Unpublish</span>
-                                                </button>
-                                            ) : (
-                                                <button 
-                                                    onClick={() => {
-                                                        setSelectedGen(gen);
-                                                        setPublishTitle('');
-                                                        setPublishDesc('');
-                                                        setPublishModalOpen(true);
-                                                    }}
-                                                    className="w-full flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
-                                                >
-                                                    <Globe className="w-4 h-4" />
-                                                    Publish to Showcase
-                                                </button>
-                                            )}
-                                        </div>
+                                        {!isAudio && (
+                                            <div className="p-4 pt-0 flex gap-2">
+                                                {gen.is_public ? (
+                                                    <button 
+                                                        onClick={() => handleUnpublish(gen.id)}
+                                                        className="w-full flex items-center justify-center gap-2 py-2 bg-green-500/10 text-green-400 hover:bg-red-500/10 hover:text-red-400 border border-green-500/20 hover:border-red-500/20 rounded-xl text-sm font-medium transition-all group/pub"
+                                                    >
+                                                        <CheckCircle2 className="w-4 h-4 group-hover/pub:hidden" />
+                                                        <X className="w-4 h-4 hidden group-hover/pub:block" />
+                                                        <span className="group-hover/pub:hidden">Published</span>
+                                                        <span className="hidden group-hover/pub:inline">Unpublish</span>
+                                                    </button>
+                                                ) : (
+                                                    <button 
+                                                        onClick={() => {
+                                                            setSelectedGen(gen);
+                                                            setPublishTitle('');
+                                                            setPublishDesc('');
+                                                            setPublishModalOpen(true);
+                                                        }}
+                                                        className="w-full flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
+                                                    >
+                                                        <Globe className="w-4 h-4" />
+                                                        Publish to Showcase
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
                                     </motion.div>
                                 );
                             })}
@@ -324,7 +391,7 @@ export default function CreationsPage() {
                             {failedGenerations.map((gen, i) => (
                                 <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
                                     className="bg-zinc-900/30 rounded-2xl border border-red-500/20 overflow-hidden backdrop-blur-sm opacity-60">
-                                    <div className="aspect-video bg-black/60 flex items-center justify-center">
+                                    <div className={`${getMediaKind(gen) === 'audio' ? 'p-6' : 'aspect-video'} bg-black/60 flex items-center justify-center`}>
                                         <span className="text-xs text-red-400/60">Generation failed</span>
                                     </div>
                                     <div className="p-4 flex items-center justify-between">

@@ -30,10 +30,10 @@ export function createServiceClient(): SupabaseClient {
     );
 }
 
-export type MediaBucket = 'generated_images' | 'generated_videos';
+export type MediaBucket = 'generated_images' | 'generated_videos' | 'generated_audio';
 
 export function isMediaBucket(bucket: string): bucket is MediaBucket {
-    return bucket === 'generated_images' || bucket === 'generated_videos';
+    return bucket === 'generated_images' || bucket === 'generated_videos' || bucket === 'generated_audio';
 }
 
 export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket; filePath: string } | null {
@@ -48,6 +48,13 @@ export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket
         return {
             bucket: 'generated_videos',
             filePath: outputUrl.replace('generated_videos/', ''),
+        };
+    }
+
+    if (outputUrl.startsWith('generated_audio/')) {
+        return {
+            bucket: 'generated_audio',
+            filePath: outputUrl.replace('generated_audio/', ''),
         };
     }
 

@@ -76,12 +76,12 @@ export default function CreateHubPage() {
                         <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
                             <Clapperboard className="w-7 h-7" />
                         </div>
-                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">AI Workflow</h2>
+                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">Workflow Canvas</h2>
                         <p className="text-zinc-400 mb-8 flex-1 leading-relaxed">
-                            Build an end-to-end ad or video plan with hooks, shots, asset prompts, and launch links into every model workflow.
+                            Build a visual node canvas that connects prompts, media inputs, image generation, video generation, and motion control into reusable workflows.
                         </p>
                         <div className="flex items-center text-emerald-400 font-medium group-hover:text-emerald-300">
-                            Plan the campaign <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                            Open the canvas <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
                         </div>
                     </Link>
 
