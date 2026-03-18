@@ -76,10 +76,21 @@ function CreateImageContent() {
     // Remix State
     const searchParams = useSearchParams();
     const remixId = searchParams.get('remix');
+    const prefillPrompt = searchParams.get('prompt');
+    const prefillModel = searchParams.get('model');
+    const prefillAspectRatio = searchParams.get('aspectRatio');
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+
+
+    useEffect(() => {
+        if (remixId) return;
+        if (prefillPrompt) setPrompt(prefillPrompt);
+        if (prefillModel && prefillModel in IMAGE_MODELS) setSelectedModel(prefillModel as ModelId);
+        if (prefillAspectRatio) setAspectRatio(prefillAspectRatio);
+    }, [prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
 
     const model = IMAGE_MODELS[selectedModel];
 

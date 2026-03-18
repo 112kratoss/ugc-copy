@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isAudioModel } from '@/lib/models';
 
 type ShowcaseCategory = 'image' | 'video' | 'motion' | 'ugc-ad';
 
@@ -46,6 +47,10 @@ export async function POST(request: NextRequest) {
 
         if (generation.status !== 'succeeded') {
             return NextResponse.json({ error: 'Cannot publish a generation that has not succeeded' }, { status: 400 });
+        }
+
+        if (isPublic && (generation.category === 'audio' || isAudioModel(generation.model))) {
+            return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
         }
 
         // Auto-detect category if not provided

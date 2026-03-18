@@ -76,12 +76,21 @@ function CreateMotionContent() {
     // Remix State
     const searchParams = useSearchParams();
     const remixId = searchParams.get('remix');
+    const prefillPrompt = searchParams.get('prompt');
+    const prefillModel = searchParams.get('model');
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+    useEffect(() => {
+        if (remixId) return;
+        if (prefillPrompt) setPrompt(prefillPrompt);
+        if (prefillModel && prefillModel in MOTION_MODELS) setSelectedModel(prefillModel as ModelId);
+    }, [prefillPrompt, prefillModel, remixId]);
+
     const model = MOTION_MODELS[selectedModel];
 
     // Close dropdown on click outside

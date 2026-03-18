@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getMotionCost, getImageCost, getVideoCost, isImageModel, isMotionModel } from '@/lib/models';
+import { getMotionCost, getImageCost, getSoundEffectCost, getVideoCost, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
 
 describe('Model Pricing', () => {
     describe('getMotionCost', () => {
@@ -64,6 +64,31 @@ describe('Model Pricing', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3' })).toBe(250);
         });
     });
+
+    describe('getVoiceoverCost', () => {
+        it('turbo rounds up character-based cost', () => {
+            expect(getVoiceoverCost('text-to-speech-turbo-2-5', { text: 'a'.repeat(1001) })).toBe(7);
+        });
+
+        it('multilingual uses its higher per-1k rate', () => {
+            expect(getVoiceoverCost('text-to-speech-multilingual-v2', { text: 'a'.repeat(1000) })).toBe(12);
+        });
+
+        it('dialogue sums turn text only', () => {
+            expect(getVoiceoverCost('text-to-dialogue-v3', {
+                dialogueTurns: [
+                    { text: 'Hello there' },
+                    { text: 'General Kenobi' },
+                ],
+            })).toBe(1);
+        });
+    });
+
+    describe('getSoundEffectCost', () => {
+        it('rounds up per-minute SFX pricing', () => {
+            expect(getSoundEffectCost('sound-effect-v2', 5)).toBe(2);
+        });
+    });
 });
 
 describe('Model Type Checks', () => {
@@ -77,5 +102,11 @@ describe('Model Type Checks', () => {
         expect(isMotionModel('kling-2.6')).toBe(true);
         expect(isMotionModel('kling-3.0')).toBe(true);
         expect(isMotionModel('nano-banana-2')).toBe(false);
+    });
+
+    it('identifies audio models correctly', () => {
+        expect(isAudioModel('text-to-speech-turbo-2-5')).toBe(true);
+        expect(isAudioModel('elevenlabs/text-to-dialogue-v3')).toBe(true);
+        expect(isAudioModel('kling-3.0/video')).toBe(false);
     });
 });

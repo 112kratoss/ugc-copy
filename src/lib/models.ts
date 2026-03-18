@@ -167,6 +167,61 @@ export const VIDEO_MODELS = {
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
 
+// ─── Audio Models (ElevenLabs via KIE) ───────────────────────────────────────
+
+export const VOICEOVER_MODELS = {
+    'text-to-speech-turbo-2-5': {
+        id: 'text-to-speech-turbo-2-5' as const,
+        displayName: 'ElevenLabs TTS Turbo 2.5',
+        description: 'Fast single-speaker text-to-speech',
+        apiModelId: 'elevenlabs/text-to-speech-turbo-2-5',
+        pricingPerThousandCharacters: 6,
+        supportsDialogue: false,
+    },
+    'text-to-speech-multilingual-v2': {
+        id: 'text-to-speech-multilingual-v2' as const,
+        displayName: 'ElevenLabs TTS Multilingual V2',
+        description: 'Higher-quality multilingual text-to-speech',
+        apiModelId: 'elevenlabs/text-to-speech-multilingual-v2',
+        pricingPerThousandCharacters: 12,
+        supportsDialogue: false,
+    },
+    'text-to-dialogue-v3': {
+        id: 'text-to-dialogue-v3' as const,
+        displayName: 'ElevenLabs Text-to-Dialogue V3',
+        description: 'Multi-speaker dialogue synthesis',
+        apiModelId: 'elevenlabs/text-to-dialogue-v3',
+        pricingPerThousandCharacters: 14,
+        supportsDialogue: true,
+    },
+} as const;
+
+export type VoiceoverModelId = keyof typeof VOICEOVER_MODELS;
+
+export const SOUND_EFFECT_MODELS = {
+    'sound-effect-v2': {
+        id: 'sound-effect-v2' as const,
+        displayName: 'ElevenLabs Sound Effect V2',
+        description: 'Prompt-driven sound effect generation',
+        apiModelId: 'elevenlabs/sound-effect-v2',
+        pricingPerMinute: 14,
+        outputFormats: ['mp3', 'wav'] as const,
+    },
+} as const;
+
+export type SoundEffectModelId = keyof typeof SOUND_EFFECT_MODELS;
+
+export const AUDIO_MODELS = {
+    ...VOICEOVER_MODELS,
+    ...SOUND_EFFECT_MODELS,
+} as const;
+
+export type AudioModelId = keyof typeof AUDIO_MODELS;
+
+export interface DialogueTurnPricingInput {
+    text: string;
+}
+
 // ─── Pricing Helpers ──────────────────────────────────────────────────────────
 
 /** Calculate credits for a motion generation. */
@@ -221,6 +276,31 @@ export function getVideoCost(
     return VIDEO_MODELS['veo-3.1'].pricing[mode];
 }
 
+/** Calculate credits for a voiceover generation. */
+export function getVoiceoverCost(
+    modelId: VoiceoverModelId,
+    options: {
+        text?: string;
+        dialogueTurns?: DialogueTurnPricingInput[];
+    }
+): number {
+    const model = VOICEOVER_MODELS[modelId];
+    const characterCount = model.supportsDialogue
+        ? (options.dialogueTurns || []).reduce((total, turn) => total + turn.text.trim().length, 0)
+        : (options.text || '').trim().length;
+
+    return Math.ceil((characterCount * model.pricingPerThousandCharacters) / 1000);
+}
+
+/** Calculate credits for a sound-effect generation. */
+export function getSoundEffectCost(
+    modelId: SoundEffectModelId,
+    durationSeconds: number
+): number {
+    const model = SOUND_EFFECT_MODELS[modelId];
+    return Math.ceil((durationSeconds * model.pricingPerMinute) / 60);
+}
+
 // ─── Helpers to check model type ──────────────────────────────────────────────
 
 /** Returns true if the model ID is an image model. */
@@ -231,4 +311,13 @@ export function isImageModel(modelId: string): boolean {
 /** Returns true if the model ID is a motion model. */
 export function isMotionModel(modelId: string): boolean {
     return modelId in MOTION_MODELS;
+}
+
+/** Returns true if the model ID is an audio model or audio provider ID. */
+export function isAudioModel(modelId: string): boolean {
+    if (modelId in AUDIO_MODELS) {
+        return true;
+    }
+
+    return Object.values(AUDIO_MODELS).some((model) => model.apiModelId === modelId);
 }
