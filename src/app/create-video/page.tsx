@@ -39,6 +39,10 @@ function CreateVideoContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const remixId = searchParams.get('remix');
+    const prefillPrompt = searchParams.get('prompt');
+    const prefillModel = searchParams.get('model');
+    const prefillAspectRatio = searchParams.get('aspectRatio');
+    const prefillDuration = searchParams.get('duration');
 
     const [isLoadingUser, setIsLoadingUser] = useState(true);
     const [userCredits, setUserCredits] = useState<number | null>(null);
@@ -73,6 +77,17 @@ function CreateVideoContent() {
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+
+    useEffect(() => {
+        if (remixId) return;
+        if (prefillPrompt) setPrompt(prefillPrompt);
+        if (prefillModel && prefillModel in VIDEO_MODELS) setSelectedModel(prefillModel as VideoModelId);
+        if (prefillAspectRatio) setAspectRatio(prefillAspectRatio);
+        if (prefillDuration) {
+            const nextDuration = Number(prefillDuration);
+            if (!Number.isNaN(nextDuration)) setSingleDuration(nextDuration);
+        }
+    }, [prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
 
     const videoModel = VIDEO_MODELS[selectedModel];
     const currentMode = videoModel.modeOptions.length > 0 && videoModel.modeOptions.some((option) => option.value === mode)

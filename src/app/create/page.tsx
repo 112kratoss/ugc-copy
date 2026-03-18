@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowRight, Video, Image as ImageIcon, Wand2 } from 'lucide-react';
+import { ArrowRight, Video, Image as ImageIcon, Wand2, Clapperboard } from 'lucide-react';
 import Link from 'next/link';
 
 export default function CreateHubPage() {
@@ -23,7 +23,7 @@ export default function CreateHubPage() {
                     </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
 
                     {/* Image Generation */}
                     <Link href="/create-image" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-purple-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
@@ -67,6 +67,21 @@ export default function CreateHubPage() {
                         </p>
                         <div className="flex items-center text-blue-400 font-medium group-hover:text-blue-300">
                             Start generating <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                        </div>
+                    </Link>
+
+
+                    <Link href="/create-workflow" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-emerald-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
+                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                            <Clapperboard className="w-7 h-7" />
+                        </div>
+                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">AI Workflow</h2>
+                        <p className="text-zinc-400 mb-8 flex-1 leading-relaxed">
+                            Build an end-to-end ad or video plan with hooks, shots, asset prompts, and launch links into every model workflow.
+                        </p>
+                        <div className="flex items-center text-emerald-400 font-medium group-hover:text-emerald-300">
+                            Plan the campaign <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
                         </div>
                     </Link>
 
