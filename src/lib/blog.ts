@@ -11,6 +11,9 @@ export interface BlogPost {
     title: string;
     date: string;
     excerpt: string;
+    seoTitle?: string;
+    seoDescription?: string;
+    coverImage?: string;
     content: string;
 }
 
@@ -28,6 +31,9 @@ export function getSortedPostsData(): Omit<BlogPost, 'content'>[] {
             title: matterResult.data.title || 'Untitled',
             date: matterResult.data.date || new Date().toISOString(),
             excerpt: matterResult.data.excerpt || '',
+            seoTitle: matterResult.data.seoTitle || undefined,
+            seoDescription: matterResult.data.seoDescription || undefined,
+            coverImage: matterResult.data.coverImage || undefined,
         };
     });
 
@@ -55,6 +61,9 @@ export async function getPostData(slug: string): Promise<BlogPost> {
         title: matterResult.data.title || 'Untitled',
         date: matterResult.data.date || new Date().toISOString(),
         excerpt: matterResult.data.excerpt || '',
+        seoTitle: matterResult.data.seoTitle || undefined,
+        seoDescription: matterResult.data.seoDescription || undefined,
+        coverImage: matterResult.data.coverImage || undefined,
         content: contentHtml,
     };
 }

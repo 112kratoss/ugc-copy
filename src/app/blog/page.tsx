@@ -2,14 +2,14 @@ import Link from 'next/link';
 import { getSortedPostsData } from '@/lib/blog';
 import { Metadata } from 'next';
 import { ArrowLeft, ArrowRight, Calendar } from 'lucide-react';
+import { createMetadata } from '@/lib/seo';
 
-export const metadata: Metadata = {
-    title: 'Blog | UGC copy',
-    description: 'Read the latest resources, tutorials, and updates on AI video generation and UGC creation.',
-    alternates: {
-        canonical: '/blog',
-    }
-};
+export const metadata: Metadata = createMetadata({
+    title: 'Blog',
+    description:
+        'Read tutorials, comparisons, and tactical guides for AI image generation, AI video creation, motion transfer, and high-converting UGC ads.',
+    path: '/blog',
+});
 
 export default function BlogIndex() {
     const posts = getSortedPostsData();

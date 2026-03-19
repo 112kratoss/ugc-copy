@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { getVideoCost, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -147,6 +148,7 @@ export async function POST(request: NextRequest) {
             duration = 5,
             resolution = '720p',
             fixedLens = false,
+            sourceGenerationId = null,
         } = await request.json();
 
         if (!(model in VIDEO_MODELS)) {
@@ -213,6 +215,17 @@ export async function POST(request: NextRequest) {
                 { error: 'Unauthorized: Please log in to generate videos' },
                 { status: 401 }
             );
+        }
+
+        let validatedSourceGenerationId: string | null = null;
+        try {
+            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
+        } catch (error) {
+            if (error instanceof SourceGenerationValidationError) {
+                return NextResponse.json({ error: error.message }, { status: error.status });
+            }
+
+            throw error;
         }
 
         const totalDuration = isMultiShot
@@ -360,6 +373,7 @@ export async function POST(request: NextRequest) {
             status: 'processing',
             prompt: isMultiShot ? ((multiPrompts as MultiPrompt[])?.[0]?.prompt || '') : (prompt || '').trim(),
             category: 'video',
+            source_generation_id: validatedSourceGenerationId,
             workflow_settings: {
                 model,
                 mode,

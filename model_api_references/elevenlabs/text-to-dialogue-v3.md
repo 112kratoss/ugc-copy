@@ -224,3 +224,6 @@ GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=task_elevenlabs_17651854487
 | 500 | Internal server error |
 | 501 | Generation failed |
 | 505 | Feature disabled |
+
+
+Pricing: ElevenLabs Text-to-Speech V3: 14 credits per 1,000 characters (≈ $0.07)

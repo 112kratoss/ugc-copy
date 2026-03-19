@@ -1,12 +1,13 @@
 import { Metadata } from 'next';
 
-export const metadata: Metadata = {
-    title: "Pricing | UGC copy",
-    description: "Flexible pay-as-you-go pricing for AI video generation. Buy credits to create amazing AI-powered videos. No subscriptions, no hidden fees.",
-    alternates: {
-        canonical: '/pricing',
-    }
-};
+import { createMetadata } from '@/lib/seo';
+
+export const metadata: Metadata = createMetadata({
+    title: 'Pricing',
+    description:
+        'Compare UGC copy credit packs for AI image generation, AI video generation, motion transfer, and reusable workflow production.',
+    path: '/pricing',
+});
 
 export default function PricingLayout({
     children,

@@ -6,6 +6,7 @@ export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all'>;
 
 export interface ShowcaseCreator {
     id: string | null;
+    username: string | null;
     name: string;
     avatar: string | null;
 }

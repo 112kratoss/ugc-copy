@@ -2,14 +2,7 @@ import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
 import { createClient } from '@supabase/supabase-js';
 
-// Define pricing tiers securely on the server
-const PRICING_PLANS: Record<string, { priceUsd: number; priceInr: number; credits: number }> = {
-    starter: { priceUsd: 5, priceInr: 415, credits: 500 }, // Approx 83 INR per USD
-    creator: { priceUsd: 20, priceInr: 1660, credits: 2000 },
-    pro: { priceUsd: 100, priceInr: 8300, credits: 10000 },
-};
-
-
+import { PRICING_PLAN_MAP } from '@/lib/pricing';
 
 // Initialize Supabase with User Auth Token
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
@@ -29,7 +22,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Missing planId or userId' }, { status: 400 });
         }
 
-        const plan = PRICING_PLANS[planId];
+        const plan = PRICING_PLAN_MAP[planId as keyof typeof PRICING_PLAN_MAP];
         if (!plan) {
             return NextResponse.json({ error: 'Invalid planId' }, { status: 400 });
         }

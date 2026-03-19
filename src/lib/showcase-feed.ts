@@ -11,6 +11,7 @@ import {
 
 interface ProfileSummary {
     id: string;
+    username: string | null;
     display_name: string | null;
     avatar_url: string | null;
 }
@@ -168,7 +169,7 @@ export async function getShowcaseFeedPage(options: {
     if (userIds.length > 0) {
         const { data: profiles, error: profilesError } = await adminSupabase
             .from('profiles')
-            .select('id, display_name, avatar_url')
+            .select('id, username, display_name, avatar_url')
             .in('id', userIds);
 
         if (profilesError) {
@@ -201,7 +202,8 @@ export async function getShowcaseFeedPage(options: {
                 createdAt: generation.created_at,
                 creator: {
                     id: profile?.id ?? null,
-                    name: profile?.display_name || 'Anonymous',
+                    username: profile?.username ?? null,
+                    name: profile?.display_name || profile?.username || 'Anonymous',
                     avatar: profile?.avatar_url ?? null,
                 },
             };

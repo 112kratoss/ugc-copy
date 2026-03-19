@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
+import CreatorIdentity from '@/app/components/CreatorIdentity';
 import {
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
@@ -451,33 +452,47 @@ export default function ShowcaseClient({
                                             <span className="capitalize">{item.category}</span>
                                         </div>
 
-                                        <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-end justify-between opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <div>
-                                                <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
-                                                <p className="text-xs text-zinc-300 mt-1">by {item.creator.name}</p>
-                                            </div>
+                                        <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
                                         </div>
                                     </button>
 
-                                    <div className="p-4 bg-zinc-900 border-t border-zinc-800 flex items-center justify-between">
-                                        <button
-                                            type="button"
-                                            onClick={() => handleSave(item.id)}
-                                            className="flex items-center gap-2 text-zinc-400 hover:text-pink-400 transition-colors"
-                                        >
-                                            <Heart className={`w-5 h-5 ${savedGenerationIds.has(item.id) ? 'fill-pink-500 text-pink-500' : ''}`} />
-                                            <span className="text-sm font-medium">{item.saveCount}</span>
-                                        </button>
+                                    <div className="p-4 bg-zinc-900 border-t border-zinc-800">
+                                        <div className="mb-4 flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
+                                                <div className="mt-3">
+                                                    <CreatorIdentity creator={item.creator} compact />
+                                                </div>
+                                            </div>
+                                            <span className="shrink-0 text-xs text-zinc-500">
+                                                {new Date(item.createdAt).toLocaleDateString('en-US', {
+                                                    month: 'short',
+                                                    day: 'numeric',
+                                                })}
+                                            </span>
+                                        </div>
 
-                                        <button
-                                            type="button"
-                                            onClick={() => handleRemix(item.id)}
-                                            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
-                                        >
-                                            <Wand2 className="w-4 h-4" />
-                                            Remix
-                                            <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
-                                        </button>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => handleSave(item.id)}
+                                                className="flex items-center gap-2 text-zinc-400 hover:text-pink-400 transition-colors"
+                                            >
+                                                <Heart className={`w-5 h-5 ${savedGenerationIds.has(item.id) ? 'fill-pink-500 text-pink-500' : ''}`} />
+                                                <span className="text-sm font-medium">{item.saveCount}</span>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRemix(item.id)}
+                                                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
+                                            >
+                                                <Wand2 className="w-4 h-4" />
+                                                Remix
+                                                <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
+                                            </button>
+                                        </div>
                                     </div>
                                 </motion.div>
                             ))}
@@ -527,9 +542,9 @@ export default function ShowcaseClient({
                                 <h2 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
                                     {selectedItem.title}
                                 </h2>
-                                <p className="mt-1 text-sm text-zinc-400">
-                                    by {selectedItem.creator.name}
-                                </p>
+                                <div className="mt-4">
+                                    <CreatorIdentity creator={selectedItem.creator} />
+                                </div>
                             </div>
 
                             <div className="rounded-xl overflow-hidden border border-white/5 bg-black/50 flex items-center justify-center flex-1 min-h-[300px]">

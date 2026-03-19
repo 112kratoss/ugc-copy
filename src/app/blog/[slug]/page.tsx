@@ -4,19 +4,25 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Calendar } from 'lucide-react';
 
+import { JsonLd } from '@/app/components/JsonLd';
+import { buildArticleSchema, createMetadata } from '@/lib/seo';
+
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
     const resolvedParams = await params;
     try {
         const post = await getPostData(resolvedParams.slug);
-        return {
-            title: `${post.title} | UGC copy Blog`,
-            description: post.excerpt,
-            alternates: {
-                canonical: `/blog/${resolvedParams.slug}`,
-            }
-        };
+        return createMetadata({
+            title: post.seoTitle ?? post.title,
+            absoluteTitle: post.seoTitle,
+            description: post.seoDescription ?? post.excerpt,
+            path: `/blog/${resolvedParams.slug}`,
+            image: post.coverImage,
+            type: 'article',
+            publishedTime: post.date,
+            modifiedTime: post.date,
+        });
     } catch {
-        return { title: 'Post Not Found | UGC copy Blog' };
+        return { title: 'Post Not Found' };
     }
 }
 
@@ -44,6 +50,16 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
     return (
         <div className="min-h-screen bg-black text-white py-24 px-6 md:px-12">
             <article className="max-w-3xl mx-auto">
+                <JsonLd
+                    data={buildArticleSchema({
+                        path: `/blog/${resolvedParams.slug}`,
+                        title: post.seoTitle ?? post.title,
+                        description: post.seoDescription ?? post.excerpt,
+                        publishedTime: post.date,
+                        modifiedTime: post.date,
+                        image: post.coverImage,
+                    })}
+                />
                 <Link href="/blog" className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-12">
                     <ArrowLeft className="w-4 h-4" /> Back to Blog
                 </Link>

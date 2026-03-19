@@ -1,12 +1,13 @@
 import { Metadata } from "next";
 
-export const metadata: Metadata = {
-    title: "Terms of Service | UGC copy",
-    description: "Terms of Service for using UGC copy's AI video generation and motion transfer platform.",
-    alternates: {
-        canonical: '/terms',
-    }
-};
+import { createMetadata } from "@/lib/seo";
+
+export const metadata: Metadata = createMetadata({
+    title: "Terms of Service",
+    description:
+        "Read the legal terms for using UGC copy to generate AI images, AI videos, motion-transfer content, and reusable production workflows.",
+    path: '/terms',
+});
 
 export default function TermsOfService() {
     return (

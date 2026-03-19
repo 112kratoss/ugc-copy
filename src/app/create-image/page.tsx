@@ -340,6 +340,7 @@ function CreateImageContent() {
                     resolution,
                     googleSearch: model.supportsGoogleSearch ? googleSearch : false,
                     outputFormat: 'jpg',
+                    sourceGenerationId: remixId || undefined,
                 })
             });
 

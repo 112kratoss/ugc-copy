@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -37,6 +38,7 @@ export async function POST(request: NextRequest) {
             resolution = '1K',
             outputFormat = 'jpg',
             googleSearch = false,
+            sourceGenerationId = null,
         } = await request.json();
 
         if (!prompt || prompt.trim().length === 0) {
@@ -88,6 +90,17 @@ export async function POST(request: NextRequest) {
                 { error: 'Unauthorized: Please log in to generate images' },
                 { status: 401 }
             );
+        }
+
+        let validatedSourceGenerationId: string | null = null;
+        try {
+            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
+        } catch (error) {
+            if (error instanceof SourceGenerationValidationError) {
+                return NextResponse.json({ error: error.message }, { status: error.status });
+            }
+
+            throw error;
         }
 
         // Deduct Credits
@@ -176,6 +189,7 @@ export async function POST(request: NextRequest) {
             status: 'processing',
             prompt: prompt.trim(),
             category: 'image',
+            source_generation_id: validatedSourceGenerationId,
             workflow_settings: {
                 model,
                 aspectRatio,

@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
+
+import { siteConfig } from "@/lib/seo";
+
 import "./globals.css";
 import { AuthProvider } from "./components/AuthProvider";
 import Navbar from "./components/Navbar";
@@ -15,21 +19,52 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://ugccreator.com'),
-  title: "UGC copy - AI Video Generation & Motion Transfer",
-  description: "Create viral UGC ads by animating static photos with reference videos. Turn any photo into a video star with our AI-powered motion transfer technology.",
-  keywords: ["AI video generation", "UGC copy", "motion transfer", "video animation", "AI content creation", "viral UGC ads", "AI animation", "Kling AI"],
-  authors: [{ name: "UGC copy" }],
+  metadataBase: new URL(siteConfig.siteUrl),
+  title: {
+    default: siteConfig.title,
+    template: `%s | ${siteConfig.name}`,
+  },
+  description: siteConfig.description,
+  applicationName: siteConfig.name,
+  keywords: [
+    "AI UGC ads",
+    "AI video generator",
+    "AI image generator",
+    "motion transfer",
+    "UGC creator software",
+    "AI workflow builder",
+  ],
+  authors: [{ name: siteConfig.name, url: siteConfig.siteUrl }],
+  creator: siteConfig.name,
+  publisher: siteConfig.name,
   openGraph: {
-    title: "UGC copy - AI Video Generation",
-    description: "Turn any photo into a video star with AI-powered motion transfer",
+    title: siteConfig.defaultTitle,
+    description: siteConfig.description,
     type: "website",
-    siteName: "UGC copy",
+    url: siteConfig.siteUrl,
+    siteName: siteConfig.name,
+    images: [
+      {
+        url: siteConfig.ogImage,
+        width: 1200,
+        height: 630,
+        alt: `${siteConfig.name} preview`,
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "UGC copy - AI Video Generation",
-    description: "Turn any photo into a video star with AI-powered motion transfer",
+    title: siteConfig.defaultTitle,
+    description: siteConfig.description,
+    images: [siteConfig.ogImage],
+  },
+  verification: {
+    google: process.env.GOOGLE_SITE_VERIFICATION || undefined,
+    other: process.env.BING_SITE_VERIFICATION
+      ? {
+        "msvalidate.01": process.env.BING_SITE_VERIFICATION,
+      }
+      : undefined,
   },
 };
 
@@ -38,6 +73,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
@@ -47,6 +84,22 @@ export default function RootLayout({
           <Navbar />
           {children}
         </AuthProvider>
+        {gaMeasurementId ? (
+          <>
+            <Script
+              src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
+              strategy="afterInteractive"
+            />
+            <Script id="google-analytics" strategy="afterInteractive">
+              {`
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', '${gaMeasurementId}', { anonymize_ip: true });
+              `}
+            </Script>
+          </>
+        ) : null}
       </body>
     </html>
   );

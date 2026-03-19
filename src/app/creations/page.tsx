@@ -5,7 +5,10 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import { isAudioModel, isImageModel } from '@/lib/models';
+import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
+import { toEditableCreatorProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 
 interface Generation {
@@ -26,6 +29,9 @@ export default function CreationsPage() {
     const router = useRouter();
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [profile, setProfile] = useState<EditableCreatorProfile | null>(null);
+    const [isProfileLoading, setIsProfileLoading] = useState(true);
+    const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
     const [filter, setFilter] = useState<FilterType>('all');
 
     // Publish Modal State
@@ -44,15 +50,33 @@ export default function CreationsPage() {
             }
 
             try {
-                const res = await fetch('/api/generations', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
-                });
-                const data = await res.json();
-                if (res.ok) setGenerations(data.generations || []);
+                const [generationsRes, profileRes] = await Promise.all([
+                    fetch('/api/generations', {
+                        headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    }),
+                    fetch('/api/profile', {
+                        headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    }),
+                ]);
+
+                const generationsData = await generationsRes.json();
+                if (generationsRes.ok) {
+                    setGenerations(generationsData.generations || []);
+                }
+
+                const profileData = await profileRes.json();
+                if (profileRes.ok) {
+                    setProfile(toEditableCreatorProfile(profileData as ProfileApiResponse));
+                    setProfileLoadError(null);
+                } else {
+                    setProfileLoadError(profileData.error || 'Failed to load creator profile.');
+                }
             } catch (err) {
                 console.error('Failed to fetch creations:', err);
+                setProfileLoadError('Failed to load creator profile.');
             } finally {
                 setIsLoading(false);
+                setIsProfileLoading(false);
             }
         };
 
@@ -206,6 +230,13 @@ export default function CreationsPage() {
                         </p>
                     </div>
                 </div>
+
+                <CreatorProfileCard
+                    initialProfile={profile}
+                    isLoading={isProfileLoading}
+                    loadError={profileLoadError}
+                    onProfileSaved={setProfile}
+                />
 
                 {/* Filter Tabs */}
                 {!isLoading && successfulGenerations.length > 0 && (

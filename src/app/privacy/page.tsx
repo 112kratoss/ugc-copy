@@ -1,12 +1,13 @@
 import { Metadata } from "next";
 
-export const metadata: Metadata = {
-    title: "Privacy Policy | UGC copy",
-    description: "Privacy Policy for UGC copy. Learn how we collect, use, and protect your data while using our AI video generation services.",
-    alternates: {
-        canonical: '/privacy',
-    }
-};
+import { createMetadata } from "@/lib/seo";
+
+export const metadata: Metadata = createMetadata({
+    title: "Privacy Policy",
+    description:
+        "Review how UGC copy collects, processes, stores, and protects data across its AI image, video, and motion-transfer workflows.",
+    path: '/privacy',
+});
 
 export default function PrivacyPolicy() {
     return (

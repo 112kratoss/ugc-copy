@@ -444,6 +444,7 @@ function CreateVideoContent() {
                 sound: currentSound,
                 resolution: currentResolution,
                 fixedLens: currentFixedLens,
+                sourceGenerationId: remixId || undefined,
             };
 
             const response = await fetch('/api/generate-video', {

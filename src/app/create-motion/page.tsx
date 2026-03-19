@@ -368,7 +368,8 @@ function CreateMotionContent() {
                     duration: effectiveDuration,
                     characterOrientation,
                     mode,
-                    prompt
+                    prompt,
+                    sourceGenerationId: remixId || undefined,
                 })
             });
 

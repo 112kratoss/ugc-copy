@@ -7,8 +7,19 @@ export default function robots(): MetadataRoute.Robots {
         rules: {
             userAgent: '*',
             allow: '/',
-            disallow: ['/creations', '/api/', '/login', '/auth/'], // private and utility routes
+            disallow: [
+                '/api/',
+                '/auth/',
+                '/create',
+                '/create-image',
+                '/create-video',
+                '/create-motion',
+                '/create-workflow',
+                '/creations',
+                '/login',
+            ],
         },
         sitemap: `${baseUrl}/sitemap.xml`,
+        host: baseUrl,
     };
 }
