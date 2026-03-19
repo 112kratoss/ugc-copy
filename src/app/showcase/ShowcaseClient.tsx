@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -37,6 +37,22 @@ interface ShowcaseClientProps {
     initialSort: ShowcaseSort;
 }
 
+function primePreviewVideoFrame(video: HTMLVideoElement) {
+    const previewTime = Number.isFinite(video.duration) && video.duration > 0
+        ? Math.min(0.1, Math.max(video.duration * 0.05, 0.01))
+        : 0.1;
+
+    if (Math.abs(video.currentTime - previewTime) < 0.01) {
+        return;
+    }
+
+    try {
+        video.currentTime = previewTime;
+    } catch {
+        // Some browsers can reject seek requests before enough data is buffered.
+    }
+}
+
 export default function ShowcaseClient({
     initialFeed,
     initialCategory,
@@ -53,7 +69,12 @@ export default function ShowcaseClient({
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [savedGenerationIds, setSavedGenerationIds] = useState<Set<string>>(new Set());
     const [selectedItem, setSelectedItem] = useState<ShowcaseFeedItem | null>(null);
+    const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
     const itemIdsKey = items.map((item) => item.id).join(',');
+
+    const registerPreviewVideo = (id: string, node: HTMLVideoElement | null) => {
+        previewVideoRefs.current[id] = node;
+    };
 
     useEffect(() => {
         setItems(initialFeed.items);
@@ -107,6 +128,34 @@ export default function ShowcaseClient({
             isActive = false;
         };
     }, [isAuthLoading, itemIdsKey, session?.access_token]);
+
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            Object.values(previewVideoRefs.current).forEach((video) => {
+                if (!video) {
+                    return;
+                }
+
+                if (document.hidden) {
+                    video.pause();
+                    return;
+                }
+
+                if (video.readyState === 0) {
+                    video.load();
+                    return;
+                }
+
+                primePreviewVideoFrame(video);
+            });
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
 
     const navigateWithFilters = (nextCategory: ShowcaseCategory, nextSort: ShowcaseSort) => {
         const params = new URLSearchParams();
@@ -364,18 +413,25 @@ export default function ShowcaseClient({
                                     >
                                         {item.category === 'video' || item.category === 'motion' ? (
                                             <video
+                                                ref={(node) => registerPreviewVideo(item.id, node)}
                                                 src={item.url}
                                                 muted
                                                 loop
                                                 playsInline
-                                                preload="none"
+                                                preload="metadata"
                                                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                                onLoadedData={(event) => {
+                                                    primePreviewVideoFrame(event.currentTarget);
+                                                }}
                                                 onMouseEnter={(event) => {
+                                                    if (event.currentTarget.readyState === 0) {
+                                                        event.currentTarget.load();
+                                                    }
                                                     void event.currentTarget.play().catch(() => {});
                                                 }}
                                                 onMouseLeave={(event) => {
                                                     event.currentTarget.pause();
-                                                    event.currentTarget.currentTime = 0;
+                                                    primePreviewVideoFrame(event.currentTarget);
                                                 }}
                                             />
                                         ) : (
