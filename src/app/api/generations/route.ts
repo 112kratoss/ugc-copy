@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/server-helpers';
 
 export async function GET(request: NextRequest) {
     try {
-        const adminSupabase = createServiceClient();
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -35,16 +34,21 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        // Convert storage paths to signed URLs
-        const generationsWithUrls = await Promise.all(
-            (generations || []).map(async (gen) => {
-                if (!gen.output_url) return gen;
-                return {
-                    ...gen,
-                    output_url: await resolveStoredMediaUrl(adminSupabase, gen.output_url),
-                };
-            })
-        );
+        const generationsWithUrls = (generations || []).map((generation) => {
+            if (!generation.output_url) {
+                return generation;
+            }
+
+            const storedLocation = getStoredMediaLocation(generation.output_url);
+            if (!storedLocation) {
+                return generation;
+            }
+
+            return {
+                ...generation,
+                output_url: buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath),
+            };
+        });
 
         return NextResponse.json({ generations: generationsWithUrls });
     } catch (error) {

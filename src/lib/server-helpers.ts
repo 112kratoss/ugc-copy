@@ -13,12 +13,16 @@ const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
 /** Creates a Supabase client scoped to the calling user's JWT. */
 export function createUserClient(request: NextRequest): SupabaseClient {
+    const authorization = request.headers.get('Authorization');
+
     return createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-            global: { headers: { Authorization: request.headers.get('Authorization')! } },
-        }
+        authorization
+            ? {
+                global: { headers: { Authorization: authorization } },
+            }
+            : undefined
     );
 }
 

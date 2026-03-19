@@ -1,59 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { LogOut, Sparkles } from 'lucide-react';
-import { User } from '@supabase/supabase-js';
+import { useAuth } from '@/app/components/AuthProvider';
 
 export default function Navbar() {
     const router = useRouter();
-    const [user, setUser] = useState<User | null>(null);
-    const [credits, setCredits] = useState<number | null>(null);
-
-    useEffect(() => {
-        const fetchUserAndCredits = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session?.user) {
-                setUser(session.user);
-
-                // Fetch credits from profiles table
-                const { data: profile } = await supabase
-                    .from('profiles')
-                    .select('credits')
-                    .eq('id', session.user.id)
-                    .single();
-
-                if (profile) {
-                    setCredits(profile.credits);
-                }
-            } else {
-                setUser(null);
-                setCredits(null);
-            }
-        };
-
-        fetchUserAndCredits();
-
-        // Listen for auth changes (login/logout)
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            if (session?.user) {
-                fetchUserAndCredits();
-            } else {
-                setUser(null);
-                setCredits(null);
-            }
-        });
-
-        // Listen for custom event to update credits
-        window.addEventListener('credits_updated', fetchUserAndCredits);
-
-        return () => {
-            subscription.unsubscribe();
-            window.removeEventListener('credits_updated', fetchUserAndCredits);
-        };
-    }, []);
+    const { user, credits } = useAuth();
 
     const handleLogout = async () => {
         await supabase.auth.signOut();
