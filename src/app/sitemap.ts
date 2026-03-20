@@ -1,6 +1,7 @@
 import { MetadataRoute } from 'next';
 
 import { getSortedPostsData } from '@/lib/blog';
+import { siteConfig } from '@/lib/seo';
 
 const INDEXABLE_ROUTES: Array<{
     path: string;
@@ -21,7 +22,7 @@ const INDEXABLE_ROUTES: Array<{
 ];
 
 export default function sitemap(): MetadataRoute.Sitemap {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://ugccreator.com';
+    const baseUrl = siteConfig.siteUrl;
     const now = new Date();
     const posts = getSortedPostsData();
 

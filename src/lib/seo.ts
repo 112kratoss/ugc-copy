@@ -36,7 +36,12 @@ type ArticleSchemaOptions = {
     image?: string;
 };
 
-const fallbackSiteUrl = 'https://ugccreator.com';
+const fallbackSiteUrl = 'https://ugccopy.com';
+const legacySiteHosts = new Set([
+    'ugccreator.com',
+    'www.ugccreator.com',
+    'ugc-app.vercel.app',
+]);
 
 function resolveSiteUrl() {
     const envUrl = process.env.NEXT_PUBLIC_SITE_URL;
@@ -45,7 +50,12 @@ function resolveSiteUrl() {
     }
 
     try {
-        return new URL(envUrl).toString().replace(/\/$/, '');
+        const parsed = new URL(envUrl);
+        if (legacySiteHosts.has(parsed.hostname)) {
+            return fallbackSiteUrl;
+        }
+
+        return parsed.toString().replace(/\/$/, '');
     } catch {
         return fallbackSiteUrl;
     }
@@ -59,7 +69,7 @@ export const siteConfig = {
         'Create AI images, videos, motion-transfer UGC ads, and reusable content workflows in one production-ready studio.',
     siteUrl: resolveSiteUrl(),
     ogImage: '/opengraph-image.png',
-    supportEmail: 'support@ugccreator.com',
+    supportEmail: 'support@ugccopy.com',
 };
 
 export function absoluteUrl(path = '/') {
@@ -224,4 +234,3 @@ export function buildArticleSchema({
         image: absoluteUrl(image),
     };
 }
-

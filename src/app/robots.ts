@@ -1,7 +1,9 @@
 import { MetadataRoute } from 'next';
 
+import { siteConfig } from '@/lib/seo';
+
 export default function robots(): MetadataRoute.Robots {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://ugccreator.com';
+    const baseUrl = siteConfig.siteUrl;
 
     return {
         rules: {
