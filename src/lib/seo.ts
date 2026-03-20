@@ -37,6 +37,7 @@ type ArticleSchemaOptions = {
 };
 
 const fallbackSiteUrl = 'https://ugccopy.com';
+const defaultGoogleSiteVerification = 'tC1WEUzj0-AR5oQjDoTP2d6Y6Gu4Nr61EnfWEE9HWxI';
 const legacySiteHosts = new Set([
     'ugccreator.com',
     'www.ugccreator.com',
@@ -70,6 +71,8 @@ export const siteConfig = {
     siteUrl: resolveSiteUrl(),
     ogImage: '/opengraph-image.png',
     supportEmail: 'support@ugccopy.com',
+    googleSiteVerification:
+        process.env.GOOGLE_SITE_VERIFICATION || defaultGoogleSiteVerification,
 };
 
 export function absoluteUrl(path = '/') {

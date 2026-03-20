@@ -59,7 +59,7 @@ export const metadata: Metadata = {
     images: [siteConfig.ogImage],
   },
   verification: {
-    google: process.env.GOOGLE_SITE_VERIFICATION || undefined,
+    google: siteConfig.googleSiteVerification,
     other: process.env.BING_SITE_VERIFICATION
       ? {
         "msvalidate.01": process.env.BING_SITE_VERIFICATION,
