@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getMotionCost, getImageCost, getSoundEffectCost, getVideoCost, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
+import { getDefaultVideoDuration, getMotionCost, getImageCost, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isValidVideoDuration } from '@/lib/models';
 
 describe('Model Pricing', () => {
     describe('getMotionCost', () => {
@@ -51,6 +51,10 @@ describe('Model Pricing', () => {
         it('pro mode with sound', () => {
             expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: true, durationSeconds: 10 })).toBe(400);
         });
+        it('supports variable Kling durations within the allowed range', () => {
+            expect(isValidVideoDuration('kling-3.0-video', 7)).toBe(true);
+            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: false, durationSeconds: 7 })).toBe(140);
+        });
         it('seedance 720p 8s without sound', () => {
             expect(getVideoCost('seedance-1.5-pro', { resolution: '720p', sound: false, durationSeconds: 8 })).toBe(28);
         });
@@ -62,6 +66,13 @@ describe('Model Pricing', () => {
         });
         it('veo 3.1 quality has flat pricing', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3' })).toBe(250);
+        });
+    });
+
+    describe('video duration metadata', () => {
+        it('exposes the Kling single-shot range and default duration', () => {
+            expect(getVideoDurationRange('kling-3.0-video')).toEqual({ min: 3, max: 15, default: 5 });
+            expect(getDefaultVideoDuration('kling-3.0-video')).toBe(5);
         });
     });
 

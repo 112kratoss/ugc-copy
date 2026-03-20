@@ -101,6 +101,11 @@ export const VIDEO_MODELS = {
         supportsFixedLens: false,
         aspectRatios: ['16:9', '9:16', '1:1'] as const,
         durations: [5, 10] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 15,
+            default: 5,
+        } as const,
         resolutions: [] as const,
         modeOptions: [
             { value: 'std', label: 'Standard (720p)' },
@@ -166,6 +171,43 @@ export const VIDEO_MODELS = {
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
+export type VideoModel = (typeof VIDEO_MODELS)[VideoModelId];
+
+export function getVideoDurationRange(modelId: VideoModelId): { min: number; max: number; default: number } | null {
+    const model = VIDEO_MODELS[modelId];
+
+    if ('singleShotDurationRange' in model) {
+        return model.singleShotDurationRange;
+    }
+
+    return null;
+}
+
+export function getDefaultVideoDuration(modelId: VideoModelId): number {
+    return getVideoDurationRange(modelId)?.default ?? VIDEO_MODELS[modelId].durations[0];
+}
+
+export function isValidVideoDuration(modelId: VideoModelId, durationSeconds: number): boolean {
+    const range = getVideoDurationRange(modelId);
+
+    if (range) {
+        return durationSeconds >= range.min && durationSeconds <= range.max;
+    }
+
+    return (VIDEO_MODELS[modelId].durations as readonly number[]).includes(durationSeconds);
+}
+
+export function clampVideoDuration(modelId: VideoModelId, durationSeconds: number): number {
+    const range = getVideoDurationRange(modelId);
+
+    if (range) {
+        return Math.min(range.max, Math.max(range.min, durationSeconds));
+    }
+
+    return isValidVideoDuration(modelId, durationSeconds)
+        ? durationSeconds
+        : VIDEO_MODELS[modelId].durations[0];
+}
 
 // ─── Audio Models (ElevenLabs via KIE) ───────────────────────────────────────
 

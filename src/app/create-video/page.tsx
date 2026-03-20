@@ -7,7 +7,7 @@ import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, P
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { getVideoCost, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 
 interface MultiShot {
     id: string;
@@ -99,9 +99,8 @@ function CreateVideoContent() {
     const currentResolution = videoModel.resolutions.length > 0 && (videoModel.resolutions as readonly string[]).includes(resolution)
         ? resolution
         : (videoModel.resolutions[0] || '');
-    const currentDuration = (videoModel.durations as readonly number[]).includes(singleDuration)
-        ? singleDuration
-        : videoModel.durations[0];
+    const singleShotDurationRange = getVideoDurationRange(selectedModel);
+    const currentDuration = clampVideoDuration(selectedModel, singleDuration);
     const currentSound = videoModel.supportsSound ? sound : false;
     const currentFixedLens = videoModel.supportsFixedLens ? fixedLens : false;
     const currentIsMultiShot = videoModel.supportsMultiShot ? isMultiShot : false;
@@ -158,8 +157,8 @@ function CreateVideoContent() {
             setAspectRatio(videoModel.aspectRatios[0]);
         }
 
-        if (!(videoModel.durations as readonly number[]).includes(singleDuration)) {
-            setSingleDuration(videoModel.durations[0]);
+        if (!isValidVideoDuration(selectedModel, singleDuration)) {
+            setSingleDuration(getDefaultVideoDuration(selectedModel));
         }
 
         if (videoModel.resolutions?.length) {
@@ -378,7 +377,7 @@ function CreateVideoContent() {
         setIsModelDropdownOpen(false);
         setMode(nextModel.modeOptions[0]?.value || '');
         setAspectRatio(nextModel.aspectRatios[0]);
-        setSingleDuration(nextModel.durations[0]);
+        setSingleDuration(getDefaultVideoDuration(modelId));
         setResolution(nextModel.resolutions[0] || '');
         setSound(false);
         setFixedLens(false);
@@ -578,6 +577,7 @@ function CreateVideoContent() {
                                     >
                                         {(Object.values(VIDEO_MODELS) as typeof VIDEO_MODELS[VideoModelId][]).map((modelOption) => {
                                             const isActive = selectedModel === modelOption.id;
+                                            const modelOptionDurationRange = getVideoDurationRange(modelOption.id);
 
                                             return (
                                                 <button
@@ -607,9 +607,11 @@ function CreateVideoContent() {
                                                                 </span>
                                                             )}
                                                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                                {modelOption.durations.length > 1
-                                                                    ? `${modelOption.durations.join('/')}s`
-                                                                    : `${modelOption.durations[0]}s fixed`}
+                                                                {modelOptionDurationRange
+                                                                    ? `${modelOptionDurationRange.min}-${modelOptionDurationRange.max}s`
+                                                                    : (modelOption.durations.length > 1
+                                                                        ? `${modelOption.durations.join('/')}s`
+                                                                        : `${modelOption.durations[0]}s fixed`)}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -669,7 +671,25 @@ function CreateVideoContent() {
                                     <div className="mt-4 flex items-center justify-between">
                                         <div className="flex items-center gap-3 flex-wrap">
                                             <span className="text-xs text-zinc-500 font-medium">Duration:</span>
-                                            {videoModel.durations.length > 1 ? (
+                                            {singleShotDurationRange ? (
+                                                <>
+                                                    <input
+                                                        type="range"
+                                                        min={singleShotDurationRange.min}
+                                                        max={singleShotDurationRange.max}
+                                                        step="1"
+                                                        value={currentDuration}
+                                                        onChange={(event) => setSingleDuration(Number(event.target.value))}
+                                                        className="w-36 accent-blue-500"
+                                                    />
+                                                    <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/10 text-white border border-white/20">
+                                                        {currentDuration} sec
+                                                    </span>
+                                                    <span className="text-xs text-zinc-600">
+                                                        {singleShotDurationRange.min}-{singleShotDurationRange.max}s
+                                                    </span>
+                                                </>
+                                            ) : videoModel.durations.length > 1 ? (
                                                 videoModel.durations.map((durationOption) => (
                                                     <button
                                                         key={durationOption}

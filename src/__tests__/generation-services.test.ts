@@ -177,6 +177,45 @@ describe('generation services', () => {
     expect(generations[0].duration).toBe(6);
   });
 
+  it('sends Kling video generations with variable single-shot duration', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-video-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    const result = await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'A product spins on a marble pedestal.',
+      model: 'kling-3.0-video',
+      duration: 7,
+      mode: 'std',
+      aspectRatio: '16:9',
+      sound: true,
+    });
+
+    expect(result.predictionId).toBe('task-video-1');
+    expect(providerBody).toMatchObject({
+      model: 'kling-3.0/video',
+      input: {
+        prompt: 'A product spins on a marble pedestal.',
+        multi_shots: false,
+        duration: '7',
+        aspect_ratio: '16:9',
+        mode: 'std',
+        sound: true,
+      },
+    });
+    expect(generations[0].duration).toBe(7);
+  });
+
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
-import { getVideoCost, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import { getVideoCost, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -189,7 +189,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: `Unsupported resolution for ${selectedModel.displayName}` }, { status: 400 });
         }
 
-        if (!isMultiShot && selectedModel.provider !== 'veo' && !(selectedModel.durations as readonly number[]).includes(duration)) {
+        if (!isMultiShot && selectedModel.provider !== 'veo' && !isValidVideoDuration(model as VideoModelId, duration)) {
             return NextResponse.json({ error: `Unsupported duration for ${selectedModel.displayName}` }, { status: 400 });
         }
 
@@ -275,17 +275,17 @@ export async function POST(request: NextRequest) {
                 mode,
                 aspect_ratio: aspectRatio,
                 sound: soundEnabled,
+                multi_shots: Boolean(isMultiShot),
+                duration: String(totalDuration),
             };
 
             if (isMultiShot) {
-                input.multi_shots = true;
                 input.multi_prompt = (multiPrompts as MultiPrompt[]).map((shot) => ({
                     prompt: shot.prompt.trim(),
                     duration: shot.duration,
                 }));
             } else {
                 input.prompt = prompt.trim();
-                input.duration = duration;
             }
 
             if (imageUrls.length > 0) {

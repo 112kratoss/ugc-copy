@@ -4,6 +4,7 @@ import {
   getMotionCost,
   getSoundEffectCost,
   getVideoCost,
+  isValidVideoDuration,
   getVoiceoverCost,
   IMAGE_MODELS,
   MOTION_MODELS,
@@ -458,6 +459,9 @@ export async function startVideoGeneration(params: {
   }
 
   const soundEnabled = selectedModel.supportsSound ? sound : false;
+  if (selectedModel.provider !== 'veo' && !isValidVideoDuration(model, duration)) {
+    throw new Error(`Unsupported duration for ${selectedModel.displayName}`);
+  }
   const totalDuration = selectedModel.provider === 'veo' ? selectedModel.durations[0] : duration;
   const cost = getVideoCost(model, {
     mode,
@@ -480,7 +484,8 @@ export async function startVideoGeneration(params: {
           mode,
           aspect_ratio: aspectRatio,
           sound: soundEnabled,
-          duration,
+          multi_shots: false,
+          duration: String(totalDuration),
           ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
         },
       };
