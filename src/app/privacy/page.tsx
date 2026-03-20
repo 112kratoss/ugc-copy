@@ -112,8 +112,8 @@ export default function PrivacyPolicy() {
                         </ul>
                         <p className="mt-4">
                             To exercise these rights, contact us at{" "}
-                            <a href="mailto:privacy@ugccreator.com" className="text-purple-400 hover:text-purple-300">
-                                privacy@ugccreator.com
+                            <a href="mailto:privacy@ugccopy.com" className="text-purple-400 hover:text-purple-300">
+                                privacy@ugccopy.com
                             </a>
                         </p>
                     </section>
@@ -161,8 +161,8 @@ export default function PrivacyPolicy() {
                         <ul className="mt-4 space-y-2">
                             <li>
                                 Email:{" "}
-                                <a href="mailto:privacy@ugccreator.com" className="text-purple-400 hover:text-purple-300">
-                                    privacy@ugccreator.com
+                                <a href="mailto:privacy@ugccopy.com" className="text-purple-400 hover:text-purple-300">
+                                    privacy@ugccopy.com
                                 </a>
                             </li>
                         </ul>

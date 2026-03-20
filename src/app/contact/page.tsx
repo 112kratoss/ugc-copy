@@ -64,10 +64,10 @@ export default function Contact() {
                                     <div>
                                         <h3 className="font-medium mb-1">Email Support</h3>
                                         <a
-                                            href="mailto:support@ugccreator.com"
+                                            href="mailto:support@ugccopy.com"
                                             className="text-purple-400 hover:text-purple-300"
                                         >
-                                            support@ugccreator.com
+                                            support@ugccopy.com
                                         </a>
                                         <p className="text-sm text-zinc-500 mt-1">We respond within 24 hours</p>
                                     </div>
@@ -80,10 +80,10 @@ export default function Contact() {
                                     <div>
                                         <h3 className="font-medium mb-1">General Inquiries</h3>
                                         <a
-                                            href="mailto:hello@ugccreator.com"
+                                            href="mailto:hello@ugccopy.com"
                                             className="text-purple-400 hover:text-purple-300"
                                         >
-                                            hello@ugccreator.com
+                                            hello@ugccopy.com
                                         </a>
                                         <p className="text-sm text-zinc-500 mt-1">For partnerships and press</p>
                                     </div>
