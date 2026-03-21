@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+@theme {
+  --color-brand-purple: #a855f7;
+  --color-brand-pink: #ec4899;
+  --color-brand-blue: #3b82f6;
+  --color-brand-red: #ef4444;
+}
+
 :root {
   --background: #0a0a0a;
   --foreground: #ededed;

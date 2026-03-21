@@ -2,6 +2,9 @@
 
 This document is the handoff note for the node-based workflow canvas feature. Use it as the starting context in future conversations.
 
+User-facing usage guide:
+- `future_plans/workflow_canvas_user_guide.md`
+
 ## Product goal
 
 Build a visual workflow canvas inspired by Freepik Spaces and similar AI node editors:

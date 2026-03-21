@@ -7,6 +7,7 @@ import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, Trendi
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
+import SkeletonLoader from '@/app/components/SkeletonLoader';
 import {
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
@@ -387,7 +388,7 @@ export default function ShowcaseClient({
                 {isLoadingInitialFeed ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {[1, 2, 3, 4, 5, 6, 7, 8].map((placeholder) => (
-                            <div key={placeholder} className="aspect-[4/5] bg-zinc-900/50 rounded-2xl animate-pulse" />
+                            <SkeletonLoader key={placeholder} className="aspect-[4/5]" />
                         ))}
                     </div>
                 ) : items.length === 0 ? (

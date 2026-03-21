@@ -1,14 +1,3 @@
--- Backfill categories that may have been misclassified by the initial publish flow.
-UPDATE public.generations
-SET category = 'video'
-WHERE model = 'kling-3.0/video'
-  AND category IS DISTINCT FROM 'video';
-
-UPDATE public.generations
-SET category = 'motion'
-WHERE model IN ('kling-2.6', 'kling-3.0')
-  AND category IS DISTINCT FROM 'motion';
-
 -- Guard showcase saves so only the authenticated user can toggle their own save
 -- and only for public generations.
 CREATE OR REPLACE FUNCTION public.toggle_showcase_save(p_generation_id uuid, p_user_id uuid)

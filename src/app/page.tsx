@@ -3,6 +3,7 @@ import { ArrowRight, Play, Shield, Sparkles, Zap } from "lucide-react";
 import { Metadata } from "next";
 
 import { JsonLd } from "@/app/components/JsonLd";
+import { FadeInStagger, FadeInItem } from "@/app/components/FadeIn";
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from "@/lib/pricing";
 import {
   buildOrganizationSchema,
@@ -102,141 +103,155 @@ export default function Home() {
       </div>
 
       <main className="relative z-10 flex flex-1 flex-col items-center gap-16 p-8 sm:p-20">
-        <section className="mt-10 flex w-full max-w-4xl flex-col items-center gap-10 text-center sm:mt-20">
-          <div className="group flex cursor-default items-center gap-2 rounded-full border border-purple-500/30 bg-zinc-950/80 px-5 py-2 text-sm text-zinc-300 backdrop-blur-md transition-all hover:border-purple-400 hover:bg-zinc-900/80 hover:shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
-            <Sparkles className="h-4 w-4 text-purple-400 transition-colors group-hover:text-purple-300" />
-            <span className="font-medium tracking-wide">
-              AI image generation, video generation, motion transfer, and reusable workflows
-            </span>
-          </div>
+        <FadeInStagger className="w-full flex flex-col items-center gap-16">
+            <section className="mt-10 flex w-full max-w-4xl flex-col items-center gap-10 text-center sm:mt-20">
+              <FadeInItem>
+                <div className="group flex cursor-default items-center gap-2 rounded-full border border-purple-500/30 bg-zinc-950/80 px-5 py-2 text-sm text-zinc-300 backdrop-blur-md transition-all hover:border-purple-400 hover:bg-zinc-900/80 hover:shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
+                  <Sparkles className="h-4 w-4 text-purple-400 transition-colors group-hover:text-purple-300" />
+                  <span className="font-medium tracking-wide">
+                    AI image generation, video generation, motion transfer, and reusable workflows
+                  </span>
+                </div>
+              </FadeInItem>
 
-          <div className="flex flex-col gap-6">
-            <h1 className="text-6xl font-extrabold tracking-tighter leading-[1.1] sm:text-8xl md:text-9xl">
-              <span className="block text-white drop-shadow-md">From idea</span>
-              <span className="block bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 bg-clip-text pb-2 text-transparent">
-                to ad-ready output.
-              </span>
-            </h1>
+              <FadeInItem>
+                <div className="flex flex-col gap-6">
+                  <h1 className="text-6xl font-extrabold tracking-tighter leading-[1.1] sm:text-8xl md:text-9xl">
+                    <span className="block text-white drop-shadow-md">From idea</span>
+                    <span className="block bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 bg-clip-text pb-2 text-transparent">
+                      to ad-ready output.
+                    </span>
+                  </h1>
 
-            <p className="mx-auto max-w-3xl text-xl font-light leading-relaxed text-zinc-400 sm:text-2xl">
-              Generate <strong className="font-medium text-zinc-200">images</strong>, create{" "}
-              <strong className="font-medium text-zinc-200">videos</strong>, animate photos with{" "}
-              <strong className="font-medium text-zinc-200">motion transfer</strong>, and turn it
-              all into repeatable creative systems.
-            </p>
-          </div>
+                  <p className="mx-auto max-w-3xl text-xl font-light leading-relaxed text-zinc-400 sm:text-2xl">
+                    Generate <strong className="font-medium text-zinc-200">images</strong>, create{" "}
+                    <strong className="font-medium text-zinc-200">videos</strong>, animate photos with{" "}
+                    <strong className="font-medium text-zinc-200">motion transfer</strong>, and turn it
+                    all into repeatable creative systems.
+                  </p>
+                </div>
+              </FadeInItem>
 
-          <div className="mt-4 flex w-full flex-col items-center gap-6 sm:w-auto sm:flex-row">
-            <Link
-              href="/create"
-              className="group relative w-full overflow-hidden rounded-full bg-gradient-to-r from-purple-500 to-pink-500 p-[1px] transition-all duration-300 hover:scale-105 hover:shadow-[0_0_30px_-5px_rgba(168,85,247,0.5)] sm:w-auto"
-            >
-              <div className="flex items-center justify-center gap-3 rounded-full bg-zinc-950 px-8 py-4 transition-all duration-300 group-hover:bg-opacity-0 sm:px-10 sm:py-5">
-                <span className="text-lg font-semibold tracking-wide text-white sm:text-xl">
-                  Start Creating
-                </span>
-                <ArrowRight className="h-5 w-5 text-white transition-transform group-hover:translate-x-1" />
-              </div>
-            </Link>
+              <FadeInItem>
+                <div className="mt-4 flex w-full flex-col items-center gap-6 sm:w-auto sm:flex-row">
+                  <Link
+                    href="/create"
+                    className="group relative w-full overflow-hidden rounded-full bg-gradient-to-r from-purple-500 to-pink-500 p-[1px] transition-all duration-300 hover:scale-105 hover:shadow-[0_0_30px_-5px_rgba(168,85,247,0.5)] sm:w-auto"
+                  >
+                    <div className="flex items-center justify-center gap-3 rounded-full bg-zinc-950 px-8 py-4 transition-all duration-300 group-hover:bg-opacity-0 sm:px-10 sm:py-5">
+                      <span className="text-lg font-semibold tracking-wide text-white sm:text-xl">
+                        Start Creating
+                      </span>
+                      <ArrowRight className="h-5 w-5 text-white transition-transform group-hover:translate-x-1" />
+                    </div>
+                  </Link>
 
-            <Link
-              href="/pricing"
-              className="group flex w-full items-center justify-center gap-3 rounded-full border border-zinc-700 bg-zinc-900/50 px-8 py-4 text-lg font-medium text-zinc-300 backdrop-blur-md transition-all hover:border-zinc-500 hover:bg-zinc-800 hover:text-white sm:w-auto sm:px-10 sm:py-5 sm:text-xl"
-            >
-              <Play className="h-5 w-5 text-zinc-400 transition-colors group-hover:text-white" />
-              See Pricing
-            </Link>
-          </div>
-        </section>
+                  <Link
+                    href="/pricing"
+                    className="group flex w-full items-center justify-center gap-3 rounded-full border border-zinc-700 bg-zinc-900/50 px-8 py-4 text-lg font-medium text-zinc-300 backdrop-blur-md transition-all hover:border-zinc-500 hover:bg-zinc-800 hover:text-white sm:w-auto sm:px-10 sm:py-5 sm:text-xl"
+                  >
+                    <Play className="h-5 w-5 text-zinc-400 transition-colors group-hover:text-white" />
+                    See Pricing
+                  </Link>
+                </div>
+              </FadeInItem>
+            </section>
 
-        <section className="mt-20 mb-6 grid w-full max-w-5xl grid-cols-1 gap-6 md:grid-cols-3">
-          <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-purple-500/30 bg-purple-500/20">
-              <Zap className="h-6 w-6 text-purple-400" />
-            </div>
-            <h2 className="text-xl font-bold text-zinc-200">Built for iteration speed</h2>
-            <p className="leading-relaxed text-zinc-400">
-              Move from concept to usable assets fast enough to test more hooks, more personas, and more creatives.
-            </p>
-          </div>
+            <FadeInItem>
+              <section className="mt-20 mb-6 grid w-full max-w-5xl grid-cols-1 gap-6 md:grid-cols-3">
+                <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-purple-500/30 bg-purple-500/20">
+                    <Zap className="h-6 w-6 text-purple-400" />
+                  </div>
+                  <h2 className="text-xl font-bold text-zinc-200">Built for iteration speed</h2>
+                  <p className="leading-relaxed text-zinc-400">
+                    Move from concept to usable assets fast enough to test more hooks, more personas, and more creatives.
+                  </p>
+                </div>
 
-          <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-pink-500/30 bg-pink-500/20">
-              <Sparkles className="h-6 w-6 text-pink-400" />
-            </div>
-            <h2 className="text-xl font-bold text-zinc-200">One studio, four workflows</h2>
-            <p className="leading-relaxed text-zinc-400">
-              Generate stills, videos, motion-transfer ads, and reusable node-based workflows without stitching tools together.
-            </p>
-          </div>
+                <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-pink-500/30 bg-pink-500/20">
+                    <Sparkles className="h-6 w-6 text-pink-400" />
+                  </div>
+                  <h2 className="text-xl font-bold text-zinc-200">One studio, four workflows</h2>
+                  <p className="leading-relaxed text-zinc-400">
+                    Generate stills, videos, motion-transfer ads, and reusable node-based workflows without stitching tools together.
+                  </p>
+                </div>
 
-          <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-500/30 bg-blue-500/20">
-              <Shield className="h-6 w-6 text-blue-400" />
-            </div>
-            <h2 className="text-xl font-bold text-zinc-200">Optimized for production teams</h2>
-            <p className="leading-relaxed text-zinc-400">
-              Keep inputs, outputs, pricing, and publishing loops close together so experiments can scale into repeatable campaigns.
-            </p>
-          </div>
-        </section>
+                <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-500/30 bg-blue-500/20">
+                    <Shield className="h-6 w-6 text-blue-400" />
+                  </div>
+                  <h2 className="text-xl font-bold text-zinc-200">Optimized for production teams</h2>
+                  <p className="leading-relaxed text-zinc-400">
+                    Keep inputs, outputs, pricing, and publishing loops close together so experiments can scale into repeatable campaigns.
+                  </p>
+                </div>
+              </section>
+            </FadeInItem>
 
-        <section className="w-full max-w-6xl rounded-[2rem] border border-white/8 bg-zinc-950/60 p-8 backdrop-blur-xl sm:p-10">
-          <div className="mb-8 max-w-2xl">
-            <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-500">
-              Explore by intent
-            </p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              Choose the workflow you want to rank, learn, and build around
-            </h2>
-          </div>
-          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-            {solutionLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="group rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-purple-400/40 hover:bg-white/[0.05]"
-              >
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                  SEO landing page
-                </p>
-                <h3 className="mt-4 text-2xl font-semibold text-white">{link.title}</h3>
-                <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
-                <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-purple-300">
-                  Explore page
-                  <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
-                </span>
-              </Link>
-            ))}
-          </div>
-        </section>
+            <FadeInItem>
+              <section className="w-full max-w-6xl rounded-[2rem] border border-white/8 bg-zinc-950/60 p-8 backdrop-blur-xl sm:p-10">
+                <div className="mb-8 max-w-2xl">
+                  <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-500">
+                    Explore by intent
+                  </p>
+                  <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+                    Choose the workflow you want to rank, learn, and build around
+                  </h2>
+                </div>
+                <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+                  {solutionLinks.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className="group rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-purple-400/40 hover:bg-white/[0.05]"
+                    >
+                      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                        SEO landing page
+                      </p>
+                      <h3 className="mt-4 text-2xl font-semibold text-white">{link.title}</h3>
+                      <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
+                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-purple-300">
+                        Explore page
+                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            </FadeInItem>
 
-        <section className="w-full max-w-6xl">
-          <div className="mb-8 max-w-2xl">
-            <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-500">
-              Learn and compare
-            </p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              Connect the landing pages to proof, education, and commercial intent
-            </h2>
-          </div>
-          <div className="grid gap-6 md:grid-cols-3">
-            {discoveryLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="group rounded-[1.5rem] border border-white/8 bg-zinc-900/50 p-6 backdrop-blur-sm transition hover:border-pink-400/40 hover:bg-zinc-900/80"
-              >
-                <h3 className="text-2xl font-semibold text-white">{link.title}</h3>
-                <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
-                <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-pink-300">
-                  Open link
-                  <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
-                </span>
-              </Link>
-            ))}
-          </div>
-        </section>
+            <FadeInItem>
+              <section className="w-full max-w-6xl">
+                <div className="mb-8 max-w-2xl">
+                  <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-500">
+                    Learn and compare
+                  </p>
+                  <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+                    Connect the landing pages to proof, education, and commercial intent
+                  </h2>
+                </div>
+                <div className="grid gap-6 md:grid-cols-3">
+                  {discoveryLinks.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className="group rounded-[1.5rem] border border-white/8 bg-zinc-900/50 p-6 backdrop-blur-sm transition hover:border-pink-400/40 hover:bg-zinc-900/80"
+                    >
+                      <h3 className="text-2xl font-semibold text-white">{link.title}</h3>
+                      <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
+                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-pink-300">
+                        Open link
+                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            </FadeInItem>
+        </FadeInStagger>
       </main>
 
       <footer className="relative z-10 w-full border-t border-white/10 bg-black/80 px-6 py-16 backdrop-blur-lg">

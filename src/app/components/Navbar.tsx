@@ -1,16 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { LogOut, Sparkles, Menu, X } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import { useState } from 'react';
+import { motion } from 'framer-motion';
 
 export default function Navbar() {
     const router = useRouter();
+    const pathname = usePathname();
     const { user, credits } = useAuth();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+    const isActivePath = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
     const handleLogout = async () => {
         await supabase.auth.signOut();
@@ -30,24 +34,38 @@ export default function Navbar() {
                 <div className="flex items-center gap-3 sm:gap-6">
                     {/* Desktop Navigation */}
                     <nav className="hidden sm:flex items-center gap-6">
-                        <Link href="/showcase" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105">
-                            Showcase
-                        </Link>
-                        <Link href="/blog" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105">
-                            Blog
-                        </Link>
-                        <Link href="/pricing" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105">
-                            Pricing
-                        </Link>
+                        {[
+                            { href: '/showcase', label: 'Showcase' },
+                            { href: '/blog', label: 'Blog' },
+                            { href: '/pricing', label: 'Pricing' },
+                        ].map((link) => {
+                            const isActive = isActivePath(link.href);
+                            return (
+                                <Link key={link.href} href={link.href} className={`relative text-sm font-medium transition-all hover:scale-105 py-1 ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`}>
+                                    {link.label}
+                                    {isActive && (
+                                        <motion.div layoutId="navbar-active" className="absolute -bottom-1 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full shadow-[0_0_10px_rgba(168,85,247,0.5)]" />
+                                    )}
+                                </Link>
+                            );
+                        })}
 
                         {user && (
                             <>
-                                <Link href="/create" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105">
-                                    Create Hub
-                                </Link>
-                                <Link href="/creations" className="text-sm font-medium text-zinc-400 hover:text-white transition-all hover:scale-105">
-                                    My Creations
-                                </Link>
+                                {[
+                                    { href: '/create', label: 'Create Hub' },
+                                    { href: '/creations', label: 'My Creations' },
+                                ].map((link) => {
+                                    const isActive = isActivePath(link.href);
+                                    return (
+                                        <Link key={link.href} href={link.href} className={`relative text-sm font-medium transition-all hover:scale-105 py-1 ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`}>
+                                            {link.label}
+                                            {isActive && (
+                                                <motion.div layoutId="navbar-active" className="absolute -bottom-1 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full shadow-[0_0_10px_rgba(168,85,247,0.5)]" />
+                                            )}
+                                        </Link>
+                                    );
+                                })}
                             </>
                         )}
                     </nav>

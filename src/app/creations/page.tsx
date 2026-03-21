@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
+import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
@@ -263,9 +264,10 @@ export default function CreationsPage() {
 
                 {/* Loading */}
                 {isLoading && (
-                    <div className="flex flex-col items-center justify-center py-32 gap-4">
-                        <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-                        <p className="text-zinc-500 text-sm">Loading your creations...</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-10 mt-8">
+                        {[1, 2, 3, 4, 5, 6].map((i) => (
+                            <SkeletonLoader key={i} className="h-48" />
+                        ))}
                     </div>
                 )}
 
