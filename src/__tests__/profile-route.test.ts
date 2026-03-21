@@ -10,7 +10,7 @@ type ProfileRow = {
 };
 
 let profilesState: ProfileRow[] = [];
-let authUserId = '11111111-1111-1111-1111-111111111111';
+const authUserId = '11111111-1111-1111-1111-111111111111';
 
 function createAdminClient() {
   return {
