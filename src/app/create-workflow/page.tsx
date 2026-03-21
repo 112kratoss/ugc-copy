@@ -16,11 +16,12 @@ import {
   useNodesState,
   type Connection,
   type NodeProps,
+  type OnSelectionChangeParams,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Clapperboard, FileText, Image as ImageIcon, Loader2, MessageSquareText, Mic, Music, Play, Plus, Save, Trash2, Video, Volume2, Wand2, ZoomIn } from 'lucide-react';
+import { ArrowLeft, Clapperboard, Copy, Download, FileText, Image as ImageIcon, Loader2, MessageSquareText, Mic, Music, Play, Plus, Save, Trash2, Video, Volume2, Wand2, XCircle, ZoomIn } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
   type AudioInputNodeData,
@@ -90,6 +91,27 @@ const HANDLE_COLORS: Record<string, string> = {
   audio: '#a78bfa',
   'reference-audio': '#a78bfa',
 };
+
+const QUICK_ADD_GROUPS: Array<{ label: string; types: WorkflowNodeKind[] }> = [
+  { label: 'Text', types: ['text-input', 'note'] },
+  { label: 'Inputs', types: ['image-input', 'video-input', 'audio-input'] },
+  { label: 'Generate', types: ['image-generate', 'video-generate', 'motion-generate', 'voiceover-generate', 'sound-effects-generate'] },
+];
+
+function cloneNodeData<T extends WorkflowNodeData>(data: T): T {
+  return {
+    ...data,
+    runState: {
+      ...data.runState,
+      status: 'idle',
+      generationId: null,
+      outputUrl: null,
+      error: null,
+      cost: null,
+      updatedAt: null,
+    },
+  };
+}
 
 function SourceHandle({ id, top }: { id: string; top: number }) {
   return <Handle type="source" position={Position.Right} id={id} style={{ top, right: -6, width: 12, height: 12, background: HANDLE_COLORS[id] || '#fff', border: '2px solid #09090b' }} />;
@@ -374,8 +396,10 @@ export default function CreateWorkflowPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [viewport, setViewport] = useState(DEFAULT_VIEWPORT);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
 
   const starter = useMemo(() => createStarterGraph(), []);
@@ -390,6 +414,23 @@ export default function CreateWorkflowPage() {
   }), [nodes, edges, starter.version, viewport]);
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId) || null, [nodes, selectedNodeId]);
+  const selectedEdge = useMemo(() => edges.find((edge) => edge.id === selectedEdgeId) || null, [edges, selectedEdgeId]);
+  const decoratedEdges = useMemo(() => (
+    edges.map((edge) => {
+      const edgeStroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : HANDLE_COLORS[edge.sourceHandle || ''] || '#ffffff';
+      const isSelected = edge.id === selectedEdgeId;
+      return {
+        ...edge,
+        animated: isSelected,
+        style: {
+          ...edge.style,
+          stroke: edgeStroke,
+          strokeWidth: isSelected ? 3 : 2,
+          opacity: isSelected ? 1 : 0.78,
+        },
+      };
+    })
+  ), [edges, selectedEdgeId]);
 
   const syncCanvasState = useCallback((canvas: WorkflowCanvasRecord) => {
     setActiveCanvasId(canvas.id);
@@ -398,7 +439,9 @@ export default function CreateWorkflowPage() {
     setEdges(canvas.graph.edges);
     setViewport(canvas.graph.viewport || DEFAULT_VIEWPORT);
     setSelectedNodeId(null);
+    setSelectedEdgeId(null);
     setActiveRunId(null);
+    setContextMenu(null);
 
     if (reactFlowInstance) {
       requestAnimationFrame(() => {
@@ -578,14 +621,25 @@ export default function CreateWorkflowPage() {
         style: { stroke, strokeWidth: 2 },
       }, current)
     );
+    setSelectedEdgeId(null);
   }, [setEdges]);
 
-  const addNode = useCallback((type: WorkflowNodeKind) => {
-    const position = reactFlowInstance
-      ? reactFlowInstance.screenToFlowPosition({ x: 420, y: 280 })
+  const addNode = useCallback((type: WorkflowNodeKind, options?: { screenPosition?: { x: number; y: number } }) => {
+    const screenPosition = options?.screenPosition;
+    let position = reactFlowInstance
+      ? reactFlowInstance.screenToFlowPosition(screenPosition ?? { x: 420, y: 280 })
       : { x: 300, y: 220 };
-    setNodes((current) => [...current, createWorkflowNode(type, position)]);
-  }, [reactFlowInstance, setNodes]);
+
+    if (!screenPosition && selectedNode) {
+      position = { x: selectedNode.position.x + 320, y: selectedNode.position.y + 24 };
+    }
+
+    const node = createWorkflowNode(type, position);
+    setNodes((current) => [...current, node]);
+    setSelectedNodeId(node.id);
+    setSelectedEdgeId(null);
+    setContextMenu(null);
+  }, [reactFlowInstance, selectedNode, setNodes]);
 
   const removeSelectedNode = useCallback(() => {
     if (!selectedNodeId) return;
@@ -593,6 +647,85 @@ export default function CreateWorkflowPage() {
     setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
     setSelectedNodeId(null);
   }, [selectedNodeId, setEdges, setNodes]);
+
+  const duplicateSelectedNode = useCallback(() => {
+    if (!selectedNode) return;
+
+    const duplicatedNode = {
+      ...selectedNode,
+      id: `${selectedNode.type}-${crypto.randomUUID()}`,
+      position: {
+        x: selectedNode.position.x + 48,
+        y: selectedNode.position.y + 48,
+      },
+      selected: false,
+      data: normalizeNodeData(selectedNode.type as WorkflowNodeKind, cloneNodeData(selectedNode.data)),
+    };
+
+    setNodes((current) => [...current, duplicatedNode]);
+    setSelectedNodeId(duplicatedNode.id);
+    setSelectedEdgeId(null);
+  }, [selectedNode, setNodes]);
+
+  const removeSelectedEdge = useCallback(() => {
+    if (!selectedEdgeId) return;
+    setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+  }, [selectedEdgeId, setEdges]);
+
+  const getSelectedNodeMediaUrl = useCallback(() => {
+    if (!selectedNode) return null;
+
+    if (selectedNode.type === 'image-input') return (selectedNode.data as ImageInputNodeData).imageUrl;
+    if (selectedNode.type === 'video-input') return (selectedNode.data as VideoInputNodeData).videoUrl;
+    if (selectedNode.type === 'audio-input') return (selectedNode.data as AudioInputNodeData).audioUrl;
+
+    return selectedNode.data.runState.outputUrl;
+  }, [selectedNode]);
+
+  const clearSelectedNodeMedia = useCallback(() => {
+    if (!selectedNode) return;
+
+    if (selectedNode.type === 'image-input') {
+      updateNode(selectedNode.id, { ...selectedNode.data, imageUrl: null, storagePath: null } as Partial<WorkflowNodeData>);
+      return;
+    }
+
+    if (selectedNode.type === 'video-input') {
+      updateNode(selectedNode.id, { ...selectedNode.data, videoUrl: null, storagePath: null } as Partial<WorkflowNodeData>);
+      return;
+    }
+
+    if (selectedNode.type === 'audio-input') {
+      updateNode(selectedNode.id, { ...selectedNode.data, audioUrl: null, storagePath: null } as Partial<WorkflowNodeData>);
+      return;
+    }
+
+    updateNode(selectedNode.id, {
+      ...selectedNode.data,
+      runState: {
+        ...selectedNode.data.runState,
+        status: 'idle',
+        generationId: null,
+        outputUrl: null,
+        error: null,
+        cost: null,
+        updatedAt: null,
+      },
+    } as Partial<WorkflowNodeData>);
+  }, [selectedNode, updateNode]);
+
+  const downloadSelectedNodeMedia = useCallback(() => {
+    const outputUrl = getSelectedNodeMediaUrl();
+    if (!outputUrl) {
+      setError('This node does not have media available yet.');
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      window.open(outputUrl, '_blank', 'noopener,noreferrer');
+    }
+  }, [getSelectedNodeMediaUrl]);
 
   const createCanvas = useCallback(async () => {
     try {
@@ -614,23 +747,50 @@ export default function CreateWorkflowPage() {
   }, [authHeaders, canvases.length, syncCanvasState]);
 
   useEffect(() => {
-    if (!selectedNodeId) return;
-
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
         return;
       }
 
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        duplicateSelectedNode();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void persistCanvas();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        void runCanvas('node');
+        return;
+      }
+
+      if (event.shiftKey && event.key === 'Enter') {
+        event.preventDefault();
+        void runCanvas('branch');
+        return;
+      }
+
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
+        if (selectedEdgeId) {
+          removeSelectedEdge();
+          return;
+        }
+
         removeSelectedNode();
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [removeSelectedNode, selectedNodeId]);
+  }, [duplicateSelectedNode, persistCanvas, removeSelectedEdge, removeSelectedNode, runCanvas, selectedEdgeId]);
 
   const deleteCanvas = useCallback(async (canvasId: string) => {
     try {
@@ -695,6 +855,11 @@ export default function CreateWorkflowPage() {
   }, []);
 
   const selectedKind = selectedNode?.type;
+
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams) => {
+    setSelectedNodeId(selectedNodes[0]?.id || null);
+    setSelectedEdgeId(selectedEdges[0]?.id || null);
+  }, []);
 
   if (isLoading) {
     return (
@@ -777,10 +942,21 @@ export default function CreateWorkflowPage() {
                 className="min-w-[280px] rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-lg font-semibold outline-none focus:border-emerald-500/40"
               />
               <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">
-                {saveState === 'saving' ? 'Saving' : saveState === 'dirty' ? 'Unsaved changes' : 'Saved'}
+                {selectedEdge
+                  ? `Connection selected: ${selectedEdge.sourceHandle ?? 'output'} → ${selectedEdge.targetHandle ?? 'input'}`
+                  : saveState === 'saving'
+                    ? 'Saving'
+                    : saveState === 'dirty'
+                      ? 'Unsaved changes'
+                      : 'Saved'}
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {selectedNode && (
+                <button onClick={duplicateSelectedNode} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200 hover:bg-white/[0.06]">
+                  <Copy className="h-4 w-4" /> Duplicate
+                </button>
+              )}
               <button onClick={() => void persistCanvas()} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200 hover:bg-white/[0.06]">
                 <Save className="h-4 w-4" /> Save
               </button>
@@ -795,6 +971,11 @@ export default function CreateWorkflowPage() {
                   <Trash2 className="h-4 w-4" /> Delete node
                 </button>
               )}
+              {selectedEdge && (
+                <button onClick={removeSelectedEdge} className="inline-flex items-center gap-2 rounded-full border border-sky-500/30 bg-sky-500/10 px-4 py-2 text-sm text-sky-100 hover:bg-sky-500/20">
+                  <Trash2 className="h-4 w-4" /> Delete connection
+                </button>
+              )}
             </div>
           </div>
 
@@ -807,11 +988,26 @@ export default function CreateWorkflowPage() {
               )}
               <ReactFlow
                 nodes={nodes as never}
-                edges={edges as never}
+                edges={decoratedEdges as never}
                 onNodesChange={onNodesChange as never}
                 onEdgesChange={onEdgesChange as never}
                 onConnect={handleConnect as never}
-                onSelectionChange={({ nodes: selectedNodes }: { nodes: Array<{ id: string }> }) => setSelectedNodeId(selectedNodes[0]?.id || null)}
+                onSelectionChange={handleSelectionChange as never}
+                onPaneClick={() => {
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(null);
+                  setContextMenu(null);
+                }}
+                onPaneContextMenu={(event) => {
+                  event.preventDefault();
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(null);
+                  setContextMenu({ x: event.clientX, y: event.clientY });
+                }}
+                onEdgeClick={(_, edge) => {
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(edge.id);
+                }}
                 onInit={setReactFlowInstance}
                 onMoveEnd={(_, nextViewport) => setViewport(nextViewport)}
                 fitView
@@ -828,6 +1024,43 @@ export default function CreateWorkflowPage() {
                 />
                 <Controls className="!border !border-white/10 !bg-black/80" />
               </ReactFlow>
+              {contextMenu && (
+                <div
+                  className="absolute z-20 min-w-[220px] rounded-3xl border border-white/10 bg-black/95 p-3 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur"
+                  style={{ left: Math.max(12, contextMenu.x - 110), top: Math.max(12, contextMenu.y - 24) }}
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Add node</div>
+                    <button type="button" onClick={() => setContextMenu(null)} className="rounded-full p-1 text-zinc-500 hover:bg-white/5 hover:text-white">
+                      <XCircle className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {QUICK_ADD_GROUPS.map((group) => (
+                      <div key={group.label}>
+                        <div className="mb-2 text-[11px] uppercase tracking-[0.16em] text-zinc-500">{group.label}</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {group.types.map((type) => {
+                            const item = NODE_LIBRARY.find((candidate) => candidate.type === type);
+                            if (!item) return null;
+                            return (
+                              <button
+                                key={type}
+                                type="button"
+                                onClick={() => addNode(type, { screenPosition: contextMenu })}
+                                className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
+                              >
+                                {item.icon}
+                                <span>{item.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
 
             <aside className="flex w-[340px] shrink-0 flex-col border-l border-white/10 bg-black/50">
@@ -838,6 +1071,11 @@ export default function CreateWorkflowPage() {
 
               <div className="flex-1 overflow-y-auto px-5 py-4">
                 {!selectedNode && <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-5 text-sm text-zinc-500">Select a node on the canvas to edit its content, models, and media.</div>}
+                {!selectedNode && selectedEdge && (
+                  <div className="mt-4 rounded-2xl border border-sky-500/30 bg-sky-500/10 p-4 text-sm text-sky-100">
+                    Selected connection: {selectedEdge.sourceHandle ?? 'output'} → {selectedEdge.targetHandle ?? 'input'}. Press Delete or use the toolbar action to remove it.
+                  </div>
+                )}
 
                 {selectedNode && (
                   <div className="space-y-4">
@@ -1211,6 +1449,23 @@ export default function CreateWorkflowPage() {
                         <div>Cost: {selectedNode.data.runState.cost ?? 'N/A'}</div>
                         {selectedNode.data.runState.error && <div className="text-rose-300">{selectedNode.data.runState.error}</div>}
                       </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={downloadSelectedNodeMedia}
+                        disabled={!getSelectedNodeMediaUrl()}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-100 enabled:hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Download className="h-4 w-4" /> Download
+                      </button>
+                      <button
+                        onClick={clearSelectedNodeMedia}
+                        disabled={!getSelectedNodeMediaUrl()}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 enabled:hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <XCircle className="h-4 w-4" /> Clear media
+                      </button>
                     </div>
 
                     <button onClick={removeSelectedNode} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 hover:bg-rose-500/20">
