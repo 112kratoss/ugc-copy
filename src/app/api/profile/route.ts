@@ -9,6 +9,12 @@ type ProfileRow = {
   display_name: string | null;
   bio: string | null;
   avatar_url: string | null;
+  cover_url: string | null;
+  website_url: string | null;
+  twitter_handle: string | null;
+  instagram_handle: string | null;
+  tiktok_handle: string | null;
+  location: string | null;
   credits: number | null;
 };
 
@@ -27,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     const { data: profile, error } = await adminSupabase
       .from('profiles')
-      .select('id, username, display_name, bio, avatar_url, credits')
+      .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -115,9 +121,15 @@ export async function PATCH(request: NextRequest) {
         display_name: payload.data.displayName,
         bio: payload.data.bio,
         avatar_url: payload.data.avatarUrl,
+        cover_url: payload.data.coverUrl,
+        website_url: payload.data.websiteUrl,
+        twitter_handle: payload.data.twitterHandle,
+        instagram_handle: payload.data.instagramHandle,
+        tiktok_handle: payload.data.tiktokHandle,
+        location: payload.data.location,
       })
       .eq('id', user.id)
-      .select('id, username, display_name, bio, avatar_url, credits')
+      .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits')
       .single();
 
     if (updateError) {

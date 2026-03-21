@@ -17,12 +17,18 @@ vi.mock('@/lib/supabase', () => ({
 }));
 
 const profile: EditableCreatorProfile = {
-  id: 'user-1',
-  username: 'creator-name',
-  displayName: 'Creator Name',
-  bio: 'Creating product-focused UGC concepts.',
+  id: 'test-user-id',
+  username: 'test-creator',
+  displayName: 'Test Creator',
+  bio: 'This is a test bio',
   avatarUrl: 'https://example.com/avatar.jpg',
-  credits: 25,
+  coverUrl: '',
+  websiteUrl: '',
+  twitterHandle: '',
+  instagramHandle: '',
+  tiktokHandle: '',
+  location: '',
+  credits: 100,
 };
 
 describe('CreatorProfileCard', () => {
@@ -62,7 +68,7 @@ describe('CreatorProfileCard', () => {
       target: { value: 'Updated-Name' },
     });
 
-    fireEvent.submit(screen.getByRole('button', { name: /save profile/i }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: /save changes/i }).closest('form')!);
 
     await waitFor(() => {
       expect(screen.getByText('Creator profile updated.')).toBeInTheDocument();
@@ -95,7 +101,7 @@ describe('CreatorProfileCard', () => {
       target: { value: 'Bad Name!' },
     });
 
-    fireEvent.submit(screen.getByRole('button', { name: /save profile/i }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: /save changes/i }).closest('form')!);
 
     await waitFor(() => {
       expect(screen.getByText(/use 3-24 lowercase letters/i)).toBeInTheDocument();

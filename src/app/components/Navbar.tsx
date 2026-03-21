@@ -55,6 +55,7 @@ export default function Navbar() {
                                 {[
                                     { href: '/create', label: 'Create Hub' },
                                     { href: '/creations', label: 'My Creations' },
+                                    { href: '/profile', label: 'Profile' },
                                 ].map((link) => {
                                     const isActive = isActivePath(link.href);
                                     return (
@@ -137,6 +138,9 @@ export default function Navbar() {
                                 </Link>
                                 <Link href="/creations" onClick={() => setIsMobileMenuOpen(false)} className="text-zinc-300 hover:text-white text-sm font-medium">
                                     My Creations
+                                </Link>
+                                <Link href="/profile" onClick={() => setIsMobileMenuOpen(false)} className="text-zinc-300 hover:text-white text-sm font-medium">
+                                    Profile
                                 </Link>
                             </>
                         )}

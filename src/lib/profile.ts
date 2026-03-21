@@ -7,6 +7,12 @@ export interface ProfileFieldErrors {
   displayName?: string;
   bio?: string;
   avatarUrl?: string;
+  coverUrl?: string;
+  websiteUrl?: string;
+  twitterHandle?: string;
+  instagramHandle?: string;
+  tiktokHandle?: string;
+  location?: string;
 }
 
 export interface ProfileApiResponse {
@@ -15,6 +21,12 @@ export interface ProfileApiResponse {
   displayName: string | null;
   bio: string | null;
   avatarUrl: string | null;
+  coverUrl: string | null;
+  websiteUrl: string | null;
+  twitterHandle: string | null;
+  instagramHandle: string | null;
+  tiktokHandle: string | null;
+  location: string | null;
   credits: number | null;
 }
 
@@ -24,6 +36,12 @@ export interface EditableCreatorProfile {
   displayName: string;
   bio: string;
   avatarUrl: string;
+  coverUrl: string;
+  websiteUrl: string;
+  twitterHandle: string;
+  instagramHandle: string;
+  tiktokHandle: string;
+  location: string;
   credits: number | null;
 }
 
@@ -32,6 +50,12 @@ export interface ProfileUpdatePayload {
   displayName?: unknown;
   bio?: unknown;
   avatarUrl?: unknown;
+  coverUrl?: unknown;
+  websiteUrl?: unknown;
+  twitterHandle?: unknown;
+  instagramHandle?: unknown;
+  tiktokHandle?: unknown;
+  location?: unknown;
 }
 
 export interface SanitizedProfileUpdate {
@@ -39,6 +63,12 @@ export interface SanitizedProfileUpdate {
   displayName: string | null;
   bio: string | null;
   avatarUrl: string | null;
+  coverUrl: string | null;
+  websiteUrl: string | null;
+  twitterHandle: string | null;
+  instagramHandle: string | null;
+  tiktokHandle: string | null;
+  location: string | null;
 }
 
 export interface ValidatedProfileUpdate {
@@ -75,6 +105,12 @@ export function toEditableCreatorProfile(profile: ProfileApiResponse): EditableC
     displayName: profile.displayName ?? '',
     bio: profile.bio ?? '',
     avatarUrl: profile.avatarUrl ?? '',
+    coverUrl: profile.coverUrl ?? '',
+    websiteUrl: profile.websiteUrl ?? '',
+    twitterHandle: profile.twitterHandle ?? '',
+    instagramHandle: profile.instagramHandle ?? '',
+    tiktokHandle: profile.tiktokHandle ?? '',
+    location: profile.location ?? '',
     credits: profile.credits,
   };
 }
@@ -85,6 +121,12 @@ export function sanitizeProfileRecord(record: {
   display_name: string | null;
   bio: string | null;
   avatar_url: string | null;
+  cover_url: string | null;
+  website_url: string | null;
+  twitter_handle: string | null;
+  instagram_handle: string | null;
+  tiktok_handle: string | null;
+  location: string | null;
   credits: number | null;
 }): ProfileApiResponse {
   return {
@@ -93,6 +135,12 @@ export function sanitizeProfileRecord(record: {
     displayName: record.display_name,
     bio: record.bio,
     avatarUrl: record.avatar_url,
+    coverUrl: record.cover_url,
+    websiteUrl: record.website_url,
+    twitterHandle: record.twitter_handle,
+    instagramHandle: record.instagram_handle,
+    tiktokHandle: record.tiktok_handle,
+    location: record.location,
     credits: record.credits,
   };
 }
@@ -124,6 +172,12 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
   const displayName = normalizeOptionalText(payload.displayName);
   const bio = normalizeOptionalText(payload.bio);
   const avatarUrl = normalizeOptionalText(payload.avatarUrl);
+  const coverUrl = normalizeOptionalText(payload.coverUrl);
+  const websiteUrl = normalizeOptionalText(payload.websiteUrl);
+  const twitterHandle = normalizeOptionalText(payload.twitterHandle)?.replace(/^@/, '') ?? null;
+  const instagramHandle = normalizeOptionalText(payload.instagramHandle)?.replace(/^@/, '') ?? null;
+  const tiktokHandle = normalizeOptionalText(payload.tiktokHandle)?.replace(/^@/, '') ?? null;
+  const location = normalizeOptionalText(payload.location);
 
   if (!username) {
     fieldErrors.username = 'Choose a username to publish your creator profile.';
@@ -150,12 +204,40 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
     }
   }
 
+  if (coverUrl) {
+    try {
+      const url = new URL(coverUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        fieldErrors.coverUrl = 'Cover URL must start with http:// or https://.';
+      }
+    } catch {
+      fieldErrors.coverUrl = 'Enter a valid cover URL.';
+    }
+  }
+
+  if (websiteUrl) {
+    try {
+      const url = new URL(websiteUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        fieldErrors.websiteUrl = 'Website URL must start with http:// or https://.';
+      }
+    } catch {
+      fieldErrors.websiteUrl = 'Enter a valid website URL.';
+    }
+  }
+
   return {
     data: {
       username,
       displayName,
       bio,
       avatarUrl,
+      coverUrl,
+      websiteUrl,
+      twitterHandle,
+      instagramHandle,
+      tiktokHandle,
+      location,
     },
     fieldErrors,
   };

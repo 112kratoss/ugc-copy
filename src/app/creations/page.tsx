@@ -3,13 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2 } from 'lucide-react';
+import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { isAudioModel, isImageModel } from '@/lib/models';
-import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
-import { toEditableCreatorProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 
 interface Generation {
@@ -30,9 +27,6 @@ export default function CreationsPage() {
     const router = useRouter();
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [profile, setProfile] = useState<EditableCreatorProfile | null>(null);
-    const [isProfileLoading, setIsProfileLoading] = useState(true);
-    const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
     const [filter, setFilter] = useState<FilterType>('all');
 
     // Publish Modal State
@@ -51,33 +45,18 @@ export default function CreationsPage() {
             }
 
             try {
-                const [generationsRes, profileRes] = await Promise.all([
-                    fetch('/api/generations', {
-                        headers: { 'Authorization': `Bearer ${session.access_token}` },
-                    }),
-                    fetch('/api/profile', {
-                        headers: { 'Authorization': `Bearer ${session.access_token}` },
-                    }),
-                ]);
+                const generationsRes = await fetch('/api/generations', {
+                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                });
 
                 const generationsData = await generationsRes.json();
                 if (generationsRes.ok) {
                     setGenerations(generationsData.generations || []);
                 }
-
-                const profileData = await profileRes.json();
-                if (profileRes.ok) {
-                    setProfile(toEditableCreatorProfile(profileData as ProfileApiResponse));
-                    setProfileLoadError(null);
-                } else {
-                    setProfileLoadError(profileData.error || 'Failed to load creator profile.');
-                }
             } catch (err) {
                 console.error('Failed to fetch creations:', err);
-                setProfileLoadError('Failed to load creator profile.');
             } finally {
                 setIsLoading(false);
-                setIsProfileLoading(false);
             }
         };
 
@@ -218,26 +197,29 @@ export default function CreationsPage() {
 
             <div className="relative z-10 max-w-7xl mx-auto px-6 py-8">
                 {/* Header */}
-                <div className="flex items-center gap-4 mb-8">
-                    <Link href="/" className="group p-3 rounded-full bg-zinc-900/50 border border-white/5 hover:bg-zinc-800 hover:border-white/10 transition-all backdrop-blur-md">
-                        <ArrowLeft className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
-                    </Link>
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
-                            My Creations
-                        </h1>
-                        <p className="text-sm text-zinc-500 font-medium tracking-wide">
-                            {successfulGenerations.length} CREATION{successfulGenerations.length !== 1 ? 'S' : ''} TOTAL
-                        </p>
+                <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-4">
+                        <Link href="/" className="group p-3 rounded-full bg-zinc-900/50 border border-white/5 hover:bg-zinc-800 hover:border-white/10 transition-all backdrop-blur-md">
+                            <ArrowLeft className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
+                        </Link>
+                        <div>
+                            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
+                                My Creations
+                            </h1>
+                            <p className="text-sm text-zinc-500 font-medium tracking-wide">
+                                {successfulGenerations.length} CREATION{successfulGenerations.length !== 1 ? 'S' : ''} TOTAL
+                            </p>
+                        </div>
                     </div>
-                </div>
 
-                <CreatorProfileCard
-                    initialProfile={profile}
-                    isLoading={isProfileLoading}
-                    loadError={profileLoadError}
-                    onProfileSaved={setProfile}
-                />
+                    <Link
+                        href="/profile"
+                        className="inline-flex items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-all hover:border-purple-500/40 hover:bg-purple-500/10 hover:text-white"
+                    >
+                        <UserRound className="h-4 w-4" />
+                        Manage profile
+                    </Link>
+                </div>
 
                 {/* Filter Tabs */}
                 {!isLoading && successfulGenerations.length > 0 && (

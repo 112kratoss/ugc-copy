@@ -4,14 +4,6 @@ import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers
 import { getCreatorDisplayName, normalizeUsername } from '@/lib/profile';
 import type { ShowcaseFeedItem, ShowcaseItemCategory } from '@/lib/showcase';
 
-interface CreatorProfileRow {
-  id: string;
-  username: string | null;
-  display_name: string | null;
-  bio: string | null;
-  avatar_url: string | null;
-}
-
 interface CreatorGenerationRow {
   id: string;
   output_url: string | null;
@@ -32,6 +24,12 @@ export interface CreatorProfilePageData {
     displayName: string;
     bio: string | null;
     avatarUrl: string | null;
+    coverUrl: string | null;
+    websiteUrl: string | null;
+    twitterHandle: string | null;
+    instagramHandle: string | null;
+    tiktokHandle: string | null;
+    location: string | null;
   };
   stats: {
     publicCreations: number;
@@ -85,7 +83,7 @@ export async function getCreatorProfilePageData(rawUsername: string): Promise<Cr
   const adminSupabase = createServiceClient();
   const { data: profile, error: profileError } = await adminSupabase
     .from('profiles')
-    .select('id, username, display_name, bio, avatar_url')
+    .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location')
     .eq('username', username)
     .maybeSingle();
 
@@ -156,6 +154,12 @@ export async function getCreatorProfilePageData(rawUsername: string): Promise<Cr
       }),
       bio: profile.bio,
       avatarUrl: profile.avatar_url,
+      coverUrl: profile.cover_url,
+      websiteUrl: profile.website_url,
+      twitterHandle: profile.twitter_handle,
+      instagramHandle: profile.instagram_handle,
+      tiktokHandle: profile.tiktok_handle,
+      location: profile.location,
     },
     stats: {
       publicCreations: items.length,
