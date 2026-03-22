@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -34,55 +35,7 @@ export function createServiceClient(): SupabaseClient {
     );
 }
 
-export type MediaBucket = 'generated_images' | 'generated_videos' | 'generated_audio';
-
-export function isMediaBucket(bucket: string): bucket is MediaBucket {
-    return bucket === 'generated_images' || bucket === 'generated_videos' || bucket === 'generated_audio';
-}
-
-export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket; filePath: string } | null {
-    if (outputUrl.startsWith('generated_images/')) {
-        return {
-            bucket: 'generated_images',
-            filePath: outputUrl.replace('generated_images/', ''),
-        };
-    }
-
-    if (outputUrl.startsWith('generated_videos/')) {
-        return {
-            bucket: 'generated_videos',
-            filePath: outputUrl.replace('generated_videos/', ''),
-        };
-    }
-
-    if (outputUrl.startsWith('generated_audio/')) {
-        return {
-            bucket: 'generated_audio',
-            filePath: outputUrl.replace('generated_audio/', ''),
-        };
-    }
-
-    try {
-        const url = new URL(outputUrl);
-        const match = url.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)$/);
-
-        if (!match) {
-            return null;
-        }
-
-        const [, bucket, rawPath] = match;
-        if (!isMediaBucket(bucket)) {
-            return null;
-        }
-
-        return {
-            bucket,
-            filePath: decodeURIComponent(rawPath),
-        };
-    } catch {
-        return null;
-    }
-}
+export { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket, type MediaBucket } from '@/lib/media-urls';
 
 /**
  * Converts stored media paths and legacy Supabase storage URLs into a fresh signed URL.
@@ -113,15 +66,6 @@ export async function signStoredMediaUrl(
         console.error(`Error signing media URL for ${location.bucket}/${location.filePath}:`, err);
         return outputUrl;
     }
-}
-
-export function buildMediaProxyUrl(bucket: MediaBucket, filePath: string): string {
-    const params = new URLSearchParams({
-        bucket,
-        path: filePath,
-    });
-
-    return `/api/media?${params.toString()}`;
 }
 
 /**

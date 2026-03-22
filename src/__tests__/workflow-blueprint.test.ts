@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildImageLaunchUrl,
   buildVideoLaunchUrl,
+  createWorkflowGraphFromBlueprint,
   extractBlueprintFromResponse,
   sanitizeBlueprint,
   DEFAULT_BLUEPRINT,
@@ -24,5 +25,21 @@ describe('workflow blueprint helpers', () => {
     expect(blueprint.shots[0].duration).toBeLessThanOrEqual(12);
     expect(buildImageLaunchUrl('hello world')).toContain('/create-image?');
     expect(buildVideoLaunchUrl('scene prompt', 'kling-3.0-video', '9:16', '5')).toContain('duration=5');
+  });
+
+  it('converts a blueprint into a runnable workflow graph', () => {
+    const graph = createWorkflowGraphFromBlueprint(DEFAULT_BLUEPRINT, '16:9');
+    const stillNode = graph.nodes.find((node) => node.data.title === 'Shot 1 still');
+    const videoNode = graph.nodes.find((node) => node.data.title === 'Shot 1 video');
+    const motionNode = graph.nodes.find((node) => node.data.title === 'Shot 1 motion');
+    const voiceoverNode = graph.nodes.find((node) => node.data.title === 'Voiceover');
+
+    expect(graph.nodes).toHaveLength(9);
+    expect(graph.edges).toHaveLength(7);
+    expect(stillNode?.type).toBe('image-generate');
+    expect(stillNode?.data).toMatchObject({ aspectRatio: '16:9', model: DEFAULT_BLUEPRINT.deliveryPlan.stillImageModel });
+    expect(videoNode?.data).toMatchObject({ model: DEFAULT_BLUEPRINT.deliveryPlan.primaryModel });
+    expect(motionNode?.data).toMatchObject({ model: DEFAULT_BLUEPRINT.deliveryPlan.motionModel });
+    expect(voiceoverNode?.type).toBe('voiceover-generate');
   });
 });

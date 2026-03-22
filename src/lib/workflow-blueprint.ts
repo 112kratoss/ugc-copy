@@ -1,3 +1,26 @@
+import {
+  clampVideoDuration,
+  type ImageModelId,
+  type MotionModelId,
+  type VideoModelId,
+} from '@/lib/models';
+import {
+  createCanvasEdge,
+  createWorkflowNode,
+  DEFAULT_VIEWPORT,
+  normalizeNodeData,
+  normalizeWorkflowGraph,
+  type ImageGenerateNodeData,
+  type MotionGenerateNodeData,
+  type NoteNodeData,
+  type TextInputNodeData,
+  type VideoGenerateNodeData,
+  type VoiceoverGenerateNodeData,
+  type WorkflowCanvasEdge,
+  type WorkflowCanvasGraph,
+  type WorkflowCanvasNode,
+} from '@/lib/workflow-canvas';
+
 export type WorkflowAspectRatio = '9:16' | '16:9' | '1:1';
 export type WorkflowObjective = 'ugc-ad' | 'product-video' | 'social-campaign';
 
@@ -38,9 +61,9 @@ export interface WorkflowBlueprint {
   assetChecklist: string[];
   shots: WorkflowShot[];
   deliveryPlan: {
-    primaryModel: string;
-    stillImageModel: string;
-    motionModel: string;
+    primaryModel: VideoModelId;
+    stillImageModel: ImageModelId;
+    motionModel: MotionModelId;
     recommendedSequence: string[];
   };
 }
@@ -112,9 +135,9 @@ export function sanitizeBlueprint(candidate: Partial<WorkflowBlueprint> | null |
     assetChecklist: normalizeStringArray(candidate?.assetChecklist, DEFAULT_BLUEPRINT.assetChecklist),
     shots: safeShots,
     deliveryPlan: {
-      primaryModel: typeof candidate?.deliveryPlan?.primaryModel === 'string' && candidate.deliveryPlan.primaryModel.trim() ? candidate.deliveryPlan.primaryModel : DEFAULT_BLUEPRINT.deliveryPlan.primaryModel,
-      stillImageModel: typeof candidate?.deliveryPlan?.stillImageModel === 'string' && candidate.deliveryPlan.stillImageModel.trim() ? candidate.deliveryPlan.stillImageModel : DEFAULT_BLUEPRINT.deliveryPlan.stillImageModel,
-      motionModel: typeof candidate?.deliveryPlan?.motionModel === 'string' && candidate.deliveryPlan.motionModel.trim() ? candidate.deliveryPlan.motionModel : DEFAULT_BLUEPRINT.deliveryPlan.motionModel,
+      primaryModel: normalizeBlueprintVideoModel(candidate?.deliveryPlan?.primaryModel),
+      stillImageModel: normalizeBlueprintImageModel(candidate?.deliveryPlan?.stillImageModel),
+      motionModel: normalizeBlueprintMotionModel(candidate?.deliveryPlan?.motionModel),
       recommendedSequence: normalizeStringArray(candidate?.deliveryPlan?.recommendedSequence, DEFAULT_BLUEPRINT.deliveryPlan.recommendedSequence),
     },
   };
@@ -127,6 +150,22 @@ function normalizeStringArray(value: unknown, fallback: string[]): string[] {
 
   const next = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 8);
   return next.length > 0 ? next : fallback;
+}
+
+function normalizeBlueprintImageModel(value: unknown): ImageModelId {
+  return value === 'nano-banana-pro' ? 'nano-banana-pro' : 'nano-banana-2';
+}
+
+function normalizeBlueprintVideoModel(value: unknown): VideoModelId {
+  if (value === 'seedance-1.5-pro' || value === 'veo-3.1') {
+    return value;
+  }
+
+  return 'kling-3.0-video';
+}
+
+function normalizeBlueprintMotionModel(value: unknown): MotionModelId {
+  return value === 'kling-2.6' ? 'kling-2.6' : 'kling-3.0';
 }
 
 export function extractBlueprintFromResponse(content: string): WorkflowBlueprint {
@@ -189,4 +228,213 @@ export function buildVideoLaunchUrl(prompt: string, model = 'kling-3.0-video', a
 export function buildMotionLaunchUrl(prompt: string, model = 'kling-3.0'): string {
   const params = new URLSearchParams({ prompt, model });
   return `/create-motion?${params.toString()}`;
+}
+
+export function createWorkflowGraphFromBlueprint(
+  blueprint: WorkflowBlueprint,
+  aspectRatio: WorkflowAspectRatio = '9:16'
+): WorkflowCanvasGraph {
+  const nodes: WorkflowCanvasNode[] = [];
+  const edges: WorkflowCanvasEdge[] = [];
+
+  const briefNode = createWorkflowNode('note', { x: 80, y: 80 });
+  const voiceoverPromptNode = createWorkflowNode('text-input', { x: 80, y: 500 });
+  const voiceoverNode = createWorkflowNode('voiceover-generate', { x: 360, y: 500 });
+
+  nodes.push({
+    ...briefNode,
+    data: normalizeNodeData('note', {
+      ...(briefNode.data as NoteNodeData),
+      title: 'Creative brief',
+      subtitle: 'Blueprint summary',
+      text: formatBlueprintBrief(blueprint),
+    }),
+  });
+
+  nodes.push({
+    ...voiceoverPromptNode,
+    data: normalizeNodeData('text-input', {
+      ...(voiceoverPromptNode.data as TextInputNodeData),
+      title: 'Voiceover script',
+      subtitle: 'Narration prompt',
+      text: blueprint.voiceover,
+    }),
+  });
+
+  nodes.push({
+    ...voiceoverNode,
+    data: normalizeNodeData('voiceover-generate', {
+      ...(voiceoverNode.data as VoiceoverGenerateNodeData),
+      title: 'Voiceover',
+      subtitle: 'Narration track',
+      model: 'text-to-speech-turbo-2-5',
+      voice: 'Rachel',
+      languageCode: 'en',
+    }),
+  });
+
+  edges.push(createCanvasEdge(voiceoverPromptNode.id, 'text', voiceoverNode.id, 'prompt'));
+
+  blueprint.shots.forEach((shot, index) => {
+    const baseX = 720 + (index * 540);
+    const imagePromptNode = createWorkflowNode('text-input', { x: baseX, y: 100 });
+    const imageNode = createWorkflowNode('image-generate', { x: baseX + 270, y: 100 });
+    const videoPromptNode = createWorkflowNode('text-input', { x: baseX, y: 360 });
+    const videoNode = createWorkflowNode('video-generate', { x: baseX + 270, y: 360 });
+    const motionPromptNode = createWorkflowNode('text-input', { x: baseX, y: 620 });
+    const motionNode = createWorkflowNode('motion-generate', { x: baseX + 270, y: 620 });
+
+    nodes.push({
+      ...imagePromptNode,
+      data: normalizeNodeData('text-input', {
+        ...(imagePromptNode.data as TextInputNodeData),
+        title: `Shot ${index + 1} still prompt`,
+        subtitle: shot.title,
+        text: formatStillPrompt(shot, index),
+      }),
+    });
+
+    nodes.push({
+      ...imageNode,
+      data: normalizeNodeData('image-generate', {
+        ...(imageNode.data as ImageGenerateNodeData),
+        title: `Shot ${index + 1} still`,
+        subtitle: shot.title,
+        model: blueprint.deliveryPlan.stillImageModel,
+        aspectRatio,
+        resolution: '1K',
+        outputFormat: 'jpg',
+      }),
+    });
+
+    nodes.push({
+      ...videoPromptNode,
+      data: normalizeNodeData('text-input', {
+        ...(videoPromptNode.data as TextInputNodeData),
+        title: `Shot ${index + 1} video prompt`,
+        subtitle: shot.title,
+        text: formatVideoPrompt(shot, index),
+      }),
+    });
+
+    nodes.push({
+      ...videoNode,
+      data: normalizeNodeData('video-generate', {
+        ...(videoNode.data as VideoGenerateNodeData),
+        title: `Shot ${index + 1} video`,
+        subtitle: shot.title,
+        model: blueprint.deliveryPlan.primaryModel,
+        aspectRatio,
+        duration: clampVideoDuration(blueprint.deliveryPlan.primaryModel, shot.duration),
+        mode: getBlueprintVideoMode(blueprint.deliveryPlan.primaryModel),
+        sound: false,
+        resolution: blueprint.deliveryPlan.primaryModel === 'seedance-1.5-pro' ? '720p' : '720p',
+        fixedLens: false,
+      }),
+    });
+
+    nodes.push({
+      ...motionPromptNode,
+      data: normalizeNodeData('text-input', {
+        ...(motionPromptNode.data as TextInputNodeData),
+        title: `Shot ${index + 1} motion prompt`,
+        subtitle: shot.title,
+        text: formatMotionPrompt(shot, index),
+      }),
+    });
+
+    nodes.push({
+      ...motionNode,
+      data: normalizeNodeData('motion-generate', {
+        ...(motionNode.data as MotionGenerateNodeData),
+        title: `Shot ${index + 1} motion`,
+        subtitle: shot.title,
+        model: blueprint.deliveryPlan.motionModel,
+        mode: '720p',
+        characterOrientation: 'video',
+      }),
+    });
+
+    edges.push(
+      createCanvasEdge(imagePromptNode.id, 'text', imageNode.id, 'prompt'),
+      createCanvasEdge(videoPromptNode.id, 'text', videoNode.id, 'prompt'),
+      createCanvasEdge(imageNode.id, 'image', videoNode.id, 'reference-image'),
+      createCanvasEdge(motionPromptNode.id, 'text', motionNode.id, 'prompt'),
+      createCanvasEdge(imageNode.id, 'image', motionNode.id, 'reference-image'),
+      createCanvasEdge(videoNode.id, 'video', motionNode.id, 'reference-video')
+    );
+  });
+
+  const zoom = Math.max(0.36, DEFAULT_VIEWPORT.zoom - Math.max(0, blueprint.shots.length - 1) * 0.08);
+
+  return normalizeWorkflowGraph({
+    viewport: {
+      ...DEFAULT_VIEWPORT,
+      zoom,
+    },
+    nodes,
+    edges,
+  });
+}
+
+function formatBlueprintBrief(blueprint: WorkflowBlueprint): string {
+  return [
+    `Workflow: ${blueprint.title}`,
+    '',
+    `Creative strategy: ${blueprint.creativeStrategy}`,
+    `Hook: ${blueprint.hook}`,
+    `Narrative: ${blueprint.narrative}`,
+    '',
+    'Editing notes:',
+    ...blueprint.editingNotes.map((note) => `- ${note}`),
+    '',
+    'Asset checklist:',
+    ...blueprint.assetChecklist.map((asset) => `- ${asset}`),
+    '',
+    'Recommended sequence:',
+    ...blueprint.deliveryPlan.recommendedSequence.map((step, index) => `${index + 1}. ${step}`),
+  ].join('\n');
+}
+
+function formatStillPrompt(shot: WorkflowShot, index: number): string {
+  return [
+    `Build the hero still for shot ${index + 1}: ${shot.title}.`,
+    `Purpose: ${shot.purpose}`,
+    `Beat: ${shot.beat}`,
+    '',
+    `Prompt: ${shot.visualPrompt}`,
+  ].join('\n');
+}
+
+function formatVideoPrompt(shot: WorkflowShot, index: number): string {
+  return [
+    `Create the main video clip for shot ${index + 1}: ${shot.title}.`,
+    `Purpose: ${shot.purpose}`,
+    `Beat: ${shot.beat}`,
+    `Target duration: ${shot.duration}s`,
+    '',
+    `Prompt: ${shot.videoPrompt}`,
+  ].join('\n');
+}
+
+function formatMotionPrompt(shot: WorkflowShot, index: number): string {
+  return [
+    `Create the motion-transfer pass for shot ${index + 1}: ${shot.title}.`,
+    `Purpose: ${shot.purpose}`,
+    `Beat: ${shot.beat}`,
+    '',
+    `Prompt: ${shot.motionPrompt}`,
+  ].join('\n');
+}
+
+function getBlueprintVideoMode(model: WorkflowBlueprint['deliveryPlan']['primaryModel']): string {
+  if (model === 'veo-3.1') {
+    return 'veo3_fast';
+  }
+
+  if (model === 'kling-3.0-video') {
+    return 'std';
+  }
+
+  return 'std';
 }

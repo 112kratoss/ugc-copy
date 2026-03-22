@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createStarterGraph,
   createWorkflowNode,
+  duplicateWorkflowSelection,
   getExecutionOrder,
   normalizeNodeData,
   normalizeWorkflowGraph,
@@ -115,5 +116,110 @@ describe('workflow canvas helpers', () => {
     expect(node.model).toBe('text-to-dialogue-v3');
     expect((node as typeof node & { dialogueTurns: Array<{ text: string }> }).dialogueTurns).toHaveLength(2);
     expect((node as typeof node & { dialogueTurns: Array<{ text: string }> }).dialogueTurns[1].text).toBe('Second line');
+  });
+
+  it('duplicates a selected subgraph with fresh ids and offset positions', () => {
+    const start = createWorkflowNode('text-input', { x: 100, y: 120 });
+    const image = createWorkflowNode('image-generate', { x: 340, y: 120 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [start, image],
+      edges: [
+        { id: 'start-image', source: start.id, target: image.id, sourceHandle: 'text', targetHandle: 'prompt' },
+      ],
+    });
+
+    const result = duplicateWorkflowSelection(graph, [start.id, image.id], { x: 48, y: 64 });
+
+    expect(result.duplicatedNodes).toHaveLength(2);
+    expect(result.duplicatedEdges).toHaveLength(1);
+    expect(result.nodeIdMap[start.id]).not.toBe(start.id);
+    expect(result.nodeIdMap[image.id]).not.toBe(image.id);
+    expect(result.duplicatedNodes[0].position).toEqual({
+      x: graph.nodes[0].position.x + 48,
+      y: graph.nodes[0].position.y + 64,
+    });
+    expect(result.duplicatedEdges[0].source).toBe(result.nodeIdMap[start.id]);
+    expect(result.duplicatedEdges[0].target).toBe(result.nodeIdMap[image.id]);
+  });
+
+  it('duplicates only edges fully contained in the selected node set', () => {
+    const start = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const image = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    const video = createWorkflowNode('video-generate', { x: 480, y: 0 });
+
+    const graph = normalizeWorkflowGraph({
+      nodes: [start, image, video],
+      edges: [
+        { id: 'start-image', source: start.id, target: image.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'image-video', source: image.id, target: video.id, sourceHandle: 'image', targetHandle: 'reference-image' },
+      ],
+    });
+
+    const result = duplicateWorkflowSelection(graph, [start.id, image.id]);
+
+    expect(result.duplicatedNodes).toHaveLength(2);
+    expect(result.duplicatedEdges).toHaveLength(1);
+    expect(result.duplicatedEdges[0].source).toBe(result.nodeIdMap[start.id]);
+    expect(result.duplicatedEdges[0].target).toBe(result.nodeIdMap[image.id]);
+  });
+
+  it('resets transient run state while preserving uploaded asset references on duplicates', () => {
+    const imageInput = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const imageOutput = createWorkflowNode('image-generate', { x: 240, y: 0 });
+
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...imageInput,
+          data: {
+            ...imageInput.data,
+            imageUrl: 'https://example.com/reference.jpg',
+            storagePath: 'generated_images/user/reference.jpg',
+            runState: {
+              ...imageInput.data.runState,
+              status: 'succeeded',
+              outputUrl: 'https://example.com/preview.jpg',
+            },
+          },
+        },
+        {
+          ...imageOutput,
+          data: {
+            ...imageOutput.data,
+            runState: {
+              ...imageOutput.data.runState,
+              status: 'succeeded',
+              generationId: 'gen-123',
+              outputUrl: 'https://example.com/output.jpg',
+              error: 'Old error',
+              cost: 42,
+              updatedAt: '2026-03-22T12:00:00.000Z',
+            },
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    const result = duplicateWorkflowSelection(graph, [imageInput.id, imageOutput.id]);
+    const duplicatedInput = result.duplicatedNodes.find((node) => node.type === 'image-input');
+    const duplicatedOutput = result.duplicatedNodes.find((node) => node.type === 'image-generate');
+
+    expect(duplicatedInput?.data).toMatchObject({
+      imageUrl: 'https://example.com/reference.jpg',
+      storagePath: 'generated_images/user/reference.jpg',
+      runState: {
+        status: 'idle',
+        outputUrl: null,
+      },
+    });
+    expect(duplicatedOutput?.data.runState).toEqual({
+      status: 'idle',
+      generationId: null,
+      outputUrl: null,
+      error: null,
+      cost: null,
+      updatedAt: null,
+    });
   });
 });

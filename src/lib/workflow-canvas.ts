@@ -378,22 +378,29 @@ function normalizeNode(node: Partial<WorkflowCanvasNode> | null | undefined): Wo
 
 export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<WorkflowNodeData>): WorkflowNodeData {
   const base = createNodeData(type);
+  const metadata = data as Partial<BaseWorkflowNodeData> | undefined;
   const runState = createNodeRunState((data as Partial<BaseWorkflowNodeData> | undefined)?.runState);
+  const title = typeof metadata?.title === 'string' && metadata.title.trim() ? metadata.title : base.title;
+  const subtitle = typeof metadata?.subtitle === 'string' && metadata.subtitle.trim()
+    ? metadata.subtitle
+    : base.subtitle;
 
   switch (type) {
     case 'text-input':
-      return { ...(base as TextInputNodeData), text: typeof (data as TextInputNodeData | undefined)?.text === 'string' ? (data as TextInputNodeData).text : (base as TextInputNodeData).text, runState };
+      return { ...(base as TextInputNodeData), title, subtitle, text: typeof (data as TextInputNodeData | undefined)?.text === 'string' ? (data as TextInputNodeData).text : (base as TextInputNodeData).text, runState };
     case 'note':
-      return { ...(base as NoteNodeData), text: typeof (data as NoteNodeData | undefined)?.text === 'string' ? (data as NoteNodeData).text : (base as NoteNodeData).text, runState };
+      return { ...(base as NoteNodeData), title, subtitle, text: typeof (data as NoteNodeData | undefined)?.text === 'string' ? (data as NoteNodeData).text : (base as NoteNodeData).text, runState };
     case 'image-input':
-      return { ...(base as ImageInputNodeData), imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null, storagePath: typeof (data as ImageInputNodeData | undefined)?.storagePath === 'string' ? (data as ImageInputNodeData).storagePath : null, runState };
+      return { ...(base as ImageInputNodeData), title, subtitle, imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null, storagePath: typeof (data as ImageInputNodeData | undefined)?.storagePath === 'string' ? (data as ImageInputNodeData).storagePath : null, runState };
     case 'video-input':
-      return { ...(base as VideoInputNodeData), videoUrl: typeof (data as VideoInputNodeData | undefined)?.videoUrl === 'string' ? (data as VideoInputNodeData).videoUrl : null, storagePath: typeof (data as VideoInputNodeData | undefined)?.storagePath === 'string' ? (data as VideoInputNodeData).storagePath : null, runState };
+      return { ...(base as VideoInputNodeData), title, subtitle, videoUrl: typeof (data as VideoInputNodeData | undefined)?.videoUrl === 'string' ? (data as VideoInputNodeData).videoUrl : null, storagePath: typeof (data as VideoInputNodeData | undefined)?.storagePath === 'string' ? (data as VideoInputNodeData).storagePath : null, runState };
     case 'audio-input':
-      return { ...(base as AudioInputNodeData), audioUrl: typeof (data as AudioInputNodeData | undefined)?.audioUrl === 'string' ? (data as AudioInputNodeData).audioUrl : null, storagePath: typeof (data as AudioInputNodeData | undefined)?.storagePath === 'string' ? (data as AudioInputNodeData).storagePath : null, runState };
+      return { ...(base as AudioInputNodeData), title, subtitle, audioUrl: typeof (data as AudioInputNodeData | undefined)?.audioUrl === 'string' ? (data as AudioInputNodeData).audioUrl : null, storagePath: typeof (data as AudioInputNodeData | undefined)?.storagePath === 'string' ? (data as AudioInputNodeData).storagePath : null, runState };
     case 'image-generate':
       return {
         ...(base as ImageGenerateNodeData),
+        title,
+        subtitle,
         model: (data as ImageGenerateNodeData | undefined)?.model === 'nano-banana-pro' ? 'nano-banana-pro' : 'nano-banana-2',
         aspectRatio: typeof (data as ImageGenerateNodeData | undefined)?.aspectRatio === 'string' ? (data as ImageGenerateNodeData).aspectRatio : (base as ImageGenerateNodeData).aspectRatio,
         resolution: (data as ImageGenerateNodeData | undefined)?.resolution === '2K' || (data as ImageGenerateNodeData | undefined)?.resolution === '4K' ? (data as ImageGenerateNodeData).resolution : '1K',
@@ -404,6 +411,8 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'video-generate':
       return {
         ...(base as VideoGenerateNodeData),
+        title,
+        subtitle,
         model: isVideoModel((data as VideoGenerateNodeData | undefined)?.model) ? (data as VideoGenerateNodeData).model : 'kling-3.0-video',
         aspectRatio: typeof (data as VideoGenerateNodeData | undefined)?.aspectRatio === 'string' ? (data as VideoGenerateNodeData).aspectRatio : (base as VideoGenerateNodeData).aspectRatio,
         duration: typeof (data as VideoGenerateNodeData | undefined)?.duration === 'number' ? (data as VideoGenerateNodeData).duration : (base as VideoGenerateNodeData).duration,
@@ -416,6 +425,8 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'motion-generate':
       return {
         ...(base as MotionGenerateNodeData),
+        title,
+        subtitle,
         model: (data as MotionGenerateNodeData | undefined)?.model === 'kling-2.6' ? 'kling-2.6' : 'kling-3.0',
         mode: (data as MotionGenerateNodeData | undefined)?.mode === '1080p' ? '1080p' : '720p',
         characterOrientation: (data as MotionGenerateNodeData | undefined)?.characterOrientation === 'image' ? 'image' : 'video',
@@ -424,6 +435,8 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'voiceover-generate':
       return {
         ...(base as VoiceoverGenerateNodeData),
+        title,
+        subtitle,
         model: normalizeVoiceoverModel((data as VoiceoverGenerateNodeData | undefined)?.model),
         voice: typeof (data as VoiceoverGenerateNodeData | undefined)?.voice === 'string' ? (data as VoiceoverGenerateNodeData).voice : (base as VoiceoverGenerateNodeData).voice,
         languageCode: getLegacyLanguageCode(data as VoiceoverGenerateNodeData | undefined) ?? (base as VoiceoverGenerateNodeData).languageCode,
@@ -438,6 +451,8 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'music-generate':
       return {
         ...(base as MusicGenerateNodeData),
+        title,
+        subtitle,
         model: 'music-v1',
         duration: typeof (data as MusicGenerateNodeData | undefined)?.duration === 'number' ? (data as MusicGenerateNodeData).duration : (base as MusicGenerateNodeData).duration,
         mood: typeof (data as MusicGenerateNodeData | undefined)?.mood === 'string' ? (data as MusicGenerateNodeData).mood : (base as MusicGenerateNodeData).mood,
@@ -446,6 +461,8 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'sound-effects-generate':
       return {
         ...(base as SoundEffectsGenerateNodeData),
+        title,
+        subtitle,
         model: normalizeSoundEffectModel((data as SoundEffectsGenerateNodeData | undefined)?.model),
         duration: typeof (data as SoundEffectsGenerateNodeData | undefined)?.duration === 'number' ? (data as SoundEffectsGenerateNodeData).duration : (base as SoundEffectsGenerateNodeData).duration,
         loop: Boolean((data as SoundEffectsGenerateNodeData | undefined)?.loop),
@@ -454,7 +471,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         runState,
       };
     case 'group':
-      return { ...(base as GroupNodeData), color: typeof (data as GroupNodeData | undefined)?.color === 'string' ? (data as GroupNodeData).color : (base as GroupNodeData).color, runState };
+      return { ...(base as GroupNodeData), title, subtitle, color: typeof (data as GroupNodeData | undefined)?.color === 'string' ? (data as GroupNodeData).color : (base as GroupNodeData).color, runState };
   }
 }
 
@@ -690,5 +707,53 @@ export function updateNodeRunState(
           }
         : node
     ),
+  };
+}
+
+export interface DuplicateWorkflowSelectionResult {
+  duplicatedNodes: WorkflowCanvasNode[];
+  duplicatedEdges: WorkflowCanvasEdge[];
+  nodeIdMap: Record<string, string>;
+}
+
+export function duplicateWorkflowSelection(
+  graph: Pick<WorkflowCanvasGraph, 'nodes' | 'edges'>,
+  selectedNodeIds: string[],
+  positionOffset: { x: number; y: number } = { x: 80, y: 80 }
+): DuplicateWorkflowSelectionResult {
+  const nodeIdSet = new Set(selectedNodeIds);
+  const sourceNodes = graph.nodes.filter((node) => nodeIdSet.has(node.id));
+  const nodeIdMap = Object.fromEntries(
+    sourceNodes.map((node) => [node.id, `${node.type}-${crypto.randomUUID()}`])
+  );
+
+  const duplicatedNodes = sourceNodes.map((node) => ({
+    ...node,
+    id: nodeIdMap[node.id],
+    position: {
+      x: node.position.x + positionOffset.x,
+      y: node.position.y + positionOffset.y,
+    },
+    selected: false,
+    data: normalizeNodeData(node.type, {
+      ...node.data,
+      runState: createNodeRunState(),
+    }),
+  }));
+
+  const duplicatedEdges = graph.edges
+    .filter((edge) => nodeIdSet.has(edge.source) && nodeIdSet.has(edge.target))
+    .map((edge) => ({
+      ...edge,
+      id: `edge-${crypto.randomUUID()}`,
+      source: nodeIdMap[edge.source],
+      target: nodeIdMap[edge.target],
+      selected: false,
+    }));
+
+  return {
+    duplicatedNodes,
+    duplicatedEdges,
+    nodeIdMap,
   };
 }
