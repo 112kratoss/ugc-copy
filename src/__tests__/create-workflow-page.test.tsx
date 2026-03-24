@@ -40,22 +40,21 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
+  const latestPropsRef: { current: Record<string, unknown> | null } = { current: null };
 
   const flowInstance = {
     screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
     flowToScreenPosition: vi.fn((position: { x: number; y: number }) => position),
-    getNode: vi.fn((id: string) => latestProps?.nodes.find((node: { id: string }) => node.id === id)),
+    getNode: vi.fn((id: string) => latestPropsRef.current?.nodes.find((node: { id: string }) => node.id === id)),
     fitView: vi.fn(async () => undefined),
     setViewport: vi.fn(async () => undefined),
   };
 
-  let latestProps: Record<string, unknown> | null = null;
-
   function ReactFlow(props: Record<string, unknown>) {
-    latestProps = props;
     const nodes = (props.nodes as Array<{ id: string; data: { title: string } }>) || [];
     const edges = (props.edges as Array<{ id: string }>) || [];
     React.useLayoutEffect(() => {
+      latestPropsRef.current = props;
       (props.onInit as ((instance: typeof flowInstance) => void) | undefined)?.(flowInstance);
     }, [props]);
 

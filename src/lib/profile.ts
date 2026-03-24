@@ -18,6 +18,7 @@ export interface ProfileFieldErrors {
 export interface ProfileApiResponse {
   id: string;
   username: string | null;
+  suggestedUsername: string;
   displayName: string | null;
   bio: string | null;
   avatarUrl: string | null;
@@ -101,7 +102,7 @@ function normalizeOptionalText(value: unknown): string | null {
 export function toEditableCreatorProfile(profile: ProfileApiResponse): EditableCreatorProfile {
   return {
     id: profile.id,
-    username: profile.username ?? '',
+    username: profile.username ?? profile.suggestedUsername,
     displayName: profile.displayName ?? '',
     bio: profile.bio ?? '',
     avatarUrl: profile.avatarUrl ?? '',
@@ -132,6 +133,7 @@ export function sanitizeProfileRecord(record: {
   return {
     id: record.id,
     username: record.username,
+    suggestedUsername: '',
     displayName: record.display_name,
     bio: record.bio,
     avatarUrl: record.avatar_url,

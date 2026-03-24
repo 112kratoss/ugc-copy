@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AtSign, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus } from 'lucide-react';
 
-import type { EditableCreatorProfile, ProfileFieldErrors } from '@/lib/profile';
+import type { EditableCreatorProfile, ProfileFieldErrors, ProfileUpdatePayload } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 
 interface CreatorProfileCardProps {
@@ -16,6 +16,24 @@ interface CreatorProfileCardProps {
 }
 
 const EMPTY_ERRORS: ProfileFieldErrors = {};
+
+function buildProfilePayload(
+  form: EditableCreatorProfile,
+  overrides?: Partial<Pick<EditableCreatorProfile, 'avatarUrl' | 'coverUrl'>>
+): ProfileUpdatePayload {
+  return {
+    username: form.username,
+    displayName: form.displayName,
+    bio: form.bio,
+    avatarUrl: overrides?.avatarUrl ?? form.avatarUrl,
+    coverUrl: overrides?.coverUrl ?? form.coverUrl,
+    websiteUrl: form.websiteUrl,
+    twitterHandle: form.twitterHandle,
+    instagramHandle: form.instagramHandle,
+    tiktokHandle: form.tiktokHandle,
+    location: form.location,
+  };
+}
 
 export default function CreatorProfileCard({
   initialProfile,
@@ -117,6 +135,18 @@ export default function CreatorProfileCard({
     setFieldErrors(EMPTY_ERRORS);
     setFormError(null);
     setSuccessMessage(null);
+    const uploadedStoragePaths: string[] = [];
+
+    const cleanupUploadedMedia = async () => {
+      if (uploadedStoragePaths.length === 0) {
+        return;
+      }
+
+      const { error: cleanupError } = await supabase.storage.from('profiles').remove(uploadedStoragePaths);
+      if (cleanupError) {
+        console.error('Failed to clean up uploaded profile media:', cleanupError);
+      }
+    };
 
     try {
       const {
@@ -128,8 +158,27 @@ export default function CreatorProfileCard({
         return;
       }
 
+      const validationResponse = await fetch('/api/profile/validate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(buildProfilePayload(form)),
+      });
+      const validationData = await validationResponse.json();
+      if (!validationResponse.ok) {
+        if (validationData.fieldErrors) {
+          setFieldErrors(validationData.fieldErrors as ProfileFieldErrors);
+        }
+
+        setFormError(validationData.error || 'Failed to validate profile.');
+        return;
+      }
+
       let finalAvatarUrl = form.avatarUrl;
       let finalCoverUrl = form.coverUrl;
+      const profilesStorage = supabase.storage.from('profiles');
 
       if (avatarFile || coverFile) {
         setSuccessMessage('Uploading new media...');
@@ -138,18 +187,20 @@ export default function CreatorProfileCard({
       if (avatarFile) {
         const fileExt = avatarFile.name.split('.').pop();
         const fileName = `${session.user.id}/avatar-${Date.now()}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('profiles').upload(fileName, avatarFile, { upsert: true });
+        const { error: uploadError } = await profilesStorage.upload(fileName, avatarFile, { upsert: true });
         if (uploadError) throw new Error(`Avatar upload failed: ${uploadError.message}`);
-        const { data: { publicUrl } } = supabase.storage.from('profiles').getPublicUrl(fileName);
+        uploadedStoragePaths.push(fileName);
+        const { data: { publicUrl } } = profilesStorage.getPublicUrl(fileName);
         finalAvatarUrl = publicUrl;
       }
 
       if (coverFile) {
         const fileExt = coverFile.name.split('.').pop();
         const fileName = `${session.user.id}/cover-${Date.now()}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('profiles').upload(fileName, coverFile, { upsert: true });
+        const { error: uploadError } = await profilesStorage.upload(fileName, coverFile, { upsert: true });
         if (uploadError) throw new Error(`Cover upload failed: ${uploadError.message}`);
-        const { data: { publicUrl } } = supabase.storage.from('profiles').getPublicUrl(fileName);
+        uploadedStoragePaths.push(fileName);
+        const { data: { publicUrl } } = profilesStorage.getPublicUrl(fileName);
         finalCoverUrl = publicUrl;
       }
 
@@ -163,22 +214,17 @@ export default function CreatorProfileCard({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({
-          username: form.username,
-          displayName: form.displayName,
-          bio: form.bio,
-          avatarUrl: finalAvatarUrl,
-          coverUrl: finalCoverUrl,
-          websiteUrl: form.websiteUrl,
-          twitterHandle: form.twitterHandle,
-          instagramHandle: form.instagramHandle,
-          tiktokHandle: form.tiktokHandle,
-          location: form.location,
-        }),
+        body: JSON.stringify(
+          buildProfilePayload(form, {
+            avatarUrl: finalAvatarUrl,
+            coverUrl: finalCoverUrl,
+          })
+        ),
       });
 
       const data = await response.json();
       if (!response.ok) {
+        await cleanupUploadedMedia();
         if (data.fieldErrors) {
           setFieldErrors(data.fieldErrors as ProfileFieldErrors);
         }
@@ -222,6 +268,7 @@ export default function CreatorProfileCard({
       setSuccessMessage('Creator profile updated.');
       onProfileSaved?.(nextProfile);
     } catch (error) {
+      await cleanupUploadedMedia();
       console.error('Failed to update profile:', error);
       setFormError('Failed to update profile.');
     } finally {

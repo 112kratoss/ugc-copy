@@ -4,14 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import type { EditableCreatorProfile } from '@/lib/profile';
 
+const supabaseMocks = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  from: vi.fn(),
+  upload: vi.fn(),
+  remove: vi.fn(),
+  getPublicUrl: vi.fn(),
+}));
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
-      getSession: vi.fn(async () => ({
-        data: {
-          session: { access_token: 'test-token' },
-        },
-      })),
+      getSession: supabaseMocks.getSession,
+    },
+    storage: {
+      from: supabaseMocks.from,
     },
   },
 }));
@@ -33,6 +40,25 @@ const profile: EditableCreatorProfile = {
 
 describe('CreatorProfileCard', () => {
   beforeEach(() => {
+    supabaseMocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'test-token',
+          user: { id: 'test-user-id' },
+        },
+      },
+    });
+    supabaseMocks.upload.mockResolvedValue({ error: null });
+    supabaseMocks.remove.mockResolvedValue({ error: null });
+    supabaseMocks.getPublicUrl.mockImplementation((path: string) => ({
+      data: { publicUrl: `https://cdn.example.com/${path}` },
+    }));
+    supabaseMocks.from.mockReturnValue({
+      upload: supabaseMocks.upload,
+      remove: supabaseMocks.remove,
+      getPublicUrl: supabaseMocks.getPublicUrl,
+    });
+
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -41,19 +67,41 @@ describe('CreatorProfileCard', () => {
     vi.restoreAllMocks();
   });
 
-  it('saves creator profile edits and updates the preview link', async () => {
+  it('validates before patching and updates the preview link after a successful save', async () => {
     const onProfileSaved = vi.fn();
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        id: 'user-1',
-        username: 'updated-name',
-        displayName: 'Updated Name',
-        bio: 'Updated bio',
-        avatarUrl: 'https://example.com/updated.jpg',
-        credits: 25,
-      }),
-    } as Response);
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/profile/validate')) {
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as Response;
+      }
+
+      if (url.endsWith('/api/profile')) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'user-1',
+            username: 'updated-name',
+            displayName: 'Updated Name',
+            bio: 'Updated bio',
+            avatarUrl: 'https://example.com/updated.jpg',
+            coverUrl: '',
+            websiteUrl: '',
+            twitterHandle: '',
+            instagramHandle: '',
+            tiktokHandle: '',
+            location: '',
+            credits: 25,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch to ${url}`);
+    });
 
     render(
       <CreatorProfileCard
@@ -74,11 +122,21 @@ describe('CreatorProfileCard', () => {
       expect(screen.getByText('Creator profile updated.')).toBeInTheDocument();
     });
 
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/profile/validate',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/profile',
+      expect.objectContaining({ method: 'PATCH' })
+    );
     expect(onProfileSaved).toHaveBeenCalled();
     expect(screen.getByRole('link', { name: /preview profile/i })).toHaveAttribute('href', '/creators/updated-name');
   });
 
-  it('shows validation errors returned by the profile API', async () => {
+  it('shows validation errors from the validate endpoint without uploading files', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: false,
       json: async () => ({
@@ -97,6 +155,12 @@ describe('CreatorProfileCard', () => {
       />
     );
 
+    const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(['avatar'], 'avatar.png', { type: 'image/png' });
+
+    fireEvent.change(fileInputs[0], {
+      target: { files: [file] },
+    });
     fireEvent.change(screen.getByPlaceholderText('creator-name'), {
       target: { value: 'Bad Name!' },
     });
@@ -106,5 +170,67 @@ describe('CreatorProfileCard', () => {
     await waitFor(() => {
       expect(screen.getByText(/use 3-24 lowercase letters/i)).toBeInTheDocument();
     });
+
+    expect(supabaseMocks.upload).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes newly uploaded media if the profile patch fails after upload', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1712345678901);
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/profile/validate')) {
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as Response;
+      }
+
+      if (url.endsWith('/api/profile')) {
+        return {
+          ok: false,
+          json: async () => ({
+            error: 'That username is already taken.',
+            fieldErrors: {
+              username: 'That username is already taken.',
+            },
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch to ${url}`);
+    });
+
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(['avatar'], 'avatar.png', { type: 'image/png' });
+
+    fireEvent.change(fileInputs[0], {
+      target: { files: [file] },
+    });
+
+    fireEvent.submit(screen.getByRole('button', { name: /save changes/i }).closest('form')!);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/already taken/i).length).toBeGreaterThan(0);
+    });
+
+    expect(supabaseMocks.upload).toHaveBeenCalledWith(
+      'test-user-id/avatar-1712345678901.png',
+      file,
+      { upsert: true }
+    );
+    expect(supabaseMocks.remove).toHaveBeenCalledWith([
+      'test-user-id/avatar-1712345678901.png',
+    ]);
   });
 });

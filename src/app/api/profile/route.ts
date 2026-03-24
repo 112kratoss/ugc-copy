@@ -1,22 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { buildFallbackUsername, sanitizeProfileRecord, validateProfileUpdate } from '@/lib/profile';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-
-type ProfileRow = {
-  id: string;
-  username: string | null;
-  display_name: string | null;
-  bio: string | null;
-  avatar_url: string | null;
-  cover_url: string | null;
-  website_url: string | null;
-  twitter_handle: string | null;
-  instagram_handle: string | null;
-  tiktok_handle: string | null;
-  location: string | null;
-  credits: number | null;
-};
+import {
+  buildProfileApiResponse,
+  PROFILE_SELECT_FIELDS,
+  type ProfileRow,
+  validateProfileSubmission,
+} from '@/lib/profile-server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,7 +23,7 @@ export async function GET(request: NextRequest) {
 
     const { data: profile, error } = await adminSupabase
       .from('profiles')
-      .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits')
+      .select(PROFILE_SELECT_FIELDS)
       .eq('id', user.id)
       .maybeSingle();
 
@@ -46,12 +36,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
     }
 
-    return NextResponse.json({
-      ...sanitizeProfileRecord({
-        ...(profile as ProfileRow),
-        username: profile.username ?? buildFallbackUsername(user.id),
-      }),
-    });
+    return NextResponse.json(buildProfileApiResponse(profile as ProfileRow, user.id));
   } catch (error) {
     console.error('Profile GET error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -71,65 +56,31 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const payload = validateProfileUpdate(await request.json());
-    if (Object.keys(payload.fieldErrors).length > 0) {
-      return NextResponse.json(
-        { error: 'Please fix the highlighted fields.', fieldErrors: payload.fieldErrors },
-        { status: 400 }
-      );
-    }
-
-    const { data: existingProfile, error: existingError } = await adminSupabase
-      .from('profiles')
-      .select('id, username')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (existingError) {
-      console.error('Failed to load current profile:', existingError);
-      return NextResponse.json({ error: 'Failed to load profile' }, { status: 500 });
-    }
-
-    if (payload.data.username) {
-      const { data: duplicateProfile, error: duplicateError } = await adminSupabase
-        .from('profiles')
-        .select('id')
-        .eq('username', payload.data.username)
-        .neq('id', user.id)
-        .maybeSingle();
-
-      if (duplicateError) {
-        console.error('Failed to validate username:', duplicateError);
-        return NextResponse.json({ error: 'Failed to validate username' }, { status: 500 });
-      }
-
-      if (duplicateProfile) {
-        return NextResponse.json(
-          {
-            error: 'That username is already taken.',
-            fieldErrors: { username: 'That username is already taken.' },
-          },
-          { status: 409 }
-        );
-      }
+    const validation = await validateProfileSubmission(
+      adminSupabase,
+      user.id,
+      await request.json()
+    );
+    if (!validation.ok) {
+      return NextResponse.json(validation.body, { status: validation.status });
     }
 
     const { data: updatedProfile, error: updateError } = await adminSupabase
       .from('profiles')
       .update({
-        username: payload.data.username ?? (existingProfile?.username ?? buildFallbackUsername(user.id)),
-        display_name: payload.data.displayName,
-        bio: payload.data.bio,
-        avatar_url: payload.data.avatarUrl,
-        cover_url: payload.data.coverUrl,
-        website_url: payload.data.websiteUrl,
-        twitter_handle: payload.data.twitterHandle,
-        instagram_handle: payload.data.instagramHandle,
-        tiktok_handle: payload.data.tiktokHandle,
-        location: payload.data.location,
+        username: validation.payload.data.username ?? validation.existingUsername,
+        display_name: validation.payload.data.displayName,
+        bio: validation.payload.data.bio,
+        avatar_url: validation.payload.data.avatarUrl,
+        cover_url: validation.payload.data.coverUrl,
+        website_url: validation.payload.data.websiteUrl,
+        twitter_handle: validation.payload.data.twitterHandle,
+        instagram_handle: validation.payload.data.instagramHandle,
+        tiktok_handle: validation.payload.data.tiktokHandle,
+        location: validation.payload.data.location,
       })
       .eq('id', user.id)
-      .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits')
+      .select(PROFILE_SELECT_FIELDS)
       .single();
 
     if (updateError) {
@@ -147,7 +98,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to update profile' }, { status: 500 });
     }
 
-    return NextResponse.json(sanitizeProfileRecord(updatedProfile as ProfileRow));
+    return NextResponse.json(buildProfileApiResponse(updatedProfile as ProfileRow, user.id));
   } catch (error) {
     console.error('Profile PATCH error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

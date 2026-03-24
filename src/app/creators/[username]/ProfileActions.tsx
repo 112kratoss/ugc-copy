@@ -1,7 +1,7 @@
 'use client';
 
 import { startTransition, useEffect, useState } from 'react';
-import { Sparkles, Edit2, X } from 'lucide-react';
+import { Sparkles, Edit2, Loader2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -18,6 +18,9 @@ interface ProfileActionsProps {
 export function ProfileActions({ profile }: ProfileActionsProps) {
   const router = useRouter();
   const [isOwner, setIsOwner] = useState<boolean | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [isFollowLoading, setIsFollowLoading] = useState(false);
+  const [followError, setFollowError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [privateProfile, setPrivateProfile] = useState<EditableCreatorProfile>(profile);
 
@@ -35,8 +38,32 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
       const ownsProfile = session?.user?.id === profile.id;
       setIsOwner(ownsProfile);
+      setFollowError(null);
 
       if (!ownsProfile || !session?.access_token) {
+        if (session?.user?.id) {
+          const { data: followRecord, error: followLookupError } = await supabase
+            .from('follows')
+            .select('follower_id')
+            .eq('follower_id', session.user.id)
+            .eq('following_id', profile.id)
+            .maybeSingle();
+
+          if (!isActive) {
+            return;
+          }
+
+          if (followLookupError) {
+            console.error('Failed to load follow state', followLookupError);
+            setFollowError('Failed to load follow state.');
+            return;
+          }
+
+          setIsFollowing(Boolean(followRecord));
+        } else {
+          setIsFollowing(false);
+        }
+
         return;
       }
 
@@ -70,9 +97,63 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     );
   }
 
+  const handleFollowToggle = async () => {
+    setFollowError(null);
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    const returnUrl = profile.username
+      ? `/creators/${profile.username}`
+      : '/showcase';
+
+    if (!session) {
+      router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+
+    if (session.user.id === profile.id) {
+      return;
+    }
+
+    const nextFollowing = !isFollowing;
+    setIsFollowLoading(true);
+    setIsFollowing(nextFollowing);
+
+    try {
+      if (nextFollowing) {
+        const { error } = await supabase.from('follows').insert({
+          follower_id: session.user.id,
+          following_id: profile.id,
+        });
+
+        if (error) {
+          throw error;
+        }
+      } else {
+        const { error } = await supabase
+          .from('follows')
+          .delete()
+          .eq('follower_id', session.user.id)
+          .eq('following_id', profile.id);
+
+        if (error) {
+          throw error;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update follow state', error);
+      setIsFollowing(!nextFollowing);
+      setFollowError('Failed to update follow state.');
+    } finally {
+      setIsFollowLoading(false);
+    }
+  };
+
   return (
     <>
-      <div className="flex items-center gap-3 mt-4 md:mt-8">
+      <div className="mt-4 flex flex-wrap items-center gap-3 md:mt-8">
         {isOwner ? (
           <button
             onClick={() => setIsEditing(true)}
@@ -82,11 +163,21 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
             Edit Profile
           </button>
         ) : (
-          <button className="inline-flex items-center gap-2 rounded-full bg-white text-black px-5 py-2.5 text-sm font-semibold transition-transform hover:scale-105">
-            Follow
+          <button
+            type="button"
+            onClick={() => void handleFollowToggle()}
+            disabled={isFollowLoading}
+            className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition ${
+              isFollowing
+                ? 'border border-white/15 bg-white/10 text-white hover:bg-white/15'
+                : 'bg-white text-black hover:scale-105'
+            } disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100`}
+          >
+            {isFollowLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {isFollowing ? 'Following' : 'Follow'}
           </button>
         )}
-        
+
         <Link
           href="/showcase"
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/50 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:border-white/20 hover:text-white"
@@ -95,6 +186,9 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
           <Sparkles className="h-4 w-4" />
         </Link>
       </div>
+      {followError ? (
+        <p className="mt-2 text-sm text-rose-300">{followError}</p>
+      ) : null}
 
       <AnimatePresence>
         {isEditing && (

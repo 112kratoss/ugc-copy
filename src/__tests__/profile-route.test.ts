@@ -6,6 +6,12 @@ type ProfileRow = {
   display_name: string | null;
   bio: string | null;
   avatar_url: string | null;
+  cover_url: string | null;
+  website_url: string | null;
+  twitter_handle: string | null;
+  instagram_handle: string | null;
+  tiktok_handle: string | null;
+  location: string | null;
   credits: number | null;
 };
 
@@ -108,6 +114,12 @@ describe('/api/profile route', () => {
         display_name: 'Existing Creator',
         bio: null,
         avatar_url: null,
+        cover_url: null,
+        website_url: null,
+        twitter_handle: null,
+        instagram_handle: null,
+        tiktok_handle: null,
+        location: null,
         credits: 25,
       },
       {
@@ -116,6 +128,12 @@ describe('/api/profile route', () => {
         display_name: 'Taken',
         bio: null,
         avatar_url: null,
+        cover_url: null,
+        website_url: null,
+        twitter_handle: null,
+        instagram_handle: null,
+        tiktok_handle: null,
+        location: null,
         credits: 10,
       },
     ];
@@ -125,13 +143,14 @@ describe('/api/profile route', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns the current profile and falls back a username when missing', async () => {
+  it('returns the current profile and suggested username when missing', async () => {
     const { GET } = await import('@/app/api/profile/route');
     const response = await GET(new Request('http://localhost/api/profile') as never);
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data.username).toBe('creator-11111111');
+    expect(data.username).toBeNull();
+    expect(data.suggestedUsername).toBe('creator-11111111');
     expect(data.displayName).toBe('Existing Creator');
     expect(data.credits).toBe(25);
   });
@@ -155,6 +174,25 @@ describe('/api/profile route', () => {
     expect(response.status).toBe(200);
     expect(data.username).toBe('creator-name');
     expect(profilesState[0].username).toBe('creator-name');
+  });
+
+  it('validates an available username without updating the profile', async () => {
+    const { POST } = await import('@/app/api/profile/validate/route');
+    const response = await POST(
+      new Request('http://localhost/api/profile/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'available-name',
+          displayName: 'Creator Name',
+        }),
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(profilesState[0].username).toBeNull();
   });
 
   it('returns field errors for invalid usernames', async () => {
