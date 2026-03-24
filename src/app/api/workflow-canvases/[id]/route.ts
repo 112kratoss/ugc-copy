@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/server-helpers';
-import { normalizeWorkflowGraph } from '@/lib/workflow-canvas';
+import { createWorkflowGraphHash, normalizeWorkflowGraph } from '@/lib/workflow-canvas';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   const { data, error } = await supabase
     .from('workflow_canvases')
-    .select('id, title, graph, created_at, updated_at')
+    .select('id, title, graph, created_at, updated_at, revision')
     .eq('id', id)
     .eq('user_id', userId)
     .single();
@@ -39,25 +39,96 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const { id } = await params;
   const { supabase, userId } = auth;
   const body = await request.json().catch(() => ({}));
-  const updates: Record<string, unknown> = {};
+  const loadCurrentCanvas = () =>
+    supabase
+      .from('workflow_canvases')
+      .select('id, title, graph, created_at, updated_at, revision')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
 
-  if (typeof body.title === 'string') {
-    updates.title = body.title.trim() || 'Untitled workflow';
+  const { data: currentCanvas, error: currentCanvasError } = await loadCurrentCanvas();
+
+  if (currentCanvasError || !currentCanvas) {
+    return NextResponse.json({ error: 'Workflow canvas not found.' }, { status: 404 });
   }
 
-  if (body.graph) {
-    const graph = normalizeWorkflowGraph(body.graph);
-    updates.graph = graph;
-    updates.viewport = graph.viewport;
+  const nextTitle = typeof body.title === 'string'
+    ? body.title.trim() || 'Untitled workflow'
+    : currentCanvas.title;
+  const nextGraph = body.graph
+    ? normalizeWorkflowGraph(body.graph)
+    : normalizeWorkflowGraph(currentCanvas.graph);
+  const currentGraph = normalizeWorkflowGraph(currentCanvas.graph);
+  const currentGraphHash = createWorkflowGraphHash(currentGraph);
+  const nextGraphHash = createWorkflowGraphHash(nextGraph);
+  const baseRevision = typeof body.baseRevision === 'number' ? body.baseRevision : null;
+  const requestGraphHash = typeof body.graphHash === 'string' ? body.graphHash : null;
+
+  if (baseRevision !== null && currentCanvas.revision > baseRevision) {
+    return NextResponse.json(
+      {
+        error: 'Workflow canvas has newer changes.',
+        canvas: {
+          ...currentCanvas,
+          graph: currentGraph,
+        },
+      },
+      { status: 409 }
+    );
   }
 
-  const { data, error } = await supabase
+  if (
+    nextTitle === currentCanvas.title &&
+    nextGraphHash === currentGraphHash &&
+    (!requestGraphHash || requestGraphHash === currentGraphHash)
+  ) {
+    return NextResponse.json({
+      canvas: {
+        ...currentCanvas,
+        graph: currentGraph,
+      },
+    });
+  }
+
+  let updateQuery = supabase
     .from('workflow_canvases')
-    .update(updates)
+    .update({
+      title: nextTitle,
+      graph: nextGraph,
+      viewport: nextGraph.viewport,
+      revision: currentCanvas.revision + 1,
+    })
     .eq('id', id)
-    .eq('user_id', userId)
-    .select('id, title, graph, created_at, updated_at')
-    .single();
+    .eq('user_id', userId);
+
+  if (baseRevision !== null) {
+    updateQuery = updateQuery.eq('revision', baseRevision);
+  }
+
+  const { data, error } = await updateQuery
+    .select('id, title, graph, created_at, updated_at, revision')
+    .maybeSingle();
+
+  if (!data && !error && baseRevision !== null) {
+    const { data: latestCanvas, error: latestCanvasError } = await loadCurrentCanvas();
+
+    if (latestCanvasError || !latestCanvas) {
+      console.error('Failed to reload workflow canvas after revision conflict:', latestCanvasError);
+      return NextResponse.json({ error: 'Failed to update workflow canvas.' }, { status: 500 });
+    }
+
+    return NextResponse.json(
+      {
+        error: 'Workflow canvas has newer changes.',
+        canvas: {
+          ...latestCanvas,
+          graph: normalizeWorkflowGraph(latestCanvas.graph),
+        },
+      },
+      { status: 409 }
+    );
+  }
 
   if (error || !data) {
     console.error('Failed to update workflow canvas:', error);

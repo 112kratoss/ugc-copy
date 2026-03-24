@@ -157,6 +157,7 @@ export interface WorkflowCanvasRecord {
   graph: WorkflowCanvasGraph;
   created_at: string;
   updated_at: string;
+  revision: number;
 }
 
 export interface WorkflowCanvasRunStepRecord {
@@ -332,6 +333,17 @@ export function createCanvasEdge(source: string, sourceHandle: WorkflowHandleTyp
     sourceHandle,
     targetHandle,
   };
+}
+
+export function createWorkflowGraphHash(graph: WorkflowCanvasGraph): string {
+  const serialized = JSON.stringify(normalizeWorkflowGraph(graph));
+  let hash = 5381;
+
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash = ((hash << 5) + hash) + serialized.charCodeAt(index);
+  }
+
+  return (hash >>> 0).toString(16);
 }
 
 export function normalizeWorkflowGraph(value: Partial<WorkflowCanvasGraph> | null | undefined): WorkflowCanvasGraph {

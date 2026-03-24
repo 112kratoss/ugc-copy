@@ -22,6 +22,7 @@ export interface ShowcaseFeedItem {
     remixCount: number;
     createdAt: string;
     creator: ShowcaseCreator;
+    isSaved?: boolean;
 }
 
 export interface ShowcaseFeedPageInfo {

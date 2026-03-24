@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 
     const { data: generation, error: fetchError } = await serviceSupabase
         .from('generations')
-        .select('output_url, is_public')
+        .select('output_url, showcase_asset_path, is_public')
         .eq('id', generationId)
         .single();
 
@@ -42,6 +42,14 @@ export async function GET(request: NextRequest) {
 
     if (!generation.output_url) {
         return NextResponse.json({ error: 'No media available' }, { status: 404 });
+    }
+
+    if (generation.showcase_asset_path) {
+        const { data } = serviceSupabase.storage
+            .from('showcase_media')
+            .getPublicUrl(generation.showcase_asset_path);
+
+        return NextResponse.json({ url: data.publicUrl });
     }
 
     // 3. If already an HTTP URL, return as-is

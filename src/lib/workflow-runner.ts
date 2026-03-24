@@ -9,6 +9,7 @@ import {
   syncGenerationStatuses,
 } from '@/lib/generation-services';
 import {
+  createWorkflowGraphHash,
   type AudioInputNodeData,
   getExecutionOrder,
   getIncomingEdges,
@@ -45,6 +46,26 @@ interface RunnableExecutionResult {
 interface HydratedRunStep extends WorkflowCanvasRunStepRecord {
   generation_id: string | null;
 }
+
+interface WorkflowRunRow {
+  id: string;
+  canvas_id: string;
+  user_id: string;
+  start_node_id: string;
+  mode: 'node' | 'branch';
+  status: 'processing' | 'succeeded' | 'failed';
+  created_at: string;
+  finished_at: string | null;
+}
+
+interface GenerationStatusSnapshot {
+  status: WorkflowRunStatus;
+  output_url: string | null;
+}
+
+const WORKFLOW_MONITOR_INTERVAL_MS = 3000;
+const WORKFLOW_MONITOR_MAX_CYCLES = 240;
+const activeWorkflowRunMonitors = new Set<string>();
 
 function buildBlockedError(message: string): RunnableExecutionResult {
   return {
@@ -163,6 +184,209 @@ async function updateRunStep(
     .from('workflow_canvas_run_steps')
     .update(updates)
     .eq('id', stepId);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getWorkflowRunMonitorKey(canvasId: string, runId: string) {
+  return `${canvasId}:${runId}`;
+}
+
+function mapGenerationStatus(status: string): WorkflowRunStatus {
+  if (status === 'succeeded') {
+    return 'succeeded';
+  }
+
+  if (status === 'processing') {
+    return 'processing';
+  }
+
+  return 'failed';
+}
+
+function getDerivedStepFinishedAt(step: HydratedRunStep, status: WorkflowRunStatus): string | null {
+  if (status === 'processing' || status === 'queued') {
+    return null;
+  }
+
+  return step.finished_at || step.started_at || null;
+}
+
+function hasStepChanged(previous: HydratedRunStep, next: HydratedRunStep) {
+  return (
+    previous.status !== next.status
+    || previous.finished_at !== next.finished_at
+    || previous.error_message !== next.error_message
+    || JSON.stringify(previous.output_snapshot ?? null) !== JSON.stringify(next.output_snapshot ?? null)
+  );
+}
+
+function deriveWorkflowRunStatus(steps: HydratedRunStep[]): 'processing' | 'succeeded' | 'failed' {
+  if (steps.some((step) => step.status === 'failed' || step.status === 'blocked')) {
+    return 'failed';
+  }
+
+  if (steps.some((step) => step.status === 'processing' || step.status === 'queued')) {
+    return 'processing';
+  }
+
+  return 'succeeded';
+}
+
+function getDerivedRunFinishedAt(run: WorkflowRunRow, status: 'processing' | 'succeeded' | 'failed', steps: HydratedRunStep[]) {
+  if (status === 'processing') {
+    return null;
+  }
+
+  const latestFinishedAt = steps.reduce<string | null>((latest, step) => {
+    if (!step.finished_at) {
+      return latest;
+    }
+
+    if (!latest || step.finished_at > latest) {
+      return step.finished_at;
+    }
+
+    return latest;
+  }, null);
+
+  return run.finished_at || latestFinishedAt || run.created_at;
+}
+
+function buildWorkflowRunResponse(run: WorkflowRunRow, steps: HydratedRunStep[]) {
+  const status = deriveWorkflowRunStatus(steps);
+  const finished_at = getDerivedRunFinishedAt(run, status, steps);
+
+  return {
+    id: run.id,
+    canvas_id: run.canvas_id,
+    start_node_id: run.start_node_id,
+    mode: run.mode,
+    status,
+    created_at: run.created_at,
+    finished_at,
+    steps,
+  };
+}
+
+async function loadWorkflowRunState(params: {
+  supabase: SupabaseClient;
+  canvasId: string;
+  runId: string;
+}) {
+  const { supabase, canvasId, runId } = params;
+  const { data: run, error } = await supabase
+    .from('workflow_canvas_runs')
+    .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at')
+    .eq('canvas_id', canvasId)
+    .eq('id', runId)
+    .single();
+
+  if (error || !run) {
+    throw new Error('Workflow run not found.');
+  }
+
+  const { data: canvas } = await supabase
+    .from('workflow_canvases')
+    .select('graph')
+    .eq('id', canvasId)
+    .single();
+
+  const { data: steps } = await supabase
+    .from('workflow_canvas_run_steps')
+    .select('id, node_id, status, generation_id, input_snapshot, output_snapshot, error_message, started_at, finished_at')
+    .eq('run_id', runId)
+    .order('started_at', { ascending: true });
+
+  return {
+    run: run as WorkflowRunRow,
+    graph: normalizeWorkflowGraph(canvas?.graph as WorkflowCanvasGraph | undefined),
+    steps: (steps || []) as HydratedRunStep[],
+  };
+}
+
+async function hydrateRunSteps(params: {
+  supabase: SupabaseClient;
+  steps: HydratedRunStep[];
+  syncGenerationState?: boolean;
+}) {
+  const { supabase, steps, syncGenerationState = false } = params;
+  const generationIds = steps.map((step) => step.generation_id).filter(Boolean) as string[];
+
+  if (generationIds.length === 0) {
+    return steps;
+  }
+
+  if (syncGenerationState) {
+    await syncGenerationStatuses({
+      supabase,
+      generationIds,
+    });
+  }
+
+  const adminSupabase = createServiceClient();
+  const generationMap = new Map<string, GenerationStatusSnapshot>();
+  const { data: generations } = await supabase
+    .from('generations')
+    .select('id, status, output_url')
+    .in('id', generationIds);
+
+  for (const generation of generations || []) {
+    generationMap.set(generation.id, {
+      status: mapGenerationStatus(generation.status),
+      output_url: generation.output_url
+        ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
+        : null,
+    });
+  }
+
+  return steps.map((step) => {
+    if (!step.generation_id) {
+      return step;
+    }
+
+    const generation = generationMap.get(step.generation_id);
+    if (!generation) {
+      return step;
+    }
+
+    const nextStatus = generation.status;
+    return {
+      ...step,
+      status: nextStatus,
+      output_snapshot: {
+        ...(step.output_snapshot as Record<string, unknown> | null),
+        outputUrl: generation.output_url,
+      },
+      finished_at: getDerivedStepFinishedAt(step, nextStatus),
+    };
+  });
+}
+
+async function persistHydratedStepUpdates(
+  supabase: SupabaseClient,
+  originalSteps: HydratedRunStep[],
+  hydratedSteps: HydratedRunStep[]
+) {
+  const originalById = new Map(originalSteps.map((step) => [step.id, step]));
+
+  for (const step of hydratedSteps) {
+    const previous = originalById.get(step.id);
+    if (!previous || !hasStepChanged(previous, step)) {
+      continue;
+    }
+
+    await updateRunStep(supabase, step.id, {
+      status: step.status,
+      output_snapshot: step.output_snapshot,
+      error_message: step.error_message,
+      finished_at: step.finished_at,
+    });
+  }
 }
 
 async function executeRunnableNode(params: {
@@ -490,105 +714,27 @@ export async function executeWorkflowRun(params: {
   };
 }
 
-export async function getWorkflowRunDetails(params: {
+async function advanceWorkflowRunProgress(params: {
   supabase: SupabaseClient;
   canvasId: string;
   runId: string;
 }) {
   const { supabase, canvasId, runId } = params;
-  const adminSupabase = createServiceClient();
-  const { data: run, error } = await supabase
-    .from('workflow_canvas_runs')
-    .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at')
-    .eq('canvas_id', canvasId)
-    .eq('id', runId)
-    .single();
+  const { run, graph, steps: originalSteps } = await loadWorkflowRunState({
+    supabase,
+    canvasId,
+    runId,
+  });
+  const hydratedSteps = await hydrateRunSteps({
+    supabase,
+    steps: originalSteps,
+    syncGenerationState: true,
+  });
 
-  if (error || !run) {
-    throw new Error('Workflow run not found.');
-  }
+  await persistHydratedStepUpdates(supabase, originalSteps, hydratedSteps);
 
-  const { data: canvas } = await supabase
-    .from('workflow_canvases')
-    .select('graph')
-    .eq('id', canvasId)
-    .single();
-
-  const { data: steps } = await supabase
-    .from('workflow_canvas_run_steps')
-    .select('id, node_id, status, generation_id, input_snapshot, output_snapshot, error_message, started_at, finished_at')
-    .eq('run_id', runId)
-    .order('started_at', { ascending: true });
-
-  const generationIds = (steps || []).map((step) => step.generation_id).filter(Boolean);
-  const generationMap = new Map<string, { status: string; output_url: string | null }>();
-
-  if (generationIds.length > 0) {
-    await syncGenerationStatuses({
-      supabase,
-      generationIds: generationIds as string[],
-    });
-
-    const { data: generations } = await supabase
-      .from('generations')
-      .select('id, status, output_url')
-      .in('id', generationIds);
-
-    for (const generation of generations || []) {
-      generationMap.set(generation.id, {
-        status: generation.status,
-        output_url: generation.output_url ? await resolveStoredMediaUrl(adminSupabase, generation.output_url) : null,
-      });
-    }
-  }
-
-  const originalSteps = (steps || []) as HydratedRunStep[];
-  const hydratedSteps: HydratedRunStep[] = [];
-
-  for (const step of originalSteps) {
-    if (!step.generation_id) {
-      hydratedSteps.push(step);
-      continue;
-    }
-
-    const generation = generationMap.get(step.generation_id);
-    if (!generation) {
-      hydratedSteps.push(step);
-      continue;
-    }
-
-    const hydratedStatus: WorkflowRunStatus = generation.status === 'processing'
-      ? 'processing'
-      : generation.status === 'succeeded'
-        ? 'succeeded'
-        : 'failed';
-
-    const nextStep: HydratedRunStep = {
-      ...step,
-      status: hydratedStatus,
-      output_snapshot: {
-        ...(step.output_snapshot as Record<string, unknown> | null),
-        outputUrl: generation.output_url,
-      },
-      finished_at: hydratedStatus === 'processing' ? null : step.finished_at || new Date().toISOString(),
-    };
-
-    hydratedSteps.push(nextStep);
-
-    if (
-      step.status !== nextStep.status
-      || step.finished_at !== nextStep.finished_at
-      || JSON.stringify(step.output_snapshot ?? null) !== JSON.stringify(nextStep.output_snapshot ?? null)
-    ) {
-      await updateRunStep(supabase, step.id, {
-        status: nextStep.status,
-        output_snapshot: nextStep.output_snapshot,
-        finished_at: nextStep.finished_at,
-      });
-    }
-  }
-
-  let workingGraph = normalizeWorkflowGraph(canvas?.graph as WorkflowCanvasGraph | undefined);
+  const originalGraphHash = createWorkflowGraphHash(graph);
+  let workingGraph = graph;
   for (const step of hydratedSteps) {
     workingGraph = applyStepToGraph(workingGraph, step);
   }
@@ -696,15 +842,12 @@ export async function getWorkflowRunDetails(params: {
     }
   }
 
-  await persistWorkflowGraph(supabase, canvasId, workingGraph);
+  if (createWorkflowGraphHash(workingGraph) !== originalGraphHash) {
+    await persistWorkflowGraph(supabase, canvasId, workingGraph);
+  }
 
-  const nextRunStatus = hydratedSteps.some((step) => step.status === 'failed' || step.status === 'blocked')
-    ? 'failed'
-    : hydratedSteps.some((step) => step.status === 'processing' || step.status === 'queued')
-      ? 'processing'
-      : 'succeeded';
-
-  const nextFinishedAt = nextRunStatus === 'processing' ? null : run.finished_at || new Date().toISOString();
+  const nextRunStatus = deriveWorkflowRunStatus(hydratedSteps);
+  const nextFinishedAt = getDerivedRunFinishedAt(run, nextRunStatus, hydratedSteps);
   if (run.status !== nextRunStatus || run.finished_at !== nextFinishedAt) {
     await supabase
       .from('workflow_canvas_runs')
@@ -715,14 +858,67 @@ export async function getWorkflowRunDetails(params: {
       .eq('id', runId);
   }
 
-  return {
-    id: run.id,
-    canvas_id: run.canvas_id,
-    start_node_id: run.start_node_id,
-    mode: run.mode,
+  return buildWorkflowRunResponse({
+    ...run,
     status: nextRunStatus,
-    created_at: run.created_at,
     finished_at: nextFinishedAt,
-    steps: hydratedSteps,
-  };
+  }, hydratedSteps);
+}
+
+export async function monitorWorkflowRun(params: {
+  canvasId: string;
+  runId: string;
+  maxCycles?: number;
+}) {
+  const { canvasId, runId, maxCycles = WORKFLOW_MONITOR_MAX_CYCLES } = params;
+  const monitorKey = getWorkflowRunMonitorKey(canvasId, runId);
+
+  if (activeWorkflowRunMonitors.has(monitorKey)) {
+    return null;
+  }
+
+  activeWorkflowRunMonitors.add(monitorKey);
+
+  try {
+    const supabase = createServiceClient();
+    let latestRun = null;
+
+    for (let cycle = 0; cycle < maxCycles; cycle += 1) {
+      latestRun = await advanceWorkflowRunProgress({
+        supabase,
+        canvasId,
+        runId,
+      });
+
+      if (!latestRun || latestRun.status !== 'processing') {
+        return latestRun;
+      }
+
+      await delay(WORKFLOW_MONITOR_INTERVAL_MS);
+    }
+
+    return latestRun;
+  } finally {
+    activeWorkflowRunMonitors.delete(monitorKey);
+  }
+}
+
+export async function getWorkflowRunDetails(params: {
+  supabase: SupabaseClient;
+  canvasId: string;
+  runId: string;
+}) {
+  const { supabase, canvasId, runId } = params;
+  const { run, steps } = await loadWorkflowRunState({
+    supabase,
+    canvasId,
+    runId,
+  });
+  const hydratedSteps = await hydrateRunSteps({
+    supabase,
+    steps,
+    syncGenerationState: false,
+  });
+
+  return buildWorkflowRunResponse(run, hydratedSteps);
 }

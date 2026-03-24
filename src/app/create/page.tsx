@@ -1,5 +1,3 @@
-'use client';
-
 import { ArrowRight, Video, Image as ImageIcon, Wand2, Clapperboard } from 'lucide-react';
 import Link from 'next/link';
 
@@ -26,7 +24,7 @@ export default function CreateHubPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
 
                     {/* Image Generation */}
-                    <Link href="/create-image" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-purple-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
+                    <Link prefetch={false} href="/create-image" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-purple-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
                         <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="w-14 h-14 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
                             <ImageIcon className="w-7 h-7" />
@@ -41,7 +39,7 @@ export default function CreateHubPage() {
                     </Link>
 
                     {/* Motion Control (Current Create Page) */}
-                    <Link href="/create-motion" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-pink-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
+                    <Link prefetch={false} href="/create-motion" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-pink-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
                         <div className="absolute inset-0 bg-gradient-to-br from-pink-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="w-14 h-14 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
                             <Wand2 className="w-7 h-7" />
@@ -56,7 +54,7 @@ export default function CreateHubPage() {
                     </Link>
 
                     {/* Video Generation */}
-                    <Link href="/create-video" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-blue-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
+                    <Link prefetch={false} href="/create-video" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-blue-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
                         <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="w-14 h-14 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
                             <Video className="w-7 h-7" />
@@ -71,7 +69,7 @@ export default function CreateHubPage() {
                     </Link>
 
 
-                    <Link href="/create-workflow" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-emerald-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
+                    <Link prefetch={false} href="/create-workflow" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-emerald-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
                         <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
                             <Clapperboard className="w-7 h-7" />

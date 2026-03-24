@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { cache } from 'react';
+
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { getCreatorDisplayName, normalizeUsername } from '@/lib/profile';
 import type { ShowcaseFeedItem, ShowcaseItemCategory } from '@/lib/showcase';
@@ -74,7 +76,7 @@ async function resolveItemUrl(
   return resolveStoredMediaUrl(adminSupabase, generation.output_url);
 }
 
-export async function getCreatorProfilePageData(rawUsername: string): Promise<CreatorProfilePageData | null> {
+export const getCreatorProfilePageData = cache(async (rawUsername: string): Promise<CreatorProfilePageData | null> => {
   const username = normalizeUsername(rawUsername);
   if (!username) {
     return null;
@@ -168,4 +170,4 @@ export async function getCreatorProfilePageData(rawUsername: string): Promise<Cr
     },
     items,
   };
-}
+});

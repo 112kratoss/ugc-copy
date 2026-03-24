@@ -1,0 +1,3 @@
+-- No-op placeholder to align local migration history with the linked production project.
+-- The linked remote already records version 20260322135530, and the current repo schema
+-- matches that state through adjacent migrations.

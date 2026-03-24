@@ -246,9 +246,11 @@ export default function CreationsPage() {
 
                 {/* Loading */}
                 {isLoading && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-10 mt-8">
+                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6 mb-10 mt-8">
                         {[1, 2, 3, 4, 5, 6].map((i) => (
-                            <SkeletonLoader key={i} className="h-48" />
+                            <div key={i} className="break-inside-avoid mb-6">
+                                <SkeletonLoader className="h-48" />
+                            </div>
                         ))}
                     </div>
                 )}
@@ -287,10 +289,10 @@ export default function CreationsPage() {
                         <h2 className="text-xs font-bold text-yellow-400/80 uppercase tracking-widest mb-4 flex items-center gap-2">
                             <Loader2 className="w-4 h-4 animate-spin" /> Processing ({processingGenerations.length})
                         </h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                             {processingGenerations.map((gen, i) => (
                                 <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                                    className="bg-zinc-900/30 rounded-2xl border border-yellow-500/20 overflow-hidden backdrop-blur-sm">
+                                    className="bg-white/[0.02] rounded-2xl border border-yellow-500/20 overflow-hidden backdrop-blur-md break-inside-avoid mb-6">
                                     <div className="aspect-video bg-black/60 flex items-center justify-center">
                                         <div className="flex flex-col items-center gap-3">
                                             <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
@@ -310,7 +312,7 @@ export default function CreationsPage() {
                         {processingGenerations.length > 0 && (
                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Completed</h2>
                         )}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                             {filteredSuccessful.map((gen, i) => {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
@@ -323,8 +325,8 @@ export default function CreationsPage() {
                                 const badgeLabel = isImage ? '🖼 Image' : isAudio ? '🔊 Audio' : '🎬 Video';
                                 return (
                                     <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                                        className="group bg-zinc-900/30 rounded-2xl border border-white/5 overflow-hidden backdrop-blur-sm hover:border-purple-500/30 hover:shadow-[0_0_30px_-10px_rgba(168,85,247,0.2)] transition-all duration-300">
-                                        <div className="bg-black relative overflow-hidden rounded-t-2xl">
+                                        className="group bg-white/[0.02] rounded-[1.5rem] border border-white/[0.04] overflow-hidden backdrop-blur-md hover:border-purple-500/30 hover:shadow-[0_8px_30px_rgba(0,0,0,0.5)] transition-all duration-300 break-inside-avoid mb-6">
+                                        <div className="bg-black relative overflow-hidden rounded-t-[1.5rem]">
                                             {isImage ? (
                                                 // eslint-disable-next-line @next/next/no-img-element
                                                 <img src={gen.output_url!} alt="Generated image" className="w-full h-auto block" />
@@ -402,10 +404,10 @@ export default function CreationsPage() {
                 {failedGenerations.length > 0 && (
                     <div className="mb-10">
                         <h2 className="text-xs font-bold text-red-400/80 uppercase tracking-widest mb-4">Failed ({failedGenerations.length})</h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                             {failedGenerations.map((gen, i) => (
                                 <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                                    className="bg-zinc-900/30 rounded-2xl border border-red-500/20 overflow-hidden backdrop-blur-sm opacity-60">
+                                    className="bg-white/[0.02] rounded-[1.5rem] border border-red-500/20 overflow-hidden backdrop-blur-md opacity-60 break-inside-avoid mb-6">
                                     <div className={`${getMediaKind(gen) === 'audio' ? 'p-6' : 'aspect-video'} bg-black/60 flex items-center justify-center`}>
                                         <span className="text-xs text-red-400/60">Generation failed</span>
                                     </div>

@@ -71,7 +71,7 @@ export const metadata: Metadata = createMetadata({
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen flex-col overflow-hidden bg-black text-white selection:bg-purple-500/30">
+    <div className="flex min-h-screen flex-col overflow-hidden bg-transparent text-white selection:bg-purple-500/30">
       <JsonLd data={buildOrganizationSchema()} />
       <JsonLd
         data={buildSoftwareApplicationSchema({
@@ -96,17 +96,17 @@ export default function Home() {
       />
 
       <div className="fixed inset-0 z-0 pointer-events-none">
-        <div className="absolute top-[-20%] left-[-10%] h-[50%] w-[50%] rounded-full bg-purple-900/20 blur-[120px] mix-blend-screen" />
-        <div className="absolute top-[20%] right-[-20%] h-[60%] w-[60%] rounded-full bg-pink-900/10 blur-[150px] mix-blend-screen" />
-        <div className="absolute bottom-[-10%] left-[20%] h-[40%] w-[40%] rounded-full bg-blue-900/10 blur-[120px] mix-blend-screen" />
-        <div className="absolute inset-0 bg-[url('/noise.png')] opacity-20 mix-blend-overlay" />
+        <div className="absolute top-[-20%] left-[-10%] h-[50%] w-[50%] rounded-full bg-purple-600/20 blur-[120px] mix-blend-screen" />
+        <div className="absolute top-[20%] right-[-20%] h-[60%] w-[60%] rounded-full bg-pink-600/15 blur-[150px] mix-blend-screen" />
+        <div className="absolute bottom-[-10%] left-[20%] h-[40%] w-[40%] rounded-full bg-blue-600/15 blur-[120px] mix-blend-screen" />
+        <div className="absolute inset-0 bg-[url('/noise.png')] opacity-[0.15] mix-blend-overlay" />
       </div>
 
       <main className="relative z-10 flex flex-1 flex-col items-center gap-16 p-8 sm:p-20">
         <FadeInStagger className="w-full flex flex-col items-center gap-16">
             <section className="mt-10 flex w-full max-w-4xl flex-col items-center gap-10 text-center sm:mt-20">
               <FadeInItem>
-                <div className="group flex cursor-default items-center gap-2 rounded-full border border-purple-500/30 bg-zinc-950/80 px-5 py-2 text-sm text-zinc-300 backdrop-blur-md transition-all hover:border-purple-400 hover:bg-zinc-900/80 hover:shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
+                <div className="group flex cursor-default items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.02] px-5 py-2 text-sm text-zinc-300 backdrop-blur-md transition-all hover:border-purple-500/50 hover:bg-white/[0.04] hover:shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]">
                   <Sparkles className="h-4 w-4 text-purple-400 transition-colors group-hover:text-purple-300" />
                   <span className="font-medium tracking-wide">
                     AI image generation, video generation, motion transfer, and reusable workflows
@@ -159,8 +159,8 @@ export default function Home() {
 
             <FadeInItem>
               <section className="mt-20 mb-6 grid w-full max-w-5xl grid-cols-1 gap-6 md:grid-cols-3">
-                <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-purple-500/30 bg-purple-500/20">
+                <div className="group flex flex-col gap-4 rounded-[2rem] border border-white/[0.04] bg-white/[0.01] p-8 backdrop-blur-md transition-all hover:bg-white/[0.03] hover:border-white/10 hover:shadow-[0_4px_30px_rgba(0,0,0,0.1)]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-purple-500/30 bg-purple-500/20 transition-transform group-hover:scale-105">
                     <Zap className="h-6 w-6 text-purple-400" />
                   </div>
                   <h2 className="text-xl font-bold text-zinc-200">Built for iteration speed</h2>
@@ -169,8 +169,8 @@ export default function Home() {
                   </p>
                 </div>
 
-                <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-pink-500/30 bg-pink-500/20">
+                <div className="group flex flex-col gap-4 rounded-[2rem] border border-white/[0.04] bg-white/[0.01] p-8 backdrop-blur-md transition-all hover:bg-white/[0.03] hover:border-white/10 hover:shadow-[0_4px_30px_rgba(0,0,0,0.1)]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-pink-500/30 bg-pink-500/20 transition-transform group-hover:scale-105">
                     <Sparkles className="h-6 w-6 text-pink-400" />
                   </div>
                   <h2 className="text-xl font-bold text-zinc-200">One studio, four workflows</h2>
@@ -179,8 +179,8 @@ export default function Home() {
                   </p>
                 </div>
 
-                <div className="flex flex-col gap-4 rounded-3xl border border-white/5 bg-zinc-900/40 p-8 backdrop-blur-sm transition-colors hover:bg-zinc-900/60">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-500/30 bg-blue-500/20">
+                <div className="group flex flex-col gap-4 rounded-[2rem] border border-white/[0.04] bg-white/[0.01] p-8 backdrop-blur-md transition-all hover:bg-white/[0.03] hover:border-white/10 hover:shadow-[0_4px_30px_rgba(0,0,0,0.1)]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-500/30 bg-blue-500/20 transition-transform group-hover:scale-105">
                     <Shield className="h-6 w-6 text-blue-400" />
                   </div>
                   <h2 className="text-xl font-bold text-zinc-200">Optimized for production teams</h2>
@@ -192,8 +192,8 @@ export default function Home() {
             </FadeInItem>
 
             <FadeInItem>
-              <section className="w-full max-w-6xl rounded-[2rem] border border-white/8 bg-zinc-950/60 p-8 backdrop-blur-xl sm:p-10">
-                <div className="mb-8 max-w-2xl">
+              <section className="w-full max-w-6xl rounded-[2.5rem] border border-white/[0.04] bg-white/[0.01] p-8 backdrop-blur-2xl sm:p-12 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]">
+                <div className="mb-10 max-w-2xl">
                   <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-500">
                     Explore by intent
                   </p>
@@ -206,16 +206,16 @@ export default function Home() {
                     <Link
                       key={link.href}
                       href={link.href}
-                      className="group rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-purple-400/40 hover:bg-white/[0.05]"
+                      className="group rounded-[1.5rem] border border-white/[0.04] bg-white/[0.02] p-6 transition-all duration-300 hover:-translate-y-1 hover:border-purple-500/30 hover:bg-white/[0.04] hover:shadow-[0_8px_30px_rgba(0,0,0,0.12)]"
                     >
-                      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-500 group-hover:text-purple-400/70 transition-colors">
                         SEO landing page
                       </p>
-                      <h3 className="mt-4 text-2xl font-semibold text-white">{link.title}</h3>
+                      <h3 className="mt-4 text-2xl font-semibold text-white group-hover:text-purple-100 transition-colors">{link.title}</h3>
                       <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
-                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-purple-300">
+                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-purple-400 group-hover:text-purple-300">
                         Explore page
-                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                        <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                       </span>
                     </Link>
                   ))}
@@ -225,7 +225,7 @@ export default function Home() {
 
             <FadeInItem>
               <section className="w-full max-w-6xl">
-                <div className="mb-8 max-w-2xl">
+                <div className="mb-10 max-w-2xl">
                   <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-500">
                     Learn and compare
                   </p>
@@ -238,13 +238,15 @@ export default function Home() {
                     <Link
                       key={link.href}
                       href={link.href}
-                      className="group rounded-[1.5rem] border border-white/8 bg-zinc-900/50 p-6 backdrop-blur-sm transition hover:border-pink-400/40 hover:bg-zinc-900/80"
+                      className="group flex flex-col justify-between rounded-[2rem] border border-white/[0.04] bg-white/[0.01] p-8 backdrop-blur-md transition-all duration-300 hover:-translate-y-1 hover:border-pink-500/30 hover:bg-white/[0.03] hover:shadow-[0_8px_30px_rgba(0,0,0,0.12)]"
                     >
-                      <h3 className="text-2xl font-semibold text-white">{link.title}</h3>
-                      <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
-                      <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-pink-300">
+                      <div>
+                        <h3 className="text-2xl font-semibold text-white group-hover:text-pink-100 transition-colors">{link.title}</h3>
+                        <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
+                      </div>
+                      <span className="mt-8 inline-flex items-center gap-2 text-sm font-semibold text-pink-400 group-hover:text-pink-300">
                         Open link
-                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                        <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                       </span>
                     </Link>
                   ))}
@@ -254,7 +256,7 @@ export default function Home() {
         </FadeInStagger>
       </main>
 
-      <footer className="relative z-10 w-full border-t border-white/10 bg-black/80 px-6 py-16 backdrop-blur-lg">
+      <footer className="relative z-10 w-full border-t border-white/[0.04] bg-[#09090b]/80 px-6 py-16 backdrop-blur-lg">
         <div className="mx-auto grid max-w-7xl grid-cols-1 gap-12 sm:grid-cols-4">
           <div className="sm:col-span-2">
             <h3 className="mb-4 inline-block bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-2xl font-bold tracking-tight text-transparent">

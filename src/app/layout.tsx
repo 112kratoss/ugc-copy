@@ -5,7 +5,6 @@ import Script from "next/script";
 import { siteConfig } from "@/lib/seo";
 
 import "./globals.css";
-import { AuthProvider } from "./components/AuthProvider";
 import Navbar from "./components/Navbar";
 
 const geistSans = Geist({
@@ -80,10 +79,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AuthProvider>
-          <Navbar />
-          {children}
-        </AuthProvider>
+        <Navbar />
+        {children}
         {gaMeasurementId ? (
           <>
             <Script

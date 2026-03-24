@@ -1,61 +1,38 @@
-'use client';
-
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { redirect } from 'next/navigation';
 import { ArrowLeft, Sparkles, UserRound } from 'lucide-react';
 
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
-import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
+import { createServiceClient } from '@/lib/server-helpers';
+import { getServerAuthState } from '@/lib/supabase-server';
 import { toEditableCreatorProfile } from '@/lib/profile';
-import { supabase } from '@/lib/supabase';
+import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
+import { buildProfileApiResponse, PROFILE_SELECT_FIELDS, type ProfileRow } from '@/lib/profile-server';
 
-export default function ProfilePage() {
-  const router = useRouter();
-  const [profile, setProfile] = useState<EditableCreatorProfile | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export default async function ProfilePage() {
+  const auth = await getServerAuthState();
 
-  useEffect(() => {
-    const fetchProfile = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+  if (!auth.session?.user) {
+    redirect('/login?returnUrl=/profile');
+  }
 
-      if (!session) {
-        router.push('/login');
-        return;
-      }
+  const adminSupabase = createServiceClient();
+  const { data: profile, error } = await adminSupabase
+    .from('profiles')
+    .select(PROFILE_SELECT_FIELDS)
+    .eq('id', auth.session.user.id)
+    .maybeSingle();
 
-      try {
-        const response = await fetch('/api/profile', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        const data = await response.json();
+  if (profile?.username?.trim()) {
+    redirect(`/creators/${profile.username}`);
+  }
 
-        if (!response.ok) {
-          setLoadError(data.error || 'Failed to load creator profile.');
-          return;
-        }
-
-        if (data.username && data.username.trim() !== '') {
-          // They already have a profile, seamlessly send them to the public view where they can invoke the premium Edit Modal
-          router.replace(`/creators/${data.username}`);
-          return;
-        }
-
-        setProfile(toEditableCreatorProfile(data as ProfileApiResponse));
-        setLoadError(null);
-      } catch (error) {
-        console.error('Failed to fetch profile:', error);
-        setLoadError('Failed to load creator profile.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchProfile();
-  }, [router]);
+  const initialProfile: EditableCreatorProfile | null = profile
+    ? toEditableCreatorProfile(
+        buildProfileApiResponse(profile as ProfileRow, auth.session.user.id) as ProfileApiResponse
+      )
+    : null;
+  const loadError = error ? 'Failed to load creator profile.' : profile ? null : 'Profile not found.';
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -97,10 +74,10 @@ export default function ProfilePage() {
         </div>
 
         <CreatorProfileCard
-          initialProfile={profile}
-          isLoading={isLoading}
+          initialProfile={initialProfile}
+          isLoading={false}
           loadError={loadError}
-          onProfileSaved={setProfile}
+          onProfileSaved={() => undefined}
         />
       </div>
     </div>

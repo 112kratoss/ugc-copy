@@ -9,15 +9,26 @@ interface AuthContextValue {
     user: User | null;
     credits: number | null;
     isLoading: boolean;
+    updateCredits: (nextCredits: number | null) => void;
     refreshSessionState: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-    const [session, setSession] = useState<Session | null>(null);
-    const [credits, setCredits] = useState<number | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+export function AuthProvider({
+    children,
+    initialSession = null,
+    initialCredits = null,
+    hasResolvedInitialState = false,
+}: {
+    children: React.ReactNode;
+    initialSession?: Session | null;
+    initialCredits?: number | null;
+    hasResolvedInitialState?: boolean;
+}) {
+    const [session, setSession] = useState<Session | null>(initialSession);
+    const [credits, setCredits] = useState<number | null>(initialCredits);
+    const [isLoading, setIsLoading] = useState(!hasResolvedInitialState);
 
     useEffect(() => {
         let isActive = true;
@@ -54,13 +65,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setIsLoading(false);
         };
 
-        void syncSessionState();
+        if (!hasResolvedInitialState) {
+            void syncSessionState();
+        }
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
             void syncSessionState(nextSession);
         });
 
-        const handleCreditsUpdated = () => {
+        const handleCreditsUpdated = (event: Event) => {
+            const customEvent = event as CustomEvent<{ credits?: number | null }>;
+            if (customEvent.detail && 'credits' in customEvent.detail) {
+                setCredits(customEvent.detail.credits ?? null);
+                setIsLoading(false);
+                return;
+            }
+
             void syncSessionState();
         };
 
@@ -71,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             subscription.unsubscribe();
             window.removeEventListener('credits_updated', handleCreditsUpdated);
         };
-    }, []);
+    }, [hasResolvedInitialState]);
 
     const refreshSessionState = async () => {
         setIsLoading(true);
@@ -94,6 +114,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
     };
 
+    const updateCredits = (nextCredits: number | null) => {
+        setCredits(nextCredits);
+
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('credits_updated', {
+                detail: { credits: nextCredits },
+            }));
+        }
+    };
+
     return (
         <AuthContext.Provider
             value={{
@@ -101,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 user: session?.user ?? null,
                 credits,
                 isLoading,
+                updateCredits,
                 refreshSessionState,
             }}
         >

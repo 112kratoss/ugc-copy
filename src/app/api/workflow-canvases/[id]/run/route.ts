@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { after, NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/server-helpers';
 import { normalizeWorkflowGraph } from '@/lib/workflow-canvas';
-import { executeWorkflowRun } from '@/lib/workflow-runner';
+import { executeWorkflowRun, monitorWorkflowRun } from '@/lib/workflow-runner';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -41,6 +41,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       startNodeId,
       mode,
     });
+
+    if (result.status === 'processing') {
+      after(async () => {
+        try {
+          await monitorWorkflowRun({
+            canvasId: canvas.id,
+            runId: result.runId,
+          });
+        } catch (monitorError) {
+          console.error('Workflow run monitor failed:', monitorError);
+        }
+      });
+    }
 
     return NextResponse.json(result);
   } catch (runError) {

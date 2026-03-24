@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS public.follows (
 -- RLS for follows
 ALTER TABLE public.follows ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Follows are viewable by everyone." ON public.follows;
 CREATE POLICY "Follows are viewable by everyone." ON public.follows FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Users can insert their own follows." ON public.follows;
 CREATE POLICY "Users can insert their own follows." ON public.follows FOR INSERT WITH CHECK (auth.uid() = follower_id);
+DROP POLICY IF EXISTS "Users can delete their own follows." ON public.follows;
 CREATE POLICY "Users can delete their own follows." ON public.follows FOR DELETE USING (auth.uid() = follower_id);

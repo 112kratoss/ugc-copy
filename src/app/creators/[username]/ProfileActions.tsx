@@ -180,6 +180,7 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
         <Link
           href="/showcase"
+          prefetch={false}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/50 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:border-white/20 hover:text-white"
         >
           Explore showcase

@@ -1,43 +1,8 @@
-'use client';
-
 import Link from "next/link";
-import { useState } from "react";
-import { Mail, MessageSquare, Send } from "lucide-react";
+import { Mail, MessageSquare } from "lucide-react";
+import { ContactForm } from "./ContactForm";
 
 export default function Contact() {
-    const [formData, setFormData] = useState({
-        name: '',
-        email: '',
-        subject: 'general',
-        message: ''
-    });
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [submitted, setSubmitted] = useState(false);
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-
-        try {
-            const res = await fetch('/api/contact', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData),
-            });
-
-            if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.error || 'Failed to send message');
-            }
-
-            setSubmitted(true);
-        } catch (err) {
-            alert(err instanceof Error ? err.message : 'Failed to send message. Please try again.');
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
     return (
         <div className="min-h-screen bg-black text-white">
             <div className="max-w-4xl mx-auto px-6 py-16">
@@ -115,109 +80,7 @@ export default function Contact() {
 
                     {/* Contact Form */}
                     <div className="bg-zinc-900 rounded-xl p-8 border border-zinc-800">
-                        {submitted ? (
-                            <div className="text-center py-12">
-                                <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <Send className="w-8 h-8 text-green-400" />
-                                </div>
-                                <h3 className="text-xl font-semibold mb-2">Message Sent!</h3>
-                                <p className="text-zinc-400">
-                                    Thank you for reaching out. We&apos;ll get back to you within 24 hours.
-                                </p>
-                                <button
-                                    onClick={() => {
-                                        setSubmitted(false);
-                                        setFormData({ name: '', email: '', subject: 'general', message: '' });
-                                    }}
-                                    className="mt-6 text-purple-400 hover:text-purple-300"
-                                >
-                                    Send another message
-                                </button>
-                            </div>
-                        ) : (
-                            <form onSubmit={handleSubmit} className="space-y-6">
-                                <div>
-                                    <label htmlFor="name" className="block text-sm font-medium mb-2">
-                                        Your Name
-                                    </label>
-                                    <input
-                                        type="text"
-                                        id="name"
-                                        required
-                                        value={formData.name}
-                                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                        className="w-full px-4 py-3 bg-black border border-zinc-700 rounded-lg focus:outline-none focus:border-purple-500 transition-colors"
-                                        placeholder="John Doe"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label htmlFor="email" className="block text-sm font-medium mb-2">
-                                        Email Address
-                                    </label>
-                                    <input
-                                        type="email"
-                                        id="email"
-                                        required
-                                        value={formData.email}
-                                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                        className="w-full px-4 py-3 bg-black border border-zinc-700 rounded-lg focus:outline-none focus:border-purple-500 transition-colors"
-                                        placeholder="john@example.com"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label htmlFor="subject" className="block text-sm font-medium mb-2">
-                                        Subject
-                                    </label>
-                                    <select
-                                        id="subject"
-                                        value={formData.subject}
-                                        onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
-                                        className="w-full px-4 py-3 bg-black border border-zinc-700 rounded-lg focus:outline-none focus:border-purple-500 transition-colors"
-                                    >
-                                        <option value="general">General Inquiry</option>
-                                        <option value="support">Technical Support</option>
-                                        <option value="billing">Billing Question</option>
-                                        <option value="partnership">Partnership</option>
-                                        <option value="feedback">Feedback</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label htmlFor="message" className="block text-sm font-medium mb-2">
-                                        Message
-                                    </label>
-                                    <textarea
-                                        id="message"
-                                        required
-                                        rows={5}
-                                        value={formData.message}
-                                        onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                                        className="w-full px-4 py-3 bg-black border border-zinc-700 rounded-lg focus:outline-none focus:border-purple-500 transition-colors resize-none"
-                                        placeholder="How can we help you?"
-                                    />
-                                </div>
-
-                                <button
-                                    type="submit"
-                                    disabled={isSubmitting}
-                                    className="w-full py-3 px-6 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-500/50 rounded-xl font-medium transition-all flex items-center justify-center gap-2"
-                                >
-                                    {isSubmitting ? (
-                                        <>
-                                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                            Sending...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Send className="w-5 h-5" />
-                                            Send Message
-                                        </>
-                                    )}
-                                </button>
-                            </form>
-                        )}
+                        <ContactForm />
                     </div>
                 </div>
 

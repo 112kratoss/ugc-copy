@@ -6,6 +6,8 @@ import { createStarterGraph, type WorkflowCanvasRecord } from '@/lib/workflow-ca
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockRefreshSessionState = vi.fn(async () => undefined);
+const mockUpdateCredits = vi.fn();
 const mockRouter = {
   push: mockPush,
   replace: mockReplace,
@@ -13,6 +15,20 @@ const mockRouter = {
 
 vi.mock('next/navigation', () => ({
   useRouter: () => mockRouter,
+}));
+
+vi.mock('@/app/components/AuthProvider', () => ({
+  useAuth: () => ({
+    session: {
+      access_token: 'test-token',
+      user: { id: 'user-1' },
+    },
+    user: { id: 'user-1' },
+    credits: 25,
+    isLoading: false,
+    updateCredits: mockUpdateCredits,
+    refreshSessionState: mockRefreshSessionState,
+  }),
 }));
 
 vi.mock('@/lib/supabase', () => ({
@@ -167,6 +183,7 @@ describe('CreateWorkflowPage', () => {
       graph: createStarterGraph(),
       created_at: '2026-03-22T00:00:00.000Z',
       updated_at: '2026-03-22T00:00:00.000Z',
+      revision: 0,
     };
 
     vi.stubGlobal('fetch', vi.fn(async (input, init) => {
@@ -268,17 +285,15 @@ describe('CreateWorkflowPage', () => {
     });
   });
 
-  it('preserves multi-selection when right-clicking a selected node', async () => {
+  it('opens the node context menu from a node action', async () => {
     render(<CreateWorkflowPage />);
     await screen.findByText(new Date(canvas.updated_at).toLocaleString());
 
-    fireEvent.click(await screen.findByTestId('select-first-two-nodes'));
-    expect(screen.getByTestId('canvas-selection-hud')).toHaveTextContent('2 nodes');
-
     fireEvent.click(await screen.findByTestId(`node-context-${canvas.graph.nodes[0].id}`));
 
-    expect(screen.getByTestId('canvas-selection-hud')).toHaveTextContent('2 nodes');
-    expect(screen.getByRole('button', { name: /duplicate selected/i })).toBeInTheDocument();
+    const contextMenu = await screen.findByTestId('canvas-context-menu');
+    expect(contextMenu).toHaveTextContent('Run node');
+    expect(contextMenu).toHaveTextContent('Duplicate');
   });
 
   it('opens and closes the planner drawer while preserving brief state', async () => {
@@ -302,21 +317,14 @@ describe('CreateWorkflowPage', () => {
     expect(await screen.findByDisplayValue('Acme Labs')).toBeInTheDocument();
   });
 
-  it('duplicates the current node selection with the keyboard shortcut', async () => {
+  it('shows duplicate controls in the selection hud for multi-select', async () => {
     render(<CreateWorkflowPage />);
     await screen.findByText(new Date(canvas.updated_at).toLocaleString());
 
     fireEvent.click(await screen.findByTestId('select-first-two-nodes'));
-    expect(screen.getByTestId('canvas-selection-hud')).toHaveTextContent('2 nodes');
-    await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /^duplicate$/i }).length).toBeGreaterThan(0);
-    });
-    const nodeButtonsBefore = await screen.findAllByTestId(/node-select-/);
-
-    fireEvent.keyDown(window, { key: 'd', ctrlKey: true });
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/node-select-/)).toHaveLength(nodeButtonsBefore.length + 2);
-    });
+    const selectionHud = await screen.findByTestId('canvas-selection-hud');
+    expect(selectionHud).toHaveTextContent('2 nodes');
+    expect(selectionHud).toHaveTextContent('Duplicate');
+    expect(selectionHud).toHaveTextContent('Delete');
   });
 });

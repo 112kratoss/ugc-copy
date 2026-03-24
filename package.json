@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
+    "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

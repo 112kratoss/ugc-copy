@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
+
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
     type ShowcaseCategory,
@@ -65,13 +67,12 @@ async function resolveFeedItemUrl(
     return resolveStoredMediaUrl(adminSupabase, generation.output_url);
 }
 
-export async function getShowcaseFeedPage(options: {
-    category: ShowcaseCategory;
-    sort: ShowcaseSort;
-    offset: number;
-    limit: number;
-}): Promise<ShowcaseFeedPage> {
-    const { category, sort, offset, limit } = options;
+async function getShowcaseFeedPageBase(
+    category: ShowcaseCategory,
+    sort: ShowcaseSort,
+    offset: number,
+    limit: number
+): Promise<ShowcaseFeedPage> {
     const adminSupabase = createServiceClient();
 
     const buildQuery = async (includeShowcaseAssetPath: boolean) => {
@@ -220,5 +221,70 @@ export async function getShowcaseFeedPage(options: {
             limit,
             offset,
         },
+    };
+}
+
+const getCachedShowcaseFeedPageBase = unstable_cache(
+    getShowcaseFeedPageBase,
+    ['showcase-feed-base'],
+    { revalidate: 60 }
+);
+
+function isMissingIncrementalCacheError(error: unknown): boolean {
+    return error instanceof Error && error.message.includes('incrementalCache missing');
+}
+
+async function loadShowcaseFeedPageBase(
+    category: ShowcaseCategory,
+    sort: ShowcaseSort,
+    offset: number,
+    limit: number
+): Promise<ShowcaseFeedPage> {
+    try {
+        return await getCachedShowcaseFeedPageBase(category, sort, offset, limit);
+    } catch (error) {
+        if (isMissingIncrementalCacheError(error)) {
+            return getShowcaseFeedPageBase(category, sort, offset, limit);
+        }
+
+        throw error;
+    }
+}
+
+export async function getShowcaseFeedPage(options: {
+    category: ShowcaseCategory;
+    sort: ShowcaseSort;
+    offset: number;
+    limit: number;
+    viewerUserId?: string | null;
+}): Promise<ShowcaseFeedPage> {
+    const { category, sort, offset, limit } = options;
+    const adminSupabase = createServiceClient();
+    const viewerUserId = options.viewerUserId ?? null;
+    const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit);
+
+    if (!viewerUserId || baseFeed.items.length === 0) {
+        return baseFeed;
+    }
+
+    const { data: savedItems, error } = await adminSupabase
+        .from('showcase_saves')
+        .select('generation_id')
+        .eq('user_id', viewerUserId)
+        .in('generation_id', baseFeed.items.map((item) => item.id));
+
+    if (error) {
+        console.error('Error fetching showcase saved state for feed page:', error);
+        return baseFeed;
+    }
+
+    const savedIdSet = new Set((savedItems ?? []).map((row) => row.generation_id));
+
+    return {
+        ...baseFeed,
+        items: baseFeed.items.map((item) => ({
+            ...item,
+            isSaved: savedIdSet.has(item.id),
+        })),
     };
 }

@@ -69,10 +69,11 @@ export default function ShowcaseClient({
     const [sort, setSort] = useState(initialSort);
     const [pageInfo, setPageInfo] = useState(initialFeed.pageInfo);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [savedGenerationIds, setSavedGenerationIds] = useState<Set<string>>(new Set());
+    const [savedGenerationIds, setSavedGenerationIds] = useState<Set<string>>(
+        new Set(initialFeed.items.filter((item) => item.isSaved).map((item) => item.id))
+    );
     const [selectedItem, setSelectedItem] = useState<ShowcaseFeedItem | null>(null);
     const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
-    const itemIdsKey = items.map((item) => item.id).join(',');
 
     const registerPreviewVideo = (id: string, node: HTMLVideoElement | null) => {
         previewVideoRefs.current[id] = node;
@@ -83,53 +84,8 @@ export default function ShowcaseClient({
         setPageInfo(initialFeed.pageInfo);
         setCategory(initialCategory);
         setSort(initialSort);
+        setSavedGenerationIds(new Set(initialFeed.items.filter((item) => item.isSaved).map((item) => item.id)));
     }, [initialCategory, initialFeed, initialSort]);
-
-    useEffect(() => {
-        let isActive = true;
-
-        const fetchSavedState = async () => {
-            if (isAuthLoading) {
-                return;
-            }
-
-            if (!session?.access_token || itemIdsKey.length === 0) {
-                if (isActive) {
-                    setSavedGenerationIds(new Set());
-                }
-                return;
-            }
-
-            try {
-                const params = new URLSearchParams({
-                    ids: itemIdsKey,
-                });
-
-                const response = await fetch(`/api/showcase/saved-state?${params.toString()}`, {
-                    headers: {
-                        Authorization: `Bearer ${session.access_token}`,
-                    },
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Saved-state request failed with ${response.status}`);
-                }
-
-                const generationIds: string[] = await response.json();
-                if (isActive) {
-                    setSavedGenerationIds(new Set(generationIds));
-                }
-            } catch (error) {
-                console.error('Failed to load showcase saved state:', error);
-            }
-        };
-
-        void fetchSavedState();
-
-        return () => {
-            isActive = false;
-        };
-    }, [isAuthLoading, itemIdsKey, session?.access_token]);
 
     useEffect(() => {
         const handleVisibilityChange = () => {
@@ -192,7 +148,11 @@ export default function ShowcaseClient({
                 limit: String(SHOWCASE_PAGE_SIZE),
             });
 
-            const response = await fetch(`/api/showcase/feed?${params.toString()}`);
+            const response = await fetch(`/api/showcase/feed?${params.toString()}`, session?.access_token ? {
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+            } : undefined);
             if (!response.ok) {
                 throw new Error(`Feed request failed with ${response.status}`);
             }
@@ -204,6 +164,15 @@ export default function ShowcaseClient({
                 ...nextFeed.items.filter((item) => !currentItems.some((current) => current.id === item.id)),
             ]);
             setPageInfo(nextFeed.pageInfo);
+            setSavedGenerationIds((currentSavedIds) => {
+                const nextSavedIds = new Set(currentSavedIds);
+                nextFeed.items.forEach((item) => {
+                    if (item.isSaved) {
+                        nextSavedIds.add(item.id);
+                    }
+                });
+                return nextSavedIds;
+            });
         } catch (error) {
             console.error('Failed to fetch more showcase items:', error);
         } finally {
@@ -317,7 +286,7 @@ export default function ShowcaseClient({
         setSelectedItem(null);
     };
 
-    const isLoadingInitialFeed = isPending && items.length === 0;
+    const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
 
     return (
         <div className="min-h-screen bg-black text-white p-6 sm:p-8 font-[family-name:var(--font-geist-sans)]">
@@ -386,9 +355,11 @@ export default function ShowcaseClient({
                 </div>
 
                 {isLoadingInitialFeed ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                         {[1, 2, 3, 4, 5, 6, 7, 8].map((placeholder) => (
-                            <SkeletonLoader key={placeholder} className="aspect-[4/5]" />
+                            <div key={placeholder} className="break-inside-avoid mb-6">
+                                <SkeletonLoader className="h-64" />
+                            </div>
                         ))}
                     </div>
                 ) : items.length === 0 ? (
@@ -398,7 +369,7 @@ export default function ShowcaseClient({
                         <p className="text-sm mt-2">Be the first to publish one!</p>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                         <AnimatePresence>
                             {items.map((item, index) => (
                                 <motion.div
@@ -406,12 +377,12 @@ export default function ShowcaseClient({
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: index * 0.05 }}
-                                    className="group relative bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden hover:border-purple-500/50 transition-colors"
+                                    className="group relative bg-[#09090b] border border-white/[0.04] rounded-[1.5rem] overflow-hidden hover:border-purple-500/40 hover:shadow-[0_8px_30px_rgba(0,0,0,0.3)] transition-all break-inside-avoid mb-6"
                                 >
                                     <button
                                         type="button"
                                         onClick={() => openPreview(item)}
-                                        className="aspect-[4/5] relative bg-black overflow-hidden block w-full text-left"
+                                        className="relative bg-black overflow-hidden block w-full text-left"
                                     >
                                         {item.category === 'video' || item.category === 'motion' ? (
                                             <video
@@ -421,7 +392,7 @@ export default function ShowcaseClient({
                                                 loop
                                                 playsInline
                                                 preload="metadata"
-                                                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                                className="w-full h-auto block object-cover transition-transform duration-500 group-hover:scale-105"
                                                 onLoadedData={(event) => {
                                                     primePreviewVideoFrame(event.currentTarget);
                                                 }}
@@ -437,12 +408,10 @@ export default function ShowcaseClient({
                                                 }}
                                             />
                                         ) : (
-                                            <Image
+                                            <img
                                                 src={item.url}
                                                 alt={item.title}
-                                                fill
-                                                sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, (max-width: 1536px) 33vw, 25vw"
-                                                className="object-cover transition-transform duration-500 group-hover:scale-105"
+                                                className="w-full h-auto block object-cover transition-transform duration-500 group-hover:scale-105"
                                             />
                                         )}
 

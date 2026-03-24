@@ -71,7 +71,6 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ generations: generationsWithUrls });
     } catch (error) {
         console.error('Error fetching generations:', error);
-        console.error('Error in generations API:', error);
         return NextResponse.json(
             { error: 'Internal server error' },
             { status: 500 }

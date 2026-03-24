@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const { supabase, userId } = auth;
   const { data, error } = await supabase
     .from('workflow_canvases')
-    .select('id, title, graph, created_at, updated_at')
+    .select('id, title, graph, created_at, updated_at, revision')
     .eq('user_id', userId)
     .order('updated_at', { ascending: false });
 
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       graph,
       viewport: graph.viewport,
     })
-    .select('id, title, graph, created_at, updated_at')
+    .select('id, title, graph, created_at, updated_at, revision')
     .single();
 
   if (error || !data) {

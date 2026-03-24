@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import { getServerAuthState } from '@/lib/supabase-server';
 import {
     SHOWCASE_PAGE_SIZE,
     normalizeShowcaseCategory,
@@ -49,6 +50,7 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
 
 export default async function ShowcasePage({ searchParams }: ShowcasePageProps) {
     const resolvedSearchParams = searchParams ? await searchParams : {};
+    const auth = await getServerAuthState();
     const category = normalizeShowcaseCategory(getFirstValue(resolvedSearchParams.category));
     const sort = normalizeShowcaseSort(getFirstValue(resolvedSearchParams.sort));
     const offset = normalizeShowcaseOffset(
@@ -62,6 +64,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         sort,
         offset,
         limit: SHOWCASE_PAGE_SIZE,
+        viewerUserId: auth.session?.user?.id ?? null,
     });
 
     return (
