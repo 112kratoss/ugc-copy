@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import { supabase } from '@/lib/supabase';
 
 interface EnhancePromptButtonProps {
@@ -10,7 +11,7 @@ interface EnhancePromptButtonProps {
     onCreditsUpdate: (remainingCredits: number) => void;
     medium: 'image' | 'video' | 'motion';
     selectedModel: string;
-    context?: Record<string, unknown>;
+    context?: EnhancerContext;
     disabled?: boolean;
 }
 

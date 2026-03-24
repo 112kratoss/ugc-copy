@@ -658,7 +658,18 @@ function CreateVideoContent() {
                                         onCreditsUpdate={(credits) => setUserCredits(credits)}
                                         medium="video"
                                         selectedModel={videoModel.enhancerModelId}
-                                        context={{ modelId: selectedModel, mode: currentMode, aspectRatio: currentAspectRatio, duration: totalDuration, sound: currentSound, resolution: currentResolution }}
+                                        context={{
+                                            modelId: selectedModel,
+                                            mode: currentMode,
+                                            aspectRatio: currentAspectRatio,
+                                            duration: totalDuration,
+                                            sound: currentSound,
+                                            resolution: currentResolution,
+                                            isMultiShot: currentIsMultiShot,
+                                            shotCount: multiPrompts.length,
+                                            hasStartImage: Boolean(startImageFile || startImageUrl),
+                                            hasEndImage: Boolean(endImageFile || endImageUrl),
+                                        }}
                                         disabled={isGenerating}
                                     />
                                     <textarea
@@ -740,7 +751,18 @@ function CreateVideoContent() {
                                                     onCreditsUpdate={(credits) => setUserCredits(credits)}
                                                     medium="video"
                                                     selectedModel={videoModel.enhancerModelId}
-                                                    context={{ modelId: selectedModel, mode: currentMode, aspectRatio: currentAspectRatio, duration: shot.duration, sound: currentSound, shotIndex: index }}
+                                                    context={{
+                                                        modelId: selectedModel,
+                                                        mode: currentMode,
+                                                        aspectRatio: currentAspectRatio,
+                                                        duration: shot.duration,
+                                                        sound: currentSound,
+                                                        shotIndex: index,
+                                                        isMultiShot: currentIsMultiShot,
+                                                        shotCount: multiPrompts.length,
+                                                        hasStartImage: Boolean(startImageFile || startImageUrl),
+                                                        hasEndImage: Boolean(endImageFile || endImageUrl),
+                                                    }}
                                                     disabled={isGenerating}
                                                 />
                                                 <textarea

@@ -103,7 +103,8 @@ export async function POST(request: NextRequest) {
             const systemPrompt = buildEnhancerSystemPrompt(
                 medium as Medium,
                 selectedModel,
-                context
+                context,
+                prompt
             );
 
             const result = await callPromptEnhancer(systemPrompt, prompt);

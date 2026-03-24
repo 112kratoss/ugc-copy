@@ -571,7 +571,13 @@ function CreateImageContent() {
                                 onCreditsUpdate={(c) => setUserCredits(c)}
                                 medium="image"
                                 selectedModel={selectedModel}
-                                context={{ modelId: selectedModel, aspectRatio, resolution, googleSearch }}
+                                context={{
+                                    modelId: selectedModel,
+                                    aspectRatio,
+                                    resolution,
+                                    googleSearch,
+                                    referenceImageCount: referenceImages.length,
+                                }}
                                 disabled={isGenerating}
                             />
                             <textarea

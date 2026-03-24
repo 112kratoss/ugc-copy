@@ -690,7 +690,12 @@ function CreateMotionContent() {
                         onCreditsUpdate={(c) => setUserCredits(c)}
                         medium="motion"
                         selectedModel={selectedModel}
-                        context={{ modelId: selectedModel, characterOrientation, mode }}
+                        context={{
+                            modelId: selectedModel,
+                            characterOrientation,
+                            mode,
+                            hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
+                        }}
                         disabled={isGenerating}
                     />
                     <textarea

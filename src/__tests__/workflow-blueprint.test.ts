@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildImageLaunchUrl,
+  buildWorkflowSystemPrompt,
   buildVideoLaunchUrl,
   createWorkflowGraphFromBlueprint,
   extractBlueprintFromResponse,
@@ -41,5 +42,32 @@ describe('workflow blueprint helpers', () => {
     expect(videoNode?.data).toMatchObject({ model: DEFAULT_BLUEPRINT.deliveryPlan.primaryModel });
     expect(motionNode?.data).toMatchObject({ model: DEFAULT_BLUEPRINT.deliveryPlan.motionModel });
     expect(voiceoverNode?.type).toBe('voiceover-generate');
+  });
+
+  it('builds model-aware workflow prompt guidance for each shot type', () => {
+    const systemPrompt = buildWorkflowSystemPrompt({
+      brandName: 'GlowLab',
+      productName: 'Night Repair Serum',
+      audience: 'Skincare shoppers',
+      objective: 'ugc-ad',
+      primaryMessage: 'Calms skin overnight',
+      offer: '20% off',
+      callToAction: 'Shop now',
+      visualStyle: 'clean creator realism',
+      tone: 'confident',
+      aspectRatio: '9:16',
+      durationSeconds: 20,
+      platform: 'TikTok',
+    });
+
+    expect(systemPrompt).toContain('visualPrompt guidance:');
+    expect(systemPrompt).toContain('If stillImageModel is nano-banana-2');
+    expect(systemPrompt).toContain('If stillImageModel is nano-banana-pro');
+    expect(systemPrompt).toContain('videoPrompt guidance:');
+    expect(systemPrompt).toContain('If primaryModel is kling-3.0-video');
+    expect(systemPrompt).toContain('If primaryModel is veo-3.1');
+    expect(systemPrompt).toContain('motionPrompt guidance:');
+    expect(systemPrompt).toContain('If motionModel is kling-3.0');
+    expect(systemPrompt).toContain('creator-led commercial realism');
   });
 });

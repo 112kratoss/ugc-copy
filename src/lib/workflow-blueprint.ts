@@ -5,6 +5,10 @@ import {
   type VideoModelId,
 } from '@/lib/models';
 import {
+  buildWorkflowPromptFieldGuidance,
+  type EnhancerContext,
+} from '@/lib/prompt-enhancer';
+import {
   createCanvasEdge,
   createWorkflowNode,
   DEFAULT_VIEWPORT,
@@ -186,6 +190,10 @@ export function extractBlueprintFromResponse(content: string): WorkflowBlueprint
 }
 
 export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
+  const plannerContext: EnhancerContext = {
+    creativeIntent: input.objective,
+  };
+
   return [
     'You are an expert creative strategist building a production-ready AI generation workflow for short-form ads and videos.',
     'Return valid JSON only. No markdown. No commentary.',
@@ -193,6 +201,33 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
     'Use the existing models only: stillImageModel must be nano-banana-2 or nano-banana-pro; primaryModel must be kling-3.0-video, seedance-1.5-pro, or veo-3.1; motionModel must be kling-2.6 or kling-3.0.',
     `Plan for a ${input.durationSeconds}-second ${input.objective} in ${input.aspectRatio} for ${input.platform}.`,
     'Generate 3 to 6 shots. Each prompt should be directly usable in an AI generation UI and must stay commercially focused.',
+    buildWorkflowPromptFieldGuidance({
+      fieldName: 'visualPrompt',
+      modelSelector: 'stillImageModel',
+      medium: 'image',
+      scenario: 'image.text_to_image',
+      modelIds: ['nano-banana-2', 'nano-banana-pro'],
+      context: plannerContext,
+    }),
+    buildWorkflowPromptFieldGuidance({
+      fieldName: 'videoPrompt',
+      modelSelector: 'primaryModel',
+      medium: 'video',
+      scenario: 'video.image_to_video_start_frame',
+      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'veo-3.1'],
+      context: plannerContext,
+      additionalRules: [
+        'These prompts should still read clearly as standalone text prompts, but they should stay reference-friendly because the workflow often pairs them with a still frame.',
+      ],
+    }),
+    buildWorkflowPromptFieldGuidance({
+      fieldName: 'motionPrompt',
+      modelSelector: 'motionModel',
+      medium: 'motion',
+      scenario: 'motion.transfer',
+      modelIds: ['kling-2.6', 'kling-3.0'],
+      context: plannerContext,
+    }),
     'Keep the strategy concise and practical. Optimize for conversion and creator-style execution.',
   ].join('\n');
 }
