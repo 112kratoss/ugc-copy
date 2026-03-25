@@ -64,6 +64,13 @@ import {
   type WorkflowNodeData,
   type WorkflowNodeKind,
 } from '@/lib/workflow-canvas';
+import {
+  drainQueuedCanvasSaves,
+  flushCanvasSaveBeforeTransition,
+  hasCanvasSaveChanges,
+  type CanvasSaveRequest,
+  type CanvasSaveResult,
+} from './workflowCanvasSaveCoordinator';
 
 type SaveState = 'saved' | 'dirty' | 'saving';
 type PreviewMediaKind = 'image' | 'video' | 'audio';
@@ -594,15 +601,21 @@ export default function CreateWorkflowPage() {
   const [remainingPlannerCredits, setRemainingPlannerCredits] = useState<number | null>(null);
   const [isGeneratingBlueprint, setIsGeneratingBlueprint] = useState(false);
   const [isApplyingBlueprint, setIsApplyingBlueprint] = useState(false);
+  const [isCanvasTransitionPending, setIsCanvasTransitionPending] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<PreviewMediaState | null>(null);
   const [contextMenu, setContextMenu] = useState<CanvasContextMenuState | null>(null);
   const [edgeFloatingPosition, setEdgeFloatingPosition] = useState<CanvasFloatingPosition | null>(null);
   const starter = useMemo(() => createStarterGraph(), []);
   const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
+  const activeCanvasIdRef = useRef<string | null>(null);
+  const activeCanvasRevisionRef = useRef(0);
+  const canvasTitleRef = useRef('Workflow canvas');
+  const graphRef = useRef<WorkflowCanvasGraph>(starter);
   const lastPersistedTitleRef = useRef('Workflow canvas');
   const lastPersistedGraphHashRef = useRef<string>(createWorkflowGraphHash(starter));
   const saveInFlightRef = useRef(false);
-  const pendingSaveRef = useRef<{ title: string; graph: WorkflowCanvasGraph } | null>(null);
+  const savePromiseRef = useRef<Promise<CanvasSaveResult> | null>(null);
+  const pendingSaveRef = useRef<CanvasSaveRequest | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState(starter.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(starter.edges.map(decorateWorkflowEdge));
 
@@ -613,6 +626,22 @@ export default function CreateWorkflowPage() {
     viewport,
   }), [nodes, edges, starter.version, viewport]);
   const graphHash = useMemo(() => createWorkflowGraphHash(graph), [graph]);
+
+  useEffect(() => {
+    activeCanvasIdRef.current = activeCanvasId;
+  }, [activeCanvasId]);
+
+  useEffect(() => {
+    activeCanvasRevisionRef.current = activeCanvasRevision;
+  }, [activeCanvasRevision]);
+
+  useEffect(() => {
+    canvasTitleRef.current = canvasTitle;
+  }, [canvasTitle]);
+
+  useEffect(() => {
+    graphRef.current = graph;
+  }, [graph]);
 
   const selectedNode = useMemo(() => {
     if (selectedNodeIds.length !== 1 || selectedEdgeIds.length > 0) {
@@ -669,6 +698,10 @@ export default function CreateWorkflowPage() {
   }, [setManualSelection]);
 
   const syncCanvasState = useCallback((canvas: WorkflowCanvasRecord) => {
+    activeCanvasIdRef.current = canvas.id;
+    activeCanvasRevisionRef.current = canvas.revision ?? 0;
+    canvasTitleRef.current = canvas.title;
+    graphRef.current = canvas.graph;
     setActiveCanvasId(canvas.id);
     setCanvasTitle(canvas.title);
     setActiveCanvasRevision(canvas.revision ?? 0);
@@ -795,82 +828,190 @@ export default function CreateWorkflowPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [previewMedia]);
 
-  const persistCanvas = useCallback(async (nextTitle?: string, nextGraph?: WorkflowCanvasGraph) => {
-    if (!activeCanvasId) return;
-    const titleToPersist = nextTitle ?? canvasTitle;
-    const graphToPersist = nextGraph ?? graph;
-    const nextGraphHash = createWorkflowGraphHash(graphToPersist);
+  const buildSaveRequest = useCallback((overrides?: Partial<Pick<CanvasSaveRequest, 'title' | 'graph'>>) => {
+    const canvasId = activeCanvasIdRef.current;
+    if (!canvasId) {
+      return null;
+    }
+
+    return {
+      canvasId,
+      baseRevision: activeCanvasRevisionRef.current,
+      title: overrides?.title ?? canvasTitleRef.current,
+      graph: overrides?.graph ?? graphRef.current,
+    } satisfies CanvasSaveRequest;
+  }, []);
+
+  const executeSaveRequest = useCallback(async (request: CanvasSaveRequest): Promise<CanvasSaveResult> => {
+    const nextGraphHash = createWorkflowGraphHash(request.graph);
 
     if (
-      titleToPersist === lastPersistedTitleRef.current &&
+      request.canvasId === activeCanvasIdRef.current &&
+      request.title === lastPersistedTitleRef.current &&
       nextGraphHash === lastPersistedGraphHashRef.current
     ) {
       setSaveState(saveInFlightRef.current ? 'saving' : 'saved');
-      return;
-    }
-
-    if (saveInFlightRef.current) {
-      pendingSaveRef.current = {
-        title: titleToPersist,
-        graph: graphToPersist,
+      return {
+        status: 'noop',
+        canvasId: request.canvasId,
+        revision: activeCanvasRevisionRef.current,
       };
-      setSaveState('saving');
-      return;
     }
 
-    saveInFlightRef.current = true;
-    setSaveState('saving');
     try {
-      const response = await fetch(`/api/workflow-canvases/${activeCanvasId}`, {
+      const response = await fetch(`/api/workflow-canvases/${request.canvasId}`, {
         method: 'PATCH',
         headers: await authHeaders(),
         body: JSON.stringify({
-          title: titleToPersist,
-          graph: graphToPersist,
-          baseRevision: activeCanvasRevision,
+          title: request.title,
+          graph: request.graph,
+          baseRevision: request.baseRevision,
           graphHash: nextGraphHash,
         }),
       });
       const data = await response.json();
-      if (response.status === 409 && data.canvas) {
-        syncCanvasState(data.canvas as WorkflowCanvasRecord);
-        setCanvases((current) =>
-          current.map((canvas) => canvas.id === activeCanvasId ? data.canvas : canvas)
-        );
-        setError('A newer canvas revision was detected. The latest saved version has been reloaded.');
-        return;
-      }
-      if (!response.ok) throw new Error(data.error || 'Failed to save canvas');
-      setCanvases((current) => current.map((canvas) => canvas.id === activeCanvasId ? data.canvas : canvas));
-      setActiveCanvasRevision((data.canvas as WorkflowCanvasRecord).revision ?? activeCanvasRevision);
-      lastPersistedTitleRef.current = (data.canvas as WorkflowCanvasRecord).title;
-      lastPersistedGraphHashRef.current = createWorkflowGraphHash((data.canvas as WorkflowCanvasRecord).graph);
-      setSaveState('saved');
-    } catch (saveError) {
-      setSaveState('dirty');
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save canvas');
-    } finally {
-      saveInFlightRef.current = false;
-      const pendingSave = pendingSaveRef.current;
-      pendingSaveRef.current = null;
 
-      if (
-        pendingSave &&
-        (
-          pendingSave.title !== lastPersistedTitleRef.current ||
-          createWorkflowGraphHash(pendingSave.graph) !== lastPersistedGraphHashRef.current
-        )
-      ) {
-        void persistCanvas(pendingSave.title, pendingSave.graph);
+      if (response.status === 409 && data.canvas) {
+        const conflictedCanvas = data.canvas as WorkflowCanvasRecord;
+        setCanvases((current) =>
+          current.map((canvas) => canvas.id === request.canvasId ? conflictedCanvas : canvas)
+        );
+        if (activeCanvasIdRef.current === request.canvasId) {
+          syncCanvasState(conflictedCanvas);
+        }
+        setError('A newer canvas revision was detected. The latest saved version has been reloaded.');
+        return {
+          status: 'conflict',
+          canvas: conflictedCanvas,
+        };
       }
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save canvas');
+      }
+
+      const savedCanvas = data.canvas as WorkflowCanvasRecord;
+      setCanvases((current) =>
+        current.map((canvas) => canvas.id === request.canvasId ? savedCanvas : canvas)
+      );
+
+      if (activeCanvasIdRef.current === request.canvasId) {
+        activeCanvasRevisionRef.current = savedCanvas.revision ?? request.baseRevision;
+        lastPersistedTitleRef.current = savedCanvas.title;
+        lastPersistedGraphHashRef.current = createWorkflowGraphHash(savedCanvas.graph);
+        setActiveCanvasRevision(savedCanvas.revision ?? request.baseRevision);
+        setSaveState('saved');
+        setError(null);
+      }
+
+      return {
+        status: 'saved',
+        canvas: savedCanvas,
+        revision: savedCanvas.revision ?? request.baseRevision,
+      };
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : 'Failed to save canvas';
+      if (activeCanvasIdRef.current === request.canvasId) {
+        setSaveState('dirty');
+      }
+      setError(message);
+      return {
+        status: 'failed',
+        canvasId: request.canvasId,
+        error: message,
+      };
     }
-  }, [activeCanvasId, activeCanvasRevision, authHeaders, canvasTitle, graph, syncCanvasState]);
+  }, [authHeaders, syncCanvasState]);
+
+  const drainSaveQueue = useCallback(async (initialRequest: CanvasSaveRequest): Promise<CanvasSaveResult> => {
+    return drainQueuedCanvasSaves({
+      initialRequest,
+      executeSaveRequest,
+      takePendingSave: () => {
+        const pendingSave = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        return pendingSave;
+      },
+      clearPendingSave: () => {
+        pendingSaveRef.current = null;
+      },
+    });
+  }, [executeSaveRequest]);
+
+  const persistCanvas = useCallback((nextTitle?: string, nextGraph?: WorkflowCanvasGraph) => {
+    const request = buildSaveRequest({
+      ...(nextTitle !== undefined ? { title: nextTitle } : {}),
+      ...(nextGraph !== undefined ? { graph: nextGraph } : {}),
+    });
+
+    if (!request) {
+      return Promise.resolve<CanvasSaveResult>({
+        status: 'failed',
+        canvasId: '',
+        error: 'No active canvas to save.',
+      });
+    }
+
+    const nextGraphHash = createWorkflowGraphHash(request.graph);
+    if (
+      request.title === lastPersistedTitleRef.current &&
+      nextGraphHash === lastPersistedGraphHashRef.current
+    ) {
+      setSaveState(saveInFlightRef.current ? 'saving' : 'saved');
+      return savePromiseRef.current ?? Promise.resolve<CanvasSaveResult>({
+        status: 'noop',
+        canvasId: request.canvasId,
+        revision: activeCanvasRevisionRef.current,
+      });
+    }
+
+    if (savePromiseRef.current) {
+      pendingSaveRef.current = request;
+      setSaveState('saving');
+      return savePromiseRef.current;
+    }
+
+    saveInFlightRef.current = true;
+    setSaveState('saving');
+    const savePromise = drainSaveQueue(request).finally(() => {
+      saveInFlightRef.current = false;
+      savePromiseRef.current = null;
+    });
+    savePromiseRef.current = savePromise;
+    return savePromise;
+  }, [buildSaveRequest, drainSaveQueue]);
+
+  const flushActiveCanvasBeforeTransition = useCallback(async () => {
+    const request = buildSaveRequest();
+
+    setIsCanvasTransitionPending(true);
+    try {
+      return await flushCanvasSaveBeforeTransition({
+        request,
+        lastPersistedTitle: lastPersistedTitleRef.current,
+        lastPersistedGraphHash: lastPersistedGraphHashRef.current,
+        currentSavePromise: savePromiseRef.current,
+        clearAutosaveTimer: () => {
+          if (autosaveTimer.current) {
+            clearTimeout(autosaveTimer.current);
+            autosaveTimer.current = null;
+          }
+        },
+        persistRequest: (pendingRequest) => persistCanvas(pendingRequest.title, pendingRequest.graph),
+      });
+    } finally {
+      setIsCanvasTransitionPending(false);
+    }
+  }, [buildSaveRequest, persistCanvas]);
 
   useEffect(() => {
     if (!activeCanvasId || isLoading) return;
-    const hasUnsavedChanges =
-      canvasTitle !== lastPersistedTitleRef.current ||
-      graphHash !== lastPersistedGraphHashRef.current;
+    const hasUnsavedChanges = hasCanvasSaveChanges({
+      canvasId: activeCanvasId,
+      baseRevision: activeCanvasRevisionRef.current,
+      title: canvasTitle,
+      graph,
+    }, lastPersistedTitleRef.current, lastPersistedGraphHashRef.current);
 
     if (!hasUnsavedChanges) {
       setSaveState(saveInFlightRef.current ? 'saving' : 'saved');
@@ -885,7 +1026,7 @@ export default function CreateWorkflowPage() {
     return () => {
         if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     };
-  }, [activeCanvasId, canvasTitle, graphHash, isLoading, persistCanvas]);
+  }, [activeCanvasId, canvasTitle, graph, graphHash, isLoading, persistCanvas]);
 
   const syncRunIntoNodes = useCallback((run: WorkflowCanvasRunRecord) => {
     const stepMap = new Map((run.steps || []).map((step) => [step.node_id, step]));
@@ -1044,6 +1185,11 @@ export default function CreateWorkflowPage() {
 
   const createCanvas = useCallback(async (options?: { title?: string; graph?: WorkflowCanvasGraph }) => {
     try {
+      const canTransition = await flushActiveCanvasBeforeTransition();
+      if (!canTransition) {
+        return null;
+      }
+
       const response = await fetch('/api/workflow-canvases', {
         method: 'POST',
         headers: await authHeaders(),
@@ -1061,7 +1207,7 @@ export default function CreateWorkflowPage() {
       setError(createError instanceof Error ? createError.message : 'Failed to create canvas');
       return null;
     }
-  }, [authHeaders, canvases.length, syncCanvasState]);
+  }, [authHeaders, canvases.length, flushActiveCanvasBeforeTransition, syncCanvasState]);
 
   const updatePlannerInput = useCallback((
     field: keyof WorkflowPlannerInput,
@@ -1179,6 +1325,13 @@ export default function CreateWorkflowPage() {
 
   const deleteCanvas = useCallback(async (canvasId: string) => {
     try {
+      if (canvasId === activeCanvasIdRef.current) {
+        const canTransition = await flushActiveCanvasBeforeTransition();
+        if (!canTransition) {
+          return;
+        }
+      }
+
       const response = await fetch(`/api/workflow-canvases/${canvasId}`, {
         method: 'DELETE',
         headers: await authHeaders(),
@@ -1195,11 +1348,20 @@ export default function CreateWorkflowPage() {
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete canvas');
     }
-  }, [authHeaders, canvases, createCanvas, syncCanvasState]);
+  }, [authHeaders, canvases, createCanvas, flushActiveCanvasBeforeTransition, syncCanvasState]);
 
-  const selectCanvas = useCallback((canvas: WorkflowCanvasRecord) => {
+  const selectCanvas = useCallback(async (canvas: WorkflowCanvasRecord) => {
+    if (canvas.id === activeCanvasIdRef.current) {
+      return;
+    }
+
+    const canTransition = await flushActiveCanvasBeforeTransition();
+    if (!canTransition) {
+      return;
+    }
+
     syncCanvasState(canvas);
-  }, [syncCanvasState]);
+  }, [flushActiveCanvasBeforeTransition, syncCanvasState]);
 
   const runCanvas = useCallback(async (mode: 'node' | 'branch', startNodeId?: string) => {
     const nodeId = startNodeId ?? selectedNodeIds[0];
@@ -1460,7 +1622,11 @@ export default function CreateWorkflowPage() {
           <div className="flex-1 overflow-y-auto px-5 py-4">
             <div className="mb-3 flex items-center justify-between">
               <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Saved canvases</div>
-              <button onClick={() => void createCanvas()} className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
+              <button
+                onClick={() => void createCanvas()}
+                disabled={isCanvasTransitionPending}
+                className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
                 New
               </button>
             </div>
@@ -1470,11 +1636,19 @@ export default function CreateWorkflowPage() {
                   key={canvas.id}
                   className={`rounded-2xl border px-3 py-3 ${canvas.id === activeCanvasId ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-white/10 bg-white/[0.03]'}`}
                 >
-                  <button className="w-full text-left" onClick={() => selectCanvas(canvas)}>
+                  <button
+                    className="w-full text-left disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => void selectCanvas(canvas)}
+                    disabled={isCanvasTransitionPending}
+                  >
                     <div className="text-sm font-medium text-white">{canvas.title}</div>
                     <div className="text-xs text-zinc-500">{new Date(canvas.updated_at).toLocaleString()}</div>
                   </button>
-                  <button onClick={() => void deleteCanvas(canvas.id)} className="mt-2 text-xs text-zinc-500 hover:text-rose-300">
+                  <button
+                    onClick={() => void deleteCanvas(canvas.id)}
+                    disabled={isCanvasTransitionPending}
+                    className="mt-2 text-xs text-zinc-500 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
                     Delete
                   </button>
                 </div>
@@ -1489,6 +1663,7 @@ export default function CreateWorkflowPage() {
               <input
                 value={canvasTitle}
                 onChange={(event) => {
+                  canvasTitleRef.current = event.target.value;
                   setCanvasTitle(event.target.value);
                   setCanvases((current) => current.map((canvas) => canvas.id === activeCanvasId ? { ...canvas, title: event.target.value } : canvas));
                 }}
