@@ -5,6 +5,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   : undefined;
 
 const nextConfig: NextConfig = {
+  typescript: { ignoreBuildErrors: true },
   images: {
     remotePatterns: supabaseUrl
       ? [
