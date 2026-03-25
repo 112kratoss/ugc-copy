@@ -5,6 +5,7 @@
   --color-brand-pink: #ec4899;
   --color-brand-blue: #3b82f6;
   --color-brand-red: #ef4444;
+  --color-brand-emerald: #34d399;
 }
 
 :root {
@@ -14,9 +15,20 @@
 
 body {
   color: var(--foreground);
-  background: var(--background);
+  background:
+    radial-gradient(circle at top, rgba(59, 130, 246, 0.08), transparent 28%),
+    radial-gradient(circle at 85% 15%, rgba(236, 72, 153, 0.08), transparent 22%),
+    radial-gradient(circle at 20% 85%, rgba(52, 211, 153, 0.05), transparent 24%),
+    var(--background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  color-scheme: dark;
+}
+
+::selection {
+  background: rgba(244, 114, 182, 0.22);
+  color: var(--foreground);
 }
 
 @keyframes skeleton-shimmer {
@@ -56,4 +68,20 @@ body {
 
 .markdown-content a {
   @apply text-purple-400 hover:text-purple-300 underline underline-offset-4;
+}
+
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.studio-shell {
+  width: 100%;
+  max-width: 1500px;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 3vw, 2.75rem);
 }

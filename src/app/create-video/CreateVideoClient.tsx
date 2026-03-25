@@ -3,9 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import { GeneratorPageHeader } from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { useAuth } from '@/app/components/AuthProvider';
@@ -472,22 +473,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             </div>
 
             <div className="relative z-10 max-w-5xl mx-auto">
-                <div className="flex items-center gap-4 mb-8">
-                    <Link href="/create" className="group p-3 rounded-full bg-zinc-900/50 border border-white/5 hover:bg-zinc-800 hover:border-white/10 transition-all backdrop-blur-md">
-                        <ArrowLeft className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
-                    </Link>
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">Video Generation</h1>
-                        <p className="text-sm text-zinc-500 font-medium tracking-wide">{videoModel.displayName.toUpperCase()}</p>
-                    </div>
-                    {userCredits !== null && (
-                        <div className="ml-auto flex items-center gap-2 px-4 py-2 bg-zinc-900/50 border border-white/5 rounded-full backdrop-blur-md">
-                            <Sparkles className="w-4 h-4 text-purple-400" />
-                            <span className="text-sm font-semibold text-white">{userCredits}</span>
-                            <span className="text-xs text-zinc-500 hidden sm:inline">credits</span>
-                        </div>
-                    )}
-                </div>
+                <GeneratorPageHeader
+                    currentToolId="video"
+                    title="Create video"
+                    eyebrow={`Creator studio / ${videoModel.displayName}`}
+                    description="Start with video when the idea needs movement, presence, or a clearer story in the very first output."
+                    credits={userCredits}
+                />
 
                 <AnimatePresence>
                     {remixId && !isRemixLoading && (

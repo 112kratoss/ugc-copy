@@ -1,0 +1,331 @@
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+import { ArrowLeft, ArrowRight, Sparkles } from 'lucide-react';
+import clsx from 'clsx';
+
+import {
+  CREATOR_TOOLS,
+  type CreatorToolAccent,
+  type CreatorToolDefinition,
+  type CreatorToolId,
+  getCreatorTool,
+} from '@/lib/creator-tools';
+
+const ACCENT_STYLES: Record<
+  CreatorToolAccent,
+  {
+    border: string;
+    shadow: string;
+    iconWrap: string;
+    badge: string;
+    button: string;
+    surface: string;
+    accentText: string;
+  }
+> = {
+  blue: {
+    border: 'hover:border-sky-300/20',
+    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(56,189,248,0.65)]',
+    iconWrap: 'border-sky-400/20 bg-sky-400/10 text-sky-200',
+    badge: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
+    button: 'bg-sky-300 text-slate-950 hover:bg-sky-200',
+    surface: 'from-sky-500/20 via-sky-400/10 to-transparent',
+    accentText: 'text-sky-300',
+  },
+  rose: {
+    border: 'hover:border-rose-300/20',
+    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(251,113,133,0.65)]',
+    iconWrap: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
+    badge: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
+    button: 'bg-rose-300 text-slate-950 hover:bg-rose-200',
+    surface: 'from-rose-500/20 via-fuchsia-400/10 to-transparent',
+    accentText: 'text-rose-300',
+  },
+  violet: {
+    border: 'hover:border-violet-300/20',
+    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(167,139,250,0.68)]',
+    iconWrap: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
+    badge: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
+    button: 'bg-violet-300 text-slate-950 hover:bg-violet-200',
+    surface: 'from-violet-500/20 via-indigo-400/10 to-transparent',
+    accentText: 'text-violet-300',
+  },
+  emerald: {
+    border: 'hover:border-emerald-300/20',
+    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(52,211,153,0.6)]',
+    iconWrap: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
+    badge: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
+    button: 'bg-emerald-300 text-slate-950 hover:bg-emerald-200',
+    surface: 'from-emerald-500/20 via-teal-400/10 to-transparent',
+    accentText: 'text-emerald-300',
+  },
+};
+
+interface SectionHeadingProps {
+  eyebrow: string;
+  title: string;
+  description?: string;
+  actionHref?: string;
+  actionLabel?: string;
+  variant?: 'default' | 'minimal';
+}
+
+export function SectionHeading({
+  eyebrow,
+  title,
+  description,
+  actionHref,
+  actionLabel,
+  variant = 'default',
+}: SectionHeadingProps) {
+  const isMinimal = variant === 'minimal';
+
+  return (
+    <div
+      className={clsx(
+        'flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between',
+        isMinimal ? 'mb-4' : 'mb-6'
+      )}
+    >
+      <div className={clsx(isMinimal ? 'max-w-xl' : 'max-w-2xl')}>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">
+          {eyebrow}
+        </div>
+        <h2
+          className={clsx(
+            'font-semibold tracking-tight text-white',
+            isMinimal ? 'text-[1.7rem] sm:text-[2rem]' : 'text-2xl sm:text-3xl'
+          )}
+        >
+          {title}
+        </h2>
+        {description ? (
+          <p
+            className={clsx(
+              'text-zinc-400',
+              isMinimal ? 'mt-2 text-sm leading-6' : 'mt-3 text-sm leading-6 sm:text-base'
+            )}
+          >
+            {description}
+          </p>
+        ) : null}
+      </div>
+      {actionHref && actionLabel ? (
+        <Link
+          href={actionHref}
+          className={clsx(
+            'inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] text-zinc-100 transition hover:bg-white/[0.06]',
+            isMinimal
+              ? 'px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em]'
+              : 'px-4 py-2 text-sm font-medium'
+          )}
+        >
+          {actionLabel}
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+interface CreatorToolCardProps {
+  tool: CreatorToolDefinition;
+  variant?: 'suite' | 'launchpad';
+  preview?: ReactNode;
+}
+
+export function CreatorToolCard({
+  tool,
+  variant = 'suite',
+  preview,
+}: CreatorToolCardProps) {
+  const theme = ACCENT_STYLES[tool.accent];
+  const Icon = tool.icon;
+  const isLaunchpad = variant === 'launchpad';
+
+  return (
+    <article
+      className={clsx(
+        'group relative overflow-hidden border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(9,9,12,0.96))] transition duration-300',
+        theme.border,
+        theme.shadow,
+        isLaunchpad
+          ? 'h-full min-h-[318px] rounded-[30px] p-4 sm:p-5'
+          : 'h-full min-h-[286px] rounded-[26px] p-3.5 sm:p-4'
+      )}
+    >
+      <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      <div className="flex h-full flex-col">
+        <div
+          className={clsx(
+            'relative overflow-hidden border border-white/8 bg-black/30',
+            isLaunchpad ? 'rounded-[24px]' : 'rounded-[20px]'
+          )}
+        >
+          {preview ? (
+            <div className={clsx('w-full bg-black', isLaunchpad ? 'h-44 sm:h-48' : 'h-40 sm:h-44')}>
+              {preview}
+            </div>
+          ) : (
+            <div
+              className={clsx(
+                'relative w-full bg-gradient-to-br',
+                theme.surface,
+                isLaunchpad ? 'h-44 sm:h-48' : 'h-40 sm:h-44'
+              )}
+            >
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_35%)]" />
+              <div className="absolute inset-0 bg-[linear-gradient(145deg,transparent_0%,rgba(255,255,255,0.04)_52%,transparent_100%)] opacity-70" />
+            </div>
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
+          <div
+            className={clsx(
+              'absolute left-4 top-4 flex items-center justify-center rounded-2xl border backdrop-blur-sm',
+              theme.iconWrap,
+              isLaunchpad ? 'h-12 w-12' : 'h-11 w-11'
+            )}
+          >
+            <Icon className={clsx(isLaunchpad ? 'h-5 w-5' : 'h-4 w-4')} />
+          </div>
+          <div className="absolute bottom-4 left-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/85">
+            {tool.shortLabel}
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
+              {tool.eyebrow}
+            </div>
+            <h3
+              className={clsx(
+                'mt-2 font-semibold tracking-tight text-white',
+                isLaunchpad ? 'text-[1.65rem]' : 'text-[1.3rem]'
+              )}
+            >
+              {tool.label}
+            </h3>
+          </div>
+          <span
+            className={clsx(
+              'rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]',
+              theme.badge
+            )}
+          >
+            {tool.badge}
+          </span>
+        </div>
+
+        <p className="mt-3 max-w-[28ch] text-sm leading-6 text-zinc-300">{tool.summary}</p>
+
+        <div className="mt-auto pt-4">
+          <Link
+            href={tool.href}
+            prefetch={tool.id === 'workflow' || tool.id === 'video' ? false : undefined}
+            className={clsx(
+              'inline-flex w-full items-center justify-between rounded-[18px] px-4 py-3 text-sm font-semibold transition',
+              theme.button
+            )}
+          >
+            {tool.launchLabel}
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+interface GeneratorQuickSwitchProps {
+  currentToolId: CreatorToolId;
+}
+
+export function GeneratorQuickSwitch({ currentToolId }: GeneratorQuickSwitchProps) {
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+      {CREATOR_TOOLS.map((tool) => {
+        const isActive = tool.id === currentToolId;
+        const Icon = tool.icon;
+
+        return (
+          <Link
+            key={tool.id}
+            href={tool.href}
+            prefetch={tool.id === 'workflow' || tool.id === 'video' ? false : undefined}
+            className={clsx(
+              'inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition',
+              isActive
+                ? 'border-white/15 bg-white/[0.08] text-white'
+                : 'border-white/8 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {tool.shortLabel}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+interface GeneratorPageHeaderProps {
+  currentToolId: CreatorToolId;
+  title: string;
+  eyebrow: string;
+  description: string;
+  credits: number | null;
+  backHref?: string;
+}
+
+export function GeneratorPageHeader({
+  currentToolId,
+  title,
+  eyebrow,
+  description,
+  credits,
+  backHref = '/create',
+}: GeneratorPageHeaderProps) {
+  const tool = getCreatorTool(currentToolId);
+  const theme = ACCENT_STYLES[tool.accent];
+
+  return (
+    <section className="mb-8 rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-7">
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-start gap-4">
+            <Link
+              href={backHref}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.06]"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Link>
+            <div className="max-w-2xl">
+              <div className="text-xs font-semibold uppercase tracking-[0.26em] text-zinc-500">{eyebrow}</div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-[2.25rem]">{title}</h1>
+                <span className={clsx('rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]', theme.badge)}>
+                  {tool.badge}
+                </span>
+              </div>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">{description}</p>
+            </div>
+          </div>
+
+          {credits !== null ? (
+            <div className="inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-100">
+              <Sparkles className={clsx('h-4 w-4', theme.accentText)} />
+              <span>{credits}</span>
+              <span className="text-zinc-500">credits</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="space-y-3 rounded-[24px] border border-white/8 bg-black/30 p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Switch creator path</div>
+          <GeneratorQuickSwitch currentToolId={currentToolId} />
+        </div>
+      </div>
+    </section>
+  );
+}

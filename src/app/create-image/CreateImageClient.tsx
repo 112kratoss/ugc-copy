@@ -3,9 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import { GeneratorPageHeader } from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
 
@@ -367,7 +368,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }
 
     return (
-        <div className="min-h-screen bg-black text-white p-8">
+        <div className="min-h-screen bg-black px-6 py-6 text-white sm:px-8 sm:py-8 font-[family-name:var(--font-geist-sans)]">
             {/* Background glows — animated per model */}
             <div className="fixed inset-0 z-0 pointer-events-none">
                 <AnimatePresence mode="wait">
@@ -385,31 +386,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 </AnimatePresence>
             </div>
 
-            <div className="relative z-10 max-w-4xl mx-auto">
-                {/* Header */}
-                <div className="flex items-center gap-4 mb-10">
-                    <Link
-                        href="/"
-                        className="group p-3 rounded-full bg-zinc-900/50 border border-white/5 hover:bg-zinc-800 hover:border-white/10 transition-all backdrop-blur-md"
-                    >
-                        <ArrowLeft className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
-                    </Link>
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
-                            Image Generation
-                        </h1>
-                        <p className="text-sm text-zinc-500 font-medium tracking-wide">
-                            AI IMAGE CREATOR · {model.displayName.toUpperCase()}
-                        </p>
-                    </div>
-                    {userCredits !== null && (
-                        <div className="ml-auto flex items-center gap-2 px-4 py-2 bg-zinc-900/50 border border-white/5 rounded-full backdrop-blur-md">
-                            <Sparkles className="w-4 h-4 text-blue-400" />
-                            <span className="text-sm font-semibold text-white">{userCredits}</span>
-                            <span className="text-xs text-zinc-500">credits</span>
-                        </div>
-                    )}
-                </div>
+            <div className="relative z-10 mx-auto max-w-5xl">
+                <GeneratorPageHeader
+                    currentToolId="image"
+                    title="Create image"
+                    eyebrow={`Creator studio / ${model.displayName}`}
+                    description="Start with a still when you need the fastest route to a polished product visual, concept frame, or campaign hook."
+                    credits={userCredits}
+                />
 
                 {/* Remix Banner */}
                 <AnimatePresence>

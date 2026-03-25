@@ -156,10 +156,10 @@ export default function NavbarClient() {
             </>
           ) : (
             <Link
-              href="/login"
-              className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-black transition-transform hover:scale-[1.02]"
+              href="/login?returnUrl=/create"
+              className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-black transition-transform hover:scale-[1.02] hover:bg-zinc-200"
             >
-              Log In
+              Start Creating
             </Link>
           )}
         </div>
@@ -214,11 +214,11 @@ export default function NavbarClient() {
               </button>
             ) : (
               <Link
-                href="/login"
+                href="/login?returnUrl=/create"
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="text-sm font-medium text-zinc-300 hover:text-white"
               >
-                Log In
+                Start Creating
               </Link>
             )}
           </div>

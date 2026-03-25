@@ -1,90 +1,108 @@
-import { ArrowRight, Video, Image as ImageIcon, Wand2, Clapperboard } from 'lucide-react';
 import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
+
+import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
+import {
+  CREATOR_STARTER_RECIPES,
+  CREATOR_TOOLS,
+  getCreatorTool,
+} from '@/lib/creator-tools';
+
+const RECIPE_ACCENTS = {
+  image: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
+  video: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
+  motion: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
+  workflow: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
+} as const;
 
 export default function CreateHubPage() {
-    return (
-        <div className="min-h-screen bg-black text-white p-6 pb-20 sm:p-12 font-[family-name:var(--font-geist-sans)] relative overflow-hidden flex flex-col items-center justify-center">
-            {/* Background Effects */}
-            <div className="fixed inset-0 z-0 pointer-events-none">
-                <div className="absolute top-[10%] left-[20%] w-[40%] h-[40%] bg-purple-900/10 blur-[120px] rounded-full mix-blend-screen" />
-                <div className="absolute bottom-[20%] right-[10%] w-[30%] h-[30%] bg-pink-900/10 blur-[100px] rounded-full mix-blend-screen" />
-                <div className="absolute inset-0 bg-[url('/noise.png')] opacity-[0.15] mix-blend-overlay" />
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-black pb-20 text-white font-[family-name:var(--font-geist-sans)]">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[10%] top-20 h-52 w-52 rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute right-[10%] top-20 h-64 w-64 rounded-full bg-fuchsia-500/10 blur-3xl" />
+      </div>
+
+      <div className="studio-shell relative z-10 pt-10 sm:pt-14">
+        <section>
+          <div className="max-w-3xl">
+            <div className="text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">
+              Creator launchpad
             </div>
+            <h1 className="mt-4 max-w-[14ch] text-4xl font-semibold tracking-tight sm:text-5xl lg:text-[3.75rem]">
+              Pick the path that gets you to a first output fastest.
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">
+              Image for quick stills, video for scenes, motion for remixes, workflow
+              for repeatable systems.
+            </p>
+          </div>
 
-            <div className="max-w-4xl w-full relative z-10">
-                <div className="text-center mb-16">
-                    <h1 className="text-4xl sm:text-5xl font-bold mb-4 tracking-tight">
-                        What would you like to create?
-                    </h1>
-                    <p className="text-zinc-400 text-lg max-w-2xl mx-auto">
-                        Choose an AI tool below to start generating high-quality content in seconds.
-                    </p>
-                </div>
+          <div className="mt-6 flex flex-wrap gap-2">
+            {CREATOR_TOOLS.map((tool) => (
+              <Link
+                key={tool.id}
+                href={tool.href}
+                prefetch={
+                  tool.id === 'workflow' || tool.id === 'video' ? false : undefined
+                }
+                className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+              >
+                {tool.shortLabel}
+              </Link>
+            ))}
+          </div>
+        </section>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <section className="mt-8 grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          {CREATOR_TOOLS.map((tool) => (
+            <CreatorToolCard key={tool.id} tool={tool} variant="launchpad" />
+          ))}
+        </section>
 
-                    {/* Image Generation */}
-                    <Link prefetch={false} href="/create-image" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-purple-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
-                        <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                        <div className="w-14 h-14 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                            <ImageIcon className="w-7 h-7" />
-                        </div>
-                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">Generate Image</h2>
-                        <p className="text-zinc-400 mb-8 flex-1 leading-relaxed">
-                            Turn your text prompts into stunning, high-resolution images using state-of-the-art AI models.
-                        </p>
-                        <div className="flex items-center text-purple-400 font-medium group-hover:text-purple-300">
-                            Start creating <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                        </div>
-                    </Link>
+        <section className="mt-10">
+          <SectionHeading
+            eyebrow="Quick starts"
+            title="Try a setup and move."
+            actionHref="/showcase"
+            actionLabel="Explore showcase"
+            variant="minimal"
+          />
 
-                    {/* Motion Control (Current Create Page) */}
-                    <Link prefetch={false} href="/create-motion" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-pink-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
-                        <div className="absolute inset-0 bg-gradient-to-br from-pink-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                        <div className="w-14 h-14 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                            <Wand2 className="w-7 h-7" />
-                        </div>
-                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">Motion Control</h2>
-                        <p className="text-zinc-400 mb-8 flex-1 leading-relaxed">
-                            Animate static photos using reference videos to create viral, ultra-realistic UGC video ads.
-                        </p>
-                        <div className="flex items-center text-pink-400 font-medium group-hover:text-pink-300">
-                            Start animating <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                        </div>
-                    </Link>
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+            {CREATOR_STARTER_RECIPES.map((recipe) => {
+              const tool = getCreatorTool(recipe.toolId);
 
-                    {/* Video Generation */}
-                    <Link prefetch={false} href="/create-video" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-blue-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
-                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                        <div className="w-14 h-14 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                            <Video className="w-7 h-7" />
-                        </div>
-                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">Generate Video</h2>
-                        <p className="text-zinc-400 mb-8 flex-1 leading-relaxed">
-                            Create fully original videos from text prompts and reference images using Kling 3.0.
-                        </p>
-                        <div className="flex items-center text-blue-400 font-medium group-hover:text-blue-300">
-                            Start generating <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                        </div>
-                    </Link>
-
-
-                    <Link prefetch={false} href="/create-workflow" className="group relative bg-zinc-900/40 border border-white/10 p-8 rounded-3xl hover:bg-zinc-800/50 hover:border-emerald-500/50 transition-all duration-300 flex flex-col overflow-hidden backdrop-blur-sm">
-                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                        <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                            <Clapperboard className="w-7 h-7" />
-                        </div>
-                        <h2 className="text-2xl font-bold mb-3 text-zinc-100 group-hover:text-white transition-colors">Workflow Canvas</h2>
-                        <p className="text-zinc-400 mb-8 flex-1 leading-relaxed">
-                            Build a visual node canvas that connects prompts, media inputs, image generation, video generation, and motion control into reusable workflows.
-                        </p>
-                        <div className="flex items-center text-emerald-400 font-medium group-hover:text-emerald-300">
-                            Open the canvas <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                        </div>
-                    </Link>
-
-                </div>
-            </div>
-        </div>
-    );
+              return (
+                <Link
+                  key={recipe.id}
+                  href={recipe.href}
+                  prefetch={
+                    tool.id === 'workflow' || tool.id === 'video' ? false : undefined
+                  }
+                  className="group rounded-[24px] border border-white/8 bg-[#111215] p-4 transition hover:border-white/12 hover:bg-white/[0.04]"
+                >
+                  <div
+                    className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${RECIPE_ACCENTS[recipe.toolId]}`}
+                  >
+                    {tool.shortLabel}
+                  </div>
+                  <h3 className="mt-4 text-[1.2rem] font-semibold tracking-tight text-white">
+                    {recipe.title}
+                  </h3>
+                  <p className="mt-2 line-clamp-3 text-sm leading-6 text-zinc-400">
+                    {recipe.description}
+                  </p>
+                  <div className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-white">
+                    {recipe.ctaLabel}
+                    <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
 }

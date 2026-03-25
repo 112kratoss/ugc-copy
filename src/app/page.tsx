@@ -1,146 +1,262 @@
-import Link from "next/link";
-import { ArrowRight, Sparkles, Image as ImageIcon, Video, UserSquare2, Layers, ChevronRight } from "lucide-react";
-import { Metadata } from "next";
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
-import { JsonLd } from "@/app/components/JsonLd";
-import { PRICING_CURRENCY, PRICING_PLAN_MAP } from "@/lib/pricing";
-import { buildOrganizationSchema, buildSoftwareApplicationSchema, createMetadata, siteConfig } from "@/lib/seo";
+import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
+import { HoverVideo } from '@/app/components/HoverVideo';
+import { JsonLd } from '@/app/components/JsonLd';
+import { CREATOR_TOOLS } from '@/lib/creator-tools';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
+import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
+import {
+  buildOrganizationSchema,
+  buildSoftwareApplicationSchema,
+  createMetadata,
+  siteConfig,
+} from '@/lib/seo';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
 import { getServerAuthState } from '@/lib/supabase-server';
-import { HoverVideo } from "@/app/components/HoverVideo";
 
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
   absoluteTitle: siteConfig.defaultTitle,
-  description: "Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with UGC copy.",
-  path: "/",
+  description:
+    'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with UGC copy.',
+  path: '/',
 });
+
+function VisualPreview({
+  item,
+  alt,
+  className,
+}: {
+  item: { category: string; title: string; url: string } | null | undefined;
+  alt: string;
+  className: string;
+}) {
+  if (!item) {
+    return (
+      <div
+        className={`h-full w-full bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] ${className}`}
+      />
+    );
+  }
+
+  if (item.category === 'video' || item.category === 'motion') {
+    return <HoverVideo src={item.url} className={className} />;
+  }
+
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={item.url} alt={alt || item.title} className={className} />;
+}
+
+const LATEST_MODELS = [
+  {
+    name: IMAGE_MODELS['nano-banana-2'].displayName,
+    description: 'Fast image generation',
+    href: '/create-image?model=nano-banana-2',
+    accent: 'from-sky-500/20 to-cyan-400/10',
+  },
+  {
+    name: IMAGE_MODELS['nano-banana-pro'].displayName,
+    description: 'High-fidelity stills',
+    href: '/create-image?model=nano-banana-pro',
+    accent: 'from-violet-500/20 to-fuchsia-400/10',
+  },
+  {
+    name: VIDEO_MODELS['kling-3.0-video'].displayName,
+    description: 'Cinematic video scenes',
+    href: '/create-video?model=kling-3.0-video',
+    accent: 'from-rose-500/20 to-orange-400/10',
+  },
+  {
+    name: MOTION_MODELS['kling-3.0'].displayName,
+    description: 'Motion-led UGC output',
+    href: '/create-motion?model=kling-3.0',
+    accent: 'from-violet-500/20 to-indigo-400/10',
+  },
+] as const;
 
 export default async function Home() {
   const auth = await getServerAuthState();
   const showcaseFeed = await getShowcaseFeedPage({
-      category: 'all',
-      sort: 'top-saves',
-      offset: 0,
-      limit: 12,
-      viewerUserId: auth.session?.user?.id ?? null,
+    category: 'all',
+    sort: 'top-saves',
+    offset: 0,
+    limit: 12,
+    viewerUserId: auth.session?.user?.id ?? null,
   });
 
-  const tools = [
-    { title: "Create Image", desc: "Generate images from text prompts", icon: ImageIcon, href: "/create-image", color: "from-blue-500 to-cyan-400" },
-    { title: "Text to Video", desc: "Generate videos from text prompts", icon: Video, href: "/create-video", color: "from-pink-500 to-rose-400" },
-    { title: "Motion Sync", desc: "Motion control videos from image & performance", icon: UserSquare2, href: "/create-motion", color: "from-purple-500 to-fuchsia-400" },
-    { title: "Workflow Builder", desc: "Connect prompts into reusable systems", icon: Layers, href: "/create-workflow", color: "from-emerald-500 to-teal-400" },
-  ];
+  const imagePreview = showcaseFeed.items.find((item) => item.category === 'image');
+  const videoPreview = showcaseFeed.items.find((item) => item.category === 'video');
+  const motionPreview = showcaseFeed.items.find((item) => item.category === 'motion');
+
+  const previewByTool = {
+    image: imagePreview,
+    video: videoPreview,
+    motion: motionPreview,
+    workflow: null,
+  } as const;
 
   return (
-    <div className="flex min-h-screen flex-col overflow-hidden bg-black text-white font-[family-name:var(--font-geist-sans)]">
+    <div className="relative flex min-h-screen flex-col overflow-hidden bg-black text-white font-[family-name:var(--font-geist-sans)]">
       <JsonLd data={buildOrganizationSchema()} />
       <JsonLd
         data={buildSoftwareApplicationSchema({
           name: siteConfig.name,
-          path: "/",
-          description: "UGC copy helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.",
-          featureList: ["AI images", "AI videos", "Motion transfer", "Workflows"],
-          offers: [{ name: `${PRICING_PLAN_MAP.starter.name} credits`, price: PRICING_PLAN_MAP.starter.priceInr, priceCurrency: PRICING_CURRENCY }],
+          path: '/',
+          description:
+            'UGC copy helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
+          featureList: ['AI images', 'AI videos', 'Motion transfer', 'Workflows'],
+          offers: [
+            {
+              name: `${PRICING_PLAN_MAP.starter.name} credits`,
+              price: PRICING_PLAN_MAP.starter.priceInr,
+              priceCurrency: PRICING_CURRENCY,
+            },
+          ],
         })}
       />
 
-      <main className="relative z-10 flex flex-1 flex-col items-center px-6 pt-24 pb-24 max-w-[1400px] mx-auto w-full">
-        {/* Hero Section */}
-        <section className="flex flex-col items-center text-center w-full mb-16 mt-8">
-          <h1 className="text-4xl sm:text-5xl md:text-[3.5rem] font-bold tracking-tight mb-10 leading-tight">
-            What would you like <br className="hidden sm:block" />
-            to <span className="font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500">create</span> today? <Sparkles className="inline-block w-8 h-8 text-purple-400 -mt-2 ml-1" />
-          </h1>
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[10%] top-20 h-48 w-48 rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute right-[12%] top-24 h-64 w-64 rounded-full bg-fuchsia-500/10 blur-3xl" />
+      </div>
 
-          {/* Category Tabs (Visual only for dashboard feel) */}
-          <div className="flex flex-wrap items-center justify-center gap-1 p-1.5 bg-[#1A1A1A] rounded-full border border-white/[0.05] shadow-lg max-w-full overflow-x-auto hide-scrollbar">
-            {[
-              { name: 'Video', icon: Video },
-              { name: 'Image', icon: ImageIcon },
-              { name: 'Motion', icon: UserSquare2 },
-              { name: 'Workflow', icon: Layers },
-            ].map((tab, i) => (
-              <button key={tab.name} className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-medium transition-all ${i === 1 ? 'bg-[#2A2A2A] text-white shadow-sm border border-white/5' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}>
-                <tab.icon className="w-4 h-4" />
-                {tab.name}
-              </button>
+      <main className="studio-shell relative z-10 flex flex-1 flex-col pb-24 pt-8 sm:pt-12">
+        <section className="flex flex-col items-center text-center">
+          <h1 className="max-w-3xl text-4xl font-semibold tracking-tight sm:text-5xl md:text-[3.85rem]">
+            What would you like to{' '}
+            <span className="bg-gradient-to-r from-pink-400 via-fuchsia-400 to-violet-300 bg-clip-text text-transparent">
+              create
+            </span>{' '}
+            today?
+          </h1>
+          <p className="mt-4 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">
+            Pick a path, see the output style immediately, and move straight into creation.
+          </p>
+
+          <div className="mt-6 flex w-full max-w-[980px] gap-2 overflow-x-auto rounded-full border border-white/8 bg-white/[0.03] p-2 hide-scrollbar">
+            {CREATOR_TOOLS.map((tool) => {
+              const Icon = tool.icon;
+
+              return (
+                <Link
+                  key={tool.id}
+                  href={tool.href}
+                  prefetch={
+                    tool.id === 'workflow' || tool.id === 'video' ? false : undefined
+                  }
+                  className="flex min-w-fit items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                >
+                  <Icon className="h-4 w-4" />
+                  {tool.shortLabel}
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-8 w-full">
+          <SectionHeading
+            eyebrow="UGC Suite"
+            title="Core creator paths"
+            actionHref="/create"
+            actionLabel="Launchpad"
+            variant="minimal"
+          />
+
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+            {CREATOR_TOOLS.map((tool) => (
+              <CreatorToolCard
+                key={tool.id}
+                tool={tool}
+                variant="suite"
+                preview={
+                  previewByTool[tool.id] ? (
+                    <VisualPreview
+                      item={previewByTool[tool.id]}
+                      alt={tool.label}
+                      className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"
+                    />
+                  ) : undefined
+                }
+              />
             ))}
           </div>
         </section>
 
-        {/* UGC Suite */}
-        <section className="w-full mb-16">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-white">UGC Suite</h2>
-            <Link href="/create" className="text-sm font-semibold text-zinc-400 hover:text-white flex items-center gap-1 transition-colors">
-              More <ChevronRight className="w-4 h-4" />
-            </Link>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {tools.map((tool) => (
-              <Link key={tool.title} href={tool.href} className="group relative flex gap-4 p-4 rounded-2xl bg-[#1A1A1A] border border-white/[0.04] hover:bg-[#222222] hover:border-white/10 transition-all duration-300">
-                <div className={`w-14 h-14 shrink-0 rounded-xl bg-gradient-to-br ${tool.color} flex items-center justify-center shadow-inner`}>
-                  <tool.icon className="w-7 h-7 text-white/90 drop-shadow-sm" />
+        <section className="mt-12 w-full">
+          <SectionHeading
+            eyebrow="Latest models"
+            title="Choose the engine."
+            variant="minimal"
+          />
+
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+            {LATEST_MODELS.map((model) => (
+              <Link
+                key={model.name}
+                href={model.href}
+                prefetch={model.href.includes('/create-video') ? false : undefined}
+                className="group overflow-hidden rounded-[26px] border border-white/8 bg-[#111215] p-3.5 transition hover:border-white/12"
+              >
+                <div
+                  className={`flex h-36 w-full items-end rounded-[20px] bg-gradient-to-br p-5 ${model.accent}`}
+                >
+                  <div className="text-2xl font-semibold tracking-tight text-white/90">
+                    {model.name}
+                  </div>
                 </div>
-                <div className="flex flex-col justify-center">
-                  <h3 className="font-semibold text-zinc-100 group-hover:text-white transition-colors">{tool.title}</h3>
-                  <p className="text-xs text-zinc-500 line-clamp-2 mt-0.5">{tool.desc}</p>
-                </div>
+                <p className="px-1 pb-1 pt-4 text-sm text-zinc-400">{model.description}</p>
               </Link>
             ))}
           </div>
         </section>
 
-        {/* Inspirations */}
-        <section className="w-full">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-white">Inspirations</h2>
-            <div className="flex gap-2">
-                <Link href="/showcase?category=image" className="px-4 py-1.5 text-xs font-semibold bg-[#2A2A2A] text-white rounded-full border border-white/5 transition-colors">
-                Images
-                </Link>
-                <Link href="/showcase?category=video" className="px-4 py-1.5 text-xs font-semibold bg-[#1A1A1A] text-zinc-400 hover:text-white hover:bg-[#2A2A2A] rounded-full border border-transparent transition-colors">
-                Video
-                </Link>
-            </div>
-          </div>
+        <section className="mt-12 w-full">
+          <SectionHeading
+            eyebrow="Inspirations"
+            title="See what creators are already making."
+            actionHref="/showcase"
+            actionLabel="Showcase"
+            variant="minimal"
+          />
 
-          <div className="columns-2 md:columns-3 xl:columns-4 gap-4 space-y-4">
+          <div className="columns-2 gap-4 space-y-4 md:columns-3 xl:columns-4 2xl:columns-5">
             {showcaseFeed.items.map((item) => (
-              <Link key={item.id} href={`/showcase?category=${item.category}`} className="group relative block break-inside-avoid bg-[#1A1A1A] rounded-[1.5rem] overflow-hidden border border-white/[0.04] hover:border-white/10 hover:shadow-[0_4px_20px_rgba(0,0,0,0.5)] transition-all">
+              <Link
+                key={item.id}
+                href={`/showcase?category=${item.category}`}
+                className="group relative block break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215]"
+              >
                 {item.category === 'video' || item.category === 'motion' ? (
-                  <HoverVideo src={item.url} className="w-full h-auto block object-cover opacity-90 group-hover:opacity-100 transition-opacity" />
+                  <HoverVideo
+                    src={item.url}
+                    className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
+                  />
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={item.url} alt={item.title} className="w-full h-auto block object-cover opacity-90 group-hover:opacity-100 transition-opacity" />
+                  <img
+                    src={item.url}
+                    alt={item.title}
+                    className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
+                  />
                 )}
-                <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                    <p className="text-sm font-medium text-white line-clamp-2 leading-tight">{item.title}</p>
-                    <p className="text-xs text-zinc-300 line-clamp-1 mt-1">{item.prompt}</p>
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
+                  <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
                 </div>
               </Link>
             ))}
-            {showcaseFeed.items.length === 0 && (
-              <div className="col-span-full py-12 text-center text-zinc-500 bg-[#1A1A1A] rounded-2xl border border-white/[0.04]">
-                <p>No community inspirations found yet.</p>
+            {showcaseFeed.items.length === 0 ? (
+              <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-10 text-center text-zinc-400">
+                No community inspiration is available yet.
               </div>
-            )}
-          </div>
-          
-          <div className="w-full flex justify-center mt-10">
-            <Link href="/showcase" className="px-6 py-3 bg-[#1A1A1A] border border-white/[0.05] hover:bg-[#252525] hover:border-white/10 text-white rounded-full text-sm font-medium transition-all shadow-sm">
-                View more inspirations
-            </Link>
+            ) : null}
           </div>
         </section>
-
       </main>
-      
-      {/* Footer minimal */}
-      <footer className="w-full border-t border-white/[0.04] bg-black px-6 py-8 text-center text-sm text-zinc-600">
+
+      <footer className="relative z-10 border-t border-white/[0.04] bg-black/70 px-6 py-8 text-center text-sm text-zinc-600 backdrop-blur-sm">
         <p>© {new Date().getFullYear()} UGC copy. All rights reserved.</p>
       </footer>
     </div>

@@ -3,9 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check, Play } from 'lucide-react';
+import { Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import { GeneratorPageHeader } from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import localforage from 'localforage';
 import { useAuth } from '@/app/components/AuthProvider';
@@ -393,28 +394,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     };
 
     return (
-        <div className="min-h-screen bg-black text-white p-8">
+        <div className="min-h-screen bg-black px-6 py-6 text-white sm:px-8 sm:py-8 font-[family-name:var(--font-geist-sans)]">
             <div className="max-w-5xl mx-auto">
-                {/* Header */}
-                <div className="flex items-center gap-4 mb-10">
-                    <Link
-                        href="/"
-                        className="group p-3 rounded-full bg-zinc-900/50 border border-white/5 hover:bg-zinc-800 hover:border-white/10 transition-all backdrop-blur-md"
-                    >
-                        <ArrowLeft className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
-                    </Link>
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">Creation Workspace</h1>
-                        <p className="text-sm text-zinc-500 font-medium tracking-wide">AI MOTION TRANSFER · {model.displayName.toUpperCase()}</p>
-                    </div>
-                    {userCredits !== null && (
-                        <div className="ml-auto flex items-center gap-2 px-4 py-2 bg-zinc-900/50 border border-white/5 rounded-full backdrop-blur-md">
-                            <Sparkles className="w-4 h-4 text-purple-400" />
-                            <span className="text-sm font-semibold text-white">{userCredits}</span>
-                            <span className="text-xs text-zinc-500">credits</span>
-                        </div>
-                    )}
-                </div>
+                <GeneratorPageHeader
+                    currentToolId="motion"
+                    title="Create motion"
+                    eyebrow={`Creator studio / ${model.displayName}`}
+                    description="Start with motion when you already have a character or still visual and want believable creator-style movement quickly."
+                    credits={userCredits}
+                />
 
                 {/* Remix Banner */}
                 <AnimatePresence>
