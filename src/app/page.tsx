@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
 import { HoverVideo } from '@/app/components/HoverVideo';
@@ -135,7 +136,7 @@ export default async function Home() {
             Pick a path, see the output style immediately, and move straight into creation.
           </p>
 
-          <div className="mt-6 flex w-full max-w-[980px] gap-2 overflow-x-auto rounded-full border border-white/8 bg-white/[0.03] p-2 hide-scrollbar">
+          <div className="mt-6 grid w-full max-w-[880px] grid-cols-2 gap-2 rounded-[28px] border border-white/8 bg-white/[0.03] p-2 sm:grid-cols-4">
             {CREATOR_TOOLS.map((tool) => {
               const Icon = tool.icon;
 
@@ -146,7 +147,7 @@ export default async function Home() {
                   prefetch={
                     tool.id === 'workflow' || tool.id === 'video' ? false : undefined
                   }
-                  className="flex min-w-fit items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                  className="flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
                 >
                   <Icon className="h-4 w-4" />
                   {tool.shortLabel}
@@ -156,14 +157,22 @@ export default async function Home() {
           </div>
         </section>
 
-        <section className="mt-8 w-full">
-          <SectionHeading
-            eyebrow="UGC Suite"
-            title="Core creator paths"
-            actionHref="/create"
-            actionLabel="Launchpad"
-            variant="minimal"
-          />
+        <section className="mt-10 w-full">
+          <div className="mb-5 flex flex-col items-center text-center">
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">
+              UGC Suite
+            </div>
+            <h2 className="text-[1.85rem] font-semibold tracking-tight text-white sm:text-[2.2rem]">
+              Core creator paths
+            </h2>
+            <Link
+              href="/create"
+              className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
+            >
+              Launchpad
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
 
           <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
             {CREATOR_TOOLS.map((tool) => (

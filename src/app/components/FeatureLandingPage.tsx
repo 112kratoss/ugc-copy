@@ -71,7 +71,7 @@ export default function FeatureLandingPage({
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_40%)]" />
             </div>
 
-            <main className="relative mx-auto flex max-w-6xl flex-col gap-20 px-6 py-20 sm:px-10 lg:px-12">
+            <main className="studio-shell relative flex flex-col gap-20 py-20">
                 <section className="grid gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
                     <div className="space-y-8">
                         <div className="inline-flex items-center gap-2 rounded-full border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-sm text-fuchsia-200">

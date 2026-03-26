@@ -219,7 +219,7 @@ export default function Pricing() {
                 src="https://checkout.razorpay.com/v1/checkout.js"
             />
 
-            <div className="max-w-6xl mx-auto px-6 py-16">
+            <div className="studio-shell py-16">
                 <Link
                     href="/"
                     className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"

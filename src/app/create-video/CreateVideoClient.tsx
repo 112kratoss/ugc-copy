@@ -6,7 +6,13 @@ import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
-import { GeneratorPageHeader } from '@/app/components/CreatorStudio';
+import {
+    GeneratorPageHeader,
+    MediaStudioShell,
+    StudioRemixNotice,
+    StudioRunPanel,
+    StudioWorkspacePanel,
+} from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { useAuth } from '@/app/components/AuthProvider';
@@ -465,57 +471,64 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         );
     }
 
+    const workspaceTitle = outputVideo
+        ? 'Latest video result'
+        : isGenerating
+            ? 'Creating your video'
+            : remixVideoUrl
+                ? 'Remix reference loaded'
+                : 'Ready to build a scene';
+
+    const workspaceDescription = outputVideo
+        ? 'Your newest video stays here until you start another run.'
+        : isGenerating
+            ? 'Track the active run here while the model handles timing, frames, and render.'
+            : remixVideoUrl
+                ? 'Use the original clip as working context while you update prompt, shots, and settings.'
+                : 'The workspace will show the current run and latest result once you generate.';
+
     return (
-        <div className="min-h-screen bg-black text-white p-6 sm:p-8 font-[family-name:var(--font-geist-sans)]">
+        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
             <div className="fixed inset-0 z-0 pointer-events-none">
                 <div className="absolute top-[10%] left-[-10%] w-[40%] h-[40%] bg-blue-900/15 blur-[120px] rounded-full mix-blend-screen" />
                 <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-900/10 blur-[120px] rounded-full mix-blend-screen" />
             </div>
 
-            <div className="relative z-10 max-w-5xl mx-auto">
-                <GeneratorPageHeader
-                    currentToolId="video"
-                    title="Create video"
-                    eyebrow={`Creator studio / ${videoModel.displayName}`}
-                    description="Start with video when the idea needs movement, presence, or a clearer story in the very first output."
-                    credits={userCredits}
-                />
-
-                <AnimatePresence>
-                    {remixId && !isRemixLoading && (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
-                            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center justify-between overflow-hidden backdrop-blur-md"
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-purple-500/20 rounded-full">
-                                    <Sparkles className="w-5 h-5 text-purple-400" />
-                                </div>
-                                <div>
-                                    <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
-                                    <p className="text-xs text-purple-300/80">
-                                        Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}.
-                                    </p>
-                                </div>
-                            </div>
-
-                            {remixVideoUrl && (
-                                <button
-                                    onClick={() => setIsPreviewModalOpen(true)}
-                                    className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded-xl transition-colors text-sm font-medium text-purple-300"
-                                >
-                                    <Play className="w-4 h-4" />
-                                    View Original
-                                </button>
+            <MediaStudioShell
+                currentToolId="video"
+                header={
+                    <GeneratorPageHeader
+                        currentToolId="video"
+                        title="Create video"
+                        eyebrow={`Creator studio / ${videoModel.displayName}`}
+                        description="Start with video when the idea needs movement, presence, or a clearer story in the very first output."
+                        credits={userCredits}
+                        showPathSwitcher={false}
+                    />
+                }
+                controls={
+                    <>
+                        <AnimatePresence>
+                            {remixId && !isRemixLoading && (
+                                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioRemixNotice
+                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}
+                                        action={
+                                            remixVideoUrl ? (
+                                                <button
+                                                    onClick={() => setIsPreviewModalOpen(true)}
+                                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                >
+                                                    <Play className="h-4 w-4" />
+                                                    View original
+                                                </button>
+                                            ) : undefined
+                                        }
+                                    />
+                                </motion.div>
                             )}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                        </AnimatePresence>
 
-                <div className="grid lg:grid-cols-12 gap-8">
-                    <div className="lg:col-span-8 flex flex-col gap-6">
                         <motion.div
                             initial={{ opacity: 0, y: 16 }}
                             animate={{ opacity: 1, y: 0 }}
@@ -819,9 +832,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 </motion.div>
                             )}
                         </div>
-                    </div>
 
-                    <div className="lg:col-span-4 flex flex-col gap-6">
                         <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm space-y-6">
                             {videoModel.modeOptions.length > 0 && (
                                 <div>
@@ -904,72 +915,170 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 </div>
                             )}
                         </div>
-
-                        <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm">
-                            <div className="flex justify-between items-end mb-6">
-                                <div>
-                                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-1">Total Cost</p>
-                                    <div className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400 flex items-baseline gap-2">
-                                        {estimatedCost} <span className="text-sm text-zinc-500 font-medium">credits</span>
+                    </>
+                }
+                workspace={
+                    <>
+                        <StudioRunPanel
+                            title={isGenerating ? 'Video run in progress' : 'Ready to generate'}
+                            summary={
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Model</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{videoModel.displayName}</div>
+                                    </div>
+                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{estimatedCost} credits</div>
                                     </div>
                                 </div>
-                                <div className="text-right">
-                                    <p className="text-xs text-zinc-500">Duration</p>
-                                    <p className="text-lg font-bold text-white">{totalDuration}s</p>
+                            }
+                            details={
+                                <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Duration</div>
+                                        <div className="mt-1 text-zinc-200">{totalDuration}s</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Aspect ratio</div>
+                                        <div className="mt-1 text-zinc-200">{currentAspectRatio}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Shot mode</div>
+                                        <div className="mt-1 text-zinc-200">{currentIsMultiShot ? 'Multi-shot' : 'Single shot'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
+                                        <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
+                                    </div>
                                 </div>
-                            </div>
-
-                            {insufficientCredits ? (
-                                <Link href="/pricing" className="w-full py-4 bg-zinc-800 text-white rounded-xl flex justify-center items-center gap-2 font-bold hover:bg-zinc-700 transition-all opacity-80">
-                                    <Sparkles className="w-4 h-4 text-yellow-500" />
-                                    Top Up Credits
-                                </Link>
-                            ) : (
-                                <button
-                                    onClick={handleGenerate}
-                                    disabled={isGenerating}
-                                    className="w-full py-4 bg-gradient-to-r from-blue-600 to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl flex justify-center items-center gap-2 font-bold text-white shadow-[0_0_20px_-5px_rgba(59,130,246,0.3)] hover:shadow-[0_0_30px_-5px_rgba(59,130,246,0.5)] transition-all"
+                            }
+                            action={
+                                insufficientCredits ? (
+                                    <div className="space-y-4">
+                                        <div className="rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4">
+                                            <p className="text-sm font-semibold text-white">Not enough credits</p>
+                                            <p className="mt-2 text-sm text-zinc-400">
+                                                This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
+                                            </p>
+                                        </div>
+                                        <Link href="/pricing" className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90">
+                                            <Sparkles className="h-4 w-4" />
+                                            Top Up Credits
+                                        </Link>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={handleGenerate}
+                                        disabled={isGenerating}
+                                        className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4 text-base font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
+                                    >
+                                        {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Video</>}
+                                    </button>
+                                )
+                            }
+                            status={
+                                <>
+                                    {isGenerating && generationStatus ? (
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between text-sm text-zinc-300">
+                                                <span>{generationStatus}</span>
+                                                <span>{getProgress()}%</span>
+                                            </div>
+                                            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                                                <motion.div
+                                                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
+                                                    initial={{ width: '0%' }}
+                                                    animate={{ width: `${getProgress()}%` }}
+                                                    transition={{ duration: 0.5 }}
+                                                />
+                                            </div>
+                                            <p className="text-xs text-zinc-500">Longer runs can take a few minutes.</p>
+                                        </div>
+                                    ) : error ? (
+                                        <p className="text-sm text-red-400">{error}</p>
+                                    ) : (
+                                        <p className="text-sm text-zinc-500">The current run will replace this workspace as soon as generation starts.</p>
+                                    )}
+                                </>
+                            }
+                            footer={
+                                <Link
+                                    href="/creations"
+                                    className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
                                 >
-                                    {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Video</>}
-                                </button>
-                            )}
+                                    View My Creations
+                                    <Download className="h-4 w-4" />
+                                </Link>
+                            }
+                        />
 
-                            {isGenerating && generationStatus && (
-                                <div className="mt-4 space-y-2">
-                                    <div className="flex justify-between text-xs text-blue-300 font-medium px-1">
-                                        <span>{generationStatus}</span>
-                                        <span>{getProgress()}%</span>
+                        <StudioWorkspacePanel
+                            title={workspaceTitle}
+                            description={workspaceDescription}
+                            action={
+                                <Link
+                                    href="/creations"
+                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
+                                >
+                                    My Creations
+                                    <Download className="h-4 w-4" />
+                                </Link>
+                            }
+                        >
+                            {outputVideo ? (
+                                <div className="space-y-5">
+                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/60 aspect-video">
+                                        <video src={outputVideo} controls autoPlay loop className="h-full w-full object-contain" />
                                     </div>
-                                    <div className="h-1.5 bg-black rounded-full overflow-hidden">
-                                        <motion.div
-                                            className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
-                                            initial={{ width: '0%' }}
-                                            animate={{ width: `${getProgress()}%` }}
-                                            transition={{ duration: 0.5 }}
-                                        />
+                                    <a href={outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
+                                        <Download className="h-4 w-4" />
+                                        Download video
+                                    </a>
+                                </div>
+                            ) : isGenerating ? (
+                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-blue-500/30 to-purple-500/20">
+                                        <Loader2 className="h-7 w-7 animate-spin text-white" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-semibold text-white">Rendering the current scene</h3>
+                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+                                            This workspace will switch from progress to preview as soon as the model finishes the latest run.
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : remixVideoUrl ? (
+                                <div className="space-y-5">
+                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/60 aspect-video">
+                                        <video src={remixVideoUrl} controls autoPlay loop className="h-full w-full object-contain" />
+                                    </div>
+                                    <button
+                                        onClick={() => setIsPreviewModalOpen(true)}
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                    >
+                                        <Play className="h-4 w-4" />
+                                        View original
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-blue-500/30 to-purple-500/20">
+                                        <Video className="h-7 w-7 text-white" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-semibold text-white">No video yet</h3>
+                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+                                            Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.
+                                        </p>
                                     </div>
                                 </div>
                             )}
-
-                            {error && <p className="mt-4 text-xs text-red-400 text-center bg-red-400/10 py-2 rounded-lg">{error}</p>}
-                        </div>
-                    </div>
-                </div>
-
-                {outputVideo && (
-                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mt-12 bg-zinc-900/30 border border-green-500/20 rounded-3xl p-6 backdrop-blur-sm flex flex-col items-center">
-                        <h2 className="text-xl font-bold text-green-400 mb-6 flex items-center gap-2">
-                            <Sparkles className="w-5 h-5" /> Your Video is Ready!
-                        </h2>
-                        <div className="w-full max-w-3xl rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-white/10 shadow-2xl">
-                            <video src={outputVideo} controls autoPlay loop className="w-full h-full object-contain" />
-                        </div>
-                        <a href={outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="mt-6 px-8 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-full flex items-center gap-2 transition-all">
-                            <Download className="w-4 h-4" /> Download Video
-                        </a>
-                    </motion.div>
-                )}
-            </div>
+                        </StudioWorkspacePanel>
+                    </>
+                }
+            >
+            </MediaStudioShell>
 
             <AnimatePresence>
                 {isPreviewModalOpen && remixVideoUrl && (

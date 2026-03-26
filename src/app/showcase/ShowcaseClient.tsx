@@ -289,12 +289,12 @@ export default function ShowcaseClient({
     const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
 
     return (
-        <div className="min-h-screen bg-black text-white p-6 sm:p-8 font-[family-name:var(--font-geist-sans)]">
+        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
             <div className="fixed inset-0 z-0 pointer-events-none">
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(120,0,255,0.05),transparent_50%)]" />
             </div>
 
-            <div className="max-w-7xl mx-auto relative z-10 pt-20">
+            <div className="studio-shell relative z-10 pt-20">
                 <div className="mb-12">
                     <h1 className="text-4xl sm:text-5xl font-bold mb-4 tracking-tight flex items-center gap-4">
                         <TrendingUp className="w-10 h-10 text-purple-400" />

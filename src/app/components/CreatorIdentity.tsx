@@ -1,15 +1,7 @@
 import Link from 'next/link';
 
+import { getUserInitials } from '@/lib/profile';
 import type { ShowcaseCreator } from '@/lib/showcase';
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '')
-    .join('') || 'U';
-}
 
 interface CreatorIdentityProps {
   creator: ShowcaseCreator;
@@ -39,7 +31,7 @@ export default function CreatorIdentity({
           className={`${compact ? 'h-8 w-8 text-[11px]' : 'h-10 w-10 text-xs'} rounded-full border border-white/10 bg-white/5 text-zinc-200 flex items-center justify-center font-semibold`}
           aria-hidden="true"
         >
-          {getInitials(creator.name)}
+          {getUserInitials(creator.name)}
         </div>
       )}
       <div className="min-w-0">

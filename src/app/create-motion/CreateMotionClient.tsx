@@ -6,7 +6,14 @@ import Link from 'next/link';
 import { Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
-import { GeneratorPageHeader } from '@/app/components/CreatorStudio';
+import {
+    GeneratorPageHeader,
+    MediaStudioShell,
+    StudioControlCard,
+    StudioRemixNotice,
+    StudioRunPanel,
+    StudioWorkspacePanel,
+} from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import localforage from 'localforage';
 import { useAuth } from '@/app/components/AuthProvider';
@@ -393,441 +400,578 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         return match ? parseInt(match[1]) : 0;
     };
 
+    const creditsPerSecond = selectedModel === 'kling-3.0'
+        ? (mode === '1080p' ? 20 : 12)
+        : (mode === '1080p' ? 9 : 6);
+    const estimatedCost = duration > 0 ? Math.ceil(duration * creditsPerSecond) : 0;
+    const insufficientCredits = userCredits !== null && estimatedCost > 0 && userCredits < estimatedCost;
+    const canGenerate = Boolean(characterImage || characterImageFile)
+        && Boolean(referenceVideo || referenceVideoFile)
+        && duration > 0
+        && !videoError;
+
+    const workspaceTitle = outputVideo
+        ? 'Latest motion result'
+        : isGenerating
+            ? 'Animating your character'
+            : (characterImage || referenceVideo)
+                ? 'Current motion setup'
+                : remixVideoUrl
+                    ? 'Remix motion loaded'
+                    : 'Ready to transfer motion';
+
+    const workspaceDescription = outputVideo
+        ? 'Your newest motion render stays here until you start another run.'
+        : isGenerating
+            ? 'Track the active generation here while the model maps movement and finishes the clip.'
+            : (characterImage || referenceVideo)
+                ? 'Review the uploaded character and reference before you generate.'
+                : remixVideoUrl
+                    ? 'Use the original motion as context while you adjust prompt, orientation, and quality.'
+                    : 'Upload a character still and a motion reference. The active run and latest result will take over this workspace.';
+
     return (
-        <div className="min-h-screen bg-black px-6 py-6 text-white sm:px-8 sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <div className="max-w-5xl mx-auto">
-                <GeneratorPageHeader
-                    currentToolId="motion"
-                    title="Create motion"
-                    eyebrow={`Creator studio / ${model.displayName}`}
-                    description="Start with motion when you already have a character or still visual and want believable creator-style movement quickly."
-                    credits={userCredits}
-                />
+        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
+            <div className="fixed inset-0 z-0 pointer-events-none">
+                <div className="absolute top-[8%] left-[-10%] h-[40%] w-[40%] rounded-full bg-violet-900/15 blur-[120px] mix-blend-screen" />
+                <div className="absolute bottom-[-10%] right-[-10%] h-[44%] w-[44%] rounded-full bg-fuchsia-900/10 blur-[140px] mix-blend-screen" />
+            </div>
 
-                {/* Remix Banner */}
-                <AnimatePresence>
-                    {remixId && !isRemixLoading && (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
-                            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center justify-between overflow-hidden backdrop-blur-md"
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-purple-500/20 rounded-full">
-                                    <Sparkles className="w-5 h-5 text-purple-400" />
-                                </div>
-                                <div>
-                                    <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
-                                    <p className="text-xs text-purple-300/80">
-                                        Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}.
-                                    </p>
-                                </div>
-                            </div>
-                            
-                            {remixVideoUrl && (
-                                <a
-                                    href={remixVideoUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded-xl transition-colors text-sm font-medium text-purple-300"
-                                >
-                                    <Play className="w-4 h-4" />
-                                    View Original
-                                </a>
+            <MediaStudioShell
+                currentToolId="motion"
+                header={
+                    <GeneratorPageHeader
+                        currentToolId="motion"
+                        title="Create motion"
+                        eyebrow={`Creator studio / ${model.displayName}`}
+                        description="Upload the character, match it to reference movement, and let the workspace track the active motion render from setup to final clip."
+                        credits={userCredits}
+                        showPathSwitcher={false}
+                    />
+                }
+                controls={
+                    <>
+                        <AnimatePresence>
+                            {remixId && !isRemixLoading && (
+                                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioRemixNotice
+                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}
+                                        action={
+                                            remixVideoUrl ? (
+                                                <a
+                                                    href={remixVideoUrl}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                >
+                                                    <Play className="h-4 w-4" />
+                                                    View original
+                                                </a>
+                                            ) : undefined
+                                        }
+                                    />
+                                </motion.div>
                             )}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                        </AnimatePresence>
 
-                {/* ─── Model Selector Dropdown ───────────────────────────────────── */}
-                <div className="mb-8 relative" ref={dropdownRef}>
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3">Model</p>
-                    <button
-                        onClick={() => setIsModelDropdownOpen(prev => !prev)}
-                        className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
-                    >
-                        <div className="flex items-center gap-3">
-                            <Zap className="w-4 h-4 text-white" />
-                            <div className="text-left">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-sm font-bold text-white">{model.displayName}</span>
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${model.badgeColor} text-white`}>
-                                        {model.badge}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-zinc-500 mt-0.5">{model.description}</p>
-                            </div>
-                        </div>
-                        <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    <AnimatePresence>
-                        {isModelDropdownOpen && (
-                            <motion.div
-                                initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                                exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                transition={{ duration: 0.15 }}
-                                className="absolute z-50 mt-2 w-full bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
-                                style={{ transformOrigin: 'top' }}
-                            >
-                                {(Object.values(MOTION_MODELS) as typeof MOTION_MODELS[ModelId][]).map((m) => {
-                                    const isActive = selectedModel === m.id;
-                                    return (
-                                        <button
-                                            key={m.id}
-                                            onClick={() => { setSelectedModel(m.id as ModelId); setIsModelDropdownOpen(false); }}
-                                            className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
-                                        >
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>{m.displayName}</span>
-                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${m.badgeColor} text-white`}>{m.badge}</span>
-                                                </div>
-                                                <p className="text-xs text-zinc-500 mt-0.5">{m.description}</p>
-                                                <div className="flex flex-wrap gap-1.5 mt-2">
-                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                        Max {m.maxVideoDuration}s video
-                                                    </span>
-                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                        720p / 1080p
-                                                    </span>
-                                                </div>
+                        <motion.div
+                            initial={{ opacity: 0, y: 16 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="relative"
+                            ref={dropdownRef}
+                        >
+                            <StudioControlCard title="Motion model" description="Choose the engine and quality ceiling for this run.">
+                                <button
+                                    onClick={() => setIsModelDropdownOpen((prev) => !prev)}
+                                    className="w-full flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-left transition hover:border-white/15 hover:bg-black/55"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-violet-400/20 bg-violet-400/10 text-violet-100">
+                                            <Zap className="h-4 w-4" />
+                                        </div>
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm font-semibold text-white">{model.displayName}</span>
+                                                <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white ${model.badgeColor}`}>
+                                                    {model.badge}
+                                                </span>
                                             </div>
-                                            {isActive && <Check className="w-4 h-4 text-purple-400 shrink-0" />}
-                                        </button>
-                                    );
-                                })}
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
-                {/* Character Image Upload */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="flex flex-col gap-4 bg-zinc-900/30 p-6 rounded-3xl border border-white/5 backdrop-blur-sm"
-                >
-                    <div className="flex flex-col gap-1">
-                        <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2 mt-1">
-                            <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center text-[10px] border border-purple-500/30">1</span>
-                            Upload Character
-                        </h2>
-                        <p className="text-sm text-zinc-500 mb-2">High-res, full body photo works best.</p>
-                    </div>
-
-                    <label
-                        className={`group flex flex-col items-center justify-center w-full h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingImage
-                            ? 'border-purple-400 bg-purple-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
-                            : 'border-zinc-700/50 hover:border-purple-500/50 hover:bg-purple-500/5'
-                            }`}
-                        onDragOver={(e) => handleDragOver(e, setIsDraggingImage)}
-                        onDragLeave={(e) => handleDragLeave(e, setIsDraggingImage)}
-                        onDrop={handleImageDrop}
-                    >
-                        {characterImage ? (
-                            <div className="w-full h-full flex items-center justify-center bg-black/50">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={characterImage} alt="Character" className="w-full h-full object-contain" />
-                                <button onClick={handleClearImage} className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-red-500/80 text-white rounded-full backdrop-blur-md transition-all shadow-lg hover:rotate-90">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="flex flex-col items-center gap-3 text-zinc-500">
-                                <Upload className={`w-8 h-8 transition-colors ${isDraggingImage ? 'text-purple-400' : ''}`} />
-                                <span className="text-sm">{isDraggingImage ? 'Drop image here' : 'Click or drag & drop image'}</span>
-                            </div>
-                        )}
-                        <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
-                    </label>
-                    <p className="text-xs text-zinc-600 mt-1">Supported formats: JPG, PNG, WEBP &nbsp;|&nbsp; Max size: 10MB &nbsp;|&nbsp; Min 300px</p>
-                </motion.div>
-
-                {/* Reference Video Upload */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.1 }}
-                    className="flex flex-col gap-4 bg-zinc-900/30 p-6 rounded-3xl border border-white/5 backdrop-blur-sm"
-                >
-                    <div className="flex flex-col gap-1">
-                        <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2 mt-1">
-                            <span className="w-5 h-5 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center text-[10px] border border-pink-500/30">2</span>
-                            Reference Video
-                        </h2>
-                        <p className="text-sm text-zinc-500 mb-2">The desired motion or action.</p>
-                    </div>
-
-                    <label
-                        className={`group flex flex-col items-center justify-center w-full h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingVideo
-                            ? 'border-pink-400 bg-pink-500/10 shadow-[0_0_30px_-5px_rgba(236,72,153,0.3)]'
-                            : 'border-zinc-700/50 hover:border-pink-500/50 hover:bg-pink-500/5'
-                            }`}
-                        onDragOver={(e) => handleDragOver(e, setIsDraggingVideo)}
-                        onDragLeave={(e) => handleDragLeave(e, setIsDraggingVideo)}
-                        onDrop={handleVideoDrop}
-                    >
-                        {referenceVideo ? (
-                            <div className="w-full h-full flex items-center justify-center bg-black/50 relative">
-                                <video
-                                    src={referenceVideo}
-                                    className="w-full h-full object-contain"
-                                    controls autoPlay loop muted
-                                    onLoadedMetadata={handleVideoMetadata}
-                                />
-                                <button onClick={handleClearVideo} className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-red-500/80 text-white rounded-full backdrop-blur-md transition-all shadow-lg hover:rotate-90 z-10">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="flex flex-col items-center gap-3 text-zinc-500">
-                                <Upload className={`w-8 h-8 transition-colors ${isDraggingVideo ? 'text-pink-400' : ''}`} />
-                                <span className="text-sm">{isDraggingVideo ? 'Drop video here' : 'Click or drag & drop video'}</span>
-                            </div>
-                        )}
-                        <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
-                    </label>
-                    <p className="text-xs text-zinc-600 mt-1">MP4/MOV &nbsp;|&nbsp; Max 100MB &nbsp;|&nbsp; Max {model.maxVideoDuration}s</p>
-                    {videoError && (
-                        <div className="mt-2 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl">
-                            <p className="text-sm text-red-400">{videoError}</p>
-                        </div>
-                    )}
-                </motion.div>
-            </div>
-
-            {/* Settings */}
-            <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.12 }}
-                className="mt-8 grid md:grid-cols-2 gap-8 max-w-5xl mx-auto"
-            >
-                <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-8 backdrop-blur-sm">
-                    <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Character Orientation</h3>
-                    <div className="flex gap-4">
-                        {(['video', 'image'] as const).map((opt) => (
-                            <button
-                                key={opt}
-                                onClick={() => setCharacterOrientation(opt)}
-                                className={`flex-1 py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-300 ${characterOrientation === opt
-                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50 shadow-[0_0_15px_-3px_rgba(168,85,247,0.3)]'
-                                    : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                    }`}
-                            >
-                                {opt === 'video' ? 'Follow Video' : 'Follow Image'}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-8 backdrop-blur-sm">
-                    <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Quality Mode</h3>
-                    <div className="flex gap-4">
-                        <button
-                            onClick={() => setMode('720p')}
-                            className={`flex-1 py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-300 ${mode === '720p'
-                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50 shadow-[0_0_15px_-3px_rgba(168,85,247,0.3)]'
-                                : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                }`}
-                        >
-                            Standard (720p)
-                        </button>
-                        <button
-                            onClick={() => setMode('1080p')}
-                            className={`flex-1 relative py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-300 overflow-hidden group ${mode === '1080p'
-                                ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-pink-300 border border-pink-500/50 shadow-[0_0_15px_-3px_rgba(236,72,153,0.3)]'
-                                : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                }`}
-                        >
-                            <span className="relative z-10">Pro (1080p)</span>
-                            {mode !== '1080p' && <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />}
-                        </button>
-                    </div>
-                </div>
-
-                <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-8 md:col-span-2 backdrop-blur-sm">
-                    <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Prompt Configuration</h3>
-                    <EnhancePromptButton
-                        prompt={prompt}
-                        onEnhanced={(text) => setPrompt(text)}
-                        onCreditsUpdate={updateCredits}
-                        medium="motion"
-                        selectedModel={selectedModel}
-                        context={{
-                            modelId: selectedModel,
-                            characterOrientation,
-                            mode,
-                            hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
-                        }}
-                        disabled={isGenerating}
-                    />
-                    <textarea
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        placeholder="e.g., The cartoon character is dancing happily..."
-                        maxLength={2500}
-                        className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-purple-500/50 focus:ring-4 focus:ring-purple-500/10 outline-none resize-y min-h-[120px] placeholder:text-zinc-600 transition-all text-sm leading-relaxed"
-                    />
-                    <p className="text-xs text-zinc-600 mt-2">{prompt.length}/2500 characters</p>
-                </div>
-            </motion.div>
-
-            {/* Duration and Cost Display */}
-            <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15 }}
-                className="mt-8 flex flex-col gap-4 items-center"
-            >
-                {(() => {
-                    const creditsPerSec = selectedModel === 'kling-3.0' 
-                        ? (mode === '1080p' ? 20 : 12) 
-                        : (mode === '1080p' ? 9 : 6);
-                    const estimatedCost = duration > 0 ? Math.ceil(duration * creditsPerSec) : 0;
-                    
-                    return duration > 0 ? (
-                        <div className="bg-purple-900/10 border border-purple-500/20 rounded-2xl p-6 text-center w-full max-w-md shadow-[0_0_30px_-10px_rgba(168,85,247,0.15)] flex flex-col items-center justify-center">
-                            <div className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 mb-1">
-                                {estimatedCost} Credits
-                            </div>
-                            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Estimated Cost</p>
-                            <div className="h-[1px] w-12 bg-zinc-800 mb-2" />
-                            <p className="text-sm text-zinc-400">
-                                Based on {duration.toFixed(1)}s video at {creditsPerSec} credits/sec
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="bg-zinc-900/20 border border-white/5 rounded-2xl p-6 text-center w-full max-w-md backdrop-blur-sm">
-                            <p className="text-zinc-500 text-sm">Upload a video to see cost estimation.</p>
-                        </div>
-                    );
-                })()}
-            </motion.div>
-
-            {/* Generate Button and Progress Bar */}
-            <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-                className="mt-8 flex flex-col items-center gap-4 w-full max-w-2xl mx-auto"
-            >
-                {(() => {
-                    const creditsPerSec = selectedModel === 'kling-3.0' 
-                        ? (mode === '1080p' ? 20 : 12) 
-                        : (mode === '1080p' ? 9 : 6);
-                    const estimatedCost = duration > 0 ? Math.ceil(duration * creditsPerSec) : 0;
-                    const hasEnoughCredits = userCredits !== null && estimatedCost > 0 && userCredits >= estimatedCost;
-                    const insufficientCredits = userCredits !== null && estimatedCost > 0 && userCredits < estimatedCost;
-
-                    return (
-                        <>
-                            {insufficientCredits ? (
-                                <div className="flex flex-col items-center gap-4 px-6 py-6 bg-gradient-to-b from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-2xl w-full max-w-md">
-                                    <div className="flex items-center gap-2">
-                                        <Sparkles className="w-5 h-5 text-yellow-400" />
-                                        <p className="text-base font-semibold text-white">Not enough credits</p>
+                                            <p className="mt-1 text-sm text-zinc-400">{model.description}</p>
+                                        </div>
                                     </div>
-                                    <p className="text-sm text-zinc-400 text-center">This video costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits} credits</strong>.</p>
-                                    <Link href="/pricing" className="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-full transition-all flex items-center gap-2 hover:opacity-90 hover:scale-105 font-semibold text-sm shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
-                                        <Sparkles className="w-4 h-4" />Top Up Credits
-                                    </Link>
+                                    <ChevronDown className={`h-4 w-4 text-zinc-400 transition-transform ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
+                                </button>
+
+                                <AnimatePresence>
+                                    {isModelDropdownOpen && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
+                                            animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                                            exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
+                                            transition={{ duration: 0.15 }}
+                                            className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] backdrop-blur-xl"
+                                            style={{ transformOrigin: 'top' }}
+                                        >
+                                            {(Object.values(MOTION_MODELS) as typeof MOTION_MODELS[ModelId][]).map((motionModel) => {
+                                                const isActive = selectedModel === motionModel.id;
+
+                                                return (
+                                                    <button
+                                                        key={motionModel.id}
+                                                        onClick={() => {
+                                                            setSelectedModel(motionModel.id as ModelId);
+                                                            setIsModelDropdownOpen(false);
+                                                        }}
+                                                        className={`flex w-full items-center gap-3 px-5 py-4 text-left transition ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
+                                                    >
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className={`text-sm font-semibold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                                    {motionModel.displayName}
+                                                                </span>
+                                                                <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white ${motionModel.badgeColor}`}>
+                                                                    {motionModel.badge}
+                                                                </span>
+                                                            </div>
+                                                            <p className="mt-1 text-sm text-zinc-400">{motionModel.description}</p>
+                                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                                                    Max {motionModel.maxVideoDuration}s
+                                                                </span>
+                                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                                                    720p / 1080p
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        {isActive ? <Check className="h-4 w-4 shrink-0 text-violet-300" /> : null}
+                                                    </button>
+                                                );
+                                            })}
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </StudioControlCard>
+                        </motion.div>
+
+                        <StudioControlCard
+                            title="Character image"
+                            description="A clear still works best. The model uses this as the identity anchor."
+                            meta={<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Step 1</span>}
+                        >
+                            <label
+                                className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingImage
+                                    ? 'border-violet-400 bg-violet-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
+                                    : 'border-zinc-700/50 hover:border-violet-500/50 hover:bg-violet-500/5'
+                                    }`}
+                                onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
+                                onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
+                                onDrop={handleImageDrop}
+                            >
+                                {characterImage ? (
+                                    <div className="relative h-full w-full bg-black/50">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img src={characterImage} alt="Character" className="h-full w-full object-contain" />
+                                        <button
+                                            onClick={handleClearImage}
+                                            className="absolute right-4 top-4 rounded-full bg-black/60 p-2 text-white transition hover:bg-red-500/80"
+                                        >
+                                            <X className="h-5 w-5" />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
+                                        <Upload className={`h-8 w-8 transition-colors ${isDraggingImage ? 'text-violet-300' : ''}`} />
+                                        <div>
+                                            <p className="text-sm font-medium text-zinc-300">
+                                                {isDraggingImage ? 'Drop image here' : 'Click or drag in the character image'}
+                                            </p>
+                                            <p className="mt-1 text-xs text-zinc-500">JPG, PNG, WEBP. Use a clean full-body frame when possible.</p>
+                                        </div>
+                                    </div>
+                                )}
+                                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                            </label>
+                        </StudioControlCard>
+
+                        <StudioControlCard
+                            title="Reference video"
+                            description="This clip drives the movement timing and overall energy."
+                            meta={<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Step 2</span>}
+                        >
+                            <div className="space-y-4">
+                                <label
+                                    className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingVideo
+                                        ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-[0_0_30px_-5px_rgba(217,70,239,0.3)]'
+                                        : 'border-zinc-700/50 hover:border-fuchsia-500/50 hover:bg-fuchsia-500/5'
+                                        }`}
+                                    onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
+                                    onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
+                                    onDrop={handleVideoDrop}
+                                >
+                                    {referenceVideo ? (
+                                        <div className="relative h-full w-full bg-black/50">
+                                            <video
+                                                src={referenceVideo}
+                                                className="h-full w-full object-contain"
+                                                controls
+                                                autoPlay
+                                                loop
+                                                muted
+                                                onLoadedMetadata={handleVideoMetadata}
+                                            />
+                                            <button
+                                                onClick={handleClearVideo}
+                                                className="absolute right-4 top-4 z-10 rounded-full bg-black/60 p-2 text-white transition hover:bg-red-500/80"
+                                            >
+                                                <X className="h-5 w-5" />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
+                                            <Upload className={`h-8 w-8 transition-colors ${isDraggingVideo ? 'text-fuchsia-300' : ''}`} />
+                                            <div>
+                                                <p className="text-sm font-medium text-zinc-300">
+                                                    {isDraggingVideo ? 'Drop video here' : 'Click or drag in the motion reference'}
+                                                </p>
+                                                <p className="mt-1 text-xs text-zinc-500">MP4 or MOV, up to 100MB and {model.maxVideoDuration}s.</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
+                                </label>
+
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-white/8 bg-black/30 px-4 py-3 text-sm text-zinc-400">
+                                    <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
+                                    <span>Limit: {model.maxVideoDuration}s</span>
                                 </div>
-                            ) : (
-                                <>
+
+                                {videoError ? (
+                                    <div className="rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
+                                        <p className="text-sm text-rose-300">{videoError}</p>
+                                    </div>
+                                ) : null}
+                            </div>
+                        </StudioControlCard>
+
+                        <StudioControlCard title="Prompt" description="Guide the performance, energy, and cleanup details for the transfer.">
+                            <EnhancePromptButton
+                                prompt={prompt}
+                                onEnhanced={(text) => setPrompt(text)}
+                                onCreditsUpdate={updateCredits}
+                                medium="motion"
+                                selectedModel={selectedModel}
+                                context={{
+                                    modelId: selectedModel,
+                                    characterOrientation,
+                                    mode,
+                                    hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
+                                }}
+                                disabled={isGenerating}
+                            />
+                            <textarea
+                                value={prompt}
+                                onChange={(event) => setPrompt(event.target.value)}
+                                placeholder="Describe the kind of movement, pacing, and constraints you want to preserve."
+                                maxLength={2500}
+                                className="mt-3 min-h-[140px] w-full resize-y rounded-2xl border border-white/10 bg-black/50 p-5 text-sm leading-relaxed text-white outline-none transition focus:border-violet-500/50 focus:ring-4 focus:ring-violet-500/10"
+                            />
+                            <div className="mt-3 flex justify-end text-xs text-zinc-500">{prompt.length}/2500</div>
+                        </StudioControlCard>
+
+                        <StudioControlCard title="Output settings" description="Set how closely the result follows the reference and the fidelity you want.">
+                            <div className="grid gap-5 sm:grid-cols-2">
+                                <div>
+                                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Character orientation</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {(['video', 'image'] as const).map((option) => (
+                                            <button
+                                                key={option}
+                                                onClick={() => setCharacterOrientation(option)}
+                                                className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${characterOrientation === option
+                                                    ? 'border border-violet-500/30 bg-violet-500/15 text-violet-100'
+                                                    : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
+                                                    }`}
+                                            >
+                                                {option === 'video' ? 'Follow video' : 'Favor image'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality mode</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {(['720p', '1080p'] as const).map((quality) => (
+                                            <button
+                                                key={quality}
+                                                onClick={() => setMode(quality)}
+                                                className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${mode === quality
+                                                    ? 'border border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-100'
+                                                    : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
+                                                    }`}
+                                            >
+                                                {quality === '720p' ? 'Standard 720p' : 'Pro 1080p'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </StudioControlCard>
+                    </>
+                }
+                workspace={
+                    <>
+                        <StudioRunPanel
+                            title={isGenerating ? 'Motion run in progress' : 'Ready to animate'}
+                            summary={
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Model</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{model.displayName}</div>
+                                    </div>
+                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{estimatedCost} credits</div>
+                                    </div>
+                                </div>
+                            }
+                            details={
+                                <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Reference</div>
+                                        <div className="mt-1 text-zinc-200">{duration > 0 ? `${duration.toFixed(1)}s` : 'Not loaded'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality</div>
+                                        <div className="mt-1 text-zinc-200">{mode}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Orientation</div>
+                                        <div className="mt-1 text-zinc-200">{characterOrientation === 'video' ? 'Follow video' : 'Favor image'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
+                                        <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
+                                    </div>
+                                </div>
+                            }
+                            action={
+                                insufficientCredits ? (
+                                    <div className="space-y-4">
+                                        <div className="rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4">
+                                            <p className="text-sm font-semibold text-white">Not enough credits</p>
+                                            <p className="mt-2 text-sm text-zinc-400">
+                                                This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
+                                            </p>
+                                        </div>
+                                        <Link href="/pricing" className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90">
+                                            <Sparkles className="h-4 w-4" />
+                                            Top Up Credits
+                                        </Link>
+                                    </div>
+                                ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={(!characterImage && !characterImageFile) || (!referenceVideo && !referenceVideoFile) || isGenerating || !hasEnoughCredits}
-                                        className="flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-full font-medium text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed w-full justify-center"
+                                        disabled={!canGenerate || isGenerating}
+                                        className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-4 text-base font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (
-                                            <><Loader2 className="w-5 h-5 animate-spin" />Generating...</>
+                                            <>
+                                                <Loader2 className="h-5 w-5 animate-spin" />
+                                                Generating...
+                                            </>
                                         ) : (
-                                            <><Sparkles className="w-5 h-5" />Generate Video ({duration > 0 ? `${Math.ceil(duration)}s` : ''})</>
+                                            <>
+                                                <Sparkles className="h-5 w-5" />
+                                                Generate motion
+                                            </>
                                         )}
                                     </button>
-                                    {duration > 0 && !isGenerating && (
-                                        <p className="text-xs text-zinc-500">Cost: {estimatedCost} Credits</p>
+                                )
+                            }
+                            status={
+                                <>
+                                    {isGenerating && generationStatus ? (
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between text-sm text-zinc-300">
+                                                <span>{generationStatus}</span>
+                                                <span>{getProgressPercentage()}%</span>
+                                            </div>
+                                            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                                                <motion.div
+                                                    className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500"
+                                                    initial={{ width: '0%' }}
+                                                    animate={{ width: `${getProgressPercentage()}%` }}
+                                                    transition={{ duration: 0.5 }}
+                                                />
+                                            </div>
+                                            <p className="text-xs text-zinc-500">Estimated time: about 3 to 5 minutes.</p>
+                                        </div>
+                                    ) : error === '__TIMEOUT_INFO__' ? (
+                                        <div className="space-y-2">
+                                            <p className="text-sm font-semibold text-teal-300">Your video is still being generated.</p>
+                                            <p className="text-sm text-zinc-400">
+                                                This run is taking longer than usual. It will appear in{' '}
+                                                <Link href="/creations" className="text-violet-300 underline underline-offset-4 hover:text-violet-200">
+                                                    My Creations
+                                                </Link>{' '}
+                                                once it finishes.
+                                            </p>
+                                        </div>
+                                    ) : videoError ? (
+                                        <p className="text-sm text-rose-300">{videoError}</p>
+                                    ) : error ? (
+                                        <p className="text-sm text-rose-300">{error}</p>
+                                    ) : (
+                                        <p className="text-sm text-zinc-500">Upload both inputs, confirm the orientation, and the latest motion render will replace this workspace.</p>
                                     )}
                                 </>
+                            }
+                            footer={
+                                <Link
+                                    href="/creations"
+                                    className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
+                                >
+                                    View My Creations
+                                    <Download className="h-4 w-4" />
+                                </Link>
+                            }
+                        />
+
+                        <StudioWorkspacePanel
+                            title={workspaceTitle}
+                            description={workspaceDescription}
+                            action={
+                                <Link
+                                    href="/creations"
+                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
+                                >
+                                    My Creations
+                                    <Download className="h-4 w-4" />
+                                </Link>
+                            }
+                        >
+                            {outputVideo ? (
+                                <div className="space-y-5">
+                                    <div className="aspect-video overflow-hidden rounded-[26px] border border-white/8 bg-black/60">
+                                        <video src={outputVideo} controls autoPlay loop className="h-full w-full object-contain" />
+                                    </div>
+                                    <div className="flex flex-wrap gap-3">
+                                        <a
+                                            href={outputVideo}
+                                            download="generated-video.mp4"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
+                                        >
+                                            <Download className="h-4 w-4" />
+                                            Download video
+                                        </a>
+                                        <button
+                                            onClick={() => {
+                                                setOutputVideo(null);
+                                                setError(null);
+                                                setGenerationStatus(null);
+                                            }}
+                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                        >
+                                            Start another run
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : isGenerating ? (
+                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-violet-500/30 to-fuchsia-500/20">
+                                        <Loader2 className="h-7 w-7 animate-spin text-white" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-semibold text-white">Transferring the motion</h3>
+                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+                                            The workspace will switch from progress to preview as soon as the current render finishes.
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : (characterImage || referenceVideo) ? (
+                                <div className="space-y-5">
+                                    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                                        <div className="overflow-hidden rounded-[24px] border border-white/8 bg-black/50">
+                                            {characterImage ? (
+                                                <>
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img src={characterImage} alt="Character preview" className="h-full w-full min-h-[240px] object-contain" />
+                                                </>
+                                            ) : (
+                                                <div className="flex min-h-[240px] items-center justify-center text-sm text-zinc-500">
+                                                    Character preview will appear here.
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="overflow-hidden rounded-[24px] border border-white/8 bg-black/50">
+                                            {referenceVideo ? (
+                                                <video
+                                                    src={referenceVideo}
+                                                    controls
+                                                    autoPlay
+                                                    loop
+                                                    muted
+                                                    className="h-full w-full min-h-[240px] object-contain"
+                                                />
+                                            ) : (
+                                                <div className="flex min-h-[240px] items-center justify-center text-sm text-zinc-500">
+                                                    Reference video preview will appear here.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="grid gap-3 sm:grid-cols-3">
+                                        <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt status</div>
+                                            <div className="mt-2 text-sm text-zinc-200">{prompt.trim() ? 'Ready' : 'Add prompt'}</div>
+                                        </div>
+                                        <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Orientation</div>
+                                            <div className="mt-2 text-sm text-zinc-200">{characterOrientation === 'video' ? 'Follow video' : 'Favor image'}</div>
+                                        </div>
+                                        <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality</div>
+                                            <div className="mt-2 text-sm text-zinc-200">{mode}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : remixVideoUrl ? (
+                                <div className="space-y-5">
+                                    <div className="aspect-video overflow-hidden rounded-[26px] border border-white/8 bg-black/60">
+                                        <video src={remixVideoUrl} controls autoPlay loop className="h-full w-full object-contain" />
+                                    </div>
+                                    <a
+                                        href={remixVideoUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                    >
+                                        <Play className="h-4 w-4" />
+                                        View original
+                                    </a>
+                                </div>
+                            ) : (
+                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-violet-500/30 to-fuchsia-500/20">
+                                        <Play className="h-7 w-7 text-white" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-semibold text-white">No motion run yet</h3>
+                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+                                            Add the character image, the motion reference, and the prompt. The latest rendered clip will take over this workspace.
+                                        </p>
+                                    </div>
+                                </div>
                             )}
-                        </>
-                    );
-                })()}
-
-                {/* Progress Bar */}
-                {isGenerating && generationStatus && (
-                    <div className="w-full mt-4 space-y-2">
-                        <div className="flex justify-between text-sm text-zinc-400 px-1">
-                            <span>{generationStatus}</span>
-                            <span>{getProgressPercentage()}%</span>
-                        </div>
-                        <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                            <motion.div
-                                className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
-                                initial={{ width: "0%" }}
-                                animate={{ width: `${getProgressPercentage()}%` }}
-                                transition={{ duration: 0.5 }}
-                            />
-                        </div>
-                        <p className="text-xs text-zinc-600 text-center pt-2">Estimated time: ~3-5 minutes. You can safely close or refresh this page.</p>
-                    </div>
-                )}
-
-                {error === '__TIMEOUT_INFO__' && (
-                    <div className="flex flex-col items-center gap-3 px-5 py-4 bg-teal-500/10 border border-teal-500/20 rounded-xl mt-4 text-center">
-                        <p className="text-sm text-teal-300 font-semibold">⏳ Your video is still being generated!</p>
-                        <p className="text-xs text-zinc-400">This generation is taking longer than usual. Your video will automatically appear in <Link href="/creations" className="text-purple-400 underline hover:text-purple-300">My Creations</Link> once it&apos;s ready.</p>
-                    </div>
-                )}
-
-                {error && error !== '__TIMEOUT_INFO__' && !error.toLowerCase().includes('insufficient') && (
-                    <div className="flex flex-col items-center gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl mt-4">
-                        <p className="text-sm text-red-400 text-center">{error}</p>
-                    </div>
-                )}
-
-                {error && error.toLowerCase().includes('insufficient') && (
-                    <div className="flex flex-col items-center gap-4 px-6 py-6 bg-gradient-to-b from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-2xl mt-4 max-w-md w-full">
-                        <div className="flex items-center gap-2">
-                            <Sparkles className="w-5 h-5 text-yellow-400" />
-                            <p className="text-base font-semibold text-white">You&apos;re out of credits!</p>
-                        </div>
-                        <p className="text-sm text-zinc-400 text-center">Top up your credits to continue creating amazing videos.</p>
-                        <Link href="/pricing" className="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-full transition-all flex items-center gap-2 hover:opacity-90 hover:scale-105 font-semibold text-sm shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)]">
-                            <Sparkles className="w-4 h-4" />Top Up Credits
-                        </Link>
-                    </div>
-                )}
-            </motion.div>
-
-            {/* Output Video */}
-            {outputVideo && (
-                <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="mt-12 flex flex-col items-center gap-6"
-                >
-                    <h2 className="text-xl font-bold text-green-400">🎉 Your Video is Ready!</h2>
-                    <div className="w-full max-w-lg rounded-2xl overflow-hidden border border-zinc-800">
-                        <video src={outputVideo} controls autoPlay loop className="w-full" />
-                    </div>
-                    <a
-                        href={outputVideo}
-                        download="generated-video.mp4"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 rounded-full font-medium transition-colors"
-                    >
-                        <Download className="w-5 h-5" />Download Video
-                    </a>
-                </motion.div>
-            )}
+                        </StudioWorkspacePanel>
+                    </>
+                }
+            />
         </div>
     );
 }

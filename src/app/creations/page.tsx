@@ -195,7 +195,7 @@ export default function CreationsPage() {
                 <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-pink-900/10 blur-[120px] rounded-full mix-blend-screen" />
             </div>
 
-            <div className="relative z-10 max-w-7xl mx-auto px-6 py-8">
+            <div className="studio-shell relative z-10 py-8">
                 {/* Header */}
                 <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-4">

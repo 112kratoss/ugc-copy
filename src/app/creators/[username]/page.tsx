@@ -37,8 +37,8 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
   }
 
   return (
-    <div className="min-h-screen bg-black px-6 py-10 text-white sm:px-8">
-      <div className="mx-auto max-w-6xl">
+    <div className="min-h-screen bg-black py-10 text-white">
+      <div className="studio-shell">
         <div className="overflow-hidden rounded-[32px] border border-white/5 bg-zinc-900/40 shadow-[0_0_50px_-30px_rgba(168,85,247,0.35)] backdrop-blur-sm">
           {/* Cover Banner */}
           <div className="h-48 w-full bg-zinc-800 relative">

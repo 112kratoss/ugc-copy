@@ -61,6 +61,8 @@ const ACCENT_STYLES: Record<
   },
 };
 
+const MEDIA_TOOL_IDS: CreatorToolId[] = ['image', 'video', 'motion'];
+
 interface SectionHeadingProps {
   eyebrow: string;
   title: string;
@@ -239,12 +241,20 @@ export function CreatorToolCard({
 
 interface GeneratorQuickSwitchProps {
   currentToolId: CreatorToolId;
+  toolIds?: CreatorToolId[];
 }
 
-export function GeneratorQuickSwitch({ currentToolId }: GeneratorQuickSwitchProps) {
+export function GeneratorQuickSwitch({
+  currentToolId,
+  toolIds,
+}: GeneratorQuickSwitchProps) {
+  const visibleTools = (toolIds ?? CREATOR_TOOLS.map((tool) => tool.id)).map((toolId) =>
+    getCreatorTool(toolId)
+  );
+
   return (
     <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
-      {CREATOR_TOOLS.map((tool) => {
+      {visibleTools.map((tool) => {
         const isActive = tool.id === currentToolId;
         const Icon = tool.icon;
 
@@ -276,6 +286,7 @@ interface GeneratorPageHeaderProps {
   description: string;
   credits: number | null;
   backHref?: string;
+  showPathSwitcher?: boolean;
 }
 
 export function GeneratorPageHeader({
@@ -285,6 +296,7 @@ export function GeneratorPageHeader({
   description,
   credits,
   backHref = '/create',
+  showPathSwitcher = true,
 }: GeneratorPageHeaderProps) {
   const tool = getCreatorTool(currentToolId);
   const theme = ACCENT_STYLES[tool.accent];
@@ -321,11 +333,242 @@ export function GeneratorPageHeader({
           ) : null}
         </div>
 
-        <div className="space-y-3 rounded-[24px] border border-white/8 bg-black/30 p-4">
-          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Switch creator path</div>
-          <GeneratorQuickSwitch currentToolId={currentToolId} />
-        </div>
+        {showPathSwitcher ? (
+          <div className="space-y-3 rounded-[24px] border border-white/8 bg-black/30 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+              Switch creator path
+            </div>
+            <GeneratorQuickSwitch currentToolId={currentToolId} />
+          </div>
+        ) : null}
       </div>
     </section>
+  );
+}
+
+function StudioPanel({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={clsx(
+        'rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)]',
+        className
+      )}
+    >
+      {children}
+    </section>
+  );
+}
+
+export function MediaStudioRail({
+  currentToolId,
+}: {
+  currentToolId: CreatorToolId;
+}) {
+  return (
+    <aside className="hidden lg:flex lg:flex-col lg:gap-3">
+      <StudioPanel className="sticky top-24 p-3">
+        <Link
+          href="/create"
+          className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-[20px] border border-white/10 bg-white/[0.03] px-3 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Hub
+        </Link>
+
+        <div className="flex flex-col gap-2">
+          {MEDIA_TOOL_IDS.map((toolId) => {
+            const tool = getCreatorTool(toolId);
+            const Icon = tool.icon;
+            const theme = ACCENT_STYLES[tool.accent];
+            const isActive = tool.id === currentToolId;
+
+            return (
+              <Link
+                key={tool.id}
+                href={tool.href}
+                prefetch={tool.id === 'video' ? false : undefined}
+                className={clsx(
+                  'group flex flex-col items-center gap-2 rounded-[24px] border px-3 py-4 text-center transition',
+                  isActive
+                    ? 'border-white/12 bg-white/[0.06] text-white'
+                    : 'border-white/8 bg-white/[0.02] text-zinc-400 hover:border-white/12 hover:bg-white/[0.05] hover:text-white'
+                )}
+              >
+                <span
+                  className={clsx(
+                    'flex h-11 w-11 items-center justify-center rounded-2xl border transition',
+                    isActive
+                      ? theme.iconWrap
+                      : 'border-white/10 bg-white/[0.04] text-zinc-300 group-hover:bg-white/[0.08]'
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.18em]">
+                  {tool.shortLabel}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      </StudioPanel>
+    </aside>
+  );
+}
+
+export function MediaStudioShell({
+  currentToolId,
+  header,
+  controls,
+  workspace,
+}: {
+  currentToolId: CreatorToolId;
+  header: ReactNode;
+  controls: ReactNode;
+  workspace: ReactNode;
+}) {
+  return (
+    <div className="studio-shell-wide relative z-10">
+      {header}
+
+      <div className="mb-4 lg:hidden">
+        <StudioPanel className="p-3">
+          <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+            Switch creator path
+          </div>
+          <GeneratorQuickSwitch currentToolId={currentToolId} toolIds={MEDIA_TOOL_IDS} />
+        </StudioPanel>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[108px_minmax(0,520px)_minmax(0,1fr)] xl:grid-cols-[108px_minmax(0,560px)_minmax(0,1fr)]">
+        <MediaStudioRail currentToolId={currentToolId} />
+        <div className="min-w-0 space-y-4">{controls}</div>
+        <div className="min-w-0 space-y-4">{workspace}</div>
+      </div>
+    </div>
+  );
+}
+
+export function StudioControlCard({
+  title,
+  description,
+  children,
+  meta,
+  className,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+  meta?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <StudioPanel className={clsx('p-5 sm:p-6', className)}>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">{title}</h2>
+          {description ? <p className="mt-1 text-sm text-zinc-400">{description}</p> : null}
+        </div>
+        {meta ? <div className="shrink-0">{meta}</div> : null}
+      </div>
+      {children}
+    </StudioPanel>
+  );
+}
+
+export function StudioRemixNotice({
+  label = 'Remixing Community Creation',
+  description,
+  action,
+}: {
+  label?: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <StudioPanel className="p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-200">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-fuchsia-200/90">
+              {label}
+            </div>
+            <p className="mt-1 text-sm text-zinc-300">{description}</p>
+          </div>
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </div>
+    </StudioPanel>
+  );
+}
+
+export function StudioRunPanel({
+  title,
+  summary,
+  details,
+  action,
+  status,
+  footer,
+}: {
+  title: string;
+  summary: ReactNode;
+  details?: ReactNode;
+  action: ReactNode;
+  status?: ReactNode;
+  footer?: ReactNode;
+}) {
+  return (
+    <StudioPanel className="p-5 sm:p-6">
+      <div className="space-y-5">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+            Run summary
+          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight text-white">{title}</h2>
+        </div>
+        <div>{summary}</div>
+        {details ? <div className="rounded-[22px] border border-white/8 bg-black/30 p-4">{details}</div> : null}
+        <div>{action}</div>
+        {status ? <div className="rounded-[22px] border border-white/8 bg-black/30 p-4">{status}</div> : null}
+        {footer ? <div className="border-t border-white/8 pt-4">{footer}</div> : null}
+      </div>
+    </StudioPanel>
+  );
+}
+
+export function StudioWorkspacePanel({
+  title,
+  description,
+  children,
+  action,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <StudioPanel className="overflow-hidden">
+      <div className="flex items-start justify-between gap-4 border-b border-white/8 px-5 py-4 sm:px-6">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+            Workspace
+          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight text-white">{title}</h2>
+          <p className="mt-1 text-sm text-zinc-400">{description}</p>
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </div>
+      <div className="p-5 sm:p-6">{children}</div>
+    </StudioPanel>
   );
 }

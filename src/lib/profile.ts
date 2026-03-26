@@ -151,6 +151,7 @@ export function getCreatorDisplayName(profile: {
   displayName?: string | null;
   username?: string | null;
   name?: string | null;
+  email?: string | null;
 }): string {
   const displayName = profile.displayName ?? profile.name;
   if (displayName && displayName.trim().length > 0) {
@@ -161,7 +162,46 @@ export function getCreatorDisplayName(profile: {
     return profile.username.trim();
   }
 
-  return 'Anonymous';
+  if (profile.email && profile.email.trim().length > 0) {
+    return profile.email.split('@')[0]?.trim() || 'Creator';
+  }
+
+  return 'Creator';
+}
+
+export function getUserInitials(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? '')
+      .join('') || 'U'
+  );
+}
+
+export function getAuthAvatarUrl(
+  userMetadata: Record<string, unknown> | null | undefined
+): string | null {
+  if (!userMetadata) {
+    return null;
+  }
+
+  const candidates = [
+    userMetadata.avatar_url,
+    userMetadata.picture,
+    userMetadata.photoURL,
+    userMetadata.image,
+    userMetadata.avatar,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
 }
 
 export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedProfileUpdate {

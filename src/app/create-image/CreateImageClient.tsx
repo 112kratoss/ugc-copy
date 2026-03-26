@@ -6,7 +6,13 @@ import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
-import { GeneratorPageHeader } from '@/app/components/CreatorStudio';
+import {
+    GeneratorPageHeader,
+    MediaStudioShell,
+    StudioRemixNotice,
+    StudioRunPanel,
+    StudioWorkspacePanel,
+} from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
 
@@ -367,8 +373,24 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         );
     }
 
+    const workspaceTitle = outputImage
+        ? 'Latest image result'
+        : isGenerating
+            ? 'Creating your image'
+            : remixImageUrl
+                ? 'Remix reference loaded'
+                : 'Ready for your next still';
+
+    const workspaceDescription = outputImage
+        ? 'Your newest image stays here until you start another run.'
+        : isGenerating
+            ? 'Watch the current run here while the model handles generation.'
+            : remixImageUrl
+                ? 'Use the original community result as reference while you tune prompt and settings.'
+                : 'The current run will appear here once you generate.';
+
     return (
-        <div className="min-h-screen bg-black px-6 py-6 text-white sm:px-8 sm:py-8 font-[family-name:var(--font-geist-sans)]">
+        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
             {/* Background glows — animated per model */}
             <div className="fixed inset-0 z-0 pointer-events-none">
                 <AnimatePresence mode="wait">
@@ -386,144 +408,131 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 </AnimatePresence>
             </div>
 
-            <div className="relative z-10 mx-auto max-w-5xl">
-                <GeneratorPageHeader
-                    currentToolId="image"
-                    title="Create image"
-                    eyebrow={`Creator studio / ${model.displayName}`}
-                    description="Start with a still when you need the fastest route to a polished product visual, concept frame, or campaign hook."
-                    credits={userCredits}
-                />
-
-                {/* Remix Banner */}
-                <AnimatePresence>
-                    {remixId && !isRemixLoading && (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            animate={{ opacity: 1, height: 'auto', marginBottom: 32 }}
-                            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                            className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 flex items-center justify-between overflow-hidden backdrop-blur-md"
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-purple-500/20 rounded-full">
-                                    <Sparkles className="w-5 h-5 text-purple-400" />
-                                </div>
-                                <div>
-                                    <h3 className="font-semibold text-purple-100 text-sm">Remixing Community Creation</h3>
-                                    <p className="text-xs text-purple-300/80">
-                                        Settings pre-filled from {remixTitle ? `"${remixTitle}"` : 'the original creation'}.
-                                    </p>
-                                </div>
-                            </div>
-                            
-                            {remixImageUrl && (
-                                <button
-                                    onClick={() => setIsPreviewModalOpen(true)}
-                                    className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded-xl transition-colors text-sm font-medium text-purple-300"
+            <MediaStudioShell
+                currentToolId="image"
+                header={
+                    <GeneratorPageHeader
+                        currentToolId="image"
+                        title="Create image"
+                        eyebrow={`Creator studio / ${model.displayName}`}
+                        description="Start with a still when you need the fastest route to a polished product visual, concept frame, or campaign hook."
+                        credits={userCredits}
+                        showPathSwitcher={false}
+                    />
+                }
+                controls={
+                    <>
+                        <AnimatePresence>
+                            {remixId && !isRemixLoading && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -12 }}
                                 >
-                                    <ImageIcon className="w-4 h-4" />
-                                    View Original
-                                </button>
+                                    <StudioRemixNotice
+                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}
+                                        action={
+                                            remixImageUrl ? (
+                                                <button
+                                                    onClick={() => setIsPreviewModalOpen(true)}
+                                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                >
+                                                    <ImageIcon className="h-4 w-4" />
+                                                    View original
+                                                </button>
+                                            ) : undefined
+                                        }
+                                    />
+                                </motion.div>
                             )}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                        </AnimatePresence>
 
-                {/* ─── Model Selector (Dropdown) ────────────────────────────────── */}
-                <motion.div
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mb-8 relative"
-                    ref={dropdownRef}
-                >
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3">Model</p>
-                    <button
-                        onClick={() => setIsModelDropdownOpen(prev => !prev)}
-                        className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
-                    >
-                        <div className="flex items-center gap-3">
-                            <Zap className="w-4 h-4 text-white" />
-                            <div className="text-left">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-sm font-bold text-white">{model.displayName}</span>
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${model.badgeColor} text-white`}>
-                                        {model.badge}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-zinc-500 mt-0.5">{model.description}</p>
-                            </div>
-                        </div>
-                        <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    <AnimatePresence>
-                        {isModelDropdownOpen && (
-                            <motion.div
-                                initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                                exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                transition={{ duration: 0.15 }}
-                                className="absolute z-50 mt-2 w-full bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
-                                style={{ transformOrigin: 'top' }}
+                        <motion.div
+                            initial={{ opacity: 0, y: 16 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="relative rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                            ref={dropdownRef}
+                        >
+                            <p className="mb-3 text-xs font-bold uppercase tracking-widest text-zinc-500">Model</p>
+                            <button
+                                onClick={() => setIsModelDropdownOpen(prev => !prev)}
+                                className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
                             >
-                                {(Object.values(IMAGE_MODELS) as typeof IMAGE_MODELS[ModelId][]).map((m) => {
-                                    const isActive = selectedModel === m.id;
-                                    return (
-                                        <button
-                                            key={m.id}
-                                            onClick={() => {
-                                                setSelectedModel(m.id as ModelId);
-                                                setIsModelDropdownOpen(false);
-                                            }}
-                                            className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${
-                                                isActive
-                                                    ? 'bg-white/5'
-                                                    : 'hover:bg-white/[0.03]'
-                                            }`}
-                                        >
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
-                                                        {m.displayName}
-                                                    </span>
-                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${m.badgeColor} text-white`}>
-                                                        {m.badge}
-                                                    </span>
-                                                </div>
-                                                <p className="text-xs text-zinc-500 mt-0.5">{m.description}</p>
-                                                <div className="flex flex-wrap gap-1.5 mt-2">
-                                                    {m.supportsGoogleSearch && (
-                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                                            Google Search
-                                                        </span>
-                                                    )}
-                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                        Up to {m.maxImages} ref images
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
-                                        </button>
-                                    );
-                                })}
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </motion.div>
+                                <div className="flex items-center gap-3">
+                                    <Zap className="w-4 h-4 text-white" />
+                                    <div className="text-left">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-bold text-white">{model.displayName}</span>
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${model.badgeColor} text-white`}>
+                                                {model.badge}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-zinc-500 mt-0.5">{model.description}</p>
+                                    </div>
+                                </div>
+                                <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
+                            </button>
 
-                <div className="grid md:grid-cols-2 gap-8">
-                    {/* Left Column: Prompt + Settings */}
-                    <div className="flex flex-col gap-6">
-                        {/* Prompt */}
+                            <AnimatePresence>
+                                {isModelDropdownOpen && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
+                                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                                        exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
+                                        transition={{ duration: 0.15 }}
+                                        className="absolute z-50 mt-2 w-[calc(100%-3rem)] bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
+                                        style={{ transformOrigin: 'top' }}
+                                    >
+                                        {(Object.values(IMAGE_MODELS) as typeof IMAGE_MODELS[ModelId][]).map((m) => {
+                                            const isActive = selectedModel === m.id;
+                                            return (
+                                                <button
+                                                    key={m.id}
+                                                    onClick={() => {
+                                                        setSelectedModel(m.id as ModelId);
+                                                        setIsModelDropdownOpen(false);
+                                                    }}
+                                                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${
+                                                        isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'
+                                                    }`}
+                                                >
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                                {m.displayName}
+                                                            </span>
+                                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${m.badgeColor} text-white`}>
+                                                                {m.badge}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-xs text-zinc-500 mt-0.5">{m.description}</p>
+                                                        <div className="flex flex-wrap gap-1.5 mt-2">
+                                                            {m.supportsGoogleSearch && (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                                                    Google Search
+                                                                </span>
+                                                            )}
+                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
+                                                                Up to {m.maxImages} ref images
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                                                </button>
+                                            );
+                                        })}
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </motion.div>
+
                         <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm"
+                            className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
                         >
-                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                                <span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] border border-blue-500/30">1</span>
-                                Your Prompt
-                            </h2>
+                            <h2 className="text-sm font-semibold text-white mb-1">Prompt</h2>
+                            <p className="text-sm text-zinc-400 mb-4">Describe the still you want to produce.</p>
                             <EnhancePromptButton
                                 prompt={prompt}
                                 onEnhanced={(text) => setPrompt(text)}
@@ -549,100 +558,21 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             <p className="text-xs text-zinc-600 mt-2">{prompt.length}/20000 characters</p>
                         </motion.div>
 
-                        {/* Aspect Ratio */}
                         <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.05 }}
-                            className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm"
+                            transition={{ delay: 0.04 }}
+                            className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
                         >
-                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Aspect Ratio</h2>
-                            <div className="flex flex-wrap gap-2">
-                                {model.aspectRatios.map(ratio => (
-                                    <button
-                                        key={ratio}
-                                        onClick={() => setAspectRatio(ratio)}
-                                        className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${aspectRatio === ratio
-                                            ? accentStyles.button + ' border'
-                                            : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                            }`}
-                                    >
-                                        {ratio}
-                                    </button>
-                                ))}
-                            </div>
-                        </motion.div>
-
-                        {/* Resolution */}
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.08 }}
-                            className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm"
-                        >
-                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Resolution</h2>
-                            <div className="flex gap-3">
-                                {model.resolutions.map(res => (
-                                    <button
-                                        key={res}
-                                        onClick={() => setResolution(res)}
-                                        className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${resolution === res
-                                            ? accentStyles.button + ' border'
-                                            : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                            }`}
-                                    >
-                                        {res}
-                                    </button>
-                                ))}
-                            </div>
-                        </motion.div>
-                    </div>
-
-                    {/* Right Column: Optional settings + Generate */}
-                    <div className="flex flex-col gap-6">
-                        {/* Google Search Grounding — only for Nano Banana 2 */}
-                        <AnimatePresence>
-                            {model.supportsGoogleSearch && (
-                                <motion.div
-                                    key="google-search"
-                                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.3 }}
-                                    className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm overflow-hidden"
-                                >
-                                    <div className="flex items-center justify-between cursor-pointer" onClick={() => setGoogleSearch(!googleSearch)}>
-                                        <div>
-                                            <h2 className="text-sm font-bold text-white mb-1">Google Search Grounding</h2>
-                                            <p className="text-xs text-zinc-500">Allow AI to access real-time internet info.</p>
-                                        </div>
-                                        <div className={`w-12 h-6 rounded-full p-1 transition-all ${googleSearch ? accentStyles.toggle : 'bg-zinc-800'}`}>
-                                            <div className={`bg-white w-4 h-4 rounded-full shadow-md transition-transform ${googleSearch ? 'translate-x-6' : 'translate-x-0'}`} />
-                                        </div>
-                                    </div>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
-
-                        {/* Reference Images */}
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.06 }}
-                            className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm"
-                        >
-                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[10px] border border-cyan-500/30">2</span>
-                                    Reference Images
+                            <div className="mb-4 flex items-start justify-between gap-3">
+                                <div>
+                                    <h2 className="text-sm font-semibold text-white">Reference images</h2>
+                                    <p className="mt-1 text-sm text-zinc-400">Guide composition, subject, or style with optional references.</p>
                                 </div>
-                                <span className="text-[10px] text-zinc-600 normal-case">
-                                    {referenceImages.length}/{model.maxImages} uploaded
+                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
+                                    {referenceImages.length}/{model.maxImages}
                                 </span>
-                            </h2>
-                            <p className="text-sm text-zinc-500 mb-4">
-                                Upload up to {model.maxImages} images to guide the style or content.
-                            </p>
+                            </div>
 
                             <div className="grid grid-cols-3 gap-2 mb-4">
                                 {referenceImages.map((img, idx) => (
@@ -678,111 +608,263 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             )}
                         </motion.div>
 
-                        {/* Cost display */}
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.1 }}
-                            className="bg-blue-900/10 border border-blue-500/20 rounded-2xl p-5 text-center shadow-[0_0_30px_-10px_rgba(59,130,246,0.15)]"
-                        >
-                            <div className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400 mb-1">
-                                {currentCost} Credits
-                            </div>
-                            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">For {resolution} Generation</p>
-                            {userCredits !== null && (
-                                <p className="text-xs text-zinc-500 mt-2">You have <span className="text-white font-semibold">{userCredits}</span> credits</p>
-                            )}
-                        </motion.div>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <motion.div
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.06 }}
+                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                            >
+                                <h2 className="text-sm font-semibold text-white mb-1">Aspect ratio</h2>
+                                <p className="text-sm text-zinc-400 mb-4">Choose the output frame before you run.</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {model.aspectRatios.map(ratio => (
+                                        <button
+                                            key={ratio}
+                                            onClick={() => setAspectRatio(ratio)}
+                                            className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${aspectRatio === ratio
+                                                ? accentStyles.button + ' border'
+                                                : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
+                                                }`}
+                                        >
+                                            {ratio}
+                                        </button>
+                                    ))}
+                                </div>
+                            </motion.div>
 
-                        {/* Generate Button */}
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.12 }}
-                            className="flex flex-col gap-4"
-                        >
-                            {insufficientCredits ? (
-                                <div className="flex flex-col items-center gap-4 px-6 py-6 bg-gradient-to-b from-blue-500/10 to-cyan-500/10 border border-blue-500/20 rounded-2xl">
-                                    <div className="flex items-center gap-2">
-                                        <Sparkles className="w-5 h-5 text-yellow-400" />
-                                        <p className="text-base font-semibold text-white">Not enough credits</p>
+                            <motion.div
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.08 }}
+                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                            >
+                                <h2 className="text-sm font-semibold text-white mb-1">Resolution</h2>
+                                <p className="text-sm text-zinc-400 mb-4">Higher detail costs more credits.</p>
+                                <div className="flex gap-3">
+                                    {model.resolutions.map(res => (
+                                        <button
+                                            key={res}
+                                            onClick={() => setResolution(res)}
+                                            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${resolution === res
+                                                ? accentStyles.button + ' border'
+                                                : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
+                                                }`}
+                                        >
+                                            {res}
+                                        </button>
+                                    ))}
+                                </div>
+                            </motion.div>
+                        </div>
+
+                        <AnimatePresence>
+                            {model.supportsGoogleSearch && (
+                                <motion.div
+                                    key="google-search"
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.25 }}
+                                    className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6 overflow-hidden"
+                                >
+                                    <div className="flex items-center justify-between cursor-pointer" onClick={() => setGoogleSearch(!googleSearch)}>
+                                        <div>
+                                            <h2 className="text-sm font-semibold text-white mb-1">Google Search grounding</h2>
+                                            <p className="text-sm text-zinc-400">Allow the model to pull in live context when it helps.</p>
+                                        </div>
+                                        <div className={`w-12 h-6 rounded-full p-1 transition-all ${googleSearch ? accentStyles.toggle : 'bg-zinc-800'}`}>
+                                            <div className={`bg-white w-4 h-4 rounded-full shadow-md transition-transform ${googleSearch ? 'translate-x-6' : 'translate-x-0'}`} />
+                                        </div>
                                     </div>
-                                    <p className="text-sm text-zinc-400 text-center">
-                                        Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits} credits</strong>.
-                                    </p>
-                                    <Link href="/pricing" className="px-8 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-full flex items-center gap-2 hover:opacity-90 hover:scale-105 font-semibold text-sm transition-all shadow-[0_0_20px_-5px_rgba(59,130,246,0.4)]">
-                                        <Sparkles className="w-4 h-4" />
-                                        Top Up Credits
-                                    </Link>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </>
+                }
+                workspace={
+                    <>
+                        <StudioRunPanel
+                            title={isGenerating ? 'Image run in progress' : 'Ready to generate'}
+                            summary={
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Model</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{model.displayName}</div>
+                                    </div>
+                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{currentCost} credits</div>
+                                    </div>
+                                </div>
+                            }
+                            details={
+                                <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Frame</div>
+                                        <div className="mt-1 text-zinc-200">{aspectRatio}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Resolution</div>
+                                        <div className="mt-1 text-zinc-200">{resolution}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">References</div>
+                                        <div className="mt-1 text-zinc-200">{referenceImages.length}/{model.maxImages}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
+                                        <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
+                                    </div>
+                                </div>
+                            }
+                            action={
+                                insufficientCredits ? (
+                                    <div className="space-y-4">
+                                        <div className="rounded-[22px] border border-blue-500/20 bg-blue-500/10 p-4">
+                                            <p className="text-sm font-semibold text-white">Not enough credits</p>
+                                            <p className="mt-2 text-sm text-zinc-400">
+                                                Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
+                                            </p>
+                                        </div>
+                                        <Link href="/pricing" className="flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-600 to-cyan-600 px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90">
+                                            <Sparkles className="h-4 w-4" />
+                                            Top Up Credits
+                                        </Link>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={handleGenerate}
+                                        disabled={!prompt.trim() || isGenerating}
+                                        className={`flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r px-6 py-4 text-base font-semibold text-white transition ${accentStyles.generate} disabled:cursor-not-allowed disabled:opacity-50`}
+                                    >
+                                        {isGenerating ? (
+                                            <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</>
+                                        ) : (
+                                            <><Sparkles className="w-5 h-5" /> Generate Image</>
+                                        )}
+                                    </button>
+                                )
+                            }
+                            status={
+                                <>
+                                    {isGenerating && generationStatus ? (
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between text-sm text-zinc-300">
+                                                <span>{generationStatus}</span>
+                                                <span>{getProgress()}%</span>
+                                            </div>
+                                            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                                                <motion.div
+                                                    className={`h-full bg-gradient-to-r ${accentStyles.progress}`}
+                                                    initial={{ width: '0%' }}
+                                                    animate={{ width: `${getProgress()}%` }}
+                                                    transition={{ duration: 0.5 }}
+                                                />
+                                            </div>
+                                            <p className="text-xs text-zinc-500">Usually takes 30–90 seconds.</p>
+                                        </div>
+                                    ) : error ? (
+                                        <p className="text-sm text-red-400">{error}</p>
+                                    ) : (
+                                        <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>
+                                    )}
+                                </>
+                            }
+                            footer={
+                                <Link
+                                    href="/creations"
+                                    className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
+                                >
+                                    View My Creations
+                                    <Download className="h-4 w-4" />
+                                </Link>
+                            }
+                        />
+
+                        <StudioWorkspacePanel
+                            title={workspaceTitle}
+                            description={workspaceDescription}
+                            action={
+                                <Link
+                                    href="/creations"
+                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
+                                >
+                                    My Creations
+                                    <Download className="h-4 w-4" />
+                                </Link>
+                            }
+                        >
+                            {outputImage ? (
+                                <div className="space-y-5">
+                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/50">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img src={outputImage} alt="Generated image" className="block h-auto w-full object-cover" />
+                                    </div>
+                                    <div className="flex flex-wrap gap-3">
+                                        <a
+                                            href={outputImage}
+                                            download="generated-image.jpg"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
+                                        >
+                                            <Download className="h-4 w-4" />
+                                            Download image
+                                        </a>
+                                        <button
+                                            onClick={() => setOutputImage(null)}
+                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                        >
+                                            Start another run
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : isGenerating ? (
+                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
+                                    <div className={`flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r ${accentStyles.progress}`}>
+                                        <Loader2 className="h-7 w-7 animate-spin text-white" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-semibold text-white">Building your next still</h3>
+                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+                                            The workspace will switch from status to output as soon as the model finishes the current run.
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : remixImageUrl ? (
+                                <div className="space-y-5">
+                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/50">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img src={remixImageUrl} alt="Original remix reference" className="block h-auto w-full object-cover" />
+                                    </div>
+                                    <div className="flex flex-wrap gap-3">
+                                        <button
+                                            onClick={() => setIsPreviewModalOpen(true)}
+                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                        >
+                                            <ImageIcon className="h-4 w-4" />
+                                            View original
+                                        </button>
+                                    </div>
                                 </div>
                             ) : (
-                                <button
-                                    onClick={handleGenerate}
-                                    disabled={!prompt.trim() || isGenerating}
-                                    className={`flex items-center gap-2 px-8 py-4 bg-gradient-to-r ${accentStyles.generate} rounded-full font-medium text-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full justify-center`}
-                                >
-                                    {isGenerating ? (
-                                        <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</>
-                                    ) : (
-                                        <><Sparkles className="w-5 h-5" /> Generate Image</>
-                                    )}
-                                </button>
-                            )}
-
-                            {/* Progress Bar */}
-                            {isGenerating && generationStatus && (
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-sm text-zinc-400 px-1">
-                                        <span>{generationStatus}</span>
-                                        <span>{getProgress()}%</span>
+                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
+                                    <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${model.accentColor === 'violet' ? 'from-violet-500/30 to-purple-500/10' : 'from-blue-500/30 to-cyan-500/10'}`}>
+                                        <ImageIcon className="h-7 w-7 text-white" />
                                     </div>
-                                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                                        <motion.div
-                                            className={`h-full bg-gradient-to-r ${accentStyles.progress}`}
-                                            initial={{ width: '0%' }}
-                                            animate={{ width: `${getProgress()}%` }}
-                                            transition={{ duration: 0.5 }}
-                                        />
+                                    <div>
+                                        <h3 className="text-xl font-semibold text-white">No image yet</h3>
+                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+                                            Write the prompt, optionally drop in a few references, then generate. The latest result will take over this workspace.
+                                        </p>
                                     </div>
-                                    <p className="text-xs text-zinc-600 text-center">Usually takes 30–90 seconds.</p>
                                 </div>
                             )}
-
-                            {/* Error */}
-                            {error && (
-                                <div className="px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl">
-                                    <p className="text-sm text-red-400 text-center">{error}</p>
-                                </div>
-                            )}
-                        </motion.div>
-                    </div>
-                </div>
-
-                {/* Output Image */}
-                {outputImage && (
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="mt-12 flex flex-col items-center gap-6"
-                    >
-                        <h2 className="text-xl font-bold text-green-400">🎉 Your Image is Ready!</h2>
-                        <div className="w-full max-w-2xl rounded-2xl overflow-hidden border border-zinc-800">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={outputImage} alt="Generated image" className="w-full h-auto block" />
-                        </div>
-                        <a
-                            href={outputImage}
-                            download="generated-image.jpg"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 rounded-full font-medium transition-colors"
-                        >
-                            <Download className="w-5 h-5" />
-                            Download Image
-                        </a>
-                    </motion.div>
-                )}
-            </div>
+                        </StudioWorkspacePanel>
+                    </>
+                }
+            />
 
             {/* Remix Preview Modal */}
             <AnimatePresence>
