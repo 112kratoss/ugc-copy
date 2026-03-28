@@ -173,6 +173,57 @@ export const VIDEO_MODELS = {
 export type VideoModelId = keyof typeof VIDEO_MODELS;
 export type VideoModel = (typeof VIDEO_MODELS)[VideoModelId];
 
+export function getVideoElementSupport(
+    modelId: VideoModelId,
+    options: { mode?: string; isMultiShot?: boolean } = {}
+): { enabled: boolean; maxElements: number; reason: string | null } {
+    if (options.isMultiShot) {
+        return {
+            enabled: false,
+            maxElements: 0,
+            reason: 'Named elements are available in single-shot only.',
+        };
+    }
+
+    if (modelId === 'seedance-1.5-pro') {
+        return {
+            enabled: true,
+            maxElements: 2,
+            reason: null,
+        };
+    }
+
+    if (modelId === 'veo-3.1') {
+        if (options.mode === 'veo3_fast') {
+            return {
+                enabled: true,
+                maxElements: 3,
+                reason: null,
+            };
+        }
+
+        return {
+            enabled: false,
+            maxElements: 0,
+            reason: 'Named elements require Veo Fast.',
+        };
+    }
+
+    if (modelId === 'kling-3.0-video') {
+        return {
+            enabled: false,
+            maxElements: 0,
+            reason: 'Named elements are not available for Kling yet.',
+        };
+    }
+
+    return {
+        enabled: false,
+        maxElements: 0,
+        reason: 'Named elements are not available for this model yet.',
+    };
+}
+
 export function getVideoDurationRange(modelId: VideoModelId): { min: number; max: number; default: number } | null {
     const model = VIDEO_MODELS[modelId];
 

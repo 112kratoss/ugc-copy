@@ -7,16 +7,25 @@ import { Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check, Play }
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
+    StudioBackgroundProcessingNotice,
     GeneratorPageHeader,
     MediaStudioShell,
     StudioControlCard,
+    StudioMediaPreviewModal,
     StudioRemixNotice,
     StudioRunPanel,
+    StudioUploadedMediaPreview,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import localforage from 'localforage';
 import { useAuth } from '@/app/components/AuthProvider';
+import {
+    getPersistedFile,
+    PERSISTED_MEDIA_KEYS,
+    removePersistedMedia,
+    setPersistedFile,
+} from '@/lib/persisted-media';
+import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
 const MOTION_MODELS = {
@@ -56,12 +65,21 @@ export interface CreateMotionPrefill {
     model?: string | null;
 }
 
+interface UploadPreviewState {
+    type: 'image' | 'video';
+    src: string;
+    alt: string;
+    title: string;
+}
+
 export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, updateCredits } = useAuth();
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const characterImageInputRef = useRef<HTMLInputElement>(null);
+    const referenceVideoInputRef = useRef<HTMLInputElement>(null);
 
     const [characterImage, setCharacterImage] = useState<string | null>(null);
     const [characterImageFile, setCharacterImageFile] = useState<File | null>(null);
@@ -86,6 +104,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
+    const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -96,6 +115,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     }, [prefillPrompt, prefillModel, remixId]);
 
     const model = MOTION_MODELS[selectedModel];
+    const revokeObjectUrl = (url: string | null) => {
+        if (url?.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+        }
+    };
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -113,7 +137,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setCharacterImageFile(file);
         const url = URL.createObjectURL(file);
         setCharacterImage(url);
-        await localforage.setItem('characterImageFile', file);
+        await setPersistedFile(PERSISTED_MEDIA_KEYS.createMotionCharacterImage, file);
     };
 
     const processVideoFile = async (file: File) => {
@@ -126,7 +150,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setReferenceVideoFile(file);
         const url = URL.createObjectURL(file);
         setReferenceVideo(url);
-        await localforage.setItem('referenceVideoFile', file);
+        await setPersistedFile(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, file);
     };
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,17 +182,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (file) await processVideoFile(file);
     };
 
-    const handleClearImage = async (e: React.MouseEvent) => {
-        e.preventDefault();
+    const handleClearImage = async () => {
         setCharacterImageFile(null); setCharacterImage(null);
-        await localforage.removeItem('characterImageFile');
+        await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
     };
 
-    const handleClearVideo = async (e: React.MouseEvent) => {
-        e.preventDefault();
+    const handleClearVideo = async () => {
         setReferenceVideoFile(null); setReferenceVideo(null);
         setDuration(0); setVideoError(null);
-        await localforage.removeItem('referenceVideoFile');
+        await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
     };
 
     const handleVideoMetadata = async (e: React.SyntheticEvent<HTMLVideoElement>) => {
@@ -176,7 +198,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (videoDuration > model.maxVideoDuration) {
             setVideoError(`Video length should be under ${model.maxVideoDuration}s. Your video is ${Math.round(videoDuration)}s.`);
             setReferenceVideoFile(null); setReferenceVideo(null); setDuration(0);
-            await localforage.removeItem('referenceVideoFile');
+            await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
             return;
         }
         setVideoError(null);
@@ -263,13 +285,20 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     // Generation Recovery & Persistence
     useEffect(() => {
+        return () => {
+            revokeObjectUrl(characterImage);
+            revokeObjectUrl(referenceVideo);
+        };
+    }, [characterImage, referenceVideo]);
+
+    useEffect(() => {
         const loadSavedFiles = async () => {
             try {
-                const savedImageFile = await localforage.getItem<File>('characterImageFile');
+                const savedImageFile = await getPersistedFile(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
                 if (savedImageFile) { setCharacterImageFile(savedImageFile); setCharacterImage(URL.createObjectURL(savedImageFile)); }
-                const savedVideoFile = await localforage.getItem<File>('referenceVideoFile');
+                const savedVideoFile = await getPersistedFile(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
                 if (savedVideoFile) { setReferenceVideoFile(savedVideoFile); setReferenceVideo(URL.createObjectURL(savedVideoFile)); }
-            } catch (err) { console.error("Error loading files from localforage:", err); }
+            } catch (err) { console.error("Error loading persisted media:", err); }
         };
         loadSavedFiles();
 
@@ -322,7 +351,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             attempts++;
         }
 
-        throw new Error('__GENERATION_TIMEOUT__');
+        throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
     const handleGenerate = async () => {
@@ -374,9 +403,9 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Something went wrong';
-            if (msg === '__GENERATION_TIMEOUT__') {
-                setGenerationStatus('⏳ Still processing... (100%)');
-                setError('__TIMEOUT_INFO__');
+            if (msg === BACKGROUND_PROCESSING_ERROR) {
+                setGenerationStatus(getBackgroundProcessingCopy('motion').status);
+                setError(BACKGROUND_PROCESSING_ERROR);
             } else {
                 setError(msg);
                 setGenerationStatus(null);
@@ -409,26 +438,24 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         && Boolean(referenceVideo || referenceVideoFile)
         && duration > 0
         && !videoError;
+    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
+    const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
 
     const workspaceTitle = outputVideo
         ? 'Latest motion result'
         : isGenerating
             ? 'Animating your character'
-            : (characterImage || referenceVideo)
-                ? 'Current motion setup'
-                : remixVideoUrl
-                    ? 'Remix motion loaded'
-                    : 'Ready to transfer motion';
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.title
+            : 'Ready to transfer motion';
 
     const workspaceDescription = outputVideo
         ? 'Your newest motion render stays here until you start another run.'
         : isGenerating
             ? 'Track the active generation here while the model maps movement and finishes the clip.'
-            : (characterImage || referenceVideo)
-                ? 'Review the uploaded character and reference before you generate.'
-                : remixVideoUrl
-                    ? 'Use the original motion as context while you adjust prompt, orientation, and quality.'
-                    : 'Upload a character still and a motion reference. The active run and latest result will take over this workspace.';
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.description
+            : 'Upload a character still and a motion reference. The active run and latest result will take over this workspace.';
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -558,27 +585,35 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                             description="A clear still works best. The model uses this as the identity anchor."
                             meta={<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Step 1</span>}
                         >
-                            <label
-                                className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingImage
-                                    ? 'border-violet-400 bg-violet-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
-                                    : 'border-zinc-700/50 hover:border-violet-500/50 hover:bg-violet-500/5'
-                                    }`}
-                                onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
-                                onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
-                                onDrop={handleImageDrop}
-                            >
-                                {characterImage ? (
-                                    <div className="relative h-full w-full bg-black/50">
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img src={characterImage} alt="Character" className="h-full w-full object-contain" />
-                                        <button
-                                            onClick={handleClearImage}
-                                            className="absolute right-4 top-4 rounded-full bg-black/60 p-2 text-white transition hover:bg-red-500/80"
-                                        >
-                                            <X className="h-5 w-5" />
-                                        </button>
-                                    </div>
-                                ) : (
+                            {characterImage ? (
+                                <div className="h-[280px]">
+                                    <StudioUploadedMediaPreview
+                                        mediaType="image"
+                                        src={characterImage}
+                                        alt="Character image"
+                                        fit="contain"
+                                        previewHint="Preview image"
+                                        onPreview={() => setUploadPreview({
+                                            type: 'image',
+                                            src: characterImage,
+                                            alt: 'Character image',
+                                            title: 'Character Image',
+                                        })}
+                                        onReplace={() => characterImageInputRef.current?.click()}
+                                        onRemove={() => void handleClearImage()}
+                                    />
+                                </div>
+                            ) : (
+                                <label
+                                    htmlFor="motion-character-image-input"
+                                    className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingImage
+                                        ? 'border-violet-400 bg-violet-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
+                                        : 'border-zinc-700/50 hover:border-violet-500/50 hover:bg-violet-500/5'
+                                        }`}
+                                    onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
+                                    onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
+                                    onDrop={handleImageDrop}
+                                >
                                     <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
                                         <Upload className={`h-8 w-8 transition-colors ${isDraggingImage ? 'text-violet-300' : ''}`} />
                                         <div>
@@ -588,9 +623,16 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                             <p className="mt-1 text-xs text-zinc-500">JPG, PNG, WEBP. Use a clean full-body frame when possible.</p>
                                         </div>
                                     </div>
-                                )}
-                                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
-                            </label>
+                                </label>
+                            )}
+                            <input
+                                ref={characterImageInputRef}
+                                id="motion-character-image-input"
+                                type="file"
+                                accept="image/*"
+                                onChange={handleImageUpload}
+                                className="hidden"
+                            />
                         </StudioControlCard>
 
                         <StudioControlCard
@@ -599,34 +641,35 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                             meta={<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Step 2</span>}
                         >
                             <div className="space-y-4">
-                                <label
-                                    className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingVideo
-                                        ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-[0_0_30px_-5px_rgba(217,70,239,0.3)]'
-                                        : 'border-zinc-700/50 hover:border-fuchsia-500/50 hover:bg-fuchsia-500/5'
-                                        }`}
-                                    onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
-                                    onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
-                                    onDrop={handleVideoDrop}
-                                >
-                                    {referenceVideo ? (
-                                        <div className="relative h-full w-full bg-black/50">
-                                            <video
-                                                src={referenceVideo}
-                                                className="h-full w-full object-contain"
-                                                controls
-                                                autoPlay
-                                                loop
-                                                muted
-                                                onLoadedMetadata={handleVideoMetadata}
-                                            />
-                                            <button
-                                                onClick={handleClearVideo}
-                                                className="absolute right-4 top-4 z-10 rounded-full bg-black/60 p-2 text-white transition hover:bg-red-500/80"
-                                            >
-                                                <X className="h-5 w-5" />
-                                            </button>
-                                        </div>
-                                    ) : (
+                                {referenceVideo ? (
+                                    <div className="h-[280px]">
+                                        <StudioUploadedMediaPreview
+                                            mediaType="video"
+                                            src={referenceVideo}
+                                            alt="Reference video"
+                                            fit="contain"
+                                            previewHint="Preview video"
+                                            onPreview={() => setUploadPreview({
+                                                type: 'video',
+                                                src: referenceVideo,
+                                                alt: 'Reference video',
+                                                title: 'Reference Video',
+                                            })}
+                                            onReplace={() => referenceVideoInputRef.current?.click()}
+                                            onRemove={() => void handleClearVideo()}
+                                        />
+                                    </div>
+                                ) : (
+                                    <label
+                                        htmlFor="motion-reference-video-input"
+                                        className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingVideo
+                                            ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-[0_0_30px_-5px_rgba(217,70,239,0.3)]'
+                                            : 'border-zinc-700/50 hover:border-fuchsia-500/50 hover:bg-fuchsia-500/5'
+                                            }`}
+                                        onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
+                                        onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
+                                        onDrop={handleVideoDrop}
+                                    >
                                         <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
                                             <Upload className={`h-8 w-8 transition-colors ${isDraggingVideo ? 'text-fuchsia-300' : ''}`} />
                                             <div>
@@ -636,9 +679,16 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 <p className="mt-1 text-xs text-zinc-500">MP4 or MOV, up to 100MB and {model.maxVideoDuration}s.</p>
                                             </div>
                                         </div>
-                                    )}
-                                    <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
-                                </label>
+                                    </label>
+                                )}
+                                <input
+                                    ref={referenceVideoInputRef}
+                                    id="motion-reference-video-input"
+                                    type="file"
+                                    accept="video/*"
+                                    onChange={handleVideoUpload}
+                                    className="hidden"
+                                />
 
                                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-white/8 bg-black/30 px-4 py-3 text-sm text-zinc-400">
                                     <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
@@ -807,17 +857,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                             </div>
                                             <p className="text-xs text-zinc-500">Estimated time: about 3 to 5 minutes.</p>
                                         </div>
-                                    ) : error === '__TIMEOUT_INFO__' ? (
-                                        <div className="space-y-2">
-                                            <p className="text-sm font-semibold text-teal-300">Your video is still being generated.</p>
-                                            <p className="text-sm text-zinc-400">
-                                                This run is taking longer than usual. It will appear in{' '}
-                                                <Link href="/creations" className="text-violet-300 underline underline-offset-4 hover:text-violet-200">
-                                                    My Creations
-                                                </Link>{' '}
-                                                once it finishes.
-                                            </p>
-                                        </div>
+                                    ) : isBackgroundProcessing ? (
+                                        <StudioBackgroundProcessingNotice accent="violet" label="motion render" />
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
                                     ) : error ? (
@@ -891,70 +932,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                         </p>
                                     </div>
                                 </div>
-                            ) : (characterImage || referenceVideo) ? (
-                                <div className="space-y-5">
-                                    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-                                        <div className="overflow-hidden rounded-[24px] border border-white/8 bg-black/50">
-                                            {characterImage ? (
-                                                <>
-                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                    <img src={characterImage} alt="Character preview" className="h-full w-full min-h-[240px] object-contain" />
-                                                </>
-                                            ) : (
-                                                <div className="flex min-h-[240px] items-center justify-center text-sm text-zinc-500">
-                                                    Character preview will appear here.
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div className="overflow-hidden rounded-[24px] border border-white/8 bg-black/50">
-                                            {referenceVideo ? (
-                                                <video
-                                                    src={referenceVideo}
-                                                    controls
-                                                    autoPlay
-                                                    loop
-                                                    muted
-                                                    className="h-full w-full min-h-[240px] object-contain"
-                                                />
-                                            ) : (
-                                                <div className="flex min-h-[240px] items-center justify-center text-sm text-zinc-500">
-                                                    Reference video preview will appear here.
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="grid gap-3 sm:grid-cols-3">
-                                        <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt status</div>
-                                            <div className="mt-2 text-sm text-zinc-200">{prompt.trim() ? 'Ready' : 'Add prompt'}</div>
-                                        </div>
-                                        <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Orientation</div>
-                                            <div className="mt-2 text-sm text-zinc-200">{characterOrientation === 'video' ? 'Follow video' : 'Favor image'}</div>
-                                        </div>
-                                        <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality</div>
-                                            <div className="mt-2 text-sm text-zinc-200">{mode}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ) : remixVideoUrl ? (
-                                <div className="space-y-5">
-                                    <div className="aspect-video overflow-hidden rounded-[26px] border border-white/8 bg-black/60">
-                                        <video src={remixVideoUrl} controls autoPlay loop className="h-full w-full object-contain" />
-                                    </div>
-                                    <a
-                                        href={remixVideoUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                    >
-                                        <Play className="h-4 w-4" />
-                                        View original
-                                    </a>
-                                </div>
+                            ) : isBackgroundProcessing ? (
+                                <StudioBackgroundProcessingNotice accent="violet" label="motion render" variant="workspace" />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-violet-500/30 to-fuchsia-500/20">
@@ -971,6 +950,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                         </StudioWorkspacePanel>
                     </>
                 }
+            />
+
+            <StudioMediaPreviewModal
+                isOpen={Boolean(uploadPreview)}
+                onClose={() => setUploadPreview(null)}
+                mediaType={uploadPreview?.type ?? 'image'}
+                src={uploadPreview?.src ?? null}
+                alt={uploadPreview?.alt ?? 'Uploaded preview'}
+                title={uploadPreview?.title ?? 'Media Preview'}
             />
         </div>
     );

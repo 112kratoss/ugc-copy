@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import {
+    compileImagePromptWithElements,
+    findUnknownPromptHandles,
+    normalizeSubmittedElementDescriptors,
+    type ImageElementDescriptor,
+} from '@/lib/image-elements';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -34,6 +40,7 @@ export async function POST(request: NextRequest) {
             model = 'nano-banana-2',
             prompt,
             imageUrls = [],
+            elements = [],
             aspectRatio = 'auto',
             resolution = '1K',
             outputFormat = 'jpg',
@@ -131,9 +138,33 @@ export async function POST(request: NextRequest) {
             shouldRefund: true,
         };
 
+        const clampedImageUrls = Array.isArray(imageUrls)
+            ? imageUrls.filter((url): url is string => typeof url === 'string' && url.length > 0).slice(0, modelConfig.maxImages)
+            : [];
+        const normalizedElements = normalizeSubmittedElementDescriptors(elements).slice(0, modelConfig.maxImages);
+        const alignedElements = normalizedElements.slice(0, clampedImageUrls.length);
+        const trimmedPrompt = prompt.trim();
+        const unknownPromptHandles = findUnknownPromptHandles(trimmedPrompt, alignedElements.map((element) => element.handle));
+
+        if (unknownPromptHandles.length > 0) {
+            return NextResponse.json(
+                { error: `Unknown element mention${unknownPromptHandles.length > 1 ? 's' : ''}: ${unknownPromptHandles.join(', ')}` },
+                { status: 400 }
+            );
+        }
+
+        if (normalizedElements.length > 0 && clampedImageUrls.length !== normalizedElements.length) {
+            return NextResponse.json(
+                { error: 'Element metadata does not match the uploaded element images.' },
+                { status: 400 }
+            );
+        }
+
+        const compiledPrompt = compileImagePromptWithElements(trimmedPrompt, alignedElements);
+
         // Build input object — model-specific
         const input: Record<string, unknown> = {
-            prompt: prompt.trim(),
+            prompt: compiledPrompt,
             aspect_ratio: aspectRatio,
             resolution,
             output_format: outputFormat,
@@ -145,8 +176,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Clamp reference images to model's limit
-        if (imageUrls && imageUrls.length > 0) {
-            input.image_input = imageUrls.slice(0, modelConfig.maxImages);
+        if (clampedImageUrls.length > 0) {
+            input.image_input = clampedImageUrls;
         }
 
         // Call Kie.ai API
@@ -187,7 +218,7 @@ export async function POST(request: NextRequest) {
             cost,
             prediction_id: taskId,
             status: 'processing',
-            prompt: prompt.trim(),
+            prompt: trimmedPrompt,
             category: 'image',
             source_generation_id: validatedSourceGenerationId,
             workflow_settings: {
@@ -196,6 +227,13 @@ export async function POST(request: NextRequest) {
                 resolution,
                 outputFormat,
                 googleSearch,
+                ...(alignedElements.length > 0
+                    ? {
+                        elements: alignedElements,
+                        promptMode: 'element-mentions-v1' as const,
+                        compiledPrompt,
+                    }
+                    : {}),
             },
         });
 

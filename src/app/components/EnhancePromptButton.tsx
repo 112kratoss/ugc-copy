@@ -13,6 +13,8 @@ interface EnhancePromptButtonProps {
     selectedModel: string;
     context?: EnhancerContext;
     disabled?: boolean;
+    label?: string;
+    helperText?: string;
 }
 
 export default function EnhancePromptButton({
@@ -23,9 +25,12 @@ export default function EnhancePromptButton({
     selectedModel,
     context,
     disabled = false,
+    label = 'Enhance',
+    helperText,
 }: EnhancePromptButtonProps) {
     const [isEnhancing, setIsEnhancing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const loadingLabel = label === 'Polish' ? 'Polishing...' : 'Enhancing...';
 
     const canEnhance = prompt.trim().length > 0 && !isEnhancing && !disabled;
 
@@ -102,7 +107,7 @@ export default function EnhancePromptButton({
                     ) : (
                         <Sparkles className={`w-3.5 h-3.5 transition-all ${canEnhance ? 'group-hover:scale-110' : ''}`} />
                     )}
-                    <span>{isEnhancing ? 'Enhancing...' : 'Enhance'}</span>
+                    <span>{isEnhancing ? loadingLabel : label}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
                         canEnhance
                             ? 'bg-violet-500/20 text-violet-400'
@@ -112,6 +117,10 @@ export default function EnhancePromptButton({
                     </span>
                 </button>
             </div>
+
+            {!error && helperText && (
+                <p className="px-1 text-xs text-zinc-500">{helperText}</p>
+            )}
 
             {error && (
                 <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg animate-in fade-in slide-in-from-top-1 duration-200">

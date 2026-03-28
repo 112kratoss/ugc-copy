@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound } from 'lucide-react';
@@ -36,32 +36,44 @@ export default function CreationsPage() {
     const [publishDesc, setPublishDesc] = useState('');
     const [isPublishing, setIsPublishing] = useState(false);
 
+    const fetchCreations = useCallback(async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+            router.push('/login');
+            return;
+        }
+
+        try {
+            const generationsRes = await fetch('/api/generations', {
+                headers: { 'Authorization': `Bearer ${session.access_token}` },
+            });
+
+            const generationsData = await generationsRes.json();
+            if (generationsRes.ok) {
+                setGenerations(generationsData.generations || []);
+            }
+        } catch (err) {
+            console.error('Failed to fetch creations:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [router]);
+
     useEffect(() => {
-        const fetchCreations = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) {
-                router.push('/login');
+        void fetchCreations();
+
+        const intervalId = window.setInterval(() => {
+            if (document.visibilityState === 'hidden') {
                 return;
             }
 
-            try {
-                const generationsRes = await fetch('/api/generations', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
-                });
+            void fetchCreations();
+        }, 30000);
 
-                const generationsData = await generationsRes.json();
-                if (generationsRes.ok) {
-                    setGenerations(generationsData.generations || []);
-                }
-            } catch (err) {
-                console.error('Failed to fetch creations:', err);
-            } finally {
-                setIsLoading(false);
-            }
+        return () => {
+            window.clearInterval(intervalId);
         };
-
-        fetchCreations();
-    }, [router]);
+    }, [fetchCreations]);
 
     const handlePublishSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -172,7 +184,7 @@ export default function CreationsPage() {
     };
 
     const successfulGenerations = generations.filter(g => g.status === 'succeeded' && g.output_url);
-    const processingGenerations = generations.filter(g => g.status === 'processing');
+    const processingGenerations = generations.filter(g => g.status === 'processing' || g.status === 'waiting');
     const failedGenerations = generations.filter(g => g.status === 'failed');
 
     const filteredSuccessful = successfulGenerations.filter(g => {
@@ -286,9 +298,24 @@ export default function CreationsPage() {
                 {/* Processing */}
                 {processingGenerations.length > 0 && (
                     <div className="mb-10">
-                        <h2 className="text-xs font-bold text-yellow-400/80 uppercase tracking-widest mb-4 flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin" /> Processing ({processingGenerations.length})
-                        </h2>
+                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                            <div>
+                                <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-yellow-400/80">
+                                    <Loader2 className="h-4 w-4 animate-spin" /> Processing ({processingGenerations.length})
+                                </h2>
+                                <p className="mt-2 max-w-2xl text-sm text-zinc-500">
+                                    Longer provider queues keep running in the background. This page refreshes automatically, so finished runs will move into Completed as soon as they land.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => void fetchCreations()}
+                                className="inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                            >
+                                <Loader2 className="h-3.5 w-3.5" />
+                                Refresh now
+                            </button>
+                        </div>
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                             {processingGenerations.map((gen, i) => (
                                 <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
@@ -296,7 +323,7 @@ export default function CreationsPage() {
                                     <div className="aspect-video bg-black/60 flex items-center justify-center">
                                         <div className="flex flex-col items-center gap-3">
                                             <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
-                                            <span className="text-xs text-zinc-500">Generating...</span>
+                                            <span className="text-xs text-zinc-500">Still processing in background...</span>
                                         </div>
                                     </div>
                                     <div className="p-4"><p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p></div>

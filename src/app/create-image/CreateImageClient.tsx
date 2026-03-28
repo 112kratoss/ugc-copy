@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check } from 'lucide-react';
@@ -9,12 +9,39 @@ import { supabase } from '@/lib/supabase';
 import {
     GeneratorPageHeader,
     MediaStudioShell,
+    StudioBackgroundProcessingNotice,
+    StudioMediaPreviewModal,
     StudioRemixNotice,
     StudioRunPanel,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
+import {
+    getPersistedFiles,
+    getPersistedImageElementRecords,
+    getPersistedValue,
+    PERSISTED_MEDIA_KEYS,
+    removePersistedMedia,
+    setPersistedImageElementRecords,
+} from '@/lib/persisted-media';
+import {
+    createElementHandleReplacementMap,
+    createElementId,
+    extractPromptHandles,
+    findUnknownPromptHandles,
+    getElementFileNameFromStoragePath,
+    getMentionQueryAtCaret,
+    getUploadsBucketPath,
+    insertHandleIntoPrompt,
+    isUploadsStoragePath,
+    normalizeElementDisplayName,
+    reconcileElementDescriptors,
+    replacePromptHandles,
+    type ImageElementDescriptor,
+    type PersistedImageElementDraft,
+} from '@/lib/image-elements';
+import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 
 // ─── Model Registry ─────────────────────────────────────────────────────────
 const IMAGE_MODELS = {
@@ -53,6 +80,73 @@ interface ImageWorkflowSettings {
     aspectRatio?: string;
     resolution?: string;
     googleSearch?: boolean;
+    elements?: ImageElementDescriptor[];
+    promptMode?: 'element-mentions-v1';
+    compiledPrompt?: string;
+}
+
+interface UploadPreviewState {
+    type: 'image';
+    src: string;
+    alt: string;
+    title: string;
+}
+
+type ImageElementDraft = ImageElementDescriptor & {
+    file: File | null;
+    previewUrl: string;
+    providerUrl: string | null;
+    source: 'upload' | 'remix';
+};
+
+type ImageElementSeed = {
+    id?: string;
+    displayName?: string;
+    file: File | null;
+    previewUrl: string;
+    providerUrl?: string | null;
+    storagePath?: string | null;
+    source?: 'upload' | 'remix';
+};
+
+function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
+    const baseElements = seeds.map((seed, index) => ({
+        id: seed.id ?? createElementId(),
+        displayName: normalizeElementDisplayName(seed.displayName, index + 1),
+        file: seed.file,
+        previewUrl: seed.previewUrl,
+        providerUrl: seed.providerUrl ?? null,
+        storagePath: seed.storagePath ?? null,
+        source: seed.source ?? 'upload',
+    }));
+
+    const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
+        id: element.id,
+        displayName: element.displayName,
+    })));
+    const byId = new Map(baseElements.map((element) => [element.id, element]));
+
+    return reconciled.map((element) => {
+        const existing = byId.get(element.id);
+        if (!existing) {
+            return {
+                id: element.id,
+                displayName: element.displayName,
+                handle: element.handle,
+                file: null,
+                previewUrl: '',
+                providerUrl: null,
+                storagePath: null,
+                source: 'upload' as const,
+            };
+        }
+
+        return {
+            ...existing,
+            displayName: element.displayName,
+            handle: element.handle,
+        };
+    });
 }
 
 export interface CreateImagePrefill {
@@ -67,7 +161,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const { credits: userCredits, isLoading: isLoadingUser, updateCredits } = useAuth();
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
-    const [referenceImages, setReferenceImages] = useState<{ url: string; file: File }[]>([]);
+    const [elements, setElements] = useState<ImageElementDraft[]>([]);
     const [aspectRatio, setAspectRatio] = useState('auto');
     const [resolution, setResolution] = useState('1K');
     const [googleSearch, setGoogleSearch] = useState(false);
@@ -78,6 +172,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [error, setError] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const hasRestoredPersistedMedia = useRef(false);
+    const elementRefs = useRef<ImageElementDraft[]>([]);
+    const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const [activeMentionQuery, setActiveMentionQuery] = useState<{
+        query: string;
+        replaceStart: number;
+        replaceEnd: number;
+    } | null>(null);
     
     // Remix State
     const remixId = prefill.remixId ?? null;
@@ -88,6 +190,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+    const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
+    const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
 
 
     useEffect(() => {
@@ -98,16 +202,60 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, [prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
 
     const model = IMAGE_MODELS[selectedModel];
+    const revokePreviewUrl = (url: string | null | undefined) => {
+        if (url?.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+        }
+    };
+
+    const clearLegacyPersistedImageElements = async () => {
+        await Promise.all([
+            removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageReferences),
+            removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageElementDrafts),
+        ]);
+    };
+
+    const persistUploadedImageElements = async (nextElements: ImageElementDraft[]) => {
+        if (remixId) {
+            return;
+        }
+
+        const persistableElements = nextElements
+            .filter((element) => element.file && element.source === 'upload')
+            .map((element) => ({
+                id: element.id,
+                displayName: element.displayName,
+                file: element.file as File,
+            }));
+
+        await setPersistedImageElementRecords(
+            PERSISTED_MEDIA_KEYS.createImageElements,
+            persistableElements
+        );
+        await clearLegacyPersistedImageElements();
+    };
+
+    const commitElements = (nextElements: ImageElementDraft[]) => {
+        elementRefs.current = nextElements;
+        setElements(nextElements);
+    };
+
+    const updateMentionState = (nextPrompt: string, caretIndex?: number) => {
+        const fallbackCaret = typeof caretIndex === 'number'
+            ? caretIndex
+            : (promptTextareaRef.current?.selectionStart ?? nextPrompt.length);
+        setActiveMentionQuery(getMentionQueryAtCaret(nextPrompt, fallbackCaret));
+    };
 
     // When model changes, clamp images and aspect ratio
     useEffect(() => {
-        setReferenceImages(prev => {
-            if (prev.length > model.maxImages) {
-                prev.slice(model.maxImages).forEach(img => URL.revokeObjectURL(img.url));
-                return prev.slice(0, model.maxImages);
-            }
-            return prev;
-        });
+        if (elements.length > model.maxImages) {
+            const nextElements = hydrateImageElements(elements.slice(0, model.maxImages));
+            elements.slice(model.maxImages).forEach((element) => revokePreviewUrl(element.previewUrl));
+            setElements(nextElements);
+            void persistUploadedImageElements(nextElements);
+        }
+
         if (!(model.aspectRatios as readonly string[]).includes(aspectRatio)) {
             setAspectRatio(model.aspectRatios[0]);
         }
@@ -169,12 +317,70 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                  
                  const settings = data.workflow_settings as ImageWorkflowSettings | null;
                  if (settings) {
+                     const restoredModelMaxImages = settings.model && IMAGE_MODELS[settings.model]
+                         ? IMAGE_MODELS[settings.model].maxImages
+                         : model.maxImages;
+
                      if (settings.model && IMAGE_MODELS[settings.model]) {
                          setSelectedModel(settings.model);
                      }
                      if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
                      if (settings.resolution) setResolution(settings.resolution);
                      if (settings.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
+
+                     if (settings.elements?.length) {
+                         const restoredSeeds = await Promise.all(
+                             settings.elements.slice(0, restoredModelMaxImages).map(async (element) => {
+                                 if (!isUploadsStoragePath(element.storagePath)) {
+                                     return null;
+                                 }
+
+                                 try {
+                                     const filePath = getUploadsBucketPath(element.storagePath);
+                                     const { data: signedData, error: signedUrlError } = await supabase.storage
+                                         .from('uploads')
+                                         .createSignedUrl(filePath, 3600);
+
+                                     if (signedUrlError || !signedData?.signedUrl) {
+                                         throw new Error(signedUrlError?.message || 'Failed to sign upload asset');
+                                     }
+
+                                     const assetResponse = await fetch(signedData.signedUrl);
+                                     if (!assetResponse.ok) {
+                                         throw new Error('Failed to download stored element asset');
+                                     }
+
+                                     const blob = await assetResponse.blob();
+                                     const restoredFile = new File(
+                                         [blob],
+                                         getElementFileNameFromStoragePath(element.storagePath, element.handle),
+                                         {
+                                             type: blob.type || 'image/jpeg',
+                                             lastModified: Date.now(),
+                                         }
+                                     );
+
+                                     return {
+                                         id: element.id,
+                                         displayName: element.displayName,
+                                         file: restoredFile,
+                                         previewUrl: URL.createObjectURL(restoredFile),
+                                         providerUrl: signedData.signedUrl,
+                                         storagePath: element.storagePath,
+                                         source: 'remix' as const,
+                                     };
+                                 } catch (restoreError) {
+                                     console.error('Failed to restore remix element:', restoreError);
+                                     return null;
+                                 }
+                             })
+                         );
+
+                         const validSeeds = restoredSeeds.filter((value): value is ImageElementSeed => value !== null);
+                         if (validSeeds.length > 0) {
+                             setElements(hydrateImageElements(validSeeds));
+                         }
+                     }
                  }
              } catch (err) {
                  console.error('Error fetching remix:', err);
@@ -186,45 +392,254 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         fetchRemixData();
     }, [remixId]);
 
-    const processImageFiles = (files: FileList | File[]) => {
+    useEffect(() => {
+        elementRefs.current = elements;
+    }, [elements]);
+
+    useEffect(() => {
+        return () => {
+            elementRefs.current.forEach((element) => {
+                revokePreviewUrl(element.previewUrl);
+            });
+        };
+    }, []);
+
+    const loadPersistedElements = useCallback(async () => {
+        if (remixId) {
+            return;
+        }
+
+        try {
+            const savedElementRecords = await getPersistedImageElementRecords(
+                PERSISTED_MEDIA_KEYS.createImageElements
+            );
+
+            if (savedElementRecords.length > 0) {
+                const clampedRecords = savedElementRecords.slice(0, model.maxImages);
+                const restoredElements = hydrateImageElements(
+                    clampedRecords.map((element) => ({
+                        id: element.id,
+                        displayName: element.displayName,
+                        file: element.file,
+                        previewUrl: URL.createObjectURL(element.file),
+                        source: 'upload',
+                    }))
+                );
+
+                commitElements(restoredElements);
+
+                if (clampedRecords.length !== savedElementRecords.length) {
+                    await persistUploadedImageElements(restoredElements);
+                }
+                return;
+            }
+
+            const [savedFiles, savedDrafts] = await Promise.all([
+                getPersistedFiles(PERSISTED_MEDIA_KEYS.createImageReferences),
+                getPersistedValue<PersistedImageElementDraft[]>(PERSISTED_MEDIA_KEYS.createImageElementDrafts),
+            ]);
+
+            if (savedFiles.length === 0) return;
+
+            const clampedFiles = savedFiles.slice(0, model.maxImages);
+            const restoredElements = hydrateImageElements(clampedFiles.map((file, index) => ({
+                id: savedDrafts?.[index]?.id,
+                displayName: savedDrafts?.[index]?.displayName,
+                file,
+                previewUrl: URL.createObjectURL(file),
+                source: 'upload',
+            })));
+
+            commitElements(restoredElements);
+
+            await persistUploadedImageElements(restoredElements);
+        } catch (err) {
+            console.error('Error loading persisted image elements:', err);
+        }
+    }, [model.maxImages, remixId]);
+
+    useEffect(() => {
+        if (hasRestoredPersistedMedia.current) return;
+        hasRestoredPersistedMedia.current = true;
+
+        void loadPersistedElements();
+    }, [loadPersistedElements]);
+
+    useEffect(() => {
+        if (remixId) return;
+
+        const restoreWhenReturning = () => {
+            if (document.visibilityState === 'visible' && elementRefs.current.length === 0) {
+                void loadPersistedElements();
+            }
+        };
+
+        window.addEventListener('focus', restoreWhenReturning);
+        document.addEventListener('visibilitychange', restoreWhenReturning);
+
+        return () => {
+            window.removeEventListener('focus', restoreWhenReturning);
+            document.removeEventListener('visibilitychange', restoreWhenReturning);
+        };
+    }, [loadPersistedElements, remixId]);
+
+    useEffect(() => {
+        return () => {
+            if (!remixId && elementRefs.current.length > 0) {
+                void persistUploadedImageElements(elementRefs.current);
+            }
+        };
+    }, [persistUploadedImageElements, remixId]);
+
+    const processImageFiles = async (files: FileList | File[]) => {
         const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
         if (validFiles.length === 0) return;
 
-        const availableSlots = model.maxImages - referenceImages.length;
+        const currentElements = elementRefs.current;
+        const availableSlots = model.maxImages - currentElements.length;
         const filesToAdd = validFiles.slice(0, availableSlots);
 
-        const newImages = filesToAdd.map(file => ({
-            url: URL.createObjectURL(file),
-            file
-        }));
-        setReferenceImages(prev => [...prev, ...newImages]);
+        if (filesToAdd.length === 0) {
+            return;
+        }
+
+        const newElements = hydrateImageElements(filesToAdd.map((file, index) => ({
+            displayName: `Element ${currentElements.length + index + 1}`,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload',
+        })));
+
+        const nextElements = hydrateImageElements([...currentElements, ...newElements]);
+        commitElements(nextElements);
+        await persistUploadedImageElements(nextElements);
     };
 
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files?.length) {
-            processImageFiles(e.target.files);
+            await processImageFiles(e.target.files);
             e.target.value = '';
         }
     };
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
-    const handleDrop = (e: React.DragEvent) => {
+    const handleDrop = async (e: React.DragEvent) => {
         e.preventDefault(); setIsDragging(false);
-        if (e.dataTransfer.files?.length) processImageFiles(e.dataTransfer.files);
+        if (e.dataTransfer.files?.length) await processImageFiles(e.dataTransfer.files);
     };
 
-    const handleRemoveImage = (index: number, e: React.MouseEvent) => {
-        e.preventDefault();
-        setReferenceImages(prev => {
-            const newImages = [...prev];
-            URL.revokeObjectURL(newImages[index].url);
-            newImages.splice(index, 1);
-            return newImages;
+    const handleRemoveElement = async (elementId: string) => {
+        const currentElements = elementRefs.current;
+        const removedElement = currentElements.find((element) => element.id === elementId);
+        if (removedElement) {
+            revokePreviewUrl(removedElement.previewUrl);
+        }
+
+        const nextElements = hydrateImageElements(
+            currentElements.filter((element) => element.id !== elementId)
+        );
+        setElementNameDrafts((prev) => {
+            if (!(elementId in prev)) {
+                return prev;
+            }
+
+            const nextDrafts = { ...prev };
+            delete nextDrafts[elementId];
+            return nextDrafts;
+        });
+        commitElements(nextElements);
+        await persistUploadedImageElements(nextElements);
+    };
+
+    const handleElementRename = async (elementId: string, nextDisplayName: string) => {
+        const currentElements = elementRefs.current;
+        const nextElements = hydrateImageElements(
+            currentElements.map((element) => (
+                element.id === elementId
+                    ? { ...element, displayName: nextDisplayName }
+                    : element
+            ))
+        );
+        const replacements = createElementHandleReplacementMap(currentElements, nextElements);
+
+        commitElements(nextElements);
+        await persistUploadedImageElements(nextElements);
+        if (replacements.size > 0) {
+            setPrompt((currentPrompt) => {
+                const nextPrompt = replacePromptHandles(currentPrompt, replacements);
+                requestAnimationFrame(() => updateMentionState(nextPrompt));
+                return nextPrompt;
+            });
+            return;
+        }
+
+        requestAnimationFrame(() => updateMentionState(prompt));
+    };
+
+    const handleElementDraftChange = (elementId: string, nextValue: string) => {
+        setElementNameDrafts((prev) => ({
+            ...prev,
+            [elementId]: nextValue,
+        }));
+    };
+
+    const commitElementDraft = async (elementId: string) => {
+        const draftValue = elementNameDrafts[elementId];
+        if (draftValue === undefined) {
+            return;
+        }
+
+        const trimmed = draftValue.trim();
+        setElementNameDrafts((prev) => {
+            const nextDrafts = { ...prev };
+            delete nextDrafts[elementId];
+            return nextDrafts;
+        });
+
+        if (!trimmed) {
+            return;
+        }
+
+        const currentElement = elementRefs.current.find((element) => element.id === elementId);
+        if (!currentElement || currentElement.displayName === trimmed) {
+            return;
+        }
+
+        await handleElementRename(elementId, trimmed);
+    };
+
+    const handlePromptChange = (value: string, caretIndex?: number) => {
+        setPrompt(value);
+        updateMentionState(value, caretIndex);
+    };
+
+    const handleInsertElementHandle = (handle: string) => {
+        const textarea = promptTextareaRef.current;
+        const selectionStart = textarea?.selectionStart ?? prompt.length;
+        const selectionEnd = textarea?.selectionEnd ?? prompt.length;
+        const nextValue = insertHandleIntoPrompt(
+            prompt,
+            handle,
+            selectionStart,
+            selectionEnd,
+            activeMentionQuery
+        );
+
+        setPrompt(nextValue.prompt);
+        setActiveMentionQuery(null);
+
+        requestAnimationFrame(() => {
+            textarea?.focus();
+            textarea?.setSelectionRange(nextValue.caretIndex, nextValue.caretIndex);
         });
     };
 
-    const uploadToSupabase = async (file: File): Promise<string> => {
+    const syncPromptCaretState = () => {
+        updateMentionState(prompt);
+    };
+
+    const uploadToSupabase = async (file: File): Promise<{ signedUrl: string; storagePath: string }> => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Please log in to upload files.');
 
@@ -241,7 +656,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             throw new Error(`Signed URL generation failed: ${signedUrlError?.message || 'Unknown error'}`);
         }
 
-        return signedData.signedUrl;
+        return {
+            signedUrl: signedData.signedUrl,
+            storagePath: `uploads/${fileName}`,
+        };
     };
 
     const pollPrediction = async (predictionId: string, accessToken: string): Promise<string> => {
@@ -270,7 +688,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             await new Promise(resolve => setTimeout(resolve, 5000));
             attempts++;
         }
-        throw new Error('Image generation timed out. Please try again.');
+        throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
     const calculateCost = () => {
@@ -286,9 +704,28 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     };
     const currentCost = calculateCost();
     const insufficientCredits = userCredits !== null && userCredits < currentCost;
+    const elementHandles = elements.map((element) => element.handle);
+    const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
+    const isElementEnhancementLocked = referencedElementHandles.length > 0;
+    const staleElementMentions = findUnknownPromptHandles(prompt, elementHandles);
+    const mentionSuggestions = activeMentionQuery
+        ? elements.filter((element) => {
+            const normalizedQuery = activeMentionQuery.query.toLowerCase();
+            if (!normalizedQuery) return true;
+
+            return (
+                element.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
+                element.displayName.toLowerCase().includes(normalizedQuery)
+            );
+        })
+        : [];
 
     const handleGenerate = async () => {
         if (!prompt.trim()) { setError('Please enter a prompt'); return; }
+        if (staleElementMentions.length > 0) {
+            setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
+            return;
+        }
         if (userCredits !== null && userCredits < currentCost) { setError(`Insufficient credits. Image generation costs ${currentCost} credits.`); return; }
 
         setIsGenerating(true);
@@ -298,9 +735,42 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
         try {
             let imageUrls: string[] = [];
-            if (referenceImages.length > 0) {
-                setGenerationStatus(`Uploading ${referenceImages.length} reference images... (2%)`);
-                imageUrls = await Promise.all(referenceImages.map(img => uploadToSupabase(img.file)));
+            const requestElements: ImageElementDescriptor[] = [];
+
+            if (elements.length > 0) {
+                setGenerationStatus(`Preparing ${elements.length} elements... (2%)`);
+
+                const uploadedElements = await Promise.all(elements.map(async (element) => {
+                    if (element.file) {
+                        const upload = await uploadToSupabase(element.file);
+                        return {
+                            descriptor: {
+                                id: element.id,
+                                displayName: element.displayName,
+                                handle: element.handle,
+                                storagePath: upload.storagePath,
+                            } satisfies ImageElementDescriptor,
+                            imageUrl: upload.signedUrl,
+                        };
+                    }
+
+                    if (!element.providerUrl) {
+                        throw new Error(`Missing media for ${element.displayName}`);
+                    }
+
+                    return {
+                        descriptor: {
+                            id: element.id,
+                            displayName: element.displayName,
+                            handle: element.handle,
+                            storagePath: element.storagePath ?? null,
+                        } satisfies ImageElementDescriptor,
+                        imageUrl: element.providerUrl,
+                    };
+                }));
+
+                requestElements.push(...uploadedElements.map((item) => item.descriptor));
+                imageUrls = uploadedElements.map((item) => item.imageUrl);
             }
 
             setGenerationStatus('Starting AI generation... (5%)');
@@ -318,6 +788,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     model: selectedModel,
                     prompt: prompt.trim(),
                     imageUrls,
+                    elements: requestElements,
                     aspectRatio,
                     resolution,
                     googleSearch: model.supportsGoogleSearch ? googleSearch : false,
@@ -335,8 +806,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
 
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Something went wrong');
-            setGenerationStatus(null);
+            const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
+            if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
+                setError(BACKGROUND_PROCESSING_ERROR);
+                setGenerationStatus(getBackgroundProcessingCopy('image').status);
+            } else {
+                setError(errorMessage);
+                setGenerationStatus(null);
+            }
         } finally {
             setIsGenerating(false);
         }
@@ -364,6 +841,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             progress: 'from-violet-500 to-purple-500',
         },
     }[model.accentColor];
+    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
+    const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
 
     if (isLoadingUser) {
         return (
@@ -377,17 +856,17 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         ? 'Latest image result'
         : isGenerating
             ? 'Creating your image'
-            : remixImageUrl
-                ? 'Remix reference loaded'
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.title
                 : 'Ready for your next still';
 
     const workspaceDescription = outputImage
         ? 'Your newest image stays here until you start another run.'
         : isGenerating
             ? 'Watch the current run here while the model handles generation.'
-            : remixImageUrl
-                ? 'Use the original community result as reference while you tune prompt and settings.'
-                : 'The current run will appear here once you generate.';
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.description
+                : 'The workspace stays focused on the active run and latest result once you generate.';
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -539,23 +1018,110 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 onCreditsUpdate={updateCredits}
                                 medium="image"
                                 selectedModel={selectedModel}
+                                label={isElementEnhancementLocked ? 'Polish' : 'Enhance'}
+                                helperText={
+                                    isElementEnhancementLocked
+                                        ? 'Named elements stay locked. This only adds light visual polish around your original @element sentence.'
+                                        : undefined
+                                }
                                 context={{
                                     modelId: selectedModel,
                                     aspectRatio,
                                     resolution,
                                     googleSearch,
-                                    referenceImageCount: referenceImages.length,
+                                    referenceImageCount: elements.length,
+                                    elementEnhancementMode: isElementEnhancementLocked ? 'append-only' : undefined,
+                                    elementReferences: elements.map((element) => ({
+                                        handle: element.handle,
+                                        displayName: element.displayName,
+                                    })),
                                 }}
                                 disabled={isGenerating}
                             />
+                            <div className="mb-4 mt-4 space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                        Named elements
+                                    </p>
+                                    <span className="text-xs text-zinc-500">
+                                        Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
+                                    </span>
+                                </div>
+                                {elements.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        {elements.map((element) => (
+                                            <button
+                                                key={element.id}
+                                                type="button"
+                                                onClick={() => handleInsertElementHandle(element.handle)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                            >
+                                                <span className="text-zinc-400">{element.displayName}</span>
+                                                <span className="text-sky-300">{element.handle}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-zinc-500">
+                                        Upload one or more element images below to mention them by name in the prompt.
+                                    </p>
+                                )}
+                            </div>
                             <textarea
+                                ref={promptTextareaRef}
                                 value={prompt}
-                                onChange={(e) => setPrompt(e.target.value)}
+                                onChange={(e) => handlePromptChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+                                onClick={syncPromptCaretState}
+                                onKeyUp={syncPromptCaretState}
                                 placeholder="Describe the image you want to create..."
                                 maxLength={20000}
                                 className={`w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 ${accentStyles.ring} focus:ring-4 outline-none resize-y min-h-[150px] placeholder:text-zinc-600 transition-all text-sm leading-relaxed`}
                             />
-                            <p className="text-xs text-zinc-600 mt-2">{prompt.length}/20000 characters</p>
+                            <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                                <p className="text-zinc-600">{prompt.length}/20000 characters</p>
+                                {staleElementMentions.length > 0 ? (
+                                    <p className="text-right text-rose-300">
+                                        Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
+                                        {staleElementMentions.join(', ')}
+                                    </p>
+                                ) : null}
+                            </div>
+                            {activeMentionQuery ? (
+                                <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                                Insert element
+                                            </p>
+                                            <p className="mt-1 text-sm text-zinc-400">
+                                                {mentionSuggestions.length > 0
+                                                    ? 'Pick an element to insert its @mention.'
+                                                    : 'No matching elements yet.'}
+                                            </p>
+                                        </div>
+                                        {activeMentionQuery.query ? (
+                                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
+                                                @{activeMentionQuery.query}
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                    {mentionSuggestions.length > 0 ? (
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            {mentionSuggestions.map((element) => (
+                                                <button
+                                                    key={element.id}
+                                                    type="button"
+                                                    onClick={() => handleInsertElementHandle(element.handle)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+                                                >
+                                                    <span className="text-zinc-400">{element.displayName}</span>
+                                                    <span className="text-sky-300">{element.handle}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : null}
                         </motion.div>
 
                         <motion.div
@@ -566,30 +1132,99 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         >
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div>
-                                    <h2 className="text-sm font-semibold text-white">Reference images</h2>
-                                    <p className="mt-1 text-sm text-zinc-400">Guide composition, subject, or style with optional references.</p>
+                                    <h2 className="text-sm font-semibold text-white">Elements</h2>
+                                    <p className="mt-1 text-sm text-zinc-400">Upload visual anchors, rename them, and reference them directly in the prompt.</p>
                                 </div>
                                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                    {referenceImages.length}/{model.maxImages}
+                                    {elements.length}/{model.maxImages}
                                 </span>
                             </div>
 
-                            <div className="grid grid-cols-3 gap-2 mb-4">
-                                {referenceImages.map((img, idx) => (
-                                    <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-zinc-700/50 group">
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img src={img.url} alt={`Reference ${idx + 1}`} className="w-full h-full object-cover" />
-                                        <button
-                                            onClick={(e) => handleRemoveImage(idx, e)}
-                                            className="absolute top-1 right-1 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full backdrop-blur-md opacity-0 group-hover:opacity-100 transition-all scale-75 group-hover:scale-100"
-                                        >
-                                            <X className="w-3 h-3" />
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
+                            {elements.length > 0 ? (
+                                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                    {elements.map((element) => (
+                                        <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
+                                            <div className="relative aspect-square group">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setUploadPreview({
+                                                        type: 'image',
+                                                        src: element.previewUrl,
+                                                        alt: element.displayName,
+                                                        title: element.displayName,
+                                                    })}
+                                                    className="block h-full w-full"
+                                                >
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img
+                                                        src={element.previewUrl}
+                                                        alt={element.displayName}
+                                                        className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                                    />
+                                                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                                                    <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/90 backdrop-blur-md">
+                                                        Preview
+                                                    </div>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemoveElement(element.id)}
+                                                    className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-1.5 text-white backdrop-blur-md transition hover:bg-red-500"
+                                                >
+                                                    <X className="h-3 w-3" />
+                                                </button>
+                                            </div>
+                                            <div className="space-y-3 p-3">
+                                                <div>
+                                                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                                        Element name
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={elementNameDrafts[element.id] ?? element.displayName}
+                                                        onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
+                                                        onBlur={() => void commitElementDraft(element.id)}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === 'Enter') {
+                                                                event.preventDefault();
+                                                                void commitElementDraft(element.id);
+                                                                event.currentTarget.blur();
+                                                            }
 
-                            {referenceImages.length < model.maxImages && (
+                                                            if (event.key === 'Escape') {
+                                                                setElementNameDrafts((prev) => {
+                                                                    if (!(element.id in prev)) {
+                                                                        return prev;
+                                                                    }
+
+                                                                    const nextDrafts = { ...prev };
+                                                                    delete nextDrafts[element.id];
+                                                                    return nextDrafts;
+                                                                });
+                                                                event.currentTarget.blur();
+                                                            }
+                                                        }}
+                                                        className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500/40"
+                                                        placeholder="Rename element"
+                                                    />
+                                                </div>
+                                                <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
+                                                    <span className="truncate text-xs font-semibold text-sky-300">{element.handle}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleInsertElementHandle(element.handle)}
+                                                        className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
+                                                    >
+                                                        Insert
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : null}
+
+                            {elements.length < model.maxImages && (
                                 <label
                                     className={`group flex flex-col items-center justify-center w-full h-[120px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDragging
                                         ? 'border-cyan-400 bg-cyan-500/10 shadow-[0_0_30px_-5px_rgba(6,182,212,0.3)]'
@@ -601,7 +1236,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 >
                                     <div className="flex flex-col items-center gap-2 text-zinc-500">
                                         <ImageIcon className={`w-6 h-6 transition-colors ${isDragging ? 'text-cyan-400' : ''}`} />
-                                        <span className="text-sm">{isDragging ? 'Drop images here' : 'Drop images or click'}</span>
+                                        <span className="text-sm">{isDragging ? 'Drop element images here' : 'Drop element images or click'}</span>
                                     </div>
                                     <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
                                 </label>
@@ -709,8 +1344,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <div className="mt-1 text-zinc-200">{resolution}</div>
                                     </div>
                                     <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">References</div>
-                                        <div className="mt-1 text-zinc-200">{referenceImages.length}/{model.maxImages}</div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Elements</div>
+                                        <div className="mt-1 text-zinc-200">{elements.length}/{model.maxImages}</div>
                                     </div>
                                     <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
@@ -735,7 +1370,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={!prompt.trim() || isGenerating}
+                                        disabled={!prompt.trim() || isGenerating || staleElementMentions.length > 0}
                                         className={`flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r px-6 py-4 text-base font-semibold text-white transition ${accentStyles.generate} disabled:cursor-not-allowed disabled:opacity-50`}
                                     >
                                         {isGenerating ? (
@@ -764,8 +1399,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             </div>
                                             <p className="text-xs text-zinc-500">Usually takes 30–90 seconds.</p>
                                         </div>
+                                    ) : isBackgroundProcessing ? (
+                                        <StudioBackgroundProcessingNotice accent={model.accentColor} label="image" />
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
+                                    ) : staleElementMentions.length > 0 ? (
+                                        <p className="text-sm text-rose-300">
+                                            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating: {staleElementMentions.join(', ')}
+                                        </p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>
                                     )}
@@ -832,22 +1473,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         </p>
                                     </div>
                                 </div>
-                            ) : remixImageUrl ? (
-                                <div className="space-y-5">
-                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/50">
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img src={remixImageUrl} alt="Original remix reference" className="block h-auto w-full object-cover" />
-                                    </div>
-                                    <div className="flex flex-wrap gap-3">
-                                        <button
-                                            onClick={() => setIsPreviewModalOpen(true)}
-                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                        >
-                                            <ImageIcon className="h-4 w-4" />
-                                            View original
-                                        </button>
-                                    </div>
-                                </div>
+                            ) : isBackgroundProcessing ? (
+                                <StudioBackgroundProcessingNotice accent={model.accentColor} label="image" variant="workspace" />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${model.accentColor === 'violet' ? 'from-violet-500/30 to-purple-500/10' : 'from-blue-500/30 to-cyan-500/10'}`}>
@@ -856,7 +1483,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">No image yet</h3>
                                         <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            Write the prompt, optionally drop in a few references, then generate. The latest result will take over this workspace.
+                                            Write the prompt, optionally add a few named elements, then generate. The latest result will take over this workspace.
                                         </p>
                                     </div>
                                 </div>
@@ -866,49 +1493,31 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 }
             />
 
-            {/* Remix Preview Modal */}
-            <AnimatePresence>
-                {isPreviewModalOpen && remixImageUrl && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-                        onClick={() => setIsPreviewModalOpen(false)}
-                    >
-                        <motion.div
-                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="bg-zinc-900 border border-white/10 p-6 rounded-3xl max-w-2xl w-full flex flex-col gap-6 shadow-2xl relative"
-                        >
-                            <button
-                                onClick={() => setIsPreviewModalOpen(false)}
-                                className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                            
-                            <h2 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
-                                Original Creation
-                            </h2>
-                            
-                            <div className="rounded-xl overflow-hidden border border-white/5 bg-black/50 flex items-center justify-center flex-1 min-h-[300px]">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={remixImageUrl} alt="Original" className="max-h-[60vh] object-contain rounded-xl" />
-                            </div>
-                            
-                            <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col gap-2">
-                                <div className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Prompt</div>
-                                <p className="text-sm text-zinc-300 leading-relaxed max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                                    {prompt || "No prompt available"}
-                                </p>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            <StudioMediaPreviewModal
+                isOpen={Boolean(uploadPreview)}
+                onClose={() => setUploadPreview(null)}
+                mediaType="image"
+                src={uploadPreview?.src ?? null}
+                alt={uploadPreview?.alt ?? 'Reference image'}
+                title={uploadPreview?.title ?? 'Reference Preview'}
+            />
+
+            <StudioMediaPreviewModal
+                isOpen={isPreviewModalOpen}
+                onClose={() => setIsPreviewModalOpen(false)}
+                mediaType="image"
+                src={remixImageUrl}
+                alt="Original creation"
+                title="Original Creation"
+                footer={
+                    <div className="flex flex-col gap-2">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
+                        <p className="max-h-32 overflow-y-auto pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
+                            {prompt || "No prompt available"}
+                        </p>
+                    </div>
+                }
+            />
         </div>
     );
 }

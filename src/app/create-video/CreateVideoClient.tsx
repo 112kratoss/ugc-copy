@@ -9,18 +9,54 @@ import { supabase } from '@/lib/supabase';
 import {
     GeneratorPageHeader,
     MediaStudioShell,
+    StudioBackgroundProcessingNotice,
+    StudioMediaPreviewModal,
     StudioRemixNotice,
     StudioRunPanel,
+    StudioUploadedMediaPreview,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { useAuth } from '@/app/components/AuthProvider';
+import {
+    getPersistedFile,
+    getPersistedImageElementRecords,
+    getPersistedValue,
+    PERSISTED_MEDIA_KEYS,
+    removePersistedMedia,
+    setPersistedFile,
+    setPersistedImageElementRecords,
+    setPersistedValue,
+} from '@/lib/persisted-media';
+import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
+import {
+    createElementHandleReplacementMap,
+    createElementId,
+    extractPromptHandles,
+    findUnknownPromptHandles,
+    getElementFileNameFromStoragePath,
+    getMentionQueryAtCaret,
+    getUploadsBucketPath,
+    insertHandleIntoPrompt,
+    isUploadsStoragePath,
+    normalizeElementDisplayName,
+    reconcileElementDescriptors,
+    replacePromptHandles,
+    type ImageElementDescriptor,
+} from '@/lib/image-elements';
 
 interface MultiShot {
     id: string;
     prompt: string;
     duration: number;
+}
+
+interface UploadPreviewState {
+    type: 'image' | 'video';
+    src: string;
+    alt: string;
+    title: string;
 }
 
 interface VideoWorkflowSettings {
@@ -33,6 +69,67 @@ interface VideoWorkflowSettings {
     duration?: number;
     resolution?: string;
     fixedLens?: boolean;
+    elements?: ImageElementDescriptor[];
+    promptMode?: 'element-mentions-v1';
+    compiledPrompt?: string;
+    referenceMode?: 'frames' | 'elements';
+}
+
+type VideoElementDraft = ImageElementDescriptor & {
+    file: File | null;
+    previewUrl: string;
+    providerUrl: string | null;
+    source: 'upload' | 'remix';
+};
+
+type VideoElementSeed = {
+    id?: string;
+    displayName?: string;
+    file: File | null;
+    previewUrl: string;
+    providerUrl?: string | null;
+    storagePath?: string | null;
+    source?: 'upload' | 'remix';
+};
+
+function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
+    const baseElements = seeds.map((seed, index) => ({
+        id: seed.id ?? createElementId(),
+        displayName: normalizeElementDisplayName(seed.displayName, index + 1),
+        file: seed.file,
+        previewUrl: seed.previewUrl,
+        providerUrl: seed.providerUrl ?? null,
+        storagePath: seed.storagePath ?? null,
+        source: seed.source ?? 'upload',
+    }));
+
+    const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
+        id: element.id,
+        displayName: element.displayName,
+    })));
+    const byId = new Map(baseElements.map((element) => [element.id, element]));
+
+    return reconciled.map((element) => {
+        const existing = byId.get(element.id);
+        if (!existing) {
+            return {
+                id: element.id,
+                displayName: element.displayName,
+                handle: element.handle,
+                file: null,
+                previewUrl: '',
+                providerUrl: null,
+                storagePath: null,
+                source: 'upload' as const,
+            };
+        }
+
+        return {
+            ...existing,
+            displayName: element.displayName,
+            handle: element.handle,
+        };
+    });
 }
 
 export interface CreateVideoPrefill {
@@ -59,6 +156,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
         { id: '1', prompt: '', duration: 5 },
     ]);
+    const [elements, setElements] = useState<VideoElementDraft[]>([]);
+    const [referenceMode, setReferenceMode] = useState<'frames' | 'elements'>('frames');
+    const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
     const [startImageUrl, setStartImageUrl] = useState<string | null>(null);
     const [endImageFile, setEndImageFile] = useState<File | null>(null);
@@ -77,11 +177,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [error, setError] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
+    const startImageInputRef = useRef<HTMLInputElement>(null);
+    const endImageInputRef = useRef<HTMLInputElement>(null);
+    const elementInputRef = useRef<HTMLInputElement>(null);
+    const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const elementsRef = useRef<VideoElementDraft[]>([]);
+    const [isDraggingElements, setIsDraggingElements] = useState(false);
+    const [activeMentionQuery, setActiveMentionQuery] = useState<{
+        query: string;
+        replaceStart: number;
+        replaceEnd: number;
+    } | null>(null);
 
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+    const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
 
     useEffect(() => {
         if (remixId) return;
@@ -95,6 +207,39 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
 
     const videoModel = VIDEO_MODELS[selectedModel];
+    const revokeObjectUrl = (url: string | null) => {
+        if (url?.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+        }
+    };
+    const commitElements = (nextElements: VideoElementDraft[]) => {
+        elementsRef.current = nextElements;
+        setElements(nextElements);
+    };
+    const persistVideoElements = async (nextElements: VideoElementDraft[]) => {
+        if (remixId) {
+            return;
+        }
+
+        const persistableElements = nextElements
+            .filter((element) => element.file && element.source === 'upload')
+            .map((element) => ({
+                id: element.id,
+                displayName: element.displayName,
+                file: element.file as File,
+            }));
+
+        await setPersistedImageElementRecords(
+            PERSISTED_MEDIA_KEYS.createVideoElements,
+            persistableElements
+        );
+    };
+    const updateMentionState = (nextPrompt: string, caretIndex?: number) => {
+        const fallbackCaret = typeof caretIndex === 'number'
+            ? caretIndex
+            : (promptTextareaRef.current?.selectionStart ?? nextPrompt.length);
+        setActiveMentionQuery(getMentionQueryAtCaret(nextPrompt, fallbackCaret));
+    };
     const currentMode = videoModel.modeOptions.length > 0 && videoModel.modeOptions.some((option) => option.value === mode)
         ? mode
         : (videoModel.modeOptions[0]?.value || '');
@@ -109,6 +254,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const currentSound = videoModel.supportsSound ? sound : false;
     const currentFixedLens = videoModel.supportsFixedLens ? fixedLens : false;
     const currentIsMultiShot = videoModel.supportsMultiShot ? isMultiShot : false;
+    const videoElementSupport = getVideoElementSupport(selectedModel, {
+        mode: currentMode,
+        isMultiShot: currentIsMultiShot,
+    });
+    const canUseVideoElements = videoElementSupport.enabled;
+    const activeReferenceMode = canUseVideoElements ? referenceMode : 'frames';
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (videoModel.provider === 'veo' ? videoModel.durations[0] : currentDuration);
@@ -119,6 +270,30 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         resolution: currentResolution,
     });
     const insufficientCredits = userCredits !== null && userCredits < estimatedCost;
+    const elementHandles = elements.map((element) => element.handle);
+    const knownElementMentions = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
+    const staleElementMentions = findUnknownPromptHandles(prompt, elementHandles);
+    const hasKnownElementMentions = knownElementMentions.length > 0;
+    const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
+    const mentionSuggestions = activeMentionQuery
+        ? elements.filter((element) => {
+            const normalizedQuery = activeMentionQuery.query.toLowerCase();
+            if (!normalizedQuery) return true;
+
+            return (
+                element.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
+                element.displayName.toLowerCase().includes(normalizedQuery)
+            );
+        })
+        : [];
+    const showElementEditor = !currentIsMultiShot && canUseVideoElements && activeReferenceMode === 'elements';
+    const showFramesEditor = activeReferenceMode === 'frames';
+    const hiddenElementDraftCount = activeReferenceMode === 'frames' ? elements.length : 0;
+    const hiddenFrameDraftCount = activeReferenceMode === 'elements'
+        ? [startImageUrl, endImageUrl].filter(Boolean).length
+        : 0;
+    const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
+    const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || hasKnownElementMentions);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -130,6 +305,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
+
+    useEffect(() => {
+        return () => {
+            revokeObjectUrl(startImageUrl);
+            revokeObjectUrl(endImageUrl);
+            elementsRef.current.forEach((element) => revokeObjectUrl(element.previewUrl));
+        };
+    }, [startImageUrl, endImageUrl]);
+
+    useEffect(() => {
+        elementsRef.current = elements;
+    }, [elements]);
 
     useEffect(() => {
         if (videoModel.modeOptions?.length) {
@@ -168,6 +355,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setIsMultiShot(false);
         }
     }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution]);
+
+    useEffect(() => {
+        if (!canUseVideoElements || elements.length <= videoElementSupport.maxElements) {
+            return;
+        }
+
+        const nextElements = hydrateVideoElements(elements.slice(0, videoElementSupport.maxElements));
+        elements.slice(videoElementSupport.maxElements).forEach((element) => revokeObjectUrl(element.previewUrl));
+        commitElements(nextElements);
+        void persistVideoElements(nextElements);
+    }, [canUseVideoElements, elements, videoElementSupport.maxElements]);
 
     useEffect(() => {
         if (!remixId) return;
@@ -234,6 +432,62 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     if (settings.sound !== undefined) setSound(settings.sound);
                     if (settings.resolution) setResolution(settings.resolution);
                     if (settings.fixedLens !== undefined) setFixedLens(settings.fixedLens);
+                    if (settings.referenceMode) setReferenceMode(settings.referenceMode);
+
+                    if (settings.elements?.length) {
+                        const restoredSeeds = await Promise.all(
+                            settings.elements.map(async (element) => {
+                                if (!isUploadsStoragePath(element.storagePath)) {
+                                    return null;
+                                }
+
+                                try {
+                                    const filePath = getUploadsBucketPath(element.storagePath);
+                                    const { data: signedData, error: signedUrlError } = await supabase.storage
+                                        .from('uploads')
+                                        .createSignedUrl(filePath, 3600);
+
+                                    if (signedUrlError || !signedData?.signedUrl) {
+                                        throw new Error(signedUrlError?.message || 'Failed to sign upload asset');
+                                    }
+
+                                    const assetResponse = await fetch(signedData.signedUrl);
+                                    if (!assetResponse.ok) {
+                                        throw new Error('Failed to download stored element asset');
+                                    }
+
+                                    const blob = await assetResponse.blob();
+                                    const restoredFile = new File(
+                                        [blob],
+                                        getElementFileNameFromStoragePath(element.storagePath, element.handle),
+                                        {
+                                            type: blob.type || 'image/jpeg',
+                                            lastModified: Date.now(),
+                                        }
+                                    );
+
+                                    return {
+                                        id: element.id,
+                                        displayName: element.displayName,
+                                        file: restoredFile,
+                                        previewUrl: URL.createObjectURL(restoredFile),
+                                        providerUrl: signedData.signedUrl,
+                                        storagePath: element.storagePath,
+                                        source: 'remix' as const,
+                                    };
+                                } catch (restoreError) {
+                                    console.error('Failed to restore remix video element:', restoreError);
+                                    return null;
+                                }
+                            })
+                        );
+
+                        const validSeeds = restoredSeeds.filter((value): value is VideoElementSeed => value !== null);
+                        if (validSeeds.length > 0) {
+                            commitElements(hydrateVideoElements(validSeeds));
+                            setReferenceMode('elements');
+                        }
+                    }
                 } else if (data.prompt) {
                     setPrompt(data.prompt);
                 }
@@ -245,6 +499,59 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         };
 
         fetchRemixData();
+    }, [remixId]);
+
+    useEffect(() => {
+        if (remixId) {
+            return;
+        }
+
+        let isMounted = true;
+
+        const loadPersistedMedia = async () => {
+            try {
+                const [savedStartImage, savedEndImage, savedElements, savedReferenceMode] = await Promise.all([
+                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
+                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage),
+                    getPersistedImageElementRecords(PERSISTED_MEDIA_KEYS.createVideoElements),
+                    getPersistedValue<'frames' | 'elements'>(PERSISTED_MEDIA_KEYS.createVideoReferenceMode),
+                ]);
+
+                if (!isMounted) return;
+
+                if (savedReferenceMode === 'frames' || savedReferenceMode === 'elements') {
+                    setReferenceMode(savedReferenceMode);
+                }
+
+                if (savedStartImage) {
+                    setStartImageFile(savedStartImage);
+                    setStartImageUrl(URL.createObjectURL(savedStartImage));
+                }
+
+                if (savedEndImage) {
+                    setEndImageFile(savedEndImage);
+                    setEndImageUrl(URL.createObjectURL(savedEndImage));
+                }
+
+                if (savedElements.length > 0) {
+                    commitElements(hydrateVideoElements(savedElements.map((element) => ({
+                        id: element.id,
+                        displayName: element.displayName,
+                        file: element.file,
+                        previewUrl: URL.createObjectURL(element.file),
+                        source: 'upload',
+                    }))));
+                }
+            } catch (err) {
+                console.error('Error loading persisted video media:', err);
+            }
+        };
+
+        void loadPersistedMedia();
+
+        return () => {
+            isMounted = false;
+        };
     }, [remixId]);
 
     const addShot = () => {
@@ -261,7 +568,58 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setMultiPrompts(multiPrompts.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot));
     };
 
-    const handleImageDrop = (event: React.DragEvent, type: 'start' | 'end') => {
+    const setReferenceModeWithPersistence = async (nextMode: 'frames' | 'elements') => {
+        setReferenceMode(nextMode);
+        if (remixId) {
+            return;
+        }
+        await setPersistedValue(PERSISTED_MEDIA_KEYS.createVideoReferenceMode, nextMode);
+    };
+
+    const persistFrame = async (file: File, type: 'start' | 'end') => {
+        await setReferenceModeWithPersistence('frames');
+
+        if (type === 'start') {
+            revokeObjectUrl(startImageUrl);
+            setStartImageFile(file);
+            setStartImageUrl(URL.createObjectURL(file));
+            if (!remixId) {
+                await setPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage, file);
+            }
+            return;
+        }
+
+        revokeObjectUrl(endImageUrl);
+        setEndImageFile(file);
+        setEndImageUrl(URL.createObjectURL(file));
+        if (!remixId) {
+            await setPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage, file);
+        }
+    };
+
+    const processElementFiles = async (files: FileList | File[]) => {
+        const validFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+        if (validFiles.length === 0) return;
+
+        const currentElements = elementsRef.current;
+        const availableSlots = videoElementSupport.maxElements - currentElements.length;
+        const filesToAdd = validFiles.slice(0, availableSlots);
+        if (filesToAdd.length === 0) return;
+
+        const newElements = hydrateVideoElements(filesToAdd.map((file, index) => ({
+            displayName: `Element ${currentElements.length + index + 1}`,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload',
+        })));
+
+        const nextElements = hydrateVideoElements([...currentElements, ...newElements]);
+        commitElements(nextElements);
+        await persistVideoElements(nextElements);
+        await setReferenceModeWithPersistence('elements');
+    };
+
+    const handleImageDrop = async (event: React.DragEvent, type: 'start' | 'end') => {
         event.preventDefault();
         if (type === 'start') {
             setIsDraggingStart(false);
@@ -271,42 +629,163 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         const file = event.dataTransfer.files?.[0];
         if (file && file.type.startsWith('image/')) {
-            if (type === 'start') {
-                setStartImageFile(file);
-                setStartImageUrl(URL.createObjectURL(file));
-            } else {
-                setEndImageFile(file);
-                setEndImageUrl(URL.createObjectURL(file));
-            }
+            await persistFrame(file, type);
         }
     };
 
-    const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>, type: 'start' | 'end') => {
+    const handleElementDrop = async (event: React.DragEvent) => {
+        event.preventDefault();
+        setIsDraggingElements(false);
+        if (event.dataTransfer.files?.length) {
+            await processElementFiles(event.dataTransfer.files);
+        }
+    };
+
+    const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>, type: 'start' | 'end') => {
         const file = event.target.files?.[0];
         if (file && file.type.startsWith('image/')) {
-            if (type === 'start') {
-                setStartImageFile(file);
-                setStartImageUrl(URL.createObjectURL(file));
-            } else {
-                setEndImageFile(file);
-                setEndImageUrl(URL.createObjectURL(file));
-            }
+            await persistFrame(file, type);
             event.target.value = '';
         }
     };
 
-    const clearImage = (event: React.MouseEvent, type: 'start' | 'end') => {
-        event.preventDefault();
-        if (type === 'start') {
-            setStartImageFile(null);
-            setStartImageUrl(null);
-        } else {
-            setEndImageFile(null);
-            setEndImageUrl(null);
+    const handleElementUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (event.target.files?.length) {
+            await processElementFiles(event.target.files);
+            event.target.value = '';
         }
     };
 
-    const uploadToSupabase = async (file: File): Promise<string> => {
+    const clearImage = async (type: 'start' | 'end') => {
+        if (type === 'start') {
+            revokeObjectUrl(startImageUrl);
+            setStartImageFile(null);
+            setStartImageUrl(null);
+            if (!remixId) {
+                await removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoStartImage);
+            }
+        } else {
+            revokeObjectUrl(endImageUrl);
+            setEndImageFile(null);
+            setEndImageUrl(null);
+            if (!remixId) {
+                await removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoEndImage);
+            }
+        }
+    };
+
+    const handleRemoveElement = async (elementId: string) => {
+        const currentElements = elementsRef.current;
+        const removedElement = currentElements.find((element) => element.id === elementId);
+        if (removedElement) {
+            revokeObjectUrl(removedElement.previewUrl);
+        }
+
+        const nextElements = hydrateVideoElements(
+            currentElements.filter((element) => element.id !== elementId)
+        );
+
+        setElementNameDrafts((prev) => {
+            if (!(elementId in prev)) {
+                return prev;
+            }
+
+            const nextDrafts = { ...prev };
+            delete nextDrafts[elementId];
+            return nextDrafts;
+        });
+        commitElements(nextElements);
+        await persistVideoElements(nextElements);
+    };
+
+    const handleElementRename = async (elementId: string, nextDisplayName: string) => {
+        const currentElements = elementsRef.current;
+        const nextElements = hydrateVideoElements(
+            currentElements.map((element) => (
+                element.id === elementId
+                    ? { ...element, displayName: nextDisplayName }
+                    : element
+            ))
+        );
+        const replacements = createElementHandleReplacementMap(currentElements, nextElements);
+
+        commitElements(nextElements);
+        await persistVideoElements(nextElements);
+        if (replacements.size > 0) {
+            setPrompt((currentPrompt) => {
+                const nextPrompt = replacePromptHandles(currentPrompt, replacements);
+                requestAnimationFrame(() => updateMentionState(nextPrompt));
+                return nextPrompt;
+            });
+            return;
+        }
+
+        requestAnimationFrame(() => updateMentionState(prompt));
+    };
+
+    const handleElementDraftChange = (elementId: string, nextValue: string) => {
+        setElementNameDrafts((prev) => ({
+            ...prev,
+            [elementId]: nextValue,
+        }));
+    };
+
+    const commitElementDraft = async (elementId: string) => {
+        const draftValue = elementNameDrafts[elementId];
+        if (draftValue === undefined) return;
+
+        const trimmed = draftValue.trim();
+        setElementNameDrafts((prev) => {
+            const nextDrafts = { ...prev };
+            delete nextDrafts[elementId];
+            return nextDrafts;
+        });
+
+        if (!trimmed) return;
+
+        const currentElement = elementsRef.current.find((element) => element.id === elementId);
+        if (!currentElement || currentElement.displayName === trimmed) {
+            return;
+        }
+
+        await handleElementRename(elementId, trimmed);
+    };
+
+    const handlePromptChange = (value: string, caretIndex?: number) => {
+        setPrompt(value);
+        updateMentionState(value, caretIndex);
+    };
+
+    const syncPromptCaretState = () => {
+        updateMentionState(prompt);
+    };
+
+    const handleInsertElementHandle = (handle: string) => {
+        const textarea = promptTextareaRef.current;
+        const selectionStart = textarea?.selectionStart ?? prompt.length;
+        const selectionEnd = textarea?.selectionEnd ?? prompt.length;
+        const nextValue = insertHandleIntoPrompt(
+            prompt,
+            handle,
+            selectionStart,
+            selectionEnd,
+            activeMentionQuery
+        );
+
+        if (!currentIsMultiShot && canUseVideoElements && activeReferenceMode !== 'elements') {
+            void setReferenceModeWithPersistence('elements');
+        }
+
+        setPrompt(nextValue.prompt);
+        setActiveMentionQuery(null);
+
+        requestAnimationFrame(() => {
+            textarea?.focus();
+            textarea?.setSelectionRange(nextValue.caretIndex, nextValue.caretIndex);
+        });
+    };
+
+    const uploadToSupabase = async (file: File): Promise<{ signedUrl: string; storagePath: string }> => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Please log in to upload files.');
 
@@ -323,7 +802,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             throw new Error(`Signed URL generation failed: ${signedUrlError?.message || 'Unknown error'}`);
         }
 
-        return signedData.signedUrl;
+        return {
+            signedUrl: signedData.signedUrl,
+            storagePath: `uploads/${fileName}`,
+        };
     };
 
     const pollPrediction = async (predictionId: string, accessToken: string): Promise<string> => {
@@ -354,7 +836,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             attempts++;
         }
 
-        throw new Error('Video generation timed out.');
+        throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
     const handleSelectModel = (modelId: VideoModelId) => {
@@ -385,6 +867,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
+        if (!currentIsMultiShot && staleElementMentions.length > 0) {
+            setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
+            return;
+        }
+
+        if (!currentIsMultiShot && hasInactiveElementMentions) {
+            setError(videoElementSupport.reason || 'Named elements are not available in this video mode.');
+            return;
+        }
+
+        if (!currentIsMultiShot && activeReferenceMode !== 'elements' && hasKnownElementMentions) {
+            setError('Switch the reference mode to Elements to use @mentions in the video prompt.');
+            return;
+        }
+
         if (insufficientCredits) {
             setError(`Insufficient credits. This costs ${estimatedCost} credits.`);
             return;
@@ -398,15 +895,55 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         try {
             let startUrl: string | null = null;
             let endUrl: string | null = null;
+            const requestElements: ImageElementDescriptor[] = [];
+            let elementImageUrls: string[] = [];
 
-            if (startImageFile) {
-                setGenerationStatus('Uploading start image... (2%)');
-                startUrl = await uploadToSupabase(startImageFile);
+            if (!currentIsMultiShot && activeReferenceMode === 'elements' && elements.length > 0) {
+                setGenerationStatus(`Preparing ${elements.length} video elements... (2%)`);
+
+                const uploadedElements = await Promise.all(elements.map(async (element) => {
+                    if (element.file) {
+                        const upload = await uploadToSupabase(element.file);
+                        return {
+                            descriptor: {
+                                id: element.id,
+                                displayName: element.displayName,
+                                handle: element.handle,
+                                storagePath: upload.storagePath,
+                            } satisfies ImageElementDescriptor,
+                            imageUrl: upload.signedUrl,
+                        };
+                    }
+
+                    if (!element.providerUrl) {
+                        throw new Error(`Missing media for ${element.displayName}`);
+                    }
+
+                    return {
+                        descriptor: {
+                            id: element.id,
+                            displayName: element.displayName,
+                            handle: element.handle,
+                            storagePath: element.storagePath ?? null,
+                        } satisfies ImageElementDescriptor,
+                        imageUrl: element.providerUrl,
+                    };
+                }));
+
+                requestElements.push(...uploadedElements.map((item) => item.descriptor));
+                elementImageUrls = uploadedElements.map((item) => item.imageUrl);
             }
 
-            if (endImageFile && !isMultiShot) {
+            if (activeReferenceMode === 'frames' && startImageFile) {
+                setGenerationStatus('Uploading start image... (2%)');
+                const upload = await uploadToSupabase(startImageFile);
+                startUrl = upload.signedUrl;
+            }
+
+            if (activeReferenceMode === 'frames' && endImageFile && !isMultiShot) {
                 setGenerationStatus('Uploading end image... (4%)');
-                endUrl = await uploadToSupabase(endImageFile);
+                const upload = await uploadToSupabase(endImageFile);
+                endUrl = upload.signedUrl;
             }
 
             setGenerationStatus('Starting AI generation... (5%)');
@@ -423,6 +960,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 prompt: prompt.trim(),
                 multiPrompts,
                 duration: totalDuration,
+                elements: requestElements,
+                elementImageUrls,
                 startImageUrl: startUrl,
                 endImageUrl: endUrl,
                 mode: currentMode,
@@ -430,6 +969,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 sound: currentSound,
                 resolution: currentResolution,
                 fixedLens: currentFixedLens,
+                referenceMode: activeReferenceMode,
                 sourceGenerationId: remixId || undefined,
             };
 
@@ -450,8 +990,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setGenerationStatus('Video generated successfully! (100%)');
             if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
         } catch (generationError) {
-            setError(generationError instanceof Error ? generationError.message : 'Something went wrong');
-            setGenerationStatus(null);
+            const errorMessage = generationError instanceof Error ? generationError.message : 'Something went wrong';
+            if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
+                setError(BACKGROUND_PROCESSING_ERROR);
+                setGenerationStatus(getBackgroundProcessingCopy('video').status);
+            } else {
+                setError(errorMessage);
+                setGenerationStatus(null);
+            }
         } finally {
             setIsGenerating(false);
         }
@@ -470,21 +1016,25 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             </div>
         );
     }
+    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
+    const backgroundProcessingCopy = getBackgroundProcessingCopy('video');
 
     const workspaceTitle = outputVideo
         ? 'Latest video result'
         : isGenerating
             ? 'Creating your video'
-            : remixVideoUrl
-                ? 'Remix reference loaded'
-                : 'Ready to build a scene';
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.title
+            : 'Ready to build a scene';
 
     const workspaceDescription = outputVideo
         ? 'Your newest video stays here until you start another run.'
         : isGenerating
             ? 'Track the active run here while the model handles timing, frames, and render.'
-            : remixVideoUrl
-                ? 'Use the original clip as working context while you update prompt, shots, and settings.'
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.description
+            : activeReferenceMode === 'elements'
+                ? 'The workspace will show the current run and latest result once your named-element scene starts rendering.'
                 : 'The workspace will show the current run and latest result once you generate.';
 
     return (
@@ -639,10 +1189,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Prompt</h2>
                                     <EnhancePromptButton
                                         prompt={prompt}
-                                        onEnhanced={(text) => setPrompt(text)}
+                                        onEnhanced={(text) => {
+                                            setPrompt(text);
+                                            setActiveMentionQuery(null);
+                                            requestAnimationFrame(() => updateMentionState(text));
+                                        }}
                                         onCreditsUpdate={updateCredits}
                                         medium="video"
                                         selectedModel={videoModel.enhancerModelId}
+                                        helperText={
+                                            activeReferenceMode === 'elements' && elements.length > 0
+                                                ? 'Named elements keep their @handles. This enhances the scene while preserving those references.'
+                                                : undefined
+                                        }
                                         context={{
                                             modelId: selectedModel,
                                             mode: currentMode,
@@ -652,19 +1211,108 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             resolution: currentResolution,
                                             isMultiShot: currentIsMultiShot,
                                             shotCount: multiPrompts.length,
-                                            hasStartImage: Boolean(startImageFile || startImageUrl),
-                                            hasEndImage: Boolean(endImageFile || endImageUrl),
+                                            hasStartImage: activeReferenceMode === 'frames' && Boolean(startImageFile || startImageUrl),
+                                            hasEndImage: activeReferenceMode === 'frames' && Boolean(endImageFile || endImageUrl),
+                                            referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
+                                            elementReferences: activeReferenceMode === 'elements'
+                                                ? elements.map((element) => ({
+                                                    handle: element.handle,
+                                                    displayName: element.displayName,
+                                                }))
+                                                : undefined,
                                         }}
                                         disabled={isGenerating}
                                     />
+                                    {(canUseVideoElements || elements.length > 0) && (
+                                        <div className="mb-4 mt-4 space-y-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                                    Named elements
+                                                </p>
+                                                <span className="text-xs text-zinc-500">
+                                                    Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
+                                                </span>
+                                            </div>
+                                            {elements.length > 0 ? (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {elements.map((element) => (
+                                                        <button
+                                                            key={element.id}
+                                                            type="button"
+                                                            onClick={() => handleInsertElementHandle(element.handle)}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                        >
+                                                            <span className="text-zinc-400">{element.displayName}</span>
+                                                            <span className="text-sky-300">{element.handle}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <p className="text-sm text-zinc-500">
+                                                    Upload element images below to mention people, products, or objects directly in the prompt.
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
                                     <textarea
+                                        ref={promptTextareaRef}
                                         value={prompt}
-                                        onChange={(event) => setPrompt(event.target.value)}
+                                        onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart ?? event.target.value.length)}
+                                        onClick={syncPromptCaretState}
+                                        onKeyUp={syncPromptCaretState}
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={2500}
                                         className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
                                     />
-                                    <div className="mt-4 flex items-center justify-between">
+                                    <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                                        <span className="text-zinc-600">{prompt.length}/2500</span>
+                                        {staleElementMentions.length > 0 ? (
+                                            <span className="text-right text-rose-300">
+                                                Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}: {staleElementMentions.join(', ')}
+                                            </span>
+                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
+                                            <span className="text-right text-amber-300">
+                                                Switch reference mode to Elements to use {knownElementMentions.join(', ')}.
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                    {activeMentionQuery ? (
+                                        <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                                        Insert element
+                                                    </p>
+                                                    <p className="mt-1 text-sm text-zinc-400">
+                                                        {mentionSuggestions.length > 0
+                                                            ? 'Pick an element to insert its @mention.'
+                                                            : 'No matching elements yet.'}
+                                                    </p>
+                                                </div>
+                                                {activeMentionQuery.query ? (
+                                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
+                                                        @{activeMentionQuery.query}
+                                                    </span>
+                                                ) : null}
+                                            </div>
+                                            {mentionSuggestions.length > 0 ? (
+                                                <div className="mt-3 flex flex-wrap gap-2">
+                                                    {mentionSuggestions.map((element) => (
+                                                        <button
+                                                            key={element.id}
+                                                            type="button"
+                                                            onClick={() => handleInsertElementHandle(element.handle)}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+                                                        >
+                                                            <span className="text-zinc-400">{element.displayName}</span>
+                                                            <span className="text-sky-300">{element.handle}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                    <div className="mt-4 flex items-center justify-between gap-4">
                                         <div className="flex items-center gap-3 flex-wrap">
                                             <span className="text-xs text-zinc-500 font-medium">Duration:</span>
                                             {singleShotDurationRange ? (
@@ -701,7 +1349,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 </span>
                                             )}
                                         </div>
-                                        <span className="text-xs text-zinc-600">{prompt.length}/2500</span>
                                     </div>
                                 </motion.div>
                             ) : (
@@ -783,55 +1430,300 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             )}
                         </AnimatePresence>
 
-                        <div className="grid sm:grid-cols-2 gap-4">
-                            <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
-                                <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
-                                    Start Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
-                                </h2>
-                                <label
-                                    className={`group flex flex-col items-center justify-center w-full h-[140px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingStart ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
-                                    onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
-                                    onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
-                                    onDrop={(event) => handleImageDrop(event, 'start')}
-                                >
-                                    {startImageUrl ? (
-                                        <div className="w-full h-full relative">
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img src={startImageUrl} alt="Start frame" className="w-full h-full object-cover" />
-                                            <button onClick={(event) => clearImage(event, 'start')} className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
-                                        </div>
-                                    ) : (
-                                        <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload Reference Image</span></div>
-                                    )}
-                                    <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event, 'start')} className="hidden" />
-                                </label>
-                            </div>
-
-                            {!currentIsMultiShot && (
-                                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
-                                        End Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
-                                    </h2>
-                                    <label
-                                        className={`group flex flex-col items-center justify-center w-full h-[140px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingEnd ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
-                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
-                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
-                                        onDrop={(event) => handleImageDrop(event, 'end')}
+                        {!currentIsMultiShot && canUseVideoElements && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 16 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm"
+                            >
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <h2 className="text-sm font-semibold text-white">Reference mode</h2>
+                                        <p className="mt-1 text-sm text-zinc-400">
+                                            Use frames for continuity beats, or switch to named elements for reusable characters and products.
+                                        </p>
+                                    </div>
+                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
+                                        {videoElementSupport.maxElements} elements max
+                                    </span>
+                                </div>
+                                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => void setReferenceModeWithPersistence('frames')}
+                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'frames' ? 'border-blue-500/40 bg-blue-500/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
                                     >
-                                        {endImageUrl ? (
-                                            <div className="w-full h-full relative">
-                                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                <img src={endImageUrl} alt="End frame" className="w-full h-full object-cover" />
-                                                <button onClick={(event) => clearImage(event, 'end')} className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
+                                        <div className="text-sm font-semibold">Frames</div>
+                                        <div className="mt-1 text-xs leading-5 text-inherit/80">
+                                            Start from a single frame or define a clear start and end transition.
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void setReferenceModeWithPersistence('elements')}
+                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'elements' ? 'border-fuchsia-500/40 bg-fuchsia-500/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
+                                    >
+                                        <div className="text-sm font-semibold">Elements</div>
+                                        <div className="mt-1 text-xs leading-5 text-inherit/80">
+                                            Upload named references like <span className="font-semibold">@person</span> or <span className="font-semibold">@product</span> and mention them in the prompt.
+                                        </div>
+                                    </button>
+                                </div>
+                            </motion.div>
+                        )}
+
+                        {showSavedElementNotice && (
+                            <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
+                                <p className="text-sm font-semibold text-white">Saved named elements are on standby</p>
+                                <p className="mt-2 text-sm leading-6 text-zinc-300">
+                                    You have {elements.length} saved element{elements.length === 1 ? '' : 's'}, but this setup can&apos;t use them right now.
+                                    {videoElementSupport.reason ? ` ${videoElementSupport.reason}` : ''} Switch to Seedance 1.5 Pro or Veo Fast single-shot to use those references.
+                                </p>
+                            </div>
+                        )}
+
+                        {showMultiShotElementNotice && (
+                            <div className="rounded-[26px] border border-purple-500/20 bg-purple-500/10 p-5">
+                                <p className="text-sm font-semibold text-white">Named elements are paused in multi-shot</p>
+                                <p className="mt-2 text-sm leading-6 text-zinc-300">
+                                    Your saved elements stay available, but multi-shot runs use shot prompts only in v1. Switch back to single-shot to reuse those named references.
+                                </p>
+                            </div>
+                        )}
+
+                        {showFramesEditor && (
+                            <>
+                                <div className={`grid gap-4 ${!currentIsMultiShot ? 'sm:grid-cols-2' : ''}`}>
+                                    <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
+                                        <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
+                                            Start Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
+                                        </h2>
+                                        {startImageUrl ? (
+                                            <div className="h-[140px]">
+                                                <StudioUploadedMediaPreview
+                                                    mediaType="image"
+                                                    src={startImageUrl}
+                                                    alt="Start frame"
+                                                    fit="cover"
+                                                    previewHint="Preview frame"
+                                                    onPreview={() => setUploadPreview({
+                                                        type: 'image',
+                                                        src: startImageUrl,
+                                                        alt: 'Start frame',
+                                                        title: 'Start Frame',
+                                                    })}
+                                                    onReplace={() => startImageInputRef.current?.click()}
+                                                    onRemove={() => void clearImage('start')}
+                                                />
                                             </div>
                                         ) : (
-                                            <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload End Image</span></div>
+                                            <label
+                                                htmlFor="video-start-frame-input"
+                                                className={`group flex h-[140px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed bg-black/40 transition-all ${isDraggingStart ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
+                                                onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
+                                                onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
+                                                onDrop={(event) => handleImageDrop(event, 'start')}
+                                            >
+                                                <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload Start Frame</span></div>
+                                            </label>
                                         )}
-                                        <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event, 'end')} className="hidden" />
+                                        <input
+                                            ref={startImageInputRef}
+                                            id="video-start-frame-input"
+                                            type="file"
+                                            accept="image/*"
+                                            onChange={(event) => handleImageUpload(event, 'start')}
+                                            className="hidden"
+                                        />
+                                    </div>
+
+                                    {!currentIsMultiShot && (
+                                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
+                                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
+                                                End Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
+                                            </h2>
+                                            {endImageUrl ? (
+                                                <div className="h-[140px]">
+                                                    <StudioUploadedMediaPreview
+                                                        mediaType="image"
+                                                        src={endImageUrl}
+                                                        alt="End frame"
+                                                        fit="cover"
+                                                        previewHint="Preview frame"
+                                                        onPreview={() => setUploadPreview({
+                                                            type: 'image',
+                                                            src: endImageUrl,
+                                                            alt: 'End frame',
+                                                            title: 'End Frame',
+                                                        })}
+                                                        onReplace={() => endImageInputRef.current?.click()}
+                                                        onRemove={() => void clearImage('end')}
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <label
+                                                    htmlFor="video-end-frame-input"
+                                                    className={`group flex h-[140px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed bg-black/40 transition-all ${isDraggingEnd ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
+                                                    onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
+                                                    onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
+                                                    onDrop={(event) => handleImageDrop(event, 'end')}
+                                                >
+                                                    <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload End Frame</span></div>
+                                                </label>
+                                            )}
+                                            <input
+                                                ref={endImageInputRef}
+                                                id="video-end-frame-input"
+                                                type="file"
+                                                accept="image/*"
+                                                onChange={(event) => handleImageUpload(event, 'end')}
+                                                className="hidden"
+                                            />
+                                        </motion.div>
+                                    )}
+                                </div>
+                                {hiddenElementDraftCount > 0 && !currentIsMultiShot ? (
+                                    <div className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
+                                        {hiddenElementDraftCount} saved element{hiddenElementDraftCount === 1 ? '' : 's'} will be ready if you switch the reference mode back to Elements.
+                                    </div>
+                                ) : null}
+                            </>
+                        )}
+
+                        {showElementEditor && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 16 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                            >
+                                <div className="mb-4 flex items-start justify-between gap-3">
+                                    <div>
+                                        <h2 className="text-sm font-semibold text-white">Elements</h2>
+                                        <p className="mt-1 text-sm text-zinc-400">
+                                            Upload named references, rename them, and mention them directly in the prompt for identity-aware video generation.
+                                        </p>
+                                    </div>
+                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
+                                        {elements.length}/{videoElementSupport.maxElements}
+                                    </span>
+                                </div>
+
+                                {elements.length > 0 ? (
+                                    <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                        {elements.map((element) => (
+                                            <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
+                                                <div className="relative aspect-square group">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setUploadPreview({
+                                                            type: 'image',
+                                                            src: element.previewUrl,
+                                                            alt: element.displayName,
+                                                            title: element.displayName,
+                                                        })}
+                                                        className="block h-full w-full"
+                                                    >
+                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                        <img
+                                                            src={element.previewUrl}
+                                                            alt={element.displayName}
+                                                            className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                                        />
+                                                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                                                        <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/90 backdrop-blur-md">
+                                                            Preview
+                                                        </div>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleRemoveElement(element.id)}
+                                                        className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-1.5 text-white backdrop-blur-md transition hover:bg-red-500"
+                                                    >
+                                                        <X className="h-3 w-3" />
+                                                    </button>
+                                                </div>
+                                                <div className="space-y-3 p-3">
+                                                    <div>
+                                                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                                            Element name
+                                                        </label>
+                                                        <input
+                                                            type="text"
+                                                            value={elementNameDrafts[element.id] ?? element.displayName}
+                                                            onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
+                                                            onBlur={() => void commitElementDraft(element.id)}
+                                                            onKeyDown={(event) => {
+                                                                if (event.key === 'Enter') {
+                                                                    event.preventDefault();
+                                                                    void commitElementDraft(element.id);
+                                                                    event.currentTarget.blur();
+                                                                }
+
+                                                                if (event.key === 'Escape') {
+                                                                    setElementNameDrafts((prev) => {
+                                                                        if (!(element.id in prev)) {
+                                                                            return prev;
+                                                                        }
+
+                                                                        const nextDrafts = { ...prev };
+                                                                        delete nextDrafts[element.id];
+                                                                        return nextDrafts;
+                                                                    });
+                                                                    event.currentTarget.blur();
+                                                                }
+                                                            }}
+                                                            className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500/40"
+                                                            placeholder="Rename element"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
+                                                        <span className="truncate text-xs font-semibold text-sky-300">{element.handle}</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleInsertElementHandle(element.handle)}
+                                                            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
+                                                        >
+                                                            Insert
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : null}
+
+                                {elements.length < videoElementSupport.maxElements && (
+                                    <label
+                                        className={`group flex flex-col items-center justify-center w-full h-[120px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingElements
+                                            ? 'border-cyan-400 bg-cyan-500/10 shadow-[0_0_30px_-5px_rgba(6,182,212,0.3)]'
+                                            : 'border-zinc-700/50 hover:border-cyan-500/50 hover:bg-cyan-500/5'
+                                            }`}
+                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingElements(true); }}
+                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingElements(false); }}
+                                        onDrop={handleElementDrop}
+                                    >
+                                        <div className="flex flex-col items-center gap-2 text-zinc-500">
+                                            <ImageIcon className={`w-6 h-6 transition-colors ${isDraggingElements ? 'text-cyan-400' : ''}`} />
+                                            <span className="text-sm">{isDraggingElements ? 'Drop element images here' : 'Drop element images or click'}</span>
+                                        </div>
+                                        <input
+                                            ref={elementInputRef}
+                                            type="file"
+                                            accept="image/*"
+                                            multiple
+                                            onChange={handleElementUpload}
+                                            className="hidden"
+                                        />
                                     </label>
-                                </motion.div>
-                            )}
-                        </div>
+                                )}
+
+                                {hiddenFrameDraftCount > 0 ? (
+                                    <p className="mt-4 text-sm text-zinc-500">
+                                        Your start and end frames are still saved. Switch the reference mode back to Frames whenever you want to use that transition path again.
+                                    </p>
+                                ) : null}
+                            </motion.div>
+                        )}
 
                         <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm space-y-6">
                             {videoModel.modeOptions.length > 0 && (
@@ -948,6 +1840,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <div className="mt-1 text-zinc-200">{currentIsMultiShot ? 'Multi-shot' : 'Single shot'}</div>
                                     </div>
                                     <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Reference</div>
+                                        <div className="mt-1 text-zinc-200">
+                                            {currentIsMultiShot ? 'Shot prompts' : activeReferenceMode === 'elements' ? 'Named elements' : 'Frames'}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Inputs</div>
+                                        <div className="mt-1 text-zinc-200">
+                                            {currentIsMultiShot
+                                                ? `${multiPrompts.length} shot${multiPrompts.length === 1 ? '' : 's'}`
+                                                : activeReferenceMode === 'elements'
+                                                    ? `${elements.length} element${elements.length === 1 ? '' : 's'}`
+                                                    : `${[startImageUrl, endImageUrl].filter(Boolean).length} frame${[startImageUrl, endImageUrl].filter(Boolean).length === 1 ? '' : 's'}`}
+                                        </div>
+                                    </div>
+                                    <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
                                         <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
                                     </div>
@@ -995,6 +1903,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             </div>
                                             <p className="text-xs text-zinc-500">Longer runs can take a few minutes.</p>
                                         </div>
+                                    ) : isBackgroundProcessing ? (
+                                        <StudioBackgroundProcessingNotice accent="rose" label="video" />
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : (
@@ -1048,19 +1958,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         </p>
                                     </div>
                                 </div>
-                            ) : remixVideoUrl ? (
-                                <div className="space-y-5">
-                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/60 aspect-video">
-                                        <video src={remixVideoUrl} controls autoPlay loop className="h-full w-full object-contain" />
-                                    </div>
-                                    <button
-                                        onClick={() => setIsPreviewModalOpen(true)}
-                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                    >
-                                        <Play className="h-4 w-4" />
-                                        View original
-                                    </button>
-                                </div>
+                            ) : isBackgroundProcessing ? (
+                                <StudioBackgroundProcessingNotice accent="rose" label="video" variant="workspace" />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-blue-500/30 to-purple-500/20">
@@ -1069,7 +1968,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">No video yet</h3>
                                         <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.
+                                            {activeReferenceMode === 'elements'
+                                                ? 'Name your references, write the scene with @elements, and the latest render will take over this workspace.'
+                                                : 'Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.'}
                                         </p>
                                     </div>
                                 </div>
@@ -1080,53 +1981,31 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             >
             </MediaStudioShell>
 
-            <AnimatePresence>
-                {isPreviewModalOpen && remixVideoUrl && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-                        onClick={() => setIsPreviewModalOpen(false)}
-                    >
-                        <motion.div
-                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                            onClick={(event) => event.stopPropagation()}
-                            className="bg-zinc-900 border border-white/10 p-6 rounded-3xl max-w-2xl w-full flex flex-col gap-6 shadow-2xl relative"
-                        >
-                            <button
-                                onClick={() => setIsPreviewModalOpen(false)}
-                                className="absolute top-4 right-4 p-2 z-10 bg-black/50 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
+            <StudioMediaPreviewModal
+                isOpen={Boolean(uploadPreview)}
+                onClose={() => setUploadPreview(null)}
+                mediaType={uploadPreview?.type ?? 'image'}
+                src={uploadPreview?.src ?? null}
+                alt={uploadPreview?.alt ?? 'Uploaded preview'}
+                title={uploadPreview?.title ?? 'Media Preview'}
+            />
 
-                            <h2 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
-                                Original Creation
-                            </h2>
-
-                            <div className="rounded-xl overflow-hidden border border-white/5 bg-black/50 flex items-center justify-center flex-1 min-h-[300px] relative group">
-                                <video
-                                    src={remixVideoUrl}
-                                    controls
-                                    autoPlay
-                                    loop
-                                    className="max-h-[60vh] object-contain rounded-xl w-full"
-                                />
-                            </div>
-
-                            <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col gap-2">
-                                <div className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Prompt</div>
-                                <p className="text-sm text-zinc-300 leading-relaxed max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                                    {isMultiShot ? multiPrompts.map((shot) => shot.prompt).join(' | ') : prompt || 'No prompt available'}
-                                </p>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            <StudioMediaPreviewModal
+                isOpen={isPreviewModalOpen}
+                onClose={() => setIsPreviewModalOpen(false)}
+                mediaType="video"
+                src={remixVideoUrl}
+                alt="Original creation"
+                title="Original Creation"
+                footer={
+                    <div className="flex flex-col gap-2">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
+                        <p className="max-h-32 overflow-y-auto pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
+                            {isMultiShot ? multiPrompts.map((shot) => shot.prompt).join(' | ') : prompt || 'No prompt available'}
+                        </p>
+                    </div>
+                }
+            />
         </div>
     );
 }

@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
         let generations = await fetchGenerations();
         const processingGenerationIds = generations
-            .filter((generation) => generation.status === 'processing')
+            .filter((generation) => generation.status === 'processing' || generation.status === 'waiting')
             .map((generation) => generation.id);
 
         if (processingGenerationIds.length > 0) {

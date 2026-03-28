@@ -5,6 +5,7 @@ import Script from "next/script";
 import { siteConfig } from "@/lib/seo";
 
 import "./globals.css";
+import GenerationNotifications from "./components/GenerationNotifications";
 import Navbar from "./components/Navbar";
 
 const geistSans = Geist({
@@ -81,6 +82,7 @@ export default function RootLayout({
       >
         <Navbar />
         {children}
+        <GenerationNotifications />
         {gaMeasurementId ? (
           <>
             <Script

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Clock3, Expand, RefreshCw, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -62,6 +62,7 @@ const ACCENT_STYLES: Record<
 };
 
 const MEDIA_TOOL_IDS: CreatorToolId[] = ['image', 'video', 'motion'];
+export type StudioMediaPreviewType = 'image' | 'video';
 
 interface SectionHeadingProps {
   eyebrow: string;
@@ -570,5 +571,193 @@ export function StudioWorkspacePanel({
       </div>
       <div className="p-5 sm:p-6">{children}</div>
     </StudioPanel>
+  );
+}
+
+export function StudioBackgroundProcessingNotice({
+  accent,
+  label,
+  variant = 'summary',
+}: {
+  accent: CreatorToolAccent;
+  label: string;
+  variant?: 'summary' | 'workspace';
+}) {
+  const theme = ACCENT_STYLES[accent];
+  const isWorkspace = variant === 'workspace';
+
+  return (
+    <div
+      className={clsx(
+        'rounded-[24px] border border-white/8 bg-black/30',
+        isWorkspace ? 'flex min-h-[520px] flex-col items-center justify-center p-10 text-center' : 'p-4'
+      )}
+    >
+      <div
+        className={clsx(
+          'inline-flex items-center justify-center rounded-full border',
+          theme.iconWrap,
+          isWorkspace ? 'h-16 w-16' : 'h-11 w-11'
+        )}
+      >
+        <Clock3 className={clsx(isWorkspace ? 'h-7 w-7' : 'h-4 w-4')} />
+      </div>
+      <div className={clsx(isWorkspace ? 'mt-5 max-w-md' : 'mt-3')}>
+        <h3 className={clsx('font-semibold text-white', isWorkspace ? 'text-xl' : 'text-sm')}>
+          {label.charAt(0).toUpperCase() + label.slice(1)} still processing
+        </h3>
+        <p className={clsx('mt-2 leading-6 text-zinc-400', isWorkspace ? 'text-sm' : 'text-sm')}>
+          This run is taking longer than usual, but it is still active in the background. We&apos;ll keep
+          tracking it in{' '}
+          <Link href="/creations" className={clsx('underline underline-offset-4 transition hover:text-white', theme.accentText)}>
+            My Creations
+          </Link>
+          .
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export function StudioUploadedMediaPreview({
+  mediaType,
+  src,
+  alt,
+  onPreview,
+  onReplace,
+  onRemove,
+  fit = 'cover',
+  replaceLabel = 'Replace',
+  previewHint = 'Preview',
+  className,
+}: {
+  mediaType: StudioMediaPreviewType;
+  src: string;
+  alt: string;
+  onPreview: () => void;
+  onReplace: () => void;
+  onRemove: () => void;
+  fit?: 'cover' | 'contain';
+  replaceLabel?: string;
+  previewHint?: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={clsx(
+        'relative h-full w-full overflow-hidden rounded-[24px] border border-white/10 bg-black/50',
+        className
+      )}
+    >
+      <button
+        type="button"
+        onClick={onPreview}
+        className="group block h-full w-full text-left"
+      >
+        {mediaType === 'image' ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={alt}
+            className={clsx('h-full w-full', fit === 'contain' ? 'object-contain' : 'object-cover')}
+          />
+        ) : (
+          <video
+            src={src}
+            className={clsx('h-full w-full', fit === 'contain' ? 'object-contain' : 'object-cover')}
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        )}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
+        <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-xs font-semibold text-zinc-100 backdrop-blur-md">
+          <Expand className="h-3.5 w-3.5" />
+          {previewHint}
+        </div>
+      </button>
+
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onReplace();
+          }}
+          className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-black/85"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          {replaceLabel}
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/65 text-white transition hover:bg-rose-500/90"
+          aria-label={`Remove ${alt}`}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function StudioMediaPreviewModal({
+  isOpen,
+  onClose,
+  mediaType,
+  src,
+  alt,
+  title,
+  footer,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  mediaType: StudioMediaPreviewType;
+  src: string | null;
+  alt: string;
+  title: string;
+  footer?: ReactNode;
+}) {
+  if (!isOpen || !src) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        onClick={(event) => event.stopPropagation()}
+        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col gap-6 rounded-[30px] border border-white/10 bg-zinc-900 p-6 shadow-2xl"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          aria-label="Close preview"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
+
+        <div className="flex min-h-[320px] flex-1 items-center justify-center overflow-hidden rounded-[24px] border border-white/5 bg-black/50">
+          {mediaType === 'image' ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={src} alt={alt} className="max-h-[68vh] w-full object-contain" />
+          ) : (
+            <video src={src} controls autoPlay loop className="max-h-[68vh] w-full object-contain" />
+          )}
+        </div>
+
+        {footer ? (
+          <div className="rounded-[22px] border border-white/5 bg-black/40 p-4">{footer}</div>
+        ) : null}
+      </div>
+    </div>
   );
 }

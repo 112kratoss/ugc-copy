@@ -28,6 +28,11 @@ export interface EnhancerContext {
   hasEndImage?: boolean;
   hasReferenceVideo?: boolean;
   creativeIntent?: CreativeIntent;
+  elementEnhancementMode?: 'append-only';
+  elementReferences?: Array<{
+    handle: string;
+    displayName: string;
+  }>;
 }
 
 interface PromptStrategyOptions {
@@ -279,6 +284,21 @@ function buildContextBlock(context?: EnhancerContext): string | null {
   if (typeof context.sound === 'boolean') lines.push(`- Sound: ${context.sound ? 'enabled' : 'disabled'}`);
   if (typeof context.referenceImageCount === 'number' && context.referenceImageCount > 0) {
     lines.push(`- Reference images attached: ${context.referenceImageCount}`);
+  }
+  if (Array.isArray(context.elementReferences) && context.elementReferences.length > 0) {
+    lines.push(
+      `- Named reference elements: ${context.elementReferences
+        .map((element) => `${element.handle} (${element.displayName})`)
+        .join(', ')}`
+    );
+    lines.push('- If the user prompt uses any @handles, preserve those exact @handles verbatim in the enhanced prompt');
+    lines.push('- Do not rename, remove, paraphrase, or invent @handles');
+  }
+  if (context.elementEnhancementMode === 'append-only') {
+    lines.push('- Element enhancement mode: append-only');
+    lines.push('- Keep the user prompt text exactly intact as the opening sentence of the output');
+    lines.push('- Do not paraphrase, reorder, shorten, or replace the original sentence');
+    lines.push('- You may append at most one short extra sentence for visual polish such as framing, lighting, texture, or finish');
   }
   if (typeof context.isMultiShot === 'boolean') {
     lines.push(`- Multi-shot sequence: ${context.isMultiShot ? 'yes' : 'no'}`);

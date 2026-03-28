@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
-import { getVideoCost, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import { getVideoCost, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import {
+    compilePromptWithElements,
+    findUnknownPromptHandles,
+    normalizeSubmittedElementDescriptors,
+} from '@/lib/image-elements';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -140,6 +145,8 @@ export async function POST(request: NextRequest) {
             isMultiShot,
             prompt,
             multiPrompts,
+            elements = [],
+            elementImageUrls = [],
             startImageUrl = null,
             endImageUrl = null,
             mode = 'std',
@@ -148,6 +155,7 @@ export async function POST(request: NextRequest) {
             duration = 5,
             resolution = '720p',
             fixedLens = false,
+            referenceMode = 'frames',
             sourceGenerationId = null,
         } = await request.json();
 
@@ -157,7 +165,11 @@ export async function POST(request: NextRequest) {
 
         const selectedModel = VIDEO_MODELS[model as VideoModelId];
         const soundEnabled = selectedModel.supportsSound ? sound : false;
-        const imageUrls = buildImageUrls(startImageUrl, endImageUrl);
+        const frameImageUrls = buildImageUrls(startImageUrl, endImageUrl);
+        const normalizedElements = normalizeSubmittedElementDescriptors(elements);
+        const videoElementSupport = getVideoElementSupport(model as VideoModelId, { mode, isMultiShot });
+        const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+        const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
 
         if (isMultiShot && !selectedModel.supportsMultiShot) {
             return NextResponse.json({ error: `${selectedModel.displayName} does not support multi-shot generation.` }, { status: 400 });
@@ -173,9 +185,62 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ error: 'All shots must have a text prompt' }, { status: 400 });
                 }
             }
-        } else if (!prompt || prompt.trim().length === 0) {
+        } else if (!trimmedPrompt) {
             return NextResponse.json({ error: 'A prompt is required for video generation' }, { status: 400 });
         }
+
+        if (normalizedElements.length > 0 && !videoElementSupport.enabled) {
+            return NextResponse.json(
+                { error: videoElementSupport.reason || 'Named elements are not available in this video mode.' },
+                { status: 400 }
+            );
+        }
+
+        if (normalizedElements.length > videoElementSupport.maxElements) {
+            return NextResponse.json(
+                { error: `This video mode supports up to ${videoElementSupport.maxElements} named element${videoElementSupport.maxElements === 1 ? '' : 's'}.` },
+                { status: 400 }
+            );
+        }
+
+        if (normalizedElements.length > 0 && frameImageUrls.length > 0) {
+            return NextResponse.json(
+                { error: 'Named elements cannot be combined with start or end frames in the same run.' },
+                { status: 400 }
+            );
+        }
+
+        const clampedElementImageUrls = Array.isArray(elementImageUrls)
+            ? elementImageUrls.filter((url): url is string => typeof url === 'string' && url.length > 0).slice(0, videoElementSupport.maxElements)
+            : [];
+
+        if (normalizedElements.length > 0 && normalizedElements.length !== clampedElementImageUrls.length) {
+            return NextResponse.json(
+                { error: 'Element metadata does not match the uploaded video element images.' },
+                { status: 400 }
+            );
+        }
+
+        const unknownPromptHandles = findUnknownPromptHandles(
+            trimmedPrompt,
+            normalizedElements.map((element) => element.handle)
+        );
+
+        if (unknownPromptHandles.length > 0) {
+            return NextResponse.json(
+                { error: `Unknown element mention${unknownPromptHandles.length > 1 ? 's' : ''}: ${unknownPromptHandles.join(', ')}` },
+                { status: 400 }
+            );
+        }
+
+        const compiledPrompt = normalizedElements.length > 0
+            ? compilePromptWithElements(trimmedPrompt, normalizedElements, 'video')
+            : trimmedPrompt;
+        const effectiveReferenceMode = normalizedElements.length > 0
+            ? 'elements'
+            : frameImageUrls.length > 0
+                ? 'frames'
+                : normalizedReferenceMode;
 
         if (!(selectedModel.aspectRatios as readonly string[]).includes(aspectRatio)) {
             return NextResponse.json({ error: `Unsupported aspect ratio for ${selectedModel.displayName}` }, { status: 400 });
@@ -269,6 +334,7 @@ export async function POST(request: NextRequest) {
         let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
         let body: Record<string, unknown>;
         let providerModelId: string = selectedModel.apiModelId || mode;
+        const referenceImageUrls = normalizedElements.length > 0 ? clampedElementImageUrls : [];
 
         if (selectedModel.provider === 'kling') {
             const input: Record<string, unknown> = {
@@ -285,11 +351,11 @@ export async function POST(request: NextRequest) {
                     duration: shot.duration,
                 }));
             } else {
-                input.prompt = prompt.trim();
+                input.prompt = compiledPrompt;
             }
 
-            if (imageUrls.length > 0) {
-                input.image_urls = imageUrls;
+            if (frameImageUrls.length > 0) {
+                input.image_urls = frameImageUrls;
             }
 
             body = {
@@ -298,7 +364,7 @@ export async function POST(request: NextRequest) {
             };
         } else if (selectedModel.provider === 'seedance') {
             const input: Record<string, unknown> = {
-                prompt: prompt.trim(),
+                prompt: compiledPrompt,
                 aspect_ratio: aspectRatio,
                 resolution,
                 duration: String(duration),
@@ -306,8 +372,10 @@ export async function POST(request: NextRequest) {
                 generate_audio: soundEnabled,
             };
 
-            if (imageUrls.length > 0) {
-                input.input_urls = imageUrls;
+            if (referenceImageUrls.length > 0) {
+                input.input_urls = referenceImageUrls;
+            } else if (frameImageUrls.length > 0) {
+                input.input_urls = frameImageUrls;
             }
 
             body = {
@@ -319,11 +387,15 @@ export async function POST(request: NextRequest) {
             providerModelId = mode === 'veo3' ? 'veo3' : 'veo3_fast';
 
             body = {
-                prompt: prompt.trim(),
+                prompt: compiledPrompt,
                 model: providerModelId,
                 aspectRatio,
-                generationType: imageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO',
-                ...(imageUrls.length > 0 ? { imageUrls } : {}),
+                generationType: referenceImageUrls.length > 0
+                    ? 'REFERENCE_2_VIDEO'
+                    : (frameImageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO'),
+                ...(referenceImageUrls.length > 0
+                    ? { imageUrls: referenceImageUrls }
+                    : (frameImageUrls.length > 0 ? { imageUrls: frameImageUrls } : {})),
             };
         }
 
@@ -371,7 +443,7 @@ export async function POST(request: NextRequest) {
             duration: totalDuration,
             prediction_id: taskId,
             status: 'processing',
-            prompt: isMultiShot ? ((multiPrompts as MultiPrompt[])?.[0]?.prompt || '') : (prompt || '').trim(),
+            prompt: isMultiShot ? ((multiPrompts as MultiPrompt[])?.[0]?.prompt || '') : trimmedPrompt,
             category: 'video',
             source_generation_id: validatedSourceGenerationId,
             workflow_settings: {
@@ -383,6 +455,14 @@ export async function POST(request: NextRequest) {
                 multiPrompts: remixMultiPrompts,
                 resolution,
                 fixedLens,
+                referenceMode: effectiveReferenceMode,
+                ...(normalizedElements.length > 0
+                    ? {
+                        elements: normalizedElements,
+                        promptMode: 'element-mentions-v1' as const,
+                        compiledPrompt,
+                    }
+                    : {}),
             },
         });
 
