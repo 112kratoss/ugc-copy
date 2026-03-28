@@ -436,35 +436,39 @@ export async function POST(request: NextRequest) {
             }))
             : undefined;
 
-        const { error: logError } = await supabase.from('generations').insert({
-            user_id: user.id,
-            model: providerModelId,
-            cost,
-            duration: totalDuration,
-            prediction_id: taskId,
-            status: 'processing',
-            prompt: isMultiShot ? ((multiPrompts as MultiPrompt[])?.[0]?.prompt || '') : trimmedPrompt,
-            category: 'video',
-            source_generation_id: validatedSourceGenerationId,
-            workflow_settings: {
-                model,
-                mode,
-                aspectRatio,
-                sound: soundEnabled,
+        const { data: generationRecord, error: logError } = await supabase
+            .from('generations')
+            .insert({
+                user_id: user.id,
+                model: providerModelId,
+                cost,
                 duration: totalDuration,
-                multiPrompts: remixMultiPrompts,
-                resolution,
-                fixedLens,
-                referenceMode: effectiveReferenceMode,
-                ...(normalizedElements.length > 0
-                    ? {
-                        elements: normalizedElements,
-                        promptMode: 'element-mentions-v1' as const,
-                        compiledPrompt,
-                    }
-                    : {}),
-            },
-        });
+                prediction_id: taskId,
+                status: 'processing',
+                prompt: isMultiShot ? ((multiPrompts as MultiPrompt[])?.[0]?.prompt || '') : trimmedPrompt,
+                category: 'video',
+                source_generation_id: validatedSourceGenerationId,
+                workflow_settings: {
+                    model,
+                    mode,
+                    aspectRatio,
+                    sound: soundEnabled,
+                    duration: totalDuration,
+                    multiPrompts: remixMultiPrompts,
+                    resolution,
+                    fixedLens,
+                    referenceMode: effectiveReferenceMode,
+                    ...(normalizedElements.length > 0
+                        ? {
+                            elements: normalizedElements,
+                            promptMode: 'element-mentions-v1' as const,
+                            compiledPrompt,
+                        }
+                        : {}),
+                },
+            })
+            .select('id')
+            .single();
 
         if (logError) {
             console.error('Error logging generation:', logError);
@@ -473,6 +477,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             success: true,
             predictionId: taskId,
+            generationId: generationRecord?.id ?? null,
             status: 'processing',
             remainingCredits,
             cost,

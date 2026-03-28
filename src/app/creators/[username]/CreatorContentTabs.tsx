@@ -1,9 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { Heart, Wand2 } from 'lucide-react';
 import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
+import PublicShareButton from '@/app/components/PublicShareButton';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { buildShowcaseDetailPath } from '@/lib/share';
 
 type TabType = 'creations' | 'remixes' | 'saved';
 
@@ -103,6 +106,23 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                         <span>•</span>
                         <span className="flex items-center gap-1"><Wand2 className="w-3 h-3" /> {item.remixCount}</span>
                       </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <PublicShareButton
+                          generationId={item.id}
+                          title={item.title}
+                          description={item.prompt}
+                          sourceSurface="creator-profile"
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                        />
+                        <Link
+                          href={buildShowcaseDetailPath(item.id)}
+                          onClick={(event) => event.stopPropagation()}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
+                        >
+                          Open page
+                        </Link>
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -133,6 +153,23 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
         title={selectedItem?.title ?? 'Creator creation'}
         prompt={selectedItem?.prompt ?? ''}
         creator={selectedItem?.creator}
+        actions={selectedItem ? (
+          <>
+            <PublicShareButton
+              generationId={selectedItem.id}
+              title={selectedItem.title}
+              description={selectedItem.prompt}
+              sourceSurface="creator-profile"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+            />
+            <Link
+              href={buildShowcaseDetailPath(selectedItem.id)}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
+            >
+              Open page
+            </Link>
+          </>
+        ) : null}
       />
     </div>
   );

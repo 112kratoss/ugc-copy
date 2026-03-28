@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp } from 'lucide-react';
@@ -7,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
+import PublicShareButton from '@/app/components/PublicShareButton';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import {
     SHOWCASE_PAGE_SIZE,
@@ -15,6 +17,7 @@ import {
     type ShowcaseFeedPage,
     type ShowcaseSort,
 } from '@/lib/showcase';
+import { buildShowcaseDetailPath } from '@/lib/share';
 
 const CATEGORIES: Array<{
     id: ShowcaseCategory;
@@ -454,15 +457,25 @@ export default function ShowcaseClient({
                                                 <span className="text-sm font-medium">{item.saveCount}</span>
                                             </button>
 
-                                            <button
-                                                type="button"
-                                                onClick={() => handleRemix(item.id)}
-                                                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
-                                            >
-                                                <Wand2 className="w-4 h-4" />
-                                                Remix
-                                                <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
-                                            </button>
+                                            <div className="flex items-center gap-2">
+                                                <PublicShareButton
+                                                    generationId={item.id}
+                                                    title={item.title}
+                                                    description={item.prompt}
+                                                    sourceSurface="showcase"
+                                                    accessToken={session?.access_token ?? null}
+                                                    className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemix(item.id)}
+                                                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
+                                                >
+                                                    <Wand2 className="w-4 h-4" />
+                                                    Remix
+                                                    <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </motion.div>
@@ -494,6 +507,24 @@ export default function ShowcaseClient({
                 title={selectedItem?.title ?? 'Showcase preview'}
                 prompt={selectedItem?.prompt ?? ''}
                 creator={selectedItem?.creator}
+                actions={selectedItem ? (
+                    <>
+                        <PublicShareButton
+                            generationId={selectedItem.id}
+                            title={selectedItem.title}
+                            description={selectedItem.prompt}
+                            sourceSurface="showcase"
+                            accessToken={session?.access_token ?? null}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                        />
+                        <Link
+                            href={buildShowcaseDetailPath(selectedItem.id)}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
+                        >
+                            Open page
+                        </Link>
+                    </>
+                ) : null}
             />
         </div>
     );

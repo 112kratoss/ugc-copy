@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -16,9 +16,12 @@ import {
     StudioUploadedMediaPreview,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
+import PublicShareButton from '@/app/components/PublicShareButton';
+import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { useAuth } from '@/app/components/AuthProvider';
+import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFile,
     getPersistedImageElementRecords,
@@ -142,7 +145,7 @@ export interface CreateVideoPrefill {
 
 export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPrefill }) {
     const router = useRouter();
-    const { credits: userCredits, isLoading: isLoadingUser, updateCredits } = useAuth();
+    const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const remixId = prefill.remixId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
@@ -174,6 +177,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationStatus, setGenerationStatus] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
+    const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
+    const [latestIsPublic, setLatestIsPublic] = useState(false);
+    const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
+    const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
@@ -890,6 +897,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setIsGenerating(true);
         setError(null);
         setOutputVideo(null);
+        setLatestGenerationId(null);
+        setLatestIsPublic(false);
+        setPublishedMeta(null);
         setGenerationStatus('Preparing... (0%)');
 
         try {
@@ -984,6 +994,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Failed to start generation');
+            setLatestGenerationId(data.generationId ?? null);
+            setLatestIsPublic(false);
 
             const outputUrl = await pollPrediction(data.predictionId, session.access_token);
             setOutputVideo(outputUrl);
@@ -1036,6 +1048,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             : activeReferenceMode === 'elements'
                 ? 'The workspace will show the current run and latest result once your named-element scene starts rendering.'
                 : 'The workspace will show the current run and latest result once you generate.';
+    const primarySharePrompt = publishedMeta?.description
+        || prompt.trim()
+        || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
+        || null;
+    const shareTitle = publishedMeta?.title
+        || prompt.trim()
+        || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
+        || `${videoModel.displayName} video`;
+    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -1941,10 +1962,55 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/60 aspect-video">
                                         <video src={outputVideo} controls autoPlay loop className="h-full w-full object-contain" />
                                     </div>
-                                    <a href={outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
-                                        <Download className="h-4 w-4" />
-                                        Download video
-                                    </a>
+                                    <div className="flex flex-wrap gap-3">
+                                        <a href={outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
+                                            <Download className="h-4 w-4" />
+                                            Download video
+                                        </a>
+                                        {latestGenerationId ? (
+                                            latestIsPublic ? (
+                                                <>
+                                                    <PublicShareButton
+                                                        generationId={latestGenerationId}
+                                                        title={shareTitle}
+                                                        description={primarySharePrompt}
+                                                        sourceSurface="create-video"
+                                                        accessToken={session?.access_token ?? null}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                                    />
+                                                    {publicResultPath ? (
+                                                        <Link
+                                                            href={publicResultPath}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                                        >
+                                                            Open public page
+                                                        </Link>
+                                                    ) : null}
+                                                </>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsPublishModalOpen(true)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-5 py-3 text-sm font-semibold text-purple-100 transition hover:border-purple-400/40 hover:bg-purple-500/15"
+                                                >
+                                                    <Share2 className="h-4 w-4" />
+                                                    Publish & share
+                                                </button>
+                                            )
+                                        ) : null}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setOutputVideo(null);
+                                                setLatestGenerationId(null);
+                                                setLatestIsPublic(false);
+                                                setPublishedMeta(null);
+                                            }}
+                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                        >
+                                            Start another run
+                                        </button>
+                                    </div>
                                 </div>
                             ) : isGenerating ? (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
@@ -1988,6 +2054,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
+            />
+
+            <PublishToShowcaseModal
+                isOpen={isPublishModalOpen}
+                onClose={() => setIsPublishModalOpen(false)}
+                generationId={latestGenerationId}
+                shareAfterPublish={latestGenerationId ? {
+                    title: shareTitle,
+                    description: primarySharePrompt,
+                    sourceSurface: 'create-video',
+                } : undefined}
+                onPublished={(payload) => {
+                    setLatestIsPublic(true);
+                    setPublishedMeta(payload);
+                    setIsPublishModalOpen(false);
+                }}
             />
 
             <StudioMediaPreviewModal

@@ -59,9 +59,20 @@ function createSupabaseMock(sourceGeneration: SourceGenerationRow | null) {
               },
             };
           },
-          async insert(record: Record<string, unknown>) {
+          insert(record: Record<string, unknown>) {
             inserts.push(record);
-            return { error: null };
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: { id: 'gen-logged-1' },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
           },
         };
       }),
@@ -126,6 +137,7 @@ describe('/api/generate-image route', () => {
     const data = await response.json();
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
+    expect(data.generationId).toBe('gen-logged-1');
     expect(currentSupabaseMock.inserts[0].source_generation_id).toBe('source-1');
   });
 

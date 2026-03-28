@@ -12,6 +12,7 @@ type GenerationRow = {
   category: string | null;
   is_public: boolean;
   title: string | null;
+  description: string | null;
   prompt: string | null;
 };
 
@@ -104,6 +105,7 @@ describe('/api/generations route', () => {
         category: 'image',
         is_public: false,
         title: 'Launch still',
+        description: 'A polished creator-style launch image.',
         prompt: 'A creator-style product image with warm natural light.',
       },
     ];
@@ -139,6 +141,7 @@ describe('/api/generations route', () => {
     expect(data.generations[0].status).toBe('succeeded');
     expect(data.generations[0].output_url).toBe('https://proxy.example.com/generated_images/user-1/output.jpg');
     expect(data.generations[0].title).toBe('Launch still');
+    expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
   });
 
@@ -162,6 +165,7 @@ describe('/api/generations route', () => {
     });
     expect(data.generations[0].status).toBe('processing');
     expect(data.generations[0].title).toBe('Launch still');
+    expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
   });
 });

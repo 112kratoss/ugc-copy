@@ -187,23 +187,27 @@ export async function POST(request: NextRequest) {
         refundState.shouldRefund = false;
 
         // Log Generation with the model key (e.g. 'kling-3.0')
-        const { error: logError } = await supabase.from('generations').insert({
-            user_id: user.id,
-            model: modelConfig.modelId,
-            duration: duration,
-            cost: COST,
-            prediction_id: taskId,
-            status: 'processing',
-            prompt: (prompt || '').trim(),
-            category: 'motion',
-            source_generation_id: validatedSourceGenerationId,
-            workflow_settings: {
-                model,
-                characterOrientation,
-                mode,
-                duration,
-            },
-        });
+        const { data: generationRecord, error: logError } = await supabase
+            .from('generations')
+            .insert({
+                user_id: user.id,
+                model: modelConfig.modelId,
+                duration: duration,
+                cost: COST,
+                prediction_id: taskId,
+                status: 'processing',
+                prompt: (prompt || '').trim(),
+                category: 'motion',
+                source_generation_id: validatedSourceGenerationId,
+                workflow_settings: {
+                    model,
+                    characterOrientation,
+                    mode,
+                    duration,
+                },
+            })
+            .select('id')
+            .single();
 
         if (logError) {
             console.error('Error logging generation:', logError);
@@ -212,6 +216,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             success: true,
             predictionId: taskId,
+            generationId: generationRecord?.id ?? null,
             status: 'processing',
             remainingCredits: remainingCredits
         });

@@ -59,9 +59,20 @@ function createSupabaseMock(sourceGeneration: SourceGenerationRow | null = null)
               },
             };
           },
-          async insert(record: Record<string, unknown>) {
+          insert(record: Record<string, unknown>) {
             inserts.push(record);
-            return { error: null };
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: { id: 'gen-logged-2' },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
           },
         };
       }),
@@ -129,6 +140,7 @@ describe('/api/generate-video route', () => {
     );
 
     expect(response.status).toBe(200);
+    expect((await response.clone().json()).generationId).toBe('gen-logged-2');
     expect(providerBody).toMatchObject({
       model: 'kling-3.0/video',
       input: {
@@ -180,6 +192,7 @@ describe('/api/generate-video route', () => {
     );
 
     expect(response.status).toBe(200);
+    expect((await response.clone().json()).generationId).toBe('gen-logged-2');
     expect(providerBody).toMatchObject({
       model: 'kling-3.0/video',
       input: {

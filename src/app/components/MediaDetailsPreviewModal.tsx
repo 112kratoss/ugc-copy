@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, Copy, X } from 'lucide-react';
 
@@ -18,6 +18,7 @@ interface MediaDetailsPreviewModalProps {
   title: string;
   prompt?: string | null;
   creator?: ShowcaseCreator;
+  actions?: ReactNode;
 }
 
 export default function MediaDetailsPreviewModal({
@@ -29,6 +30,7 @@ export default function MediaDetailsPreviewModal({
   title,
   prompt,
   creator,
+  actions,
 }: MediaDetailsPreviewModalProps) {
   return (
     <AnimatePresence>
@@ -42,6 +44,7 @@ export default function MediaDetailsPreviewModal({
           title={title}
           prompt={prompt}
           creator={creator}
+          actions={actions}
         />
       ) : null}
     </AnimatePresence>
@@ -56,6 +59,7 @@ function MediaDetailsPreviewDialog({
   title,
   prompt,
   creator,
+  actions,
 }: Omit<MediaDetailsPreviewModalProps, 'isOpen'>) {
   const titleId = useId();
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
@@ -182,6 +186,11 @@ function MediaDetailsPreviewDialog({
           {creator ? (
             <div className="mt-4">
               <CreatorIdentity creator={creator} />
+            </div>
+          ) : null}
+          {actions ? (
+            <div className="mt-4 flex flex-wrap gap-3">
+              {actions}
             </div>
           ) : null}
         </div>

@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound, Eye } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound, Eye, Share2 } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
+import PublicShareButton from '@/app/components/PublicShareButton';
+import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { isAudioModel, isImageModel } from '@/lib/models';
+import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { supabase } from '@/lib/supabase';
 
 interface Generation {
@@ -21,6 +25,7 @@ interface Generation {
     category?: string | null;
     is_public?: boolean;
     title?: string | null;
+    description?: string | null;
     prompt?: string | null;
 }
 
@@ -28,17 +33,13 @@ type FilterType = 'all' | 'images' | 'videos' | 'audio';
 
 export default function CreationsPage() {
     const router = useRouter();
+    const { session } = useAuth();
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [filter, setFilter] = useState<FilterType>('all');
-
-    // Publish Modal State
-    const [publishModalOpen, setPublishModalOpen] = useState(false);
-    const [selectedGen, setSelectedGen] = useState<Generation | null>(null);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
-    const [publishTitle, setPublishTitle] = useState('');
-    const [publishDesc, setPublishDesc] = useState('');
-    const [isPublishing, setIsPublishing] = useState(false);
+    const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
+    const [shareAfterPublish, setShareAfterPublish] = useState(false);
 
     const fetchCreations = useCallback(async () => {
         const { data: { session } } = await supabase.auth.getSession();
@@ -79,41 +80,29 @@ export default function CreationsPage() {
         };
     }, [fetchCreations]);
 
-    const handlePublishSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!selectedGen) return;
+    const openPublishModal = (generation: Generation, options?: { shareAfterPublish?: boolean }) => {
+        setPublishTarget(generation);
+        setShareAfterPublish(Boolean(options?.shareAfterPublish));
+    };
 
-        setIsPublishing(true);
-        try {
-            const { data: { session } } = await supabase.auth.getSession();
-            const res = await fetch('/api/showcase/publish', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session?.access_token}`
-                },
-                body: JSON.stringify({
-                    generationId: selectedGen.id,
-                    isPublic: true,
-                    title: publishTitle.trim() || undefined,
-                    description: publishDesc.trim() || undefined,
-                })
-            });
+    const closePublishModal = () => {
+        setPublishTarget(null);
+        setShareAfterPublish(false);
+    };
 
-            const data = await res.json();
-            if (data.success) {
-                // Optimistically update the local list
-                setGenerations(prev => prev.map(g => g.id === selectedGen.id ? { ...g, is_public: true } : g));
-                setPublishModalOpen(false);
-            } else {
-                alert(data.error || 'Failed to publish');
-            }
-        } catch (err) {
-            console.error(err);
-            alert('Failed to publish');
-        } finally {
-            setIsPublishing(false);
-        }
+    const handlePublished = (generationId: string, payload: { title: string; description: string }) => {
+        setGenerations((previous) =>
+            previous.map((generation) =>
+                generation.id === generationId
+                    ? {
+                        ...generation,
+                        is_public: true,
+                        title: payload.title || generation.title,
+                        description: payload.description || generation.description,
+                    }
+                    : generation
+            )
+        );
     };
 
     const handleUnpublish = async (generationId: string) => {
@@ -209,6 +198,63 @@ export default function CreationsPage() {
         }
 
         return mediaKind === 'image' ? 'image' : 'video';
+    };
+
+    const isShareSupported = (generation: Generation): boolean =>
+        supportsPublicCreationSharing({
+            category: getGenerationCategory(generation),
+            model: generation.model,
+        });
+
+    const renderShareAction = (generation: Generation, compact = false) => {
+        const baseClass = compact
+            ? 'inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white'
+            : 'flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium transition-all';
+
+        if (!isShareSupported(generation)) {
+            return (
+                <button
+                    type="button"
+                    disabled
+                    title="Audio creations cannot be shared publicly yet."
+                    className={compact
+                        ? `${baseClass} cursor-not-allowed opacity-50`
+                        : `${baseClass} cursor-not-allowed border border-white/5 bg-zinc-900/50 text-zinc-500 opacity-60`}
+                >
+                    <Share2 className="h-4 w-4" />
+                    Share unavailable
+                </button>
+            );
+        }
+
+        if (generation.is_public) {
+            return (
+                <PublicShareButton
+                    generationId={generation.id}
+                    title={getPreviewTitle(generation)}
+                    description={generation.description ?? generation.prompt ?? null}
+                    sourceSurface="my-creations"
+                    accessToken={session?.access_token ?? null}
+                    label="Share link"
+                    className={compact
+                        ? baseClass
+                        : `${baseClass} border border-white/10 bg-white/[0.04] text-zinc-100 hover:border-white/20 hover:bg-white/[0.08] hover:text-white`}
+                />
+            );
+        }
+
+        return (
+            <button
+                type="button"
+                onClick={() => openPublishModal(generation, { shareAfterPublish: true })}
+                className={compact
+                    ? `${baseClass} border border-purple-500/20 bg-purple-500/10 text-purple-100 hover:border-purple-400/40 hover:bg-purple-500/15`
+                    : `${baseClass} border border-purple-500/25 bg-purple-500/10 text-purple-100 hover:border-purple-400/40 hover:bg-purple-500/15`}
+            >
+                <Share2 className="h-4 w-4" />
+                Publish & share
+            </button>
+        );
     };
 
     const successfulGenerations = generations.filter(g => g.status === 'succeeded' && g.output_url);
@@ -429,6 +475,8 @@ export default function CreationsPage() {
                                                 View details
                                             </button>
 
+                                            {renderShareAction(gen)}
+
                                             {!isAudio ? (
                                                 gen.is_public ? (
                                                     <button 
@@ -442,16 +490,11 @@ export default function CreationsPage() {
                                                     </button>
                                                 ) : (
                                                     <button 
-                                                        onClick={() => {
-                                                            setSelectedGen(gen);
-                                                            setPublishTitle('');
-                                                            setPublishDesc('');
-                                                            setPublishModalOpen(true);
-                                                        }}
+                                                        onClick={() => openPublishModal(gen)}
                                                         className="flex-1 flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
                                                     >
                                                         <Globe className="w-4 h-4" />
-                                                        Publish to Showcase
+                                                        Publish only
                                                     </button>
                                                 )
                                             ) : null}
@@ -493,84 +536,41 @@ export default function CreationsPage() {
                 alt={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
                 title={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
                 prompt={previewGen?.prompt ?? ''}
+                actions={previewGen ? (
+                    <>
+                        {renderShareAction(previewGen, true)}
+                        {previewGen.is_public ? (
+                            <Link
+                                href={buildShowcaseDetailPath(previewGen.id)}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
+                            >
+                                Open public page
+                            </Link>
+                        ) : null}
+                    </>
+                ) : null}
             />
 
-            {/* Publish Modal */}
-            <AnimatePresence>
-                {publishModalOpen && selectedGen && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        onClick={() => setPublishModalOpen(false)}
-                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.95, y: 20 }}
-                            animate={{ scale: 1, y: 0 }}
-                            exit={{ scale: 0.95, y: 20 }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-md shadow-2xl"
-                        >
-                            <div className="flex justify-between items-center mb-6">
-                                <h3 className="text-xl font-bold flex items-center gap-2">
-                                    <Globe className="w-5 h-5 text-purple-400" />
-                                    Publish to Showcase
-                                </h3>
-                                <button onClick={() => setPublishModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
-                            
-                            <p className="text-sm text-zinc-400 mb-6">
-                                Share your creation with the community! This will make it visible on the public feed and allow others to remix it.
-                            </p>
+            <PublishToShowcaseModal
+                isOpen={Boolean(publishTarget)}
+                onClose={closePublishModal}
+                generationId={publishTarget?.id ?? null}
+                defaultTitle={publishTarget?.title ?? ''}
+                defaultDescription={publishTarget?.description ?? ''}
+                shareAfterPublish={shareAfterPublish ? {
+                    title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',
+                    description: publishTarget?.description ?? publishTarget?.prompt ?? null,
+                    sourceSurface: 'my-creations',
+                } : undefined}
+                onPublished={(payload) => {
+                    if (!publishTarget) {
+                        return;
+                    }
 
-                            <form onSubmit={handlePublishSubmit} className="space-y-4">
-                                <div>
-                                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Title (Optional)</label>
-                                    <input
-                                        type="text"
-                                        value={publishTitle}
-                                        onChange={(e) => setPublishTitle(e.target.value)}
-                                        placeholder="Give your creation a name"
-                                        className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors"
-                                        maxLength={60}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Description (Optional)</label>
-                                    <textarea
-                                        value={publishDesc}
-                                        onChange={(e) => setPublishDesc(e.target.value)}
-                                        placeholder="Share the story behind this, or some tips."
-                                        rows={3}
-                                        className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors resize-none"
-                                        maxLength={200}
-                                    />
-                                </div>
-
-                                <div className="pt-4 flex gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={() => setPublishModalOpen(false)}
-                                        className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-medium transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={isPublishing}
-                                        className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-xl font-medium transition-all shadow-[0_0_20px_-5px_rgba(168,85,247,0.4)] disabled:opacity-50 flex justify-center items-center"
-                                    >
-                                        {isPublishing ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Publish Now'}
-                                    </button>
-                                </div>
-                            </form>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    handlePublished(publishTarget.id, payload);
+                    closePublishModal();
+                }}
+            />
         </div>
     );
 }

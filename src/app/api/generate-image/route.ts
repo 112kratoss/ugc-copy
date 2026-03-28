@@ -5,7 +5,6 @@ import {
     compileImagePromptWithElements,
     findUnknownPromptHandles,
     normalizeSubmittedElementDescriptors,
-    type ImageElementDescriptor,
 } from '@/lib/image-elements';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
@@ -212,30 +211,34 @@ export async function POST(request: NextRequest) {
         refundState.shouldRefund = false;
 
         // Log Generation
-        const { error: logError } = await supabase.from('generations').insert({
-            user_id: user.id,
-            model,
-            cost,
-            prediction_id: taskId,
-            status: 'processing',
-            prompt: trimmedPrompt,
-            category: 'image',
-            source_generation_id: validatedSourceGenerationId,
-            workflow_settings: {
+        const { data: generationRecord, error: logError } = await supabase
+            .from('generations')
+            .insert({
+                user_id: user.id,
                 model,
-                aspectRatio,
-                resolution,
-                outputFormat,
-                googleSearch,
-                ...(alignedElements.length > 0
-                    ? {
-                        elements: alignedElements,
-                        promptMode: 'element-mentions-v1' as const,
-                        compiledPrompt,
-                    }
-                    : {}),
-            },
-        });
+                cost,
+                prediction_id: taskId,
+                status: 'processing',
+                prompt: trimmedPrompt,
+                category: 'image',
+                source_generation_id: validatedSourceGenerationId,
+                workflow_settings: {
+                    model,
+                    aspectRatio,
+                    resolution,
+                    outputFormat,
+                    googleSearch,
+                    ...(alignedElements.length > 0
+                        ? {
+                            elements: alignedElements,
+                            promptMode: 'element-mentions-v1' as const,
+                            compiledPrompt,
+                        }
+                        : {}),
+                },
+            })
+            .select('id')
+            .single();
 
         if (logError) {
             console.error('Error logging generation:', logError);
@@ -244,6 +247,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             success: true,
             predictionId: taskId,
+            generationId: generationRecord?.id ?? null,
             status: 'processing',
             remainingCredits,
         });

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -15,8 +15,11 @@ import {
     StudioRunPanel,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
+import PublicShareButton from '@/app/components/PublicShareButton';
+import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
+import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFiles,
     getPersistedImageElementRecords,
@@ -158,7 +161,7 @@ export interface CreateImagePrefill {
 
 export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
     const router = useRouter();
-    const { credits: userCredits, isLoading: isLoadingUser, updateCredits } = useAuth();
+    const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
     const [elements, setElements] = useState<ImageElementDraft[]>([]);
@@ -169,6 +172,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationStatus, setGenerationStatus] = useState<string | null>(null);
     const [outputImage, setOutputImage] = useState<string | null>(null);
+    const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
+    const [latestIsPublic, setLatestIsPublic] = useState(false);
+    const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
+    const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -731,6 +738,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setIsGenerating(true);
         setError(null);
         setOutputImage(null);
+        setLatestGenerationId(null);
+        setLatestIsPublic(false);
+        setPublishedMeta(null);
         setGenerationStatus('Preparing... (0%)');
 
         try {
@@ -799,6 +809,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Failed to start generation');
+            setLatestGenerationId(data.generationId ?? null);
+            setLatestIsPublic(false);
 
             const outputUrl = await pollPrediction(data.predictionId, session.access_token);
             setOutputImage(outputUrl);
@@ -867,6 +879,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             : isBackgroundProcessing
                 ? backgroundProcessingCopy.description
                 : 'The workspace stays focused on the active run and latest result once you generate.';
+    const shareTitle = publishedMeta?.title || prompt.trim() || `${model.displayName} image`;
+    const shareDescription = publishedMeta?.description || prompt.trim() || null;
+    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -1453,8 +1468,44 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             <Download className="h-4 w-4" />
                                             Download image
                                         </a>
+                                        {latestGenerationId ? (
+                                            latestIsPublic ? (
+                                                <>
+                                                    <PublicShareButton
+                                                        generationId={latestGenerationId}
+                                                        title={shareTitle}
+                                                        description={shareDescription}
+                                                        sourceSurface="create-image"
+                                                        accessToken={session?.access_token ?? null}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                                    />
+                                                    {publicResultPath ? (
+                                                        <Link
+                                                            href={publicResultPath}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                                        >
+                                                            Open public page
+                                                        </Link>
+                                                    ) : null}
+                                                </>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsPublishModalOpen(true)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-5 py-3 text-sm font-semibold text-purple-100 transition hover:border-purple-400/40 hover:bg-purple-500/15"
+                                                >
+                                                    <Share2 className="h-4 w-4" />
+                                                    Publish & share
+                                                </button>
+                                            )
+                                        ) : null}
                                         <button
-                                            onClick={() => setOutputImage(null)}
+                                            onClick={() => {
+                                                setOutputImage(null);
+                                                setLatestGenerationId(null);
+                                                setLatestIsPublic(false);
+                                                setPublishedMeta(null);
+                                            }}
                                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                                         >
                                             Start another run
@@ -1500,6 +1551,22 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Reference image'}
                 title={uploadPreview?.title ?? 'Reference Preview'}
+            />
+
+            <PublishToShowcaseModal
+                isOpen={isPublishModalOpen}
+                onClose={() => setIsPublishModalOpen(false)}
+                generationId={latestGenerationId}
+                shareAfterPublish={latestGenerationId ? {
+                    title: shareTitle,
+                    description: shareDescription,
+                    sourceSurface: 'create-image',
+                } : undefined}
+                onPublished={(payload) => {
+                    setLatestIsPublic(true);
+                    setPublishedMeta(payload);
+                    setIsPublishModalOpen(false);
+                }}
             />
 
             <StudioMediaPreviewModal

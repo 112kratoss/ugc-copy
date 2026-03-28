@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Upload, Sparkles, Loader2, Download, X, Zap, ChevronDown, Check, Play } from 'lucide-react';
+import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -17,8 +17,11 @@ import {
     StudioUploadedMediaPreview,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
+import PublicShareButton from '@/app/components/PublicShareButton';
+import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
+import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFile,
     PERSISTED_MEDIA_KEYS,
@@ -74,7 +77,7 @@ interface UploadPreviewState {
 
 export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
     const router = useRouter();
-    const { credits: userCredits, isLoading: isLoadingUser, updateCredits } = useAuth();
+    const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -90,6 +93,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [error, setError] = useState<string | null>(null);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
+    const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
+    const [latestIsPublic, setLatestIsPublic] = useState(false);
+    const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
+    const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [duration, setDuration] = useState<number>(0);
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
@@ -191,18 +198,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setReferenceVideoFile(null); setReferenceVideo(null);
         setDuration(0); setVideoError(null);
         await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
-    };
-
-    const handleVideoMetadata = async (e: React.SyntheticEvent<HTMLVideoElement>) => {
-        const videoDuration = e.currentTarget.duration;
-        if (videoDuration > model.maxVideoDuration) {
-            setVideoError(`Video length should be under ${model.maxVideoDuration}s. Your video is ${Math.round(videoDuration)}s.`);
-            setReferenceVideoFile(null); setReferenceVideo(null); setDuration(0);
-            await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
-            return;
-        }
-        setVideoError(null);
-        setDuration(videoDuration);
     };
 
     const uploadToSupabase = async (file: File, bucket: string): Promise<string> => {
@@ -361,6 +356,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (effectiveDuration <= 0) { alert('Invalid video duration'); return; }
 
         setIsGenerating(true); setError(null); setOutputVideo(null);
+        setLatestGenerationId(null); setLatestIsPublic(false); setPublishedMeta(null);
 
         try {
             setGenerationStatus('Uploading files... (0%)');
@@ -396,6 +392,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     : (data.error || 'Failed to start generation');
                 throw new Error(errorMessage);
             }
+            setLatestGenerationId(data.generationId ?? null);
+            setLatestIsPublic(false);
 
             const outputUrl = await pollPrediction(data.predictionId, session.access_token);
             setOutputVideo(outputUrl);
@@ -456,6 +454,9 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             : isBackgroundProcessing
                 ? backgroundProcessingCopy.description
             : 'Upload a character still and a motion reference. The active run and latest result will take over this workspace.';
+    const shareTitle = publishedMeta?.title || prompt.trim() || `${model.displayName} motion clip`;
+    const shareDescription = publishedMeta?.description || prompt.trim() || null;
+    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -908,9 +909,43 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                             <Download className="h-4 w-4" />
                                             Download video
                                         </a>
+                                        {latestGenerationId ? (
+                                            latestIsPublic ? (
+                                                <>
+                                                    <PublicShareButton
+                                                        generationId={latestGenerationId}
+                                                        title={shareTitle}
+                                                        description={shareDescription}
+                                                        sourceSurface="create-motion"
+                                                        accessToken={session?.access_token ?? null}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                                    />
+                                                    {publicResultPath ? (
+                                                        <Link
+                                                            href={publicResultPath}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                                                        >
+                                                            Open public page
+                                                        </Link>
+                                                    ) : null}
+                                                </>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsPublishModalOpen(true)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-5 py-3 text-sm font-semibold text-purple-100 transition hover:border-purple-400/40 hover:bg-purple-500/15"
+                                                >
+                                                    <Share2 className="h-4 w-4" />
+                                                    Publish & share
+                                                </button>
+                                            )
+                                        ) : null}
                                         <button
                                             onClick={() => {
                                                 setOutputVideo(null);
+                                                setLatestGenerationId(null);
+                                                setLatestIsPublic(false);
+                                                setPublishedMeta(null);
                                                 setError(null);
                                                 setGenerationStatus(null);
                                             }}
@@ -959,6 +994,22 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
+            />
+
+            <PublishToShowcaseModal
+                isOpen={isPublishModalOpen}
+                onClose={() => setIsPublishModalOpen(false)}
+                generationId={latestGenerationId}
+                shareAfterPublish={latestGenerationId ? {
+                    title: shareTitle,
+                    description: shareDescription,
+                    sourceSurface: 'create-motion',
+                } : undefined}
+                onPublished={(payload) => {
+                    setLatestIsPublic(true);
+                    setPublishedMeta(payload);
+                    setIsPublishModalOpen(false);
+                }}
             />
         </div>
     );
