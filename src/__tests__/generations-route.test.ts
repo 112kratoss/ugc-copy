@@ -11,6 +11,8 @@ type GenerationRow = {
   model: string;
   category: string | null;
   is_public: boolean;
+  title: string | null;
+  prompt: string | null;
 };
 
 let generationsState: GenerationRow[] = [];
@@ -101,6 +103,8 @@ describe('/api/generations route', () => {
         model: 'nano-banana-2',
         category: 'image',
         is_public: false,
+        title: 'Launch still',
+        prompt: 'A creator-style product image with warm natural light.',
       },
     ];
   });
@@ -134,6 +138,8 @@ describe('/api/generations route', () => {
     });
     expect(data.generations[0].status).toBe('succeeded');
     expect(data.generations[0].output_url).toBe('https://proxy.example.com/generated_images/user-1/output.jpg');
+    expect(data.generations[0].title).toBe('Launch still');
+    expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
   });
 
   it('returns data even when syncing processing generations fails', async () => {
@@ -155,5 +161,7 @@ describe('/api/generations route', () => {
       generationIds: ['gen-1'],
     });
     expect(data.generations[0].status).toBe('processing');
+    expect(data.generations[0].title).toBe('Launch still');
+    expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
   });
 });

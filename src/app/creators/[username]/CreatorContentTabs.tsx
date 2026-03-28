@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Heart, Wand2 } from 'lucide-react';
+import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 
 type TabType = 'creations' | 'remixes' | 'saved';
@@ -12,6 +13,7 @@ interface CreatorContentTabsProps {
 
 export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
   const [activeTab, setActiveTab] = useState<TabType>('creations');
+  const [selectedItem, setSelectedItem] = useState<CreatorProfilePageData['items'][number] | null>(null);
 
   return (
     <div className="mt-10">
@@ -56,6 +58,15 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                 {items.map((item) => (
                   <article
                     key={item.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedItem(item)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedItem(item);
+                      }
+                    }}
                     className="group overflow-hidden rounded-3xl border border-white/5 bg-zinc-900/30 shadow-[0_0_40px_-30px_rgba(255,255,255,0.3)] hover:border-purple-500/30 transition-all duration-300"
                   >
                     <div className="relative bg-black">
@@ -112,6 +123,17 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
           </div>
         )}
       </div>
+
+      <MediaDetailsPreviewModal
+        isOpen={Boolean(selectedItem)}
+        onClose={() => setSelectedItem(null)}
+        mediaType={selectedItem && (selectedItem.category === 'video' || selectedItem.category === 'motion') ? 'video' : 'image'}
+        src={selectedItem?.url ?? null}
+        alt={selectedItem?.title ?? 'Creator creation preview'}
+        title={selectedItem?.title ?? 'Creator creation'}
+        prompt={selectedItem?.prompt ?? ''}
+        creator={selectedItem?.creator}
+      />
     </div>
   );
 }

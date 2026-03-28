@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound } from 'lucide-react';
+import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound, Eye } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import { supabase } from '@/lib/supabase';
@@ -19,6 +20,8 @@ interface Generation {
     model: string;
     category?: string | null;
     is_public?: boolean;
+    title?: string | null;
+    prompt?: string | null;
 }
 
 type FilterType = 'all' | 'images' | 'videos' | 'audio';
@@ -32,6 +35,7 @@ export default function CreationsPage() {
     // Publish Modal State
     const [publishModalOpen, setPublishModalOpen] = useState(false);
     const [selectedGen, setSelectedGen] = useState<Generation | null>(null);
+    const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const [publishTitle, setPublishTitle] = useState('');
     const [publishDesc, setPublishDesc] = useState('');
     const [isPublishing, setIsPublishing] = useState(false);
@@ -181,6 +185,30 @@ export default function CreationsPage() {
         } catch {
             return fallback;
         }
+    };
+
+    const getPreviewTitle = (generation: Generation): string => {
+        if (generation.title?.trim()) {
+            return generation.title.trim();
+        }
+
+        const mediaKind = getMediaKind(generation);
+        const mediaLabel = mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video';
+        const shortDate = new Date(generation.created_at).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+        });
+
+        return `${mediaLabel} · ${generation.model} · ${shortDate}`;
+    };
+
+    const getPreviewMediaType = (generation: Generation): MediaDetailsType => {
+        const mediaKind = getMediaKind(generation);
+        if (mediaKind === 'audio') {
+            return 'audio';
+        }
+
+        return mediaKind === 'image' ? 'image' : 'video';
     };
 
     const successfulGenerations = generations.filter(g => g.status === 'succeeded' && g.output_url);
@@ -391,13 +419,21 @@ export default function CreationsPage() {
                                             </div>
                                         </div>
                                         
-                                        {/* Action Bar */}
-                                        {!isAudio && (
-                                            <div className="p-4 pt-0 flex gap-2">
-                                                {gen.is_public ? (
+                                        <div className="p-4 pt-0 flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setPreviewGen(gen)}
+                                                className="flex-1 flex items-center justify-center gap-2 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 hover:border-white/20 rounded-xl text-sm text-zinc-200 hover:text-white font-medium transition-all"
+                                            >
+                                                <Eye className="w-4 h-4" />
+                                                View details
+                                            </button>
+
+                                            {!isAudio ? (
+                                                gen.is_public ? (
                                                     <button 
                                                         onClick={() => handleUnpublish(gen.id)}
-                                                        className="w-full flex items-center justify-center gap-2 py-2 bg-green-500/10 text-green-400 hover:bg-red-500/10 hover:text-red-400 border border-green-500/20 hover:border-red-500/20 rounded-xl text-sm font-medium transition-all group/pub"
+                                                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-green-500/10 text-green-400 hover:bg-red-500/10 hover:text-red-400 border border-green-500/20 hover:border-red-500/20 rounded-xl text-sm font-medium transition-all group/pub"
                                                     >
                                                         <CheckCircle2 className="w-4 h-4 group-hover/pub:hidden" />
                                                         <X className="w-4 h-4 hidden group-hover/pub:block" />
@@ -412,14 +448,14 @@ export default function CreationsPage() {
                                                             setPublishDesc('');
                                                             setPublishModalOpen(true);
                                                         }}
-                                                        className="w-full flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
+                                                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
                                                     >
                                                         <Globe className="w-4 h-4" />
                                                         Publish to Showcase
                                                     </button>
-                                                )}
-                                            </div>
-                                        )}
+                                                )
+                                            ) : null}
+                                        </div>
                                     </motion.div>
                                 );
                             })}
@@ -448,6 +484,16 @@ export default function CreationsPage() {
                     </div>
                 )}
             </div>
+
+            <MediaDetailsPreviewModal
+                isOpen={Boolean(previewGen)}
+                onClose={() => setPreviewGen(null)}
+                mediaType={previewGen ? getPreviewMediaType(previewGen) : 'image'}
+                src={previewGen?.output_url ?? null}
+                alt={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
+                title={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
+                prompt={previewGen?.prompt ?? ''}
+            />
 
             {/* Publish Modal */}
             <AnimatePresence>
