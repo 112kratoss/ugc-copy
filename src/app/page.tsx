@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
+import HomeShowcasePreviewGrid from '@/app/components/HomeShowcasePreviewGrid';
 import { HoverVideo } from '@/app/components/HoverVideo';
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
@@ -231,37 +232,7 @@ export default async function Home() {
             variant="minimal"
           />
 
-          <div className="columns-2 gap-4 space-y-4 md:columns-3 xl:columns-4 2xl:columns-5">
-            {showcaseFeed.items.map((item) => (
-              <Link
-                key={item.id}
-                href={`/showcase?category=${item.category}`}
-                className="group relative block break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215]"
-              >
-                {item.category === 'video' || item.category === 'motion' ? (
-                  <HoverVideo
-                    src={item.url}
-                    className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
-                  />
-                ) : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={item.url}
-                    alt={item.title}
-                    className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
-                  />
-                )}
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
-                  <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
-                </div>
-              </Link>
-            ))}
-            {showcaseFeed.items.length === 0 ? (
-              <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-10 text-center text-zinc-400">
-                No community inspiration is available yet.
-              </div>
-            ) : null}
-          </div>
+          <HomeShowcasePreviewGrid items={showcaseFeed.items} />
         </section>
       </main>
 
