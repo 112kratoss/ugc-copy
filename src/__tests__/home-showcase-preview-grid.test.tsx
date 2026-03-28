@@ -5,6 +5,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import HomeShowcasePreviewGrid from '@/app/components/HomeShowcasePreviewGrid';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
+const mockPush = vi.fn();
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mockPush,
+  }),
+}));
+
+vi.mock('@/app/components/AuthProvider', () => ({
+  useAuth: () => ({
+    session: {
+      access_token: 'test-token',
+      user: { id: 'user-1' },
+    },
+    user: { id: 'user-1' },
+    credits: 25,
+    isLoading: false,
+  }),
+}));
+
 vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: ReactNode }) => <>{children}</>,
   motion: {
@@ -23,7 +43,7 @@ describe('HomeShowcasePreviewGrid', () => {
     vi.restoreAllMocks();
   });
 
-  it('opens the media preview modal from the homepage inspiration grid', () => {
+  it('opens the media preview modal from the homepage inspiration grid with action buttons', () => {
     const items: ShowcaseFeedItem[] = [
       {
         id: 'gen-1',
@@ -41,6 +61,7 @@ describe('HomeShowcasePreviewGrid', () => {
           name: 'Creator Name',
           avatar: null,
         },
+        isSaved: true,
       },
     ];
 
@@ -51,6 +72,8 @@ describe('HomeShowcasePreviewGrid', () => {
     const dialog = screen.getByRole('dialog', { name: /campaign frame/i });
     expect(within(dialog).getByText('A creator-style product shot by a bright window.')).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /^share$/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /8 saves/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /3 remixes/i })).toBeInTheDocument();
 
     const openPageLink = within(dialog).getByRole('link', { name: /open public page/i });
     expect(openPageLink).toHaveAttribute('href', '/showcase/gen-1');

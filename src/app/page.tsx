@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 
+import { AuthProvider } from '@/app/components/AuthProvider';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
 import HomeShowcasePreviewGrid from '@/app/components/HomeShowcasePreviewGrid';
 import { HoverVideo } from '@/app/components/HoverVideo';
@@ -232,7 +233,13 @@ export default async function Home() {
             variant="minimal"
           />
 
-          <HomeShowcasePreviewGrid items={showcaseFeed.items} />
+          <AuthProvider
+            initialSession={auth.session}
+            initialCredits={auth.credits}
+            hasResolvedInitialState
+          >
+            <HomeShowcasePreviewGrid items={showcaseFeed.items} />
+          </AuthProvider>
         </section>
       </main>
 
