@@ -209,4 +209,61 @@ describe('/api/generate-video route', () => {
     });
     expect((providerBody?.input as Record<string, unknown>).prompt).toBeUndefined();
   });
+
+  it('persists frame descriptors when remixing with start and end frames', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-3' } }),
+      }))
+    );
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-video',
+          isMultiShot: false,
+          prompt: 'Turn this frame pair into a product reveal.',
+          duration: 5,
+          aspectRatio: '16:9',
+          mode: 'std',
+          referenceMode: 'frames',
+          startImageUrl: 'https://signed.example.com/start.png',
+          endImageUrl: 'https://signed.example.com/end.png',
+          startFrame: {
+            kind: 'image',
+            label: 'Start frame',
+            storagePath: 'uploads/user-1/start.png',
+          },
+          endFrame: {
+            kind: 'image',
+            label: 'End frame',
+            storagePath: 'uploads/user-1/end.png',
+          },
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(currentSupabaseMock.inserts[0].workflow_settings).toMatchObject({
+      referenceMode: 'frames',
+      startFrame: {
+        kind: 'image',
+        label: 'Start frame',
+        storagePath: 'uploads/user-1/start.png',
+      },
+      endFrame: {
+        kind: 'image',
+        label: 'End frame',
+        storagePath: 'uploads/user-1/end.png',
+      },
+    });
+  });
 });

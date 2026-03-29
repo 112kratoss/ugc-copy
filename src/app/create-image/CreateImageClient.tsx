@@ -19,6 +19,13 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
+import type { RemixSourceBundle } from '@/lib/remix-source';
+import {
+    createRemixElementSeeds,
+    createRemixResultReferenceElement,
+    getRemixRestoreWarning,
+    getRemixResultReferenceLabel,
+} from '@/lib/remix-source-client';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFiles,
@@ -33,11 +40,8 @@ import {
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
-    getElementFileNameFromStoragePath,
     getMentionQueryAtCaret,
-    getUploadsBucketPath,
     insertHandleIntoPrompt,
-    isUploadsStoragePath,
     normalizeElementDisplayName,
     reconcileElementDescriptors,
     replacePromptHandles,
@@ -100,6 +104,7 @@ type ImageElementDraft = ImageElementDescriptor & {
     previewUrl: string;
     providerUrl: string | null;
     source: 'upload' | 'remix';
+    sourceGenerationId?: string | null;
 };
 
 type ImageElementSeed = {
@@ -110,6 +115,7 @@ type ImageElementSeed = {
     providerUrl?: string | null;
     storagePath?: string | null;
     source?: 'upload' | 'remix';
+    sourceGenerationId?: string | null;
 };
 
 function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
@@ -121,6 +127,7 @@ function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
         providerUrl: seed.providerUrl ?? null,
         storagePath: seed.storagePath ?? null,
         source: seed.source ?? 'upload',
+        sourceGenerationId: seed.sourceGenerationId ?? null,
     }));
 
     const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
@@ -141,6 +148,7 @@ function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
                 providerUrl: null,
                 storagePath: null,
                 source: 'upload' as const,
+                sourceGenerationId: null,
             };
         }
 
@@ -196,6 +204,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
+    const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
+    const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
@@ -285,119 +295,73 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     // Handle Remix Pre-fill
     useEffect(() => {
         if (!remixId) return;
+        if (!session?.access_token) return;
+
+        let isCancelled = false;
 
         const fetchRemixData = async () => {
-             const { data: { session } } = await supabase.auth.getSession();
-             if (!session) return;
+            try {
+                const response = await fetch(`/api/remix-source?id=${remixId}`, {
+                    headers: {
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                });
+                const data = await response.json();
 
-             try {
-                 const { data, error } = await supabase
-                     .from('generations')
-                     .select('title, prompt, workflow_settings, output_url')
-                     .eq('id', remixId)
-                     .single();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load remix data');
+                }
 
-                 if (error || !data) {
-                     console.error('Failed to load remix data');
-                     return;
-                 }
+                const bundle = data as RemixSourceBundle;
+                if (isCancelled) {
+                    return;
+                }
 
-                 if (data.title) setRemixTitle(data.title);
-                 if (data.prompt) setPrompt(data.prompt);
-                 
-                 // Handle the preview URL via server-side signed URL
-                 try {
-                     const session = await supabase.auth.getSession();
-                     const token = session.data.session?.access_token;
-                     if (token) {
-                         const previewRes = await fetch(`/api/showcase/preview?id=${remixId}`, {
-                             headers: { 'Authorization': `Bearer ${token}` }
-                         });
-                         if (previewRes.ok) {
-                             const previewData = await previewRes.json();
-                             if (previewData.url) setRemixImageUrl(previewData.url);
-                         }
-                     }
-                 } catch (e) {
-                     console.error('Failed to load preview URL:', e);
-                 }
-                 
-                 const settings = data.workflow_settings as ImageWorkflowSettings | null;
-                 if (settings) {
-                     const restoredModelMaxImages = settings.model && IMAGE_MODELS[settings.model]
-                         ? IMAGE_MODELS[settings.model].maxImages
-                         : model.maxImages;
+                setRemixSourceBundle(bundle);
+                setRemixTitle(bundle.generation.title);
+                setPrompt(bundle.generation.prompt);
+                setRemixImageUrl(bundle.result?.mediaType === 'image' ? bundle.result.url : null);
+                setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
-                     if (settings.model && IMAGE_MODELS[settings.model]) {
-                         setSelectedModel(settings.model);
-                     }
-                     if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
-                     if (settings.resolution) setResolution(settings.resolution);
-                     if (settings.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
+                const settings = bundle.workflowSettings as ImageWorkflowSettings | null;
+                const nextModelId =
+                    settings?.model && IMAGE_MODELS[settings.model] ? settings.model : 'nano-banana-2';
 
-                     if (settings.elements?.length) {
-                         const restoredSeeds = await Promise.all(
-                             settings.elements.slice(0, restoredModelMaxImages).map(async (element) => {
-                                 if (!isUploadsStoragePath(element.storagePath)) {
-                                     return null;
-                                 }
+                if (settings?.model && IMAGE_MODELS[settings.model]) {
+                    setSelectedModel(settings.model);
+                }
+                if (settings?.aspectRatio) setAspectRatio(settings.aspectRatio);
+                if (settings?.resolution) setResolution(settings.resolution);
+                if (settings?.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
 
-                                 try {
-                                     const filePath = getUploadsBucketPath(element.storagePath);
-                                     const { data: signedData, error: signedUrlError } = await supabase.storage
-                                         .from('uploads')
-                                         .createSignedUrl(filePath, 3600);
+                const restoredSeeds = createRemixElementSeeds(
+                    bundle.inputs.image?.elements ?? [],
+                    IMAGE_MODELS[nextModelId].maxImages
+                );
 
-                                     if (signedUrlError || !signedData?.signedUrl) {
-                                         throw new Error(signedUrlError?.message || 'Failed to sign upload asset');
-                                     }
-
-                                     const assetResponse = await fetch(signedData.signedUrl);
-                                     if (!assetResponse.ok) {
-                                         throw new Error('Failed to download stored element asset');
-                                     }
-
-                                     const blob = await assetResponse.blob();
-                                     const restoredFile = new File(
-                                         [blob],
-                                         getElementFileNameFromStoragePath(element.storagePath, element.handle),
-                                         {
-                                             type: blob.type || 'image/jpeg',
-                                             lastModified: Date.now(),
-                                         }
-                                     );
-
-                                     return {
-                                         id: element.id,
-                                         displayName: element.displayName,
-                                         file: restoredFile,
-                                         previewUrl: URL.createObjectURL(restoredFile),
-                                         providerUrl: signedData.signedUrl,
-                                         storagePath: element.storagePath,
-                                         source: 'remix' as const,
-                                     };
-                                 } catch (restoreError) {
-                                     console.error('Failed to restore remix element:', restoreError);
-                                     return null;
-                                 }
-                             })
-                         );
-
-                         const validSeeds = restoredSeeds.filter((value): value is ImageElementSeed => value !== null);
-                         if (validSeeds.length > 0) {
-                             setElements(hydrateImageElements(validSeeds));
-                         }
-                     }
-                 }
-             } catch (err) {
-                 console.error('Error fetching remix:', err);
-             } finally {
-                 setIsRemixLoading(false);
-             }
+                if (restoredSeeds.length > 0) {
+                    commitElements(hydrateImageElements(restoredSeeds));
+                }
+            } catch (err) {
+                console.error('Error fetching remix:', err);
+                if (!isCancelled) {
+                    setRemixRestoreWarning(
+                        'Some source media could not be restored automatically, so you may need to re-add a few references.'
+                    );
+                }
+            } finally {
+                if (!isCancelled) {
+                    setIsRemixLoading(false);
+                }
+            }
         };
 
-        fetchRemixData();
-    }, [remixId]);
+        void fetchRemixData();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [remixId, session?.access_token]);
 
     useEffect(() => {
         elementRefs.current = elements;
@@ -646,6 +610,37 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         updateMentionState(prompt);
     };
 
+    const handleUseOriginalResultAsReference = () => {
+        if (!remixSourceBundle) {
+            return;
+        }
+
+        if (elementRefs.current.length >= model.maxImages) {
+            setError(`This model supports up to ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}.`);
+            return;
+        }
+
+        const nextElement = createRemixResultReferenceElement(remixSourceBundle);
+        if (!nextElement) {
+            return;
+        }
+
+        const resultLabel = getRemixResultReferenceLabel(remixSourceBundle.generation.title);
+        const alreadyAdded = elementRefs.current.some(
+            (element) =>
+                element.displayName === resultLabel &&
+                element.sourceGenerationId === remixSourceBundle.generation.id
+        );
+
+        if (alreadyAdded) {
+            return;
+        }
+
+        const nextElements = hydrateImageElements([...elementRefs.current, nextElement]);
+        commitElements(nextElements);
+        void persistUploadedImageElements(nextElements);
+    };
+
     const uploadToSupabase = async (file: File): Promise<{ signedUrl: string; storagePath: string }> => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Please log in to upload files.');
@@ -759,6 +754,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 displayName: element.displayName,
                                 handle: element.handle,
                                 storagePath: upload.storagePath,
+                                sourceGenerationId: null,
                             } satisfies ImageElementDescriptor,
                             imageUrl: upload.signedUrl,
                         };
@@ -774,6 +770,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             displayName: element.displayName,
                             handle: element.handle,
                             storagePath: element.storagePath ?? null,
+                            sourceGenerationId: element.sourceGenerationId ?? null,
                         } satisfies ImageElementDescriptor,
                         imageUrl: element.providerUrl,
                     };
@@ -855,6 +852,20 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }[model.accentColor];
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
+    const remixResultReferenceLabel = remixSourceBundle
+        ? getRemixResultReferenceLabel(remixSourceBundle.generation.title)
+        : null;
+    const canUseOriginalResultAsReference =
+        remixSourceBundle?.result?.mediaType === 'image' && Boolean(remixSourceBundle.result.url);
+    const hasOriginalResultReference = Boolean(
+        remixResultReferenceLabel &&
+        remixSourceBundle &&
+        elements.some(
+            (element) =>
+                element.displayName === remixResultReferenceLabel &&
+                element.sourceGenerationId === remixSourceBundle.generation.id
+        )
+    );
 
     if (isLoadingUser) {
         return (
@@ -924,16 +935,33 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioRemixNotice
-                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}
+                                        description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         action={
-                                            remixImageUrl ? (
-                                                <button
-                                                    onClick={() => setIsPreviewModalOpen(true)}
-                                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                >
-                                                    <ImageIcon className="h-4 w-4" />
-                                                    View original
-                                                </button>
+                                            remixImageUrl || canUseOriginalResultAsReference ? (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {remixImageUrl ? (
+                                                        <button
+                                                            onClick={() => setIsPreviewModalOpen(true)}
+                                                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                        >
+                                                            <ImageIcon className="h-4 w-4" />
+                                                            View original
+                                                        </button>
+                                                    ) : null}
+                                                    {canUseOriginalResultAsReference ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleUseOriginalResultAsReference}
+                                                            disabled={hasOriginalResultReference}
+                                                            className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${hasOriginalResultReference
+                                                                ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                                                : 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15'}`}
+                                                        >
+                                                            <Sparkles className="h-4 w-4" />
+                                                            {hasOriginalResultReference ? 'Using original result' : 'Use as reference'}
+                                                        </button>
+                                                    ) : null}
+                                                </div>
                                             ) : undefined
                                         }
                                     />

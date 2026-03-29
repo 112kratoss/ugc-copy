@@ -21,6 +21,12 @@ import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { useAuth } from '@/app/components/AuthProvider';
+import type { RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import {
+    createRemixElementSeeds,
+    createRestoredRemixAssetState,
+    getRemixRestoreWarning,
+} from '@/lib/remix-source-client';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFile,
@@ -38,11 +44,8 @@ import {
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
-    getElementFileNameFromStoragePath,
     getMentionQueryAtCaret,
-    getUploadsBucketPath,
     insertHandleIntoPrompt,
-    isUploadsStoragePath,
     normalizeElementDisplayName,
     reconcileElementDescriptors,
     replacePromptHandles,
@@ -76,6 +79,8 @@ interface VideoWorkflowSettings {
     promptMode?: 'element-mentions-v1';
     compiledPrompt?: string;
     referenceMode?: 'frames' | 'elements';
+    startFrame?: RemixMediaAssetDescriptor;
+    endFrame?: RemixMediaAssetDescriptor;
 }
 
 type VideoElementDraft = ImageElementDescriptor & {
@@ -83,6 +88,7 @@ type VideoElementDraft = ImageElementDescriptor & {
     previewUrl: string;
     providerUrl: string | null;
     source: 'upload' | 'remix';
+    sourceGenerationId?: string | null;
 };
 
 type VideoElementSeed = {
@@ -93,6 +99,7 @@ type VideoElementSeed = {
     providerUrl?: string | null;
     storagePath?: string | null;
     source?: 'upload' | 'remix';
+    sourceGenerationId?: string | null;
 };
 
 function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
@@ -104,6 +111,7 @@ function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
         providerUrl: seed.providerUrl ?? null,
         storagePath: seed.storagePath ?? null,
         source: seed.source ?? 'upload',
+        sourceGenerationId: seed.sourceGenerationId ?? null,
     }));
 
     const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
@@ -124,6 +132,7 @@ function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
                 providerUrl: null,
                 storagePath: null,
                 source: 'upload' as const,
+                sourceGenerationId: null,
             };
         }
 
@@ -164,8 +173,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
     const [startImageUrl, setStartImageUrl] = useState<string | null>(null);
+    const [startFrameDescriptor, setStartFrameDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
     const [endImageFile, setEndImageFile] = useState<File | null>(null);
     const [endImageUrl, setEndImageUrl] = useState<string | null>(null);
+    const [endFrameDescriptor, setEndFrameDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
     const [mode, setMode] = useState('std');
     const [aspectRatio, setAspectRatio] = useState('16:9');
     const [sound, setSound] = useState(false);
@@ -199,6 +210,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
+    const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
 
@@ -376,137 +388,125 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     useEffect(() => {
         if (!remixId) return;
+        if (!session?.access_token) return;
+
+        let isCancelled = false;
 
         const fetchRemixData = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-
             try {
-                const { data, error } = await supabase
-                    .from('generations')
-                    .select('title, prompt, workflow_settings, output_url')
-                    .eq('id', remixId)
-                    .single();
+                const response = await fetch(`/api/remix-source?id=${remixId}`, {
+                    headers: {
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                });
+                const data = await response.json();
 
-                if (error || !data) {
-                    console.error('Failed to load remix data');
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load remix data');
+                }
+
+                const bundle = data as RemixSourceBundle;
+                if (isCancelled) {
                     return;
                 }
 
-                if (data.title) setRemixTitle(data.title);
+                setRemixTitle(bundle.generation.title);
+                setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
+                setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
-                try {
-                    const sessionData = await supabase.auth.getSession();
-                    const token = sessionData.data.session?.access_token;
-                    if (token) {
-                        const previewRes = await fetch(`/api/showcase/preview?id=${remixId}`, {
-                            headers: { Authorization: `Bearer ${token}` },
-                        });
-                        if (previewRes.ok) {
-                            const previewData = await previewRes.json();
-                            if (previewData.url) setRemixVideoUrl(previewData.url);
-                        }
-                    }
-                } catch (previewError) {
-                    console.error('Failed to load preview URL:', previewError);
+                const settings = bundle.workflowSettings as VideoWorkflowSettings | null;
+                const nextModelId =
+                    settings?.model && settings.model in VIDEO_MODELS
+                        ? settings.model
+                        : 'kling-3.0-video';
+                const nextIsMultiShot = Boolean(settings?.isMultiShot);
+                const nextMode =
+                    settings?.mode ||
+                    VIDEO_MODELS[nextModelId].modeOptions[0]?.value ||
+                    '';
+
+                setSelectedModel(nextModelId);
+                setIsMultiShot(nextIsMultiShot);
+
+                if (nextIsMultiShot && settings?.multiPrompts?.length) {
+                    setMultiPrompts(settings.multiPrompts.map((shot, index) => ({
+                        id: shot.id || `${index + 1}`,
+                        prompt: shot.prompt,
+                        duration: shot.duration,
+                    })));
+                } else {
+                    setPrompt(bundle.generation.prompt);
+                    if (settings?.duration) setSingleDuration(settings.duration);
                 }
 
-                const settings = data.workflow_settings as VideoWorkflowSettings | null;
-                if (settings?.model && settings.model in VIDEO_MODELS) {
-                    setSelectedModel(settings.model);
-                }
+                if (settings?.aspectRatio) setAspectRatio(settings.aspectRatio);
+                if (settings?.sound !== undefined) setSound(settings.sound);
+                if (settings?.resolution) setResolution(settings.resolution);
+                if (settings?.fixedLens !== undefined) setFixedLens(settings.fixedLens);
+                if (settings?.referenceMode) setReferenceMode(settings.referenceMode);
+                setMode(nextMode);
 
-                if (settings) {
-                    if (settings.isMultiShot !== undefined) {
-                        setIsMultiShot(settings.isMultiShot);
-                        if (settings.isMultiShot && settings.multiPrompts) {
-                            setMultiPrompts(settings.multiPrompts.map((shot, index) => ({
-                                id: shot.id || `${index + 1}`,
-                                prompt: shot.prompt,
-                                duration: shot.duration,
-                            })));
-                        } else {
-                            if (data.prompt) setPrompt(data.prompt);
-                            if (settings.duration) setSingleDuration(settings.duration);
-                        }
-                    } else {
-                        if (data.prompt) setPrompt(data.prompt);
-                        if (settings.duration) setSingleDuration(settings.duration);
+                const restoredVideoInputs = bundle.inputs.video;
+                const restoreMode = restoredVideoInputs?.referenceMode === 'elements' ? 'elements' : 'frames';
+                setReferenceMode(restoreMode);
+
+                if (restoreMode === 'elements') {
+                    const elementSupport = getVideoElementSupport(nextModelId, {
+                        mode: nextMode,
+                        isMultiShot: nextIsMultiShot,
+                    });
+                    const restoredSeeds = createRemixElementSeeds(
+                        restoredVideoInputs?.elements ?? [],
+                        elementSupport.maxElements
+                    );
+
+                    if (restoredSeeds.length > 0) {
+                        commitElements(hydrateVideoElements(restoredSeeds));
                     }
 
-                    if (settings.mode) setMode(settings.mode);
-                    if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
-                    if (settings.sound !== undefined) setSound(settings.sound);
-                    if (settings.resolution) setResolution(settings.resolution);
-                    if (settings.fixedLens !== undefined) setFixedLens(settings.fixedLens);
-                    if (settings.referenceMode) setReferenceMode(settings.referenceMode);
+                    setStartImageFile(null);
+                    setStartImageUrl(null);
+                    setStartFrameDescriptor(null);
+                    setEndImageFile(null);
+                    setEndImageUrl(null);
+                    setEndFrameDescriptor(null);
+                } else {
+                    commitElements([]);
 
-                    if (settings.elements?.length) {
-                        const restoredSeeds = await Promise.all(
-                            settings.elements.map(async (element) => {
-                                if (!isUploadsStoragePath(element.storagePath)) {
-                                    return null;
-                                }
+                    const restoredStartFrame = createRestoredRemixAssetState(
+                        restoredVideoInputs?.startFrame ?? null
+                    );
+                    const restoredEndFrame = createRestoredRemixAssetState(
+                        restoredVideoInputs?.endFrame ?? null
+                    );
 
-                                try {
-                                    const filePath = getUploadsBucketPath(element.storagePath);
-                                    const { data: signedData, error: signedUrlError } = await supabase.storage
-                                        .from('uploads')
-                                        .createSignedUrl(filePath, 3600);
-
-                                    if (signedUrlError || !signedData?.signedUrl) {
-                                        throw new Error(signedUrlError?.message || 'Failed to sign upload asset');
-                                    }
-
-                                    const assetResponse = await fetch(signedData.signedUrl);
-                                    if (!assetResponse.ok) {
-                                        throw new Error('Failed to download stored element asset');
-                                    }
-
-                                    const blob = await assetResponse.blob();
-                                    const restoredFile = new File(
-                                        [blob],
-                                        getElementFileNameFromStoragePath(element.storagePath, element.handle),
-                                        {
-                                            type: blob.type || 'image/jpeg',
-                                            lastModified: Date.now(),
-                                        }
-                                    );
-
-                                    return {
-                                        id: element.id,
-                                        displayName: element.displayName,
-                                        file: restoredFile,
-                                        previewUrl: URL.createObjectURL(restoredFile),
-                                        providerUrl: signedData.signedUrl,
-                                        storagePath: element.storagePath,
-                                        source: 'remix' as const,
-                                    };
-                                } catch (restoreError) {
-                                    console.error('Failed to restore remix video element:', restoreError);
-                                    return null;
-                                }
-                            })
-                        );
-
-                        const validSeeds = restoredSeeds.filter((value): value is VideoElementSeed => value !== null);
-                        if (validSeeds.length > 0) {
-                            commitElements(hydrateVideoElements(validSeeds));
-                            setReferenceMode('elements');
-                        }
-                    }
-                } else if (data.prompt) {
-                    setPrompt(data.prompt);
+                    setStartImageFile(null);
+                    setStartImageUrl(restoredStartFrame?.url ?? null);
+                    setStartFrameDescriptor(restoredStartFrame?.descriptor ?? null);
+                    setEndImageFile(null);
+                    setEndImageUrl(restoredEndFrame?.url ?? null);
+                    setEndFrameDescriptor(restoredEndFrame?.descriptor ?? null);
                 }
             } catch (fetchError) {
                 console.error('Error fetching remix:', fetchError);
+                if (!isCancelled) {
+                    setRemixRestoreWarning(
+                        'Some source media could not be restored automatically, so you may need to re-add a few references.'
+                    );
+                }
             } finally {
-                setIsRemixLoading(false);
+                if (!isCancelled) {
+                    setIsRemixLoading(false);
+                }
             }
         };
 
-        fetchRemixData();
-    }, [remixId]);
+        void fetchRemixData();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [remixId, session?.access_token]);
 
     useEffect(() => {
         if (remixId) {
@@ -590,6 +590,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             revokeObjectUrl(startImageUrl);
             setStartImageFile(file);
             setStartImageUrl(URL.createObjectURL(file));
+            setStartFrameDescriptor(null);
             if (!remixId) {
                 await setPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage, file);
             }
@@ -599,6 +600,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         revokeObjectUrl(endImageUrl);
         setEndImageFile(file);
         setEndImageUrl(URL.createObjectURL(file));
+        setEndFrameDescriptor(null);
         if (!remixId) {
             await setPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage, file);
         }
@@ -668,6 +670,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             revokeObjectUrl(startImageUrl);
             setStartImageFile(null);
             setStartImageUrl(null);
+            setStartFrameDescriptor(null);
             if (!remixId) {
                 await removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoStartImage);
             }
@@ -675,6 +678,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             revokeObjectUrl(endImageUrl);
             setEndImageFile(null);
             setEndImageUrl(null);
+            setEndFrameDescriptor(null);
             if (!remixId) {
                 await removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoEndImage);
             }
@@ -903,8 +907,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setGenerationStatus('Preparing... (0%)');
 
         try {
-            let startUrl: string | null = null;
-            let endUrl: string | null = null;
+            let startUrl: string | null = activeReferenceMode === 'frames' ? startImageUrl : null;
+            let endUrl: string | null = activeReferenceMode === 'frames' ? endImageUrl : null;
+            let nextStartFrameDescriptor = startFrameDescriptor;
+            let nextEndFrameDescriptor = endFrameDescriptor;
             const requestElements: ImageElementDescriptor[] = [];
             let elementImageUrls: string[] = [];
 
@@ -920,6 +926,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 displayName: element.displayName,
                                 handle: element.handle,
                                 storagePath: upload.storagePath,
+                                sourceGenerationId: null,
                             } satisfies ImageElementDescriptor,
                             imageUrl: upload.signedUrl,
                         };
@@ -935,6 +942,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             displayName: element.displayName,
                             handle: element.handle,
                             storagePath: element.storagePath ?? null,
+                            sourceGenerationId: element.sourceGenerationId ?? null,
                         } satisfies ImageElementDescriptor,
                         imageUrl: element.providerUrl,
                     };
@@ -948,12 +956,24 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 setGenerationStatus('Uploading start image... (2%)');
                 const upload = await uploadToSupabase(startImageFile);
                 startUrl = upload.signedUrl;
+                nextStartFrameDescriptor = {
+                    kind: 'image',
+                    label: 'Start frame',
+                    storagePath: upload.storagePath,
+                    sourceGenerationId: null,
+                };
             }
 
             if (activeReferenceMode === 'frames' && endImageFile && !isMultiShot) {
                 setGenerationStatus('Uploading end image... (4%)');
                 const upload = await uploadToSupabase(endImageFile);
                 endUrl = upload.signedUrl;
+                nextEndFrameDescriptor = {
+                    kind: 'image',
+                    label: 'End frame',
+                    storagePath: upload.storagePath,
+                    sourceGenerationId: null,
+                };
             }
 
             setGenerationStatus('Starting AI generation... (5%)');
@@ -980,6 +1000,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 resolution: currentResolution,
                 fixedLens: currentFixedLens,
                 referenceMode: activeReferenceMode,
+                startFrame: activeReferenceMode === 'frames' ? nextStartFrameDescriptor : undefined,
+                endFrame: activeReferenceMode === 'frames' ? nextEndFrameDescriptor : undefined,
                 sourceGenerationId: remixId || undefined,
             };
 
@@ -1083,7 +1105,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}
+                                        description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         action={
                                             remixVideoUrl ? (
                                                 <button

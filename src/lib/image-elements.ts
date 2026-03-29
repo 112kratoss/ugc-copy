@@ -3,6 +3,7 @@ export interface ImageElementDescriptor {
   displayName: string;
   handle: string;
   storagePath?: string | null;
+  sourceGenerationId?: string | null;
 }
 
 export interface PersistedImageElementDraft {
@@ -228,6 +229,10 @@ export function normalizeSubmittedElementDescriptors(value: unknown): ImageEleme
         displayName: typedElement.displayName.trim() || `Element ${index + 1}`,
         handle: typedElement.handle,
         storagePath: typeof typedElement.storagePath === 'string' ? typedElement.storagePath : null,
+        sourceGenerationId:
+          typeof typedElement.sourceGenerationId === 'string'
+            ? typedElement.sourceGenerationId
+            : null,
       } satisfies ImageElementDescriptor;
     })
     .filter((element): element is ImageElementDescriptor => element !== null);

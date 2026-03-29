@@ -21,6 +21,11 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
+import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
+import {
+    createRestoredRemixAssetState,
+    getRemixRestoreWarning,
+} from '@/lib/remix-source-client';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFile,
@@ -60,6 +65,8 @@ interface MotionWorkflowSettings {
     model?: ModelId;
     mode?: '720p' | '1080p';
     characterOrientation?: 'video' | 'image';
+    characterImage?: RemixMediaAssetDescriptor;
+    referenceVideo?: RemixMediaAssetDescriptor;
 }
 
 export interface CreateMotionPrefill {
@@ -86,8 +93,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     const [characterImage, setCharacterImage] = useState<string | null>(null);
     const [characterImageFile, setCharacterImageFile] = useState<File | null>(null);
+    const [characterImageDescriptor, setCharacterImageDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
     const [referenceVideo, setReferenceVideo] = useState<string | null>(null);
     const [referenceVideoFile, setReferenceVideoFile] = useState<File | null>(null);
+    const [referenceVideoDescriptor, setReferenceVideoDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationStatus, setGenerationStatus] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -111,6 +120,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
+    const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
+    const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -144,6 +155,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setCharacterImageFile(file);
         const url = URL.createObjectURL(file);
         setCharacterImage(url);
+        setCharacterImageDescriptor(null);
         await setPersistedFile(PERSISTED_MEDIA_KEYS.createMotionCharacterImage, file);
     };
 
@@ -157,6 +169,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setReferenceVideoFile(file);
         const url = URL.createObjectURL(file);
         setReferenceVideo(url);
+        setReferenceVideoDescriptor(null);
         await setPersistedFile(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, file);
     };
 
@@ -191,16 +204,18 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     const handleClearImage = async () => {
         setCharacterImageFile(null); setCharacterImage(null);
+        setCharacterImageDescriptor(null);
         await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
     };
 
     const handleClearVideo = async () => {
         setReferenceVideoFile(null); setReferenceVideo(null);
+        setReferenceVideoDescriptor(null);
         setDuration(0); setVideoError(null);
         await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
     };
 
-    const uploadToSupabase = async (file: File, bucket: string): Promise<string> => {
+    const uploadToSupabase = async (file: File, bucket: string): Promise<{ signedUrl: string; storagePath: string }> => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Please log in to upload files.');
 
@@ -217,66 +232,140 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             throw new Error(`Signed URL generation failed: ${signedUrlError?.message || 'Unknown error'}`);
         }
 
-        return signedData.signedUrl;
+        return {
+            signedUrl: signedData.signedUrl,
+            storagePath: `${bucket}/${fileName}`,
+        };
     };
 
     // Handle Remix Pre-fill
     useEffect(() => {
         if (!remixId) return;
+        if (!session?.access_token) return;
+
+        let isCancelled = false;
 
         const fetchRemixData = async () => {
-             const { data: { session } } = await supabase.auth.getSession();
-             if (!session) return;
+            try {
+                const response = await fetch(`/api/remix-source?id=${remixId}`, {
+                    headers: {
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                });
+                const data = await response.json();
 
-             try {
-                 const { data, error } = await supabase
-                     .from('generations')
-                     .select('title, prompt, workflow_settings, output_url')
-                     .eq('id', remixId)
-                     .single();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load remix data');
+                }
 
-                 if (error || !data) {
-                     console.error('Failed to load remix data');
-                     return;
-                 }
+                const bundle = data as RemixSourceBundle;
+                if (isCancelled) {
+                    return;
+                }
 
-                 if (data.title) setRemixTitle(data.title);
-                 if (data.prompt) setPrompt(data.prompt);
-                 
-                 // Handle the preview URL via server-side signed URL
-                 try {
-                     const session = await supabase.auth.getSession();
-                     const token = session.data.session?.access_token;
-                     if (token) {
-                         const previewRes = await fetch(`/api/showcase/preview?id=${remixId}`, {
-                             headers: { 'Authorization': `Bearer ${token}` }
-                         });
-                         if (previewRes.ok) {
-                             const previewData = await previewRes.json();
-                             if (previewData.url) setRemixVideoUrl(previewData.url);
-                         }
-                     }
-                 } catch (e) {
-                     console.error('Failed to load preview URL:', e);
-                 }
-                 
-                 const settings = data.workflow_settings as MotionWorkflowSettings | null;
-                 if (settings) {
-                     if (settings.model && MOTION_MODELS[settings.model]) {
-                         setSelectedModel(settings.model);
-                     }
-                     if (settings.mode) setMode(settings.mode);
-                     if (settings.characterOrientation) setCharacterOrientation(settings.characterOrientation);
-                 }
-             } catch (err) {
-                 console.error('Error fetching remix:', err);
-             } finally {
-                 setIsRemixLoading(false);
-             }
+                setRemixSourceBundle(bundle);
+                setRemixTitle(bundle.generation.title);
+                setPrompt(bundle.generation.prompt);
+                setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
+                setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
+
+                const settings = bundle.workflowSettings as MotionWorkflowSettings | null;
+                if (settings?.model && MOTION_MODELS[settings.model]) {
+                    setSelectedModel(settings.model);
+                }
+                if (settings?.mode) setMode(settings.mode);
+                if (settings?.characterOrientation) setCharacterOrientation(settings.characterOrientation);
+
+                const restoredMotionInputs = bundle.inputs.motion;
+                const restoredCharacterImage = createRestoredRemixAssetState(
+                    restoredMotionInputs?.characterImage ?? null
+                );
+                const restoredReferenceVideo = createRestoredRemixAssetState(
+                    restoredMotionInputs?.referenceVideo ?? null
+                );
+
+                setCharacterImageFile(null);
+                setCharacterImage(restoredCharacterImage?.url ?? null);
+                setCharacterImageDescriptor(restoredCharacterImage?.descriptor ?? null);
+                setReferenceVideoFile(null);
+                setReferenceVideo(restoredReferenceVideo?.url ?? null);
+                setReferenceVideoDescriptor(restoredReferenceVideo?.descriptor ?? null);
+            } catch (err) {
+                console.error('Error fetching remix:', err);
+                if (!isCancelled) {
+                    setRemixRestoreWarning(
+                        'Some source media could not be restored automatically, so you may need to re-add a few references.'
+                    );
+                }
+            } finally {
+                if (!isCancelled) {
+                    setIsRemixLoading(false);
+                }
+            }
         };
 
-        fetchRemixData();
-    }, [remixId]);
+        void fetchRemixData();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [remixId, session?.access_token]);
+
+    const handleUseOriginalResultAsReferenceVideo = () => {
+        if (remixSourceBundle?.result?.mediaType !== 'video' || !remixSourceBundle.result.url) {
+            return;
+        }
+
+        setReferenceVideoFile(null);
+        setReferenceVideo(remixSourceBundle.result.url);
+        setReferenceVideoDescriptor({
+            kind: 'video',
+            label: 'Original result video',
+            storagePath: null,
+            sourceGenerationId: remixSourceBundle.generation.id,
+        });
+        setVideoError(null);
+    };
+
+    useEffect(() => {
+        if (!referenceVideo) {
+            return;
+        }
+
+        let isCancelled = false;
+        const previewVideo = document.createElement('video');
+        previewVideo.preload = 'metadata';
+
+        const handleLoadedMetadata = () => {
+            if (isCancelled || !Number.isFinite(previewVideo.duration)) {
+                return;
+            }
+
+            setDuration(previewVideo.duration);
+            if (previewVideo.duration > model.maxVideoDuration) {
+                setVideoError(`Reference video exceeds ${model.maxVideoDuration}s. Please choose a shorter clip.`);
+            } else {
+                setVideoError(null);
+            }
+        };
+
+        const handleMetadataError = () => {
+            if (!isCancelled) {
+                setVideoError('We could not read the reference video. Please try another clip.');
+            }
+        };
+
+        previewVideo.addEventListener('loadedmetadata', handleLoadedMetadata);
+        previewVideo.addEventListener('error', handleMetadataError);
+        previewVideo.src = referenceVideo;
+
+        return () => {
+            isCancelled = true;
+            previewVideo.removeEventListener('loadedmetadata', handleLoadedMetadata);
+            previewVideo.removeEventListener('error', handleMetadataError);
+            previewVideo.src = '';
+        };
+    }, [model.maxVideoDuration, referenceVideo]);
 
     // Generation Recovery & Persistence
     useEffect(() => {
@@ -362,9 +451,30 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             setGenerationStatus('Uploading files... (0%)');
             let imageUrl = characterImage;
             let videoUrl = referenceVideo;
+            let nextCharacterImageDescriptor = characterImageDescriptor;
+            let nextReferenceVideoDescriptor = referenceVideoDescriptor;
 
-            if (characterImageFile) imageUrl = await uploadToSupabase(characterImageFile, 'uploads');
-            if (referenceVideoFile) videoUrl = await uploadToSupabase(referenceVideoFile, 'uploads');
+            if (characterImageFile) {
+                const upload = await uploadToSupabase(characterImageFile, 'uploads');
+                imageUrl = upload.signedUrl;
+                nextCharacterImageDescriptor = {
+                    kind: 'image',
+                    label: 'Character image',
+                    storagePath: upload.storagePath,
+                    sourceGenerationId: null,
+                };
+            }
+
+            if (referenceVideoFile) {
+                const upload = await uploadToSupabase(referenceVideoFile, 'uploads');
+                videoUrl = upload.signedUrl;
+                nextReferenceVideoDescriptor = {
+                    kind: 'video',
+                    label: 'Reference video',
+                    storagePath: upload.storagePath,
+                    sourceGenerationId: null,
+                };
+            }
 
             setGenerationStatus('Starting AI generation... (5%)');
             const { data: { session } } = await supabase.auth.getSession();
@@ -381,6 +491,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     characterOrientation,
                     mode,
                     prompt,
+                    characterImage: nextCharacterImageDescriptor,
+                    referenceVideo: nextReferenceVideoDescriptor,
                     sourceGenerationId: remixId || undefined,
                 })
             });
@@ -438,6 +550,12 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         && !videoError;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
+    const canUseOriginalResultAsReferenceVideo =
+        remixSourceBundle?.result?.mediaType === 'video' && Boolean(remixSourceBundle.result.url);
+    const isUsingOriginalResultAsReferenceVideo = Boolean(
+        remixSourceBundle &&
+        referenceVideoDescriptor?.sourceGenerationId === remixSourceBundle.generation.id
+    );
 
     const workspaceTitle = outputVideo
         ? 'Latest motion result'
@@ -483,18 +601,35 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}
+                                        description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         action={
-                                            remixVideoUrl ? (
-                                                <a
-                                                    href={remixVideoUrl}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                >
-                                                    <Play className="h-4 w-4" />
-                                                    View original
-                                                </a>
+                                            remixVideoUrl || canUseOriginalResultAsReferenceVideo ? (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {remixVideoUrl ? (
+                                                        <a
+                                                            href={remixVideoUrl}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                        >
+                                                            <Play className="h-4 w-4" />
+                                                            View original
+                                                        </a>
+                                                    ) : null}
+                                                    {canUseOriginalResultAsReferenceVideo ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleUseOriginalResultAsReferenceVideo}
+                                                            disabled={isUsingOriginalResultAsReferenceVideo}
+                                                            className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${isUsingOriginalResultAsReferenceVideo
+                                                                ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                                                : 'border border-violet-400/20 bg-violet-500/10 text-violet-100 hover:border-violet-300/40 hover:bg-violet-500/15'}`}
+                                                        >
+                                                            <Play className="h-4 w-4" />
+                                                            {isUsingOriginalResultAsReferenceVideo ? 'Using original result' : 'Use as reference video'}
+                                                        </button>
+                                                    ) : null}
+                                                </div>
                                             ) : undefined
                                         }
                                     />

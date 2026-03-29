@@ -7,6 +7,7 @@ import {
     findUnknownPromptHandles,
     normalizeSubmittedElementDescriptors,
 } from '@/lib/image-elements';
+import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -156,6 +157,8 @@ export async function POST(request: NextRequest) {
             resolution = '720p',
             fixedLens = false,
             referenceMode = 'frames',
+            startFrame = null,
+            endFrame = null,
             sourceGenerationId = null,
         } = await request.json();
 
@@ -170,6 +173,8 @@ export async function POST(request: NextRequest) {
         const videoElementSupport = getVideoElementSupport(model as VideoModelId, { mode, isMultiShot });
         const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
         const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
+        const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
+        const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
 
         if (isMultiShot && !selectedModel.supportsMultiShot) {
             return NextResponse.json({ error: `${selectedModel.displayName} does not support multi-shot generation.` }, { status: 400 });
@@ -464,6 +469,12 @@ export async function POST(request: NextRequest) {
                             promptMode: 'element-mentions-v1' as const,
                             compiledPrompt,
                         }
+                        : {}),
+                    ...(effectiveReferenceMode === 'frames' && normalizedStartFrame
+                        ? { startFrame: normalizedStartFrame }
+                        : {}),
+                    ...(effectiveReferenceMode === 'frames' && normalizedEndFrame
+                        ? { endFrame: normalizedEndFrame }
                         : {}),
                 },
             })

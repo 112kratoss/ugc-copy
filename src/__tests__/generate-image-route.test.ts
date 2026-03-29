@@ -165,4 +165,49 @@ describe('/api/generate-image route', () => {
     expect(data.error).toContain('Source generation');
     expect(currentSupabaseMock.inserts).toHaveLength(0);
   });
+
+  it('persists image element sourceGenerationId values for future remixes', async () => {
+    currentSupabaseMock = createSupabaseMock({
+      id: 'source-1',
+      user_id: 'other-user',
+      is_public: true,
+    });
+
+    const { POST } = await import('@/app/api/generate-image/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          prompt: 'A refreshed creator frame',
+          model: 'nano-banana-2',
+          imageUrls: ['https://signed.example.com/source-1.png'],
+          elements: [
+            {
+              id: 'el-1',
+              displayName: 'Original result',
+              handle: '@original_result',
+              sourceGenerationId: 'source-1',
+            },
+          ],
+          sourceGenerationId: 'source-1',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(currentSupabaseMock.inserts[0].workflow_settings).toMatchObject({
+      elements: [
+        {
+          id: 'el-1',
+          displayName: 'Original result',
+          handle: '@original_result',
+          sourceGenerationId: 'source-1',
+        },
+      ],
+    });
+  });
 });

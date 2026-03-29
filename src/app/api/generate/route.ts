@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -38,6 +39,8 @@ export async function POST(request: NextRequest) {
             characterOrientation = 'video',
             mode = '720p',
             prompt = '',
+            characterImage = null,
+            referenceVideo = null,
             sourceGenerationId = null,
         } = await request.json();
 
@@ -111,6 +114,8 @@ export async function POST(request: NextRequest) {
         }
         
         const COST = Math.ceil(duration * creditsPerSecond);
+        const normalizedCharacterImage = normalizeRemixMediaAssetDescriptor(characterImage, 'image');
+        const normalizedReferenceVideo = normalizeRemixMediaAssetDescriptor(referenceVideo, 'video');
 
         // Deduct Credits
         const { data: remainingCredits, error: creditError } = await supabase.rpc('deduct_credits', {
@@ -204,6 +209,8 @@ export async function POST(request: NextRequest) {
                     characterOrientation,
                     mode,
                     duration,
+                    ...(normalizedCharacterImage ? { characterImage: normalizedCharacterImage } : {}),
+                    ...(normalizedReferenceVideo ? { referenceVideo: normalizedReferenceVideo } : {}),
                 },
             })
             .select('id')
