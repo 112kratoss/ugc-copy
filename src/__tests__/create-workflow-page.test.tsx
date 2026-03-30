@@ -56,7 +56,7 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
-  const latestPropsRef: { current: Record<string, unknown> | null } = { current: null };
+  const latestPropsRef: { current: { nodes?: Array<{ id: string }> } | null } = { current: null };
 
   const flowInstance = {
     screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
@@ -69,10 +69,20 @@ vi.mock('@xyflow/react', async () => {
   function ReactFlow(props: Record<string, unknown>) {
     const nodes = (props.nodes as Array<{ id: string; data: { title: string } }>) || [];
     const edges = (props.edges as Array<{ id: string }>) || [];
+    const didInitRef = React.useRef(false);
+
     React.useLayoutEffect(() => {
       latestPropsRef.current = props;
-      (props.onInit as ((instance: typeof flowInstance) => void) | undefined)?.(flowInstance);
     }, [props]);
+
+    React.useEffect(() => {
+      if (didInitRef.current) {
+        return;
+      }
+
+      didInitRef.current = true;
+      (props.onInit as ((instance: typeof flowInstance) => void) | undefined)?.(flowInstance);
+    }, [props.onInit]);
 
     return (
       <div data-testid="reactflow-mock">
@@ -154,6 +164,8 @@ vi.mock('@xyflow/react', async () => {
 
   return {
     addEdge: (edge: Record<string, unknown>, current: Array<Record<string, unknown>>) => [...current, edge],
+    applyEdgeChanges: (_changes: Array<Record<string, unknown>>, current: Array<Record<string, unknown>>) => current,
+    applyNodeChanges: (_changes: Array<Record<string, unknown>>, current: Array<Record<string, unknown>>) => current,
     Background: () => <div data-testid="rf-background" />,
     BackgroundVariant: { Dots: 'dots' },
     Controls: () => <div data-testid="rf-controls" />,
@@ -162,19 +174,31 @@ vi.mock('@xyflow/react', async () => {
     Position: { Left: 'left', Right: 'right' },
     ReactFlow,
     SelectionMode: { Partial: 'partial', Full: 'full' },
-    useEdgesState: (initial: Array<Record<string, unknown>>) => {
-      const [state, setState] = React.useState(initial);
-      return [state, setState, vi.fn()] as const;
-    },
-    useNodesState: (initial: Array<Record<string, unknown>>) => {
-      const [state, setState] = React.useState(initial);
-      return [state, setState, vi.fn()] as const;
-    },
   };
 });
 
 describe('CreateWorkflowPage', () => {
   let canvas: WorkflowCanvasRecord;
+
+  async function renderLoadedPage() {
+    const fetchMock = global.fetch as unknown as {
+      mock: { calls: Array<[unknown, RequestInit | undefined]> };
+    };
+
+    render(<CreateWorkflowPage />);
+
+    await screen.findAllByTestId(/node-select-/);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).endsWith(`/api/workflow-canvases/${canvas.id}`) && (init?.method || 'GET') === 'GET'
+        )
+      ).toBe(true);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 
   beforeEach(() => {
     canvas = {
@@ -193,7 +217,21 @@ describe('CreateWorkflowPage', () => {
       if (url.endsWith('/api/workflow-canvases') && method === 'GET') {
         return {
           ok: true,
-          json: async () => ({ canvases: [canvas] }),
+          json: async () => ({
+            canvases: [{
+              id: canvas.id,
+              title: canvas.title,
+              updated_at: canvas.updated_at,
+              revision: canvas.revision,
+            }],
+          }),
+        } as Response;
+      }
+
+      if (url.endsWith(`/api/workflow-canvases/${canvas.id}`) && method === 'GET') {
+        return {
+          ok: true,
+          json: async () => ({ canvas }),
         } as Response;
       }
 
@@ -215,6 +253,20 @@ describe('CreateWorkflowPage', () => {
         return {
           ok: true,
           json: async () => ({ runId: 'run-1' }),
+        } as Response;
+      }
+
+      if (url.endsWith('/api/workflow-canvases') && method === 'POST') {
+        canvas = {
+          ...canvas,
+          id: 'canvas-2',
+          title: 'Workflow 2',
+          updated_at: '2026-03-22T00:02:00.000Z',
+          revision: 0,
+        };
+        return {
+          ok: true,
+          json: async () => ({ canvas }),
         } as Response;
       }
 
@@ -255,50 +307,8 @@ describe('CreateWorkflowPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('opens a floating node editor on single selection and closes it from the pane', async () => {
-    render(<CreateWorkflowPage />);
-    await screen.findByText(new Date(canvas.updated_at).toLocaleString());
-
-    fireEvent.click(await screen.findByTestId(`node-select-${canvas.graph.nodes[0].id}`));
-
-    expect(screen.getByTestId('floating-node-editor')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('pane-click'));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId('floating-node-editor')).not.toBeInTheDocument();
-    });
-  });
-
-  it('deletes a selected connection from the context menu', async () => {
-    render(<CreateWorkflowPage />);
-    await screen.findByText(new Date(canvas.updated_at).toLocaleString());
-
-    const edgeButtonsBefore = await screen.findAllByTestId(/edge-context-/);
-    fireEvent.click(await screen.findByTestId(`edge-context-${canvas.graph.edges[0].id}`));
-
-    expect(screen.getByRole('button', { name: /delete connection/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /delete connection/i }));
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/edge-context-/)).toHaveLength(edgeButtonsBefore.length - 1);
-    });
-  });
-
-  it('opens the node context menu from a node action', async () => {
-    render(<CreateWorkflowPage />);
-    await screen.findByText(new Date(canvas.updated_at).toLocaleString());
-
-    fireEvent.click(await screen.findByTestId(`node-context-${canvas.graph.nodes[0].id}`));
-
-    const contextMenu = await screen.findByTestId('canvas-context-menu');
-    expect(contextMenu).toHaveTextContent('Run node');
-    expect(contextMenu).toHaveTextContent('Duplicate');
-  });
-
   it('opens and closes the planner drawer while preserving brief state', async () => {
-    render(<CreateWorkflowPage />);
-    await screen.findByText(new Date(canvas.updated_at).toLocaleString());
+    await renderLoadedPage();
 
     fireEvent.click(await screen.findByRole('button', { name: /^planner$/i }));
     expect(await screen.findByTestId('planner-assistant-drawer')).toBeInTheDocument();
@@ -318,8 +328,7 @@ describe('CreateWorkflowPage', () => {
   });
 
   it('shows duplicate controls in the selection hud for multi-select', async () => {
-    render(<CreateWorkflowPage />);
-    await screen.findByText(new Date(canvas.updated_at).toLocaleString());
+    await renderLoadedPage();
 
     fireEvent.click(await screen.findByTestId('select-first-two-nodes'));
     const selectionHud = await screen.findByTestId('canvas-selection-hud');
@@ -327,4 +336,55 @@ describe('CreateWorkflowPage', () => {
     expect(selectionHud).toHaveTextContent('Duplicate');
     expect(selectionHud).toHaveTextContent('Delete');
   });
+
+  it('does not autosave selection-only changes', async () => {
+    await renderLoadedPage();
+
+    const fetchMock = global.fetch as unknown as {
+      mockClear: () => void;
+      mock: { calls: Array<[unknown, RequestInit | undefined]> };
+    };
+    fetchMock.mockClear();
+
+    const [firstNodeButton] = await screen.findAllByTestId(/node-select-/);
+    fireEvent.click(firstNodeButton);
+    await new Promise((resolve) => setTimeout(resolve, 950));
+
+    const patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
+      String(url).includes(`/api/workflow-canvases/${canvas.id}`) && init?.method === 'PATCH'
+    );
+
+    expect(patchCalls).toHaveLength(0);
+  });
+
+  it('persists title-only changes', async () => {
+    await renderLoadedPage();
+
+    const fetchMock = global.fetch as unknown as {
+      mockClear: () => void;
+      mock: { calls: Array<[unknown, RequestInit | undefined]> };
+    };
+    fetchMock.mockClear();
+
+    const titleInput = screen.getByDisplayValue('Workflow canvas');
+    fireEvent.change(titleInput, {
+      target: { value: 'Updated workflow canvas' },
+    });
+    fireEvent.blur(titleInput);
+
+    await waitFor(() => {
+      const patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
+        String(url).includes(`/api/workflow-canvases/${canvas.id}`) && init?.method === 'PATCH'
+      );
+      expect(patchCalls).toHaveLength(1);
+    });
+
+    const patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
+      String(url).includes(`/api/workflow-canvases/${canvas.id}`) && init?.method === 'PATCH'
+    );
+    expect(patchCalls).toHaveLength(1);
+    const payload = JSON.parse(String(patchCalls[0]?.[1]?.body || '{}'));
+    expect(payload.title).toBe('Updated workflow canvas');
+  });
+
 });

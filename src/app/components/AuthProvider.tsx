@@ -2,6 +2,10 @@
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
+
+import {
+    getClientE2EAuthState,
+} from '@/lib/e2e-auth';
 import { supabase } from '@/lib/supabase';
 
 interface AuthContextValue {
@@ -26,9 +30,10 @@ export function AuthProvider({
     initialCredits?: number | null;
     hasResolvedInitialState?: boolean;
 }) {
-    const [session, setSession] = useState<Session | null>(initialSession);
-    const [credits, setCredits] = useState<number | null>(initialCredits);
-    const [isLoading, setIsLoading] = useState(!hasResolvedInitialState);
+    const clientE2EAuth = getClientE2EAuthState();
+    const [session, setSession] = useState<Session | null>(initialSession ?? clientE2EAuth?.session ?? null);
+    const [credits, setCredits] = useState<number | null>(initialCredits ?? clientE2EAuth?.credits ?? null);
+    const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
 
     useEffect(() => {
         let isActive = true;

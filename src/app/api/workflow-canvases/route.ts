@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/server-helpers';
-import { createStarterGraph, normalizeWorkflowGraph } from '@/lib/workflow-canvas';
+import { createStarterGraph, normalizeWorkflowGraph, serializeWorkflowGraph } from '@/lib/workflow-canvas';
 
 export async function GET(request: NextRequest) {
   const auth = await authenticateRequest(request);
@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const { supabase, userId } = auth;
   const { data, error } = await supabase
     .from('workflow_canvases')
-    .select('id, title, graph, created_at, updated_at, revision')
+    .select('id, title, updated_at, revision')
     .eq('user_id', userId)
     .order('updated_at', { ascending: false });
 
@@ -19,10 +19,7 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    canvases: (data || []).map((canvas) => ({
-      ...canvas,
-      graph: normalizeWorkflowGraph(canvas.graph),
-    })),
+    canvases: data || [],
   });
 }
 
@@ -40,7 +37,7 @@ export async function POST(request: NextRequest) {
     .insert({
       user_id: userId,
       title,
-      graph,
+      graph: serializeWorkflowGraph(graph),
       viewport: graph.viewport,
     })
     .select('id, title, graph, created_at, updated_at, revision')

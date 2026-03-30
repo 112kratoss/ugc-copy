@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createNodeRunState,
   createStarterGraph,
+  createWorkflowGraphHash,
   createWorkflowNode,
   duplicateWorkflowSelection,
   getExecutionOrder,
+  mergeWorkflowCanvasGraph,
   normalizeNodeData,
   normalizeWorkflowGraph,
   resolveNodeInputs,
+  serializeWorkflowGraph,
   validateWorkflowConnection,
 } from '@/lib/workflow-canvas';
 
@@ -64,6 +68,67 @@ describe('workflow canvas helpers', () => {
     });
     expect(graph.nodes).toHaveLength(1);
     expect(graph.edges).toHaveLength(0);
+  });
+
+  it('serializes client-save graphs without run state or view-only decoration', () => {
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...createWorkflowNode('text-input', { x: 10, y: 20 }),
+          selected: true,
+          width: 320,
+          data: {
+            ...createWorkflowNode('text-input', { x: 10, y: 20 }).data,
+            runState: createNodeRunState({ status: 'succeeded', outputUrl: 'https://example.com/output.jpg' }),
+          },
+        },
+      ],
+      edges: [
+        {
+          id: 'edge-1',
+          source: 'a',
+          target: 'b',
+          sourceHandle: 'text',
+          targetHandle: 'prompt',
+          selected: true,
+          animated: true,
+          interactionWidth: 42,
+          style: { stroke: '#fff' },
+        },
+      ],
+    });
+
+    const serialized = serializeWorkflowGraph(graph, { mode: 'client-save' });
+
+    expect(serialized.nodes[0].data).not.toHaveProperty('runState');
+    expect(serialized.nodes[0]).not.toHaveProperty('selected');
+    expect(serialized.nodes[0]).not.toHaveProperty('width');
+    expect(serialized.edges[0]).toEqual({
+      id: 'edge-1',
+      source: 'a',
+      target: 'b',
+      sourceHandle: 'text',
+      targetHandle: 'prompt',
+    });
+  });
+
+  it('ignores selection-only changes in the client-save graph hash', () => {
+    const baseGraph = createStarterGraph();
+    const selectedGraph = normalizeWorkflowGraph({
+      ...baseGraph,
+      nodes: baseGraph.nodes.map((node, index) => ({ ...node, selected: index === 0 })),
+      edges: baseGraph.edges.map((edge, index) => ({
+        ...edge,
+        selected: index === 0,
+        animated: true,
+        interactionWidth: 48,
+        style: { stroke: '#22c55e' },
+      })),
+    });
+
+    expect(createWorkflowGraphHash(baseGraph, { mode: 'client-save' })).toBe(
+      createWorkflowGraphHash(selectedGraph, { mode: 'client-save' })
+    );
   });
 
   it('resolves audio inputs from incoming edges', () => {
@@ -221,5 +286,57 @@ describe('workflow canvas helpers', () => {
       cost: null,
       updatedAt: null,
     });
+  });
+
+  it('merges stored run state into incoming graph saves', () => {
+    const existingStart = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const existingOutput = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    const existingGraph = normalizeWorkflowGraph({
+      nodes: [
+        existingStart,
+        {
+          ...existingOutput,
+          data: {
+            ...existingOutput.data,
+            title: 'Existing output',
+            runState: createNodeRunState({
+              status: 'succeeded',
+              generationId: 'gen-123',
+              outputUrl: 'https://example.com/existing.jpg',
+            }),
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    const newNode = createWorkflowNode('video-generate', { x: 480, y: 0 });
+    const incomingGraph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...existingOutput,
+          data: {
+            ...existingOutput.data,
+            title: 'Updated title',
+            runState: createNodeRunState({ status: 'failed' }),
+          },
+        },
+        newNode,
+      ],
+      edges: [],
+    });
+
+    const mergedGraph = normalizeWorkflowGraph(mergeWorkflowCanvasGraph(existingGraph, incomingGraph));
+    const preservedNode = mergedGraph.nodes.find((node) => node.id === existingOutput.id);
+    const insertedNode = mergedGraph.nodes.find((node) => node.id === newNode.id);
+
+    expect(mergedGraph.nodes.find((node) => node.id === existingStart.id)).toBeUndefined();
+    expect(preservedNode?.data.title).toBe('Updated title');
+    expect(preservedNode?.data.runState).toMatchObject({
+      status: 'succeeded',
+      generationId: 'gen-123',
+      outputUrl: 'https://example.com/existing.jpg',
+    });
+    expect(insertedNode?.data.runState).toEqual(createNodeRunState());
   });
 });

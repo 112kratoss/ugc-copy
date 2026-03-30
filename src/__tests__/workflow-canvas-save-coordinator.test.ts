@@ -129,7 +129,7 @@ describe('workflowCanvasSaveCoordinator', () => {
     const canTransition = await flushCanvasSaveBeforeTransition({
       request,
       lastPersistedTitle: 'Workflow canvas',
-      lastPersistedGraphHash: createWorkflowGraphHash(graph),
+      lastPersistedGraphHash: createWorkflowGraphHash(graph, { mode: 'client-save' }),
       currentSavePromise: null,
       clearAutosaveTimer,
       persistRequest,
@@ -154,7 +154,7 @@ describe('workflowCanvasSaveCoordinator', () => {
     const canTransition = await flushCanvasSaveBeforeTransition({
       request,
       lastPersistedTitle: 'Workflow canvas',
-      lastPersistedGraphHash: createWorkflowGraphHash(graph),
+      lastPersistedGraphHash: createWorkflowGraphHash(graph, { mode: 'client-save' }),
       currentSavePromise: Promise.resolve({
         status: 'saved',
         canvas: createCanvasRecord('canvas-a', 'Workflow canvas', 2),

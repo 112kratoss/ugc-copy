@@ -151,6 +151,42 @@ export interface WorkflowCanvasGraph {
   viewport: Viewport;
 }
 
+export interface WorkflowCanvasListItem {
+  id: string;
+  title: string;
+  updated_at: string;
+  revision: number;
+}
+
+export type WorkflowGraphSerializationMode = 'storage' | 'client-save';
+
+export interface SerializedWorkflowCanvasNode {
+  id: string;
+  type: WorkflowNodeKind;
+  position: { x: number; y: number };
+  data: Record<string, unknown>;
+  draggable: boolean;
+}
+
+export interface SerializedWorkflowCanvasEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+}
+
+export interface SerializedWorkflowCanvasGraph {
+  version: number;
+  nodes: SerializedWorkflowCanvasNode[];
+  edges: SerializedWorkflowCanvasEdge[];
+  viewport: Viewport;
+}
+
+export interface SerializeWorkflowGraphOptions {
+  mode?: WorkflowGraphSerializationMode;
+}
+
 export interface WorkflowCanvasRecord {
   id: string;
   title: string;
@@ -335,8 +371,59 @@ export function createCanvasEdge(source: string, sourceHandle: WorkflowHandleTyp
   };
 }
 
-export function createWorkflowGraphHash(graph: WorkflowCanvasGraph): string {
-  const serialized = JSON.stringify(normalizeWorkflowGraph(graph));
+function serializeWorkflowNodeData(
+  type: WorkflowNodeKind,
+  data: Partial<WorkflowNodeData> | undefined,
+  mode: WorkflowGraphSerializationMode
+): Record<string, unknown> {
+  const normalized = normalizeNodeData(type, data) as Record<string, unknown>;
+
+  if (mode === 'client-save') {
+    const { runState: _runState, ...editableData } = normalized;
+    return editableData;
+  }
+
+  return {
+    ...normalized,
+    runState: createNodeRunState((normalized.runState as Partial<WorkflowNodeRunState> | undefined) ?? undefined),
+  };
+}
+
+export function serializeWorkflowGraph(
+  value: Partial<WorkflowCanvasGraph> | null | undefined,
+  options?: SerializeWorkflowGraphOptions
+): SerializedWorkflowCanvasGraph {
+  const mode = options?.mode ?? 'storage';
+  const graph = normalizeWorkflowGraph(value);
+
+  return {
+    version: graph.version,
+    viewport: normalizeViewport(graph.viewport),
+    nodes: graph.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: {
+        x: node.position.x,
+        y: node.position.y,
+      },
+      data: serializeWorkflowNodeData(node.type, node.data, mode),
+      draggable: node.draggable ?? true,
+    })),
+    edges: graph.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? null,
+      targetHandle: edge.targetHandle ?? null,
+    })),
+  };
+}
+
+export function createWorkflowGraphHash(
+  graph: Partial<WorkflowCanvasGraph> | null | undefined,
+  options?: SerializeWorkflowGraphOptions
+): string {
+  const serialized = JSON.stringify(serializeWorkflowGraph(graph, options));
   let hash = 5381;
 
   for (let index = 0; index < serialized.length; index += 1) {
@@ -357,6 +444,33 @@ export function normalizeWorkflowGraph(value: Partial<WorkflowCanvasGraph> | nul
     nodes,
     edges: rawEdges.filter((edge): edge is WorkflowCanvasEdge => Boolean(edge?.id && edge.source && edge.target)),
   };
+}
+
+export function mergeWorkflowCanvasGraph(
+  existingValue: Partial<WorkflowCanvasGraph> | null | undefined,
+  incomingValue: Partial<WorkflowCanvasGraph> | null | undefined
+): SerializedWorkflowCanvasGraph {
+  const existingGraph = normalizeWorkflowGraph(existingValue);
+  const incomingGraph = normalizeWorkflowGraph(incomingValue);
+  const existingNodeMap = new Map(existingGraph.nodes.map((node) => [node.id, node]));
+
+  return serializeWorkflowGraph({
+    ...incomingGraph,
+    nodes: incomingGraph.nodes.map((node) => {
+      const existingNode = existingNodeMap.get(node.id);
+      const nextRunState = existingNode && existingNode.type === node.type
+        ? existingNode.data.runState
+        : createNodeRunState();
+
+      return {
+        ...node,
+        data: normalizeNodeData(node.type, {
+          ...node.data,
+          runState: nextRunState,
+        }),
+      };
+    }),
+  });
 }
 
 function normalizeViewport(value: Partial<Viewport> | undefined): Viewport {
@@ -581,6 +695,11 @@ export interface ResolvedWorkflowInputs extends Record<string, unknown> {
   audioUrls: string[];
 }
 
+export interface WorkflowNodeDependencyState {
+  kind: 'ready' | 'queued' | 'blocked';
+  message: string | null;
+}
+
 export function resolveNodeInputs(graph: WorkflowCanvasGraph, nodeId: string): ResolvedWorkflowInputs {
   const incoming = getIncomingEdges(graph, nodeId);
   const promptParts: string[] = [];
@@ -635,14 +754,74 @@ export function getNodeOutputUrl(node: WorkflowCanvasNode): string | null {
   return data.runState.outputUrl;
 }
 
+export function inspectWorkflowNodeDependencies(
+  graph: WorkflowCanvasGraph,
+  node: WorkflowCanvasNode
+): WorkflowNodeDependencyState {
+  const waitingMessages: string[] = [];
+  const blockingMessages: string[] = [];
+
+  for (const edge of getIncomingEdges(graph, node.id)) {
+    const source = getNodeById(graph, edge.source);
+    if (!source) continue;
+
+    const sourceTitle = source.data.title || source.id;
+
+    if (edge.sourceHandle === 'text') {
+      if ('text' in source.data && typeof source.data.text === 'string' && source.data.text.trim()) {
+        continue;
+      }
+
+      blockingMessages.push(`${sourceTitle} is connected but has no prompt text yet.`);
+      continue;
+    }
+
+    const outputUrl = getNodeOutputUrl(source);
+    if (outputUrl) {
+      continue;
+    }
+
+    if (isRunnableNode(source)) {
+      if (source.data.runState.status === 'processing' || source.data.runState.status === 'queued') {
+        waitingMessages.push(`${sourceTitle} is still generating.`);
+        continue;
+      }
+
+      if (source.data.runState.status === 'failed' || source.data.runState.status === 'blocked') {
+        blockingMessages.push(`${sourceTitle} did not finish successfully.`);
+        continue;
+      }
+    }
+
+    const handleLabel = edge.sourceHandle === 'image'
+      ? 'image'
+      : edge.sourceHandle === 'video'
+        ? 'video'
+        : edge.sourceHandle === 'audio'
+          ? 'audio'
+          : 'input';
+    blockingMessages.push(`${sourceTitle} has no ${handleLabel} output yet.`);
+  }
+
+  if (blockingMessages.length > 0) {
+    return { kind: 'blocked', message: blockingMessages[0] };
+  }
+
+  if (waitingMessages.length > 0) {
+    return { kind: 'queued', message: waitingMessages[0] };
+  }
+
+  return { kind: 'ready', message: null };
+}
+
 export function getExecutionOrder(graph: WorkflowCanvasGraph, startNodeId: string, mode: 'node' | 'branch'): string[] {
   if (mode === 'node') return [startNodeId];
 
   const reachable = new Set<string>();
   const queue = [startNodeId];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+    const current = queue[queueIndex];
     if (!current || reachable.has(current)) continue;
     reachable.add(current);
 
@@ -675,9 +854,11 @@ export function getExecutionOrder(graph: WorkflowCanvasGraph, startNodeId: strin
   });
 
   const ordered: string[] = [];
+  const orderedNodeIds = new Set<string>();
   while (ready.length > 0) {
     const nodeId = ready.shift()!;
     ordered.push(nodeId);
+    orderedNodeIds.add(nodeId);
 
     for (const target of outgoingMap.get(nodeId) || []) {
       const nextDegree = (inDegree.get(target) || 0) - 1;
@@ -690,7 +871,7 @@ export function getExecutionOrder(graph: WorkflowCanvasGraph, startNodeId: strin
   }
 
   for (const nodeId of reachable) {
-    if (!ordered.includes(nodeId)) {
+    if (!orderedNodeIds.has(nodeId)) {
       ordered.push(nodeId);
     }
   }

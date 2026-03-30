@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createStarterGraph, createWorkflowGraphHash } from '@/lib/workflow-canvas';
+import { createStarterGraph, createWorkflowGraphHash, createWorkflowNode, createNodeRunState } from '@/lib/workflow-canvas';
 
 type CanvasRow = {
   id: string;
@@ -173,7 +173,7 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
   });
 
   it('returns 200 for a no-op save without issuing an update', async () => {
-    const currentGraphHash = createWorkflowGraphHash(canvasState.graph);
+    const currentGraphHash = createWorkflowGraphHash(canvasState.graph, { mode: 'client-save' });
     const { PATCH } = await import('@/app/api/workflow-canvases/[id]/route');
     const response = await PATCH(
       new Request('http://localhost/api/workflow-canvases/canvas-1', {
@@ -193,5 +193,63 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
     expect(response.status).toBe(200);
     expect(data.canvas.revision).toBe(2);
     expect(updateCalls).toBe(0);
+  });
+
+  it('preserves stored run state while saving user-edited graph changes', async () => {
+    const runnableNode = createWorkflowNode('image-generate', { x: 320, y: 0 });
+    canvasState = {
+      ...canvasState,
+      graph: {
+        ...canvasState.graph,
+        nodes: [
+          {
+            ...runnableNode,
+            data: {
+              ...runnableNode.data,
+              title: 'Original title',
+              runState: createNodeRunState({
+                status: 'succeeded',
+                generationId: 'gen-123',
+                outputUrl: 'https://example.com/output.jpg',
+              }),
+            },
+          },
+        ],
+        edges: [],
+      },
+    };
+
+    const { PATCH } = await import('@/app/api/workflow-canvases/[id]/route');
+    const response = await PATCH(
+      new Request('http://localhost/api/workflow-canvases/canvas-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: canvasState.title,
+          graph: {
+            ...canvasState.graph,
+            nodes: canvasState.graph.nodes.map((node) => ({
+              ...node,
+              data: {
+                ...node.data,
+                title: 'Updated title',
+                runState: createNodeRunState({ status: 'failed' }),
+              },
+            })),
+          },
+          baseRevision: canvasState.revision,
+        }),
+      }) as never,
+      { params: Promise.resolve({ id: 'canvas-1' }) }
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.canvas.graph.nodes[0].data.title).toBe('Updated title');
+    expect(data.canvas.graph.nodes[0].data.runState).toMatchObject({
+      status: 'succeeded',
+      generationId: 'gen-123',
+      outputUrl: 'https://example.com/output.jpg',
+    });
   });
 });

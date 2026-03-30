@@ -20,7 +20,7 @@ export function hasCanvasSaveChanges(
 ) {
   return (
     request.title !== lastPersistedTitle ||
-    createWorkflowGraphHash(request.graph) !== lastPersistedGraphHash
+    createWorkflowGraphHash(request.graph, { mode: 'client-save' }) !== lastPersistedGraphHash
   );
 }
 
@@ -100,9 +100,11 @@ export async function flushCanvasSaveBeforeTransition({
 
   clearAutosaveTimer();
 
-  const result = hasUnsavedChanges
-    ? await persistRequest(request)
-    : await currentSavePromise;
+  if (!hasUnsavedChanges) {
+    const result = await currentSavePromise;
+    return result.status === 'saved' || result.status === 'noop';
+  }
 
+  const result = await persistRequest(request);
   return result.status === 'saved' || result.status === 'noop';
 }

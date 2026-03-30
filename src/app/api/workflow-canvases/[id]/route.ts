@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/server-helpers';
-import { createWorkflowGraphHash, normalizeWorkflowGraph } from '@/lib/workflow-canvas';
+import {
+  createWorkflowGraphHash,
+  mergeWorkflowCanvasGraph,
+  normalizeWorkflowGraph,
+} from '@/lib/workflow-canvas';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -60,8 +64,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     ? normalizeWorkflowGraph(body.graph)
     : normalizeWorkflowGraph(currentCanvas.graph);
   const currentGraph = normalizeWorkflowGraph(currentCanvas.graph);
-  const currentGraphHash = createWorkflowGraphHash(currentGraph);
-  const nextGraphHash = createWorkflowGraphHash(nextGraph);
+  const currentGraphHash = createWorkflowGraphHash(currentGraph, { mode: 'client-save' });
+  const nextGraphHash = createWorkflowGraphHash(nextGraph, { mode: 'client-save' });
   const baseRevision = typeof body.baseRevision === 'number' ? body.baseRevision : null;
   const requestGraphHash = typeof body.graphHash === 'string' ? body.graphHash : null;
 
@@ -91,12 +95,14 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     });
   }
 
+  const mergedGraph = mergeWorkflowCanvasGraph(currentGraph, nextGraph);
+
   let updateQuery = supabase
     .from('workflow_canvases')
     .update({
       title: nextTitle,
-      graph: nextGraph,
-      viewport: nextGraph.viewport,
+      graph: mergedGraph,
+      viewport: mergedGraph.viewport,
       revision: currentCanvas.revision + 1,
     })
     .eq('id', id)

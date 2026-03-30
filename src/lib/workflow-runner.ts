@@ -15,6 +15,7 @@ import {
   getIncomingEdges,
   getNodeById,
   getNodeOutputUrl,
+  inspectWorkflowNodeDependencies,
   isRunnableNode,
   normalizeWorkflowGraph,
   resolveNodeInputs,
@@ -105,74 +106,16 @@ async function persistWorkflowGraph(
 
 function applyStepToGraph(graph: WorkflowCanvasGraph, step: HydratedRunStep): WorkflowCanvasGraph {
   const outputUrl = (step.output_snapshot as { outputUrl?: string } | null)?.outputUrl || null;
+  const cost = (step.output_snapshot as { cost?: number | null } | null)?.cost ?? null;
 
   return updateNodeRunState(graph, step.node_id, {
     status: step.status,
     generationId: step.generation_id,
     outputUrl,
     error: step.error_message,
+    cost,
     updatedAt: step.finished_at || step.started_at,
   });
-}
-
-function inspectNodeDependencies(
-  graph: WorkflowCanvasGraph,
-  node: WorkflowCanvasNode
-): { kind: 'ready' | 'queued' | 'blocked'; message: string | null } {
-  const waitingMessages: string[] = [];
-  const blockingMessages: string[] = [];
-
-  for (const edge of getIncomingEdges(graph, node.id)) {
-    const source = getNodeById(graph, edge.source);
-    if (!source) continue;
-
-    const sourceTitle = source.data.title || source.id;
-
-    if (edge.sourceHandle === 'text') {
-      if ('text' in source.data && typeof source.data.text === 'string' && source.data.text.trim()) {
-        continue;
-      }
-
-      blockingMessages.push(`${sourceTitle} is connected but has no prompt text yet.`);
-      continue;
-    }
-
-    const outputUrl = getNodeOutputUrl(source);
-    if (outputUrl) {
-      continue;
-    }
-
-    if (isRunnableNode(source)) {
-      if (source.data.runState.status === 'processing' || source.data.runState.status === 'queued') {
-        waitingMessages.push(`${sourceTitle} is still generating.`);
-        continue;
-      }
-
-      if (source.data.runState.status === 'failed' || source.data.runState.status === 'blocked') {
-        blockingMessages.push(`${sourceTitle} did not finish successfully.`);
-        continue;
-      }
-    }
-
-    const handleLabel = edge.sourceHandle === 'image'
-      ? 'image'
-      : edge.sourceHandle === 'video'
-        ? 'video'
-        : edge.sourceHandle === 'audio'
-          ? 'audio'
-          : 'input';
-    blockingMessages.push(`${sourceTitle} has no ${handleLabel} output yet.`);
-  }
-
-  if (blockingMessages.length > 0) {
-    return { kind: 'blocked', message: blockingMessages[0] };
-  }
-
-  if (waitingMessages.length > 0) {
-    return { kind: 'queued', message: waitingMessages[0] };
-  }
-
-  return { kind: 'ready', message: null };
 }
 
 async function updateRunStep(
@@ -335,12 +278,18 @@ async function hydrateRunSteps(params: {
     .select('id, status, output_url')
     .in('id', generationIds);
 
-  for (const generation of generations || []) {
+  const resolvedGenerations = await Promise.all((generations || []).map(async (generation) => ({
+    id: generation.id,
+    status: mapGenerationStatus(generation.status),
+    output_url: generation.output_url
+      ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
+      : null,
+  })));
+
+  for (const generation of resolvedGenerations) {
     generationMap.set(generation.id, {
-      status: mapGenerationStatus(generation.status),
-      output_url: generation.output_url
-        ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
-        : null,
+      status: generation.status,
+      output_url: generation.output_url,
     });
   }
 
@@ -609,7 +558,7 @@ export async function executeWorkflowRun(params: {
       continue;
     }
 
-    const dependencyState = inspectNodeDependencies(workingGraph, node);
+    const dependencyState = inspectWorkflowNodeDependencies(workingGraph, node);
     if (dependencyState.kind === 'queued') {
       hasPendingWork = true;
       workingGraph = updateNodeRunState(workingGraph, node.id, {
@@ -650,10 +599,11 @@ export async function executeWorkflowRun(params: {
 
     try {
       const result = await executeRunnableNode({ supabase, userId, node, graph: workingGraph });
-      const nextRunState: Partial<Record<'status' | 'generationId' | 'error' | 'updatedAt', unknown>> = {
+      const nextRunState: Partial<Record<'status' | 'generationId' | 'error' | 'updatedAt' | 'cost', unknown>> = {
         status: result.status,
         generationId: result.generation_id,
         error: result.error_message,
+        cost: (result.output_snapshot as { cost?: number | null } | null)?.cost ?? null,
         updatedAt: result.status === 'processing' ? startedAt : new Date().toISOString(),
       };
       workingGraph = updateNodeRunState(workingGraph, node.id, nextRunState as Record<string, unknown>);
@@ -740,9 +690,10 @@ async function advanceWorkflowRunProgress(params: {
   }
 
   const executionOrder = getExecutionOrder(workingGraph, run.start_node_id, run.mode);
+  const stepIndexByNodeId = new Map(hydratedSteps.map((step, index) => [step.node_id, index]));
   for (const nodeId of executionOrder) {
-    const stepIndex = hydratedSteps.findIndex((step) => step.node_id === nodeId);
-    if (stepIndex === -1 || hydratedSteps[stepIndex].status !== 'queued') {
+    const stepIndex = stepIndexByNodeId.get(nodeId);
+    if (stepIndex === undefined || hydratedSteps[stepIndex].status !== 'queued') {
       continue;
     }
 
@@ -752,7 +703,7 @@ async function advanceWorkflowRunProgress(params: {
       continue;
     }
 
-    const dependencyState = inspectNodeDependencies(workingGraph, node);
+    const dependencyState = inspectWorkflowNodeDependencies(workingGraph, node);
     if (dependencyState.kind === 'queued') {
       if (queuedStep.error_message !== dependencyState.message) {
         hydratedSteps[stepIndex] = {
