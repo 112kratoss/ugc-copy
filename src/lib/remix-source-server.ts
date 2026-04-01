@@ -28,7 +28,10 @@ type RemixSourceGenerationRow = {
   workflow_settings: Record<string, unknown> | null;
 };
 
-type ResultGenerationRow = Pick<RemixSourceGenerationRow, 'id' | 'output_url' | 'showcase_asset_path'>;
+type ResultGenerationRow = Pick<
+  RemixSourceGenerationRow,
+  'id' | 'user_id' | 'is_public' | 'output_url' | 'showcase_asset_path'
+>;
 
 const GENERATION_SELECT =
   'id, user_id, is_public, output_url, showcase_asset_path, category, model, prompt, title, workflow_settings';
@@ -96,13 +99,19 @@ async function resolveGenerationResultUrl(
 
 async function resolveUploadsStoragePathUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  storagePath: string
+  storagePath: string,
+  requesterUserId: string
 ): Promise<string | null> {
   if (!isUploadsStoragePath(storagePath)) {
     return null;
   }
 
   const filePath = getUploadsBucketPath(storagePath);
+  const storageOwnerId = filePath.split('/')[0]?.trim();
+  if (!storageOwnerId || storageOwnerId !== requesterUserId) {
+    return null;
+  }
+
   const { data, error } = await adminSupabase.storage.from('uploads').createSignedUrl(filePath, 3600);
 
   if (error || !data?.signedUrl) {
@@ -115,11 +124,12 @@ async function resolveUploadsStoragePathUrl(
 
 async function fetchGenerationById(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  generationId: string
+  generationId: string,
+  requesterUserId: string
 ): Promise<ResultGenerationRow | null> {
   const { data, error } = await adminSupabase
     .from('generations')
-    .select('id, output_url, showcase_asset_path')
+    .select('id, user_id, is_public, output_url, showcase_asset_path')
     .eq('id', generationId)
     .maybeSingle();
 
@@ -128,7 +138,16 @@ async function fetchGenerationById(
     return null;
   }
 
-  return data as ResultGenerationRow | null;
+  const generation = data as ResultGenerationRow | null;
+  if (!generation) {
+    return null;
+  }
+
+  if (generation.user_id !== requesterUserId && !generation.is_public) {
+    return null;
+  }
+
+  return generation;
 }
 
 export async function loadRemixSourceBundle(
@@ -189,7 +208,11 @@ export async function loadRemixSourceBundle(
     issueLabel: string
   ): Promise<string | null> => {
     if (descriptor.storagePath) {
-      const signedUrl = await resolveUploadsStoragePathUrl(adminSupabase, descriptor.storagePath);
+      const signedUrl = await resolveUploadsStoragePathUrl(
+        adminSupabase,
+        descriptor.storagePath,
+        user.id
+      );
       if (signedUrl) {
         return signedUrl;
       }
@@ -201,7 +224,10 @@ export async function loadRemixSourceBundle(
     if (descriptor.sourceGenerationId) {
       const cacheKey = descriptor.sourceGenerationId;
       if (!referencedGenerationCache.has(cacheKey)) {
-        referencedGenerationCache.set(cacheKey, fetchGenerationById(adminSupabase, cacheKey));
+        referencedGenerationCache.set(
+          cacheKey,
+          fetchGenerationById(adminSupabase, cacheKey, user.id)
+        );
       }
 
       const referencedGeneration = await referencedGenerationCache.get(cacheKey)!;
@@ -320,4 +346,3 @@ export async function loadRemixSourceBundle(
 
   return bundle;
 }
-

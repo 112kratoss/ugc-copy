@@ -124,7 +124,7 @@ describe('/api/remix-source route', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns a public remix bundle with signed source media and referenced generation results', async () => {
+  it('redacts inaccessible nested remix inputs while returning a public source bundle', async () => {
     generationRows.set('ref-1', {
       id: 'ref-1',
       user_id: 'creator-2',
@@ -186,14 +186,20 @@ describe('/api/remix-source route', () => {
       expect.objectContaining({
         displayName: 'Bottle',
         storagePath: 'uploads/creator-1/bottle.png',
-        url: 'https://signed.example.com/uploads/creator-1/bottle.png',
+        url: null,
       }),
       expect.objectContaining({
         displayName: 'Reference result',
         sourceGenerationId: 'ref-1',
-        url: 'https://signed.example.com/generated_images%2Fcreator-2%2Fref-1.png',
+        url: null,
       }),
     ]);
+    expect(data.restoreIssues).toEqual(
+      expect.arrayContaining([
+        'image-element:Bottle',
+        'image-element:Reference result',
+      ])
+    );
   });
 
   it('allows the owner to restore motion remix inputs from a private creation', async () => {
@@ -237,6 +243,8 @@ describe('/api/remix-source route', () => {
   });
 
   it('returns partial remix data when a saved source asset is missing', async () => {
+    currentUserId = 'creator-1';
+
     generationRows.set('video-1', {
       id: 'video-1',
       user_id: 'creator-1',

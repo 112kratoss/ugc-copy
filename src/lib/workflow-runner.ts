@@ -24,6 +24,7 @@ import {
   updateNodeRunState,
   type ImageGenerateNodeData,
   type MotionGenerateNodeData,
+  type WorkflowCanvasRunRecord,
   type SoundEffectsGenerateNodeData,
   type VideoGenerateNodeData,
   type VoiceoverGenerateNodeData,
@@ -66,9 +67,14 @@ interface GenerationStatusSnapshot {
   output_url: string | null;
 }
 
+type WorkflowRunResponse = WorkflowCanvasRunRecord & {
+  steps: HydratedRunStep[];
+};
+
 const WORKFLOW_MONITOR_INTERVAL_MS = 3000;
 const WORKFLOW_MONITOR_MAX_CYCLES = 240;
-const activeWorkflowRunMonitors = new Set<string>();
+const activeWorkflowRunAdvances = new Map<string, Promise<WorkflowRunResponse>>();
+const activeWorkflowRunMonitors = new Map<string, Promise<WorkflowRunResponse | null>>();
 
 function getRunnableElementPayload(
   graph: WorkflowCanvasGraph,
@@ -243,7 +249,7 @@ function getDerivedRunFinishedAt(run: WorkflowRunRow, status: 'processing' | 'su
   return run.finished_at || latestFinishedAt || run.created_at;
 }
 
-function buildWorkflowRunResponse(run: WorkflowRunRow, steps: HydratedRunStep[]) {
+function buildWorkflowRunResponse(run: WorkflowRunRow, steps: HydratedRunStep[]): WorkflowRunResponse {
   const status = deriveWorkflowRunStatus(steps);
   const finished_at = getDerivedRunFinishedAt(run, status, steps);
 
@@ -257,6 +263,25 @@ function buildWorkflowRunResponse(run: WorkflowRunRow, steps: HydratedRunStep[])
     finished_at,
     steps,
   };
+}
+
+async function advanceWorkflowRunOnce(params: {
+  supabase: SupabaseClient;
+  canvasId: string;
+  runId: string;
+}) {
+  const { canvasId, runId } = params;
+  const monitorKey = getWorkflowRunMonitorKey(canvasId, runId);
+  const existingAdvance = activeWorkflowRunAdvances.get(monitorKey);
+  if (existingAdvance) {
+    return existingAdvance;
+  }
+
+  const nextAdvance = advanceWorkflowRunProgress(params).finally(() => {
+    activeWorkflowRunAdvances.delete(monitorKey);
+  });
+  activeWorkflowRunAdvances.set(monitorKey, nextAdvance);
+  return nextAdvance;
 }
 
 async function loadWorkflowRunState(params: {
@@ -876,19 +901,17 @@ export async function monitorWorkflowRun(params: {
 }) {
   const { canvasId, runId, maxCycles = WORKFLOW_MONITOR_MAX_CYCLES } = params;
   const monitorKey = getWorkflowRunMonitorKey(canvasId, runId);
-
-  if (activeWorkflowRunMonitors.has(monitorKey)) {
-    return null;
+  const existingMonitor = activeWorkflowRunMonitors.get(monitorKey);
+  if (existingMonitor) {
+    return existingMonitor;
   }
 
-  activeWorkflowRunMonitors.add(monitorKey);
-
-  try {
+  const nextMonitor = (async () => {
     const supabase = createServiceClient();
-    let latestRun = null;
+    let latestRun: WorkflowRunResponse | null = null;
 
     for (let cycle = 0; cycle < maxCycles; cycle += 1) {
-      latestRun = await advanceWorkflowRunProgress({
+      latestRun = await advanceWorkflowRunOnce({
         supabase,
         canvasId,
         runId,
@@ -902,9 +925,12 @@ export async function monitorWorkflowRun(params: {
     }
 
     return latestRun;
-  } finally {
+  })().finally(() => {
     activeWorkflowRunMonitors.delete(monitorKey);
-  }
+  });
+
+  activeWorkflowRunMonitors.set(monitorKey, nextMonitor);
+  return nextMonitor;
 }
 
 export async function getWorkflowRunDetails(params: {
@@ -918,6 +944,15 @@ export async function getWorkflowRunDetails(params: {
     canvasId,
     runId,
   });
+
+  if (run.status === 'processing') {
+    return advanceWorkflowRunOnce({
+      supabase,
+      canvasId,
+      runId,
+    });
+  }
+
   const hydratedSteps = await hydrateRunSteps({
     supabase,
     steps,

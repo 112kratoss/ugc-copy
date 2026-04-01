@@ -103,7 +103,7 @@ describe('workflow run routes', () => {
     });
   });
 
-  it('GET /runs/[runId] stays read-only and does not schedule monitoring', async () => {
+  it('GET /runs/[runId] returns runner-managed recovery state without scheduling monitoring', async () => {
     getWorkflowRunDetailsMock.mockResolvedValue({
       id: 'run-1',
       canvas_id: 'canvas-1',
