@@ -1,28 +1,31 @@
 'use client';
 
-import { Bot, Copy, Layers3, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
+import { Layers3, PencilLine, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
 import type { WorkflowCanvasEdge, WorkflowCanvasNode } from '@/lib/workflow-canvas';
 import type {
   CanvasContextMenuState,
   CanvasSelectionState,
   PreviewMediaState,
-  WorkflowRunAffordance,
 } from './workflowCanvasUiTypes';
 import { getNodeLabel } from './workflowCanvasUiUtils';
 
 interface WorkflowCanvasOverlaysProps {
   contextMenu: CanvasContextMenuState | null;
   edges: WorkflowCanvasEdge[];
-  nodeRunAffordance: WorkflowRunAffordance | null;
   nodes: WorkflowCanvasNode[];
+  nodeRunStateById: Record<string, {
+    canRunBranch: boolean;
+    canRunNode: boolean;
+    runBranchDisabled: boolean;
+    runNodeDisabled: boolean;
+  } | undefined>;
   onAddNote: (position: { x: number; y: number }) => void;
   onClearSelection: () => void;
   onCloseContextMenu: () => void;
   onClosePreview: () => void;
   onDeleteSelection: () => void;
-  onDuplicateSelection: () => void;
+  onEditNode: (nodeId: string) => void;
   onFitView: () => void;
-  onOpenPlanner: () => void;
   onRunBranch: (nodeId: string) => void;
   onRunNode: (nodeId: string) => void;
   onSelectAll: () => void;
@@ -33,12 +36,10 @@ interface WorkflowCanvasOverlaysProps {
 
 function CanvasSelectionHud({
   selection,
-  onDuplicate,
   onDelete,
   onClear,
 }: {
   selection: CanvasSelectionState;
-  onDuplicate: () => void;
   onDelete: () => void;
   onClear: () => void;
 }) {
@@ -67,15 +68,6 @@ function CanvasSelectionHud({
         </button>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        {nodeCount > 0 && (
-          <button
-            type="button"
-            onClick={onDuplicate}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200 transition hover:bg-white/[0.06]"
-          >
-            <Copy className="h-4 w-4" /> Duplicate
-          </button>
-        )}
         <button
           type="button"
           onClick={onDelete}
@@ -149,33 +141,31 @@ function CanvasContextMenu({
   selection,
   nodes,
   edges,
-  nodeRunAffordance,
+  nodeRunStateById,
   onClose,
   onDeleteSelection,
-  onDuplicateSelection,
+  onEditNode,
   onClearSelection,
-  onRunNode,
-  onRunBranch,
   onAddNote,
   onFitView,
+  onRunBranch,
+  onRunNode,
   onSelectAll,
-  onOpenPlanner,
 }: {
   contextMenu: CanvasContextMenuState | null;
   selection: CanvasSelectionState;
   nodes: WorkflowCanvasNode[];
   edges: WorkflowCanvasEdge[];
-  nodeRunAffordance: WorkflowRunAffordance | null;
+  nodeRunStateById: WorkflowCanvasOverlaysProps['nodeRunStateById'];
   onClose: () => void;
   onDeleteSelection: () => void;
-  onDuplicateSelection: () => void;
+  onEditNode: (nodeId: string) => void;
   onClearSelection: () => void;
-  onRunNode: (nodeId: string) => void;
-  onRunBranch: (nodeId: string) => void;
   onAddNote: (position: { x: number; y: number }) => void;
   onFitView: () => void;
+  onRunBranch: (nodeId: string) => void;
+  onRunNode: (nodeId: string) => void;
   onSelectAll: () => void;
-  onOpenPlanner: () => void;
 }) {
   if (!contextMenu) {
     return null;
@@ -185,6 +175,7 @@ function CanvasContextMenu({
   const isSelectionMenu = contextMenu.target !== 'pane' && selectionCount > 1;
   const node = contextMenu.nodeId ? nodes.find((candidate) => candidate.id === contextMenu.nodeId) || null : null;
   const edge = contextMenu.edgeId ? edges.find((candidate) => candidate.id === contextMenu.edgeId) || null : null;
+  const nodeRunState = node ? nodeRunStateById[node.id] : undefined;
   const actionClassName = 'flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-zinc-200 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60';
 
   return (
@@ -227,21 +218,11 @@ function CanvasContextMenu({
                 <span>Select all</span>
                 <Layers3 className="h-4 w-4 text-zinc-500" />
               </button>
-              <button type="button" onClick={() => { onClose(); onOpenPlanner(); }} className={actionClassName}>
-                <span>Open planner</span>
-                <Bot className="h-4 w-4 text-zinc-500" />
-              </button>
             </>
           )}
 
           {isSelectionMenu && (
             <>
-              {selection.nodeIds.length > 0 && (
-                <button type="button" onClick={() => { onClose(); onDuplicateSelection(); }} className={actionClassName}>
-                  <span>Duplicate selected</span>
-                  <Copy className="h-4 w-4 text-zinc-500" />
-                </button>
-              )}
               <button type="button" onClick={() => { onClose(); onDeleteSelection(); }} className={actionClassName}>
                 <span>Delete selected</span>
                 <Trash2 className="h-4 w-4 text-rose-300" />
@@ -255,38 +236,36 @@ function CanvasContextMenu({
 
           {!isSelectionMenu && contextMenu.target === 'node' && node && (
             <>
-              {nodeRunAffordance && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm text-zinc-200">
-                  <div>{nodeRunAffordance.message}</div>
-                  {nodeRunAffordance.creditLabel && (
-                    <div className="mt-2 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                      {nodeRunAffordance.creditLabel}
-                    </div>
-                  )}
-                </div>
+              <button
+                type="button"
+                onClick={() => { onClose(); onEditNode(node.id); }}
+                className={actionClassName}
+              >
+                <span>Edit node</span>
+                <PencilLine className="h-4 w-4 text-zinc-500" />
+              </button>
+              {nodeRunState?.canRunNode && (
+                <button
+                  type="button"
+                  onClick={() => { onClose(); onRunNode(node.id); }}
+                  disabled={nodeRunState.runNodeDisabled}
+                  className={actionClassName}
+                >
+                  <span>Run this step</span>
+                  <Play className="h-4 w-4 fill-current text-emerald-300" />
+                </button>
               )}
-              <button
-                type="button"
-                onClick={() => { onClose(); onRunNode(node.id); }}
-                disabled={nodeRunAffordance?.runNodeDisabled}
-                className={actionClassName}
-              >
-                <span>Run node</span>
-                <Play className="h-4 w-4 text-zinc-500" />
-              </button>
-              <button
-                type="button"
-                onClick={() => { onClose(); onRunBranch(node.id); }}
-                disabled={nodeRunAffordance?.runBranchDisabled}
-                className={actionClassName}
-              >
-                <span>Run from here</span>
-                <ZoomIn className="h-4 w-4 text-zinc-500" />
-              </button>
-              <button type="button" onClick={() => { onClose(); onDuplicateSelection(); }} className={actionClassName}>
-                <span>Duplicate</span>
-                <Copy className="h-4 w-4 text-zinc-500" />
-              </button>
+              {nodeRunState?.canRunBranch && (
+                <button
+                  type="button"
+                  onClick={() => { onClose(); onRunBranch(node.id); }}
+                  disabled={nodeRunState.runBranchDisabled}
+                  className={actionClassName}
+                >
+                  <span>Run from here</span>
+                  <Play className="h-4 w-4 fill-current text-sky-300" />
+                </button>
+              )}
               <button type="button" onClick={() => { onClose(); onDeleteSelection(); }} className={actionClassName}>
                 <span>Delete</span>
                 <Trash2 className="h-4 w-4 text-rose-300" />
@@ -309,16 +288,15 @@ function CanvasContextMenu({
 export function WorkflowCanvasOverlays({
   contextMenu,
   edges,
-  nodeRunAffordance,
   nodes,
+  nodeRunStateById,
   onAddNote,
   onClearSelection,
   onCloseContextMenu,
   onClosePreview,
   onDeleteSelection,
-  onDuplicateSelection,
+  onEditNode,
   onFitView,
-  onOpenPlanner,
   onRunBranch,
   onRunNode,
   onSelectAll,
@@ -331,7 +309,6 @@ export function WorkflowCanvasOverlays({
       {showSelectionHud && (
         <CanvasSelectionHud
           selection={selection}
-          onDuplicate={onDuplicateSelection}
           onDelete={onDeleteSelection}
           onClear={onClearSelection}
         />
@@ -342,17 +319,16 @@ export function WorkflowCanvasOverlays({
         selection={selection}
         nodes={nodes}
         edges={edges}
-        nodeRunAffordance={nodeRunAffordance}
+        nodeRunStateById={nodeRunStateById}
         onClose={onCloseContextMenu}
         onDeleteSelection={onDeleteSelection}
-        onDuplicateSelection={onDuplicateSelection}
+        onEditNode={onEditNode}
         onClearSelection={onClearSelection}
-        onRunNode={onRunNode}
-        onRunBranch={onRunBranch}
         onAddNote={onAddNote}
         onFitView={onFitView}
+        onRunBranch={onRunBranch}
+        onRunNode={onRunNode}
         onSelectAll={onSelectAll}
-        onOpenPlanner={onOpenPlanner}
       />
 
       <PreviewMediaOverlay preview={preview} onClose={onClosePreview} />

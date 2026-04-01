@@ -17,13 +17,15 @@ import {
 } from '@/lib/workflow-canvas';
 
 function toCanvasListItem(
-  canvas: Pick<WorkflowCanvasRecord, 'id' | 'title' | 'updated_at' | 'revision'>
+  canvas: Pick<WorkflowCanvasRecord, 'id' | 'title' | 'updated_at' | 'revision' | 'status' | 'published_at'>
 ): WorkflowCanvasListItem {
   return {
     id: canvas.id,
     title: canvas.title,
     updated_at: canvas.updated_at,
     revision: canvas.revision,
+    status: canvas.status,
+    published_at: canvas.published_at,
   };
 }
 
@@ -34,24 +36,30 @@ function sortCanvasList(canvases: WorkflowCanvasListItem[]) {
 interface UseWorkflowCanvasCanvasesOptions {
   authHeaders: () => Promise<Record<string, string>>;
   beforeCanvasTransitionRef: MutableRefObject<() => Promise<boolean>>;
+  hasUnsavedChangesRef: MutableRefObject<boolean>;
   onActivateCanvas: (canvas: WorkflowCanvasRecord) => void;
   onError: (message: string | null) => void;
-  sessionToken: string | null | undefined;
+  sessionUserId: string | null | undefined;
 }
 
 export function useWorkflowCanvasCanvases({
   authHeaders,
   beforeCanvasTransitionRef,
+  hasUnsavedChangesRef,
   onActivateCanvas,
   onError,
-  sessionToken,
+  sessionUserId,
 }: UseWorkflowCanvasCanvasesOptions) {
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
+  const [activeCanvasRecord, setActiveCanvasRecord] = useState<WorkflowCanvasRecord | null>(null);
   const [canvasTitle, setCanvasTitle] = useState('Workflow canvas');
   const [canvases, setCanvases] = useState<WorkflowCanvasListItem[]>([]);
   const [isCanvasTransitionPending, setIsCanvasTransitionPending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const activeCanvasIdRef = useRef<string | null>(null);
+  const activeCanvasRecordRef = useRef<WorkflowCanvasRecord | null>(null);
+  const authHeadersRef = useRef(authHeaders);
+  const sessionUserIdRef = useRef(sessionUserId);
   const canvasesCountRef = useRef(0);
 
   useEffect(() => {
@@ -59,23 +67,36 @@ export function useWorkflowCanvasCanvases({
   }, [activeCanvasId]);
 
   useEffect(() => {
+    activeCanvasRecordRef.current = activeCanvasRecord;
+  }, [activeCanvasRecord]);
+
+  useEffect(() => {
     canvasesCountRef.current = canvases.length;
   }, [canvases.length]);
 
+  useEffect(() => {
+    authHeadersRef.current = authHeaders;
+  }, [authHeaders]);
+
+  useEffect(() => {
+    sessionUserIdRef.current = sessionUserId;
+  }, [sessionUserId]);
+
   const activateCanvas = useCallback((canvas: WorkflowCanvasRecord) => {
     setActiveCanvasId(canvas.id);
+    setActiveCanvasRecord(canvas);
     setCanvasTitle(canvas.title);
     onActivateCanvas(canvas);
     onError(null);
   }, [onActivateCanvas, onError]);
 
   const fetchCanvasDetails = useCallback(async (canvasId: string) => {
-    if (!sessionToken) {
+    if (!sessionUserIdRef.current) {
       throw new Error('Please log in to load workflow canvases.');
     }
 
     const response = await fetch(`/api/workflow-canvases/${canvasId}`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+      headers: await authHeadersRef.current(),
     });
     const data = await response.json();
     if (!response.ok) {
@@ -83,7 +104,7 @@ export function useWorkflowCanvasCanvases({
     }
 
     return data.canvas as WorkflowCanvasRecord;
-  }, [sessionToken]);
+  }, []);
 
   const syncSavedCanvasMetadata = useCallback((canvas: WorkflowCanvasRecord) => {
     startTransition(() => {
@@ -92,6 +113,7 @@ export function useWorkflowCanvasCanvases({
         ...current.filter((item) => item.id !== canvas.id),
       ]));
       if (activeCanvasIdRef.current === canvas.id) {
+        setActiveCanvasRecord(canvas);
         setCanvasTitle(canvas.title);
       }
     });
@@ -155,10 +177,14 @@ export function useWorkflowCanvasCanvases({
       return null;
     }
 
+    if (hasUnsavedChangesRef.current) {
+      return activeCanvasRecordRef.current;
+    }
+
     const canvas = await fetchCanvasDetails(activeCanvasIdRef.current);
     syncSavedCanvasMetadata(canvas);
     return canvas;
-  }, [fetchCanvasDetails, syncSavedCanvasMetadata]);
+  }, [fetchCanvasDetails, hasUnsavedChangesRef, syncSavedCanvasMetadata]);
 
   const deleteCanvas = useCallback(async (canvasId: string) => {
     try {
@@ -228,6 +254,7 @@ export function useWorkflowCanvasCanvases({
 
   const updateCanvasTitleLocally = useCallback((title: string) => {
     setCanvasTitle(title);
+    setActiveCanvasRecord((current) => (current ? { ...current, title } : current));
     startTransition(() => {
       setCanvases((current) => current.map((canvas) => (
         canvas.id === activeCanvasIdRef.current
@@ -238,17 +265,18 @@ export function useWorkflowCanvasCanvases({
   }, []);
 
   useEffect(() => {
-    if (!sessionToken) {
+    if (!sessionUserId) {
       setIsLoading(false);
       return;
     }
 
     let cancelled = false;
+    setIsLoading(true);
 
     async function loadCanvases() {
       try {
         const response = await fetch('/api/workflow-canvases', {
-          headers: { Authorization: `Bearer ${sessionToken}` },
+          headers: await authHeadersRef.current(),
         });
         const data = await response.json();
         if (!response.ok) {
@@ -265,13 +293,31 @@ export function useWorkflowCanvasCanvases({
         });
 
         if (nextCanvases.length === 0) {
-          await createCanvas({
-            title: 'UGC workflow canvas',
-            graph: createStarterGraph(),
-            skipFlush: true,
+          const createResponse = await fetch('/api/workflow-canvases', {
+            method: 'POST',
+            headers: await authHeadersRef.current(),
+            body: JSON.stringify({
+              title: 'UGC workflow canvas',
+              graph: createStarterGraph(),
+            }),
           });
+          const createData = await createResponse.json();
+          if (!createResponse.ok) {
+            throw new Error(createData.error || 'Failed to create canvas');
+          }
+
+          const createdCanvas = createData.canvas as WorkflowCanvasRecord;
+          if (!cancelled) {
+            startTransition(() => {
+              setCanvases([toCanvasListItem(createdCanvas)]);
+              activateCanvas(createdCanvas);
+            });
+          }
         } else {
-          const firstCanvas = await fetchCanvasDetails(nextCanvases[0].id);
+          const nextCanvasId = activeCanvasIdRef.current && nextCanvases.some((canvas) => canvas.id === activeCanvasIdRef.current)
+            ? activeCanvasIdRef.current
+            : nextCanvases[0].id;
+          const firstCanvas = await fetchCanvasDetails(nextCanvasId);
           if (!cancelled) {
             startTransition(() => {
               activateCanvas(firstCanvas);
@@ -294,10 +340,11 @@ export function useWorkflowCanvasCanvases({
     return () => {
       cancelled = true;
     };
-  }, [activateCanvas, createCanvas, fetchCanvasDetails, onError, sessionToken]);
+  }, [activateCanvas, fetchCanvasDetails, onError, sessionUserId]);
 
   return {
     activeCanvasId,
+    activeCanvasRecord,
     canvasTitle,
     canvases,
     createCanvas,

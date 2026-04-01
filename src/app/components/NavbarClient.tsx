@@ -140,8 +140,12 @@ export default function NavbarClient() {
   }, []);
 
   useEffect(() => {
-    setIsAccountMenuOpen(false);
-    setIsMobileMenuOpen(false);
+    const closeMenus = () => {
+      setIsAccountMenuOpen(false);
+      setIsMobileMenuOpen(false);
+    };
+
+    closeMenus();
   }, [pathname]);
 
   useEffect(() => {

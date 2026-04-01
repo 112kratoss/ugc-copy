@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateWorkflowPage from '@/app/create-workflow/page';
@@ -8,6 +8,10 @@ const mockPush = vi.fn();
 const mockReplace = vi.fn();
 const mockRefreshSessionState = vi.fn(async () => undefined);
 const mockUpdateCredits = vi.fn();
+let mockSession = {
+  access_token: 'test-token',
+  user: { id: 'user-1' },
+};
 const mockRouter = {
   push: mockPush,
   replace: mockReplace,
@@ -19,11 +23,8 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/app/components/AuthProvider', () => ({
   useAuth: () => ({
-    session: {
-      access_token: 'test-token',
-      user: { id: 'user-1' },
-    },
-    user: { id: 'user-1' },
+    session: mockSession,
+    user: mockSession.user,
     credits: 25,
     isLoading: false,
     updateCredits: mockUpdateCredits,
@@ -61,14 +62,27 @@ vi.mock('@xyflow/react', async () => {
   const flowInstance = {
     screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
     flowToScreenPosition: vi.fn((position: { x: number; y: number }) => position),
-    getNode: vi.fn((id: string) => latestPropsRef.current?.nodes.find((node: { id: string }) => node.id === id)),
+    getNode: vi.fn((id: string) => (latestPropsRef.current?.nodes ?? []).find((node: { id: string }) => node.id === id)),
     fitView: vi.fn(async () => undefined),
     setViewport: vi.fn(async () => undefined),
   };
 
   function ReactFlow(props: Record<string, unknown>) {
-    const nodes = (props.nodes as Array<{ id: string; data: { title: string } }>) || [];
-    const edges = (props.edges as Array<{ id: string }>) || [];
+    const nodes = (props.nodes as Array<{
+      id: string;
+      data: {
+        title: string;
+        __runtime?: {
+          isRunMenuOpen?: boolean;
+          onDeleteNode?: () => void;
+          onOpenRunMenu?: () => void;
+          onRunBranch?: () => void;
+          onRunNode?: () => void;
+          showPlayControl?: boolean;
+        };
+      };
+    }>) || [];
+    const edges = (props.edges as Array<{ id: string; data?: { onDeleteEdge?: (edgeId: string) => void } }>) || [];
     const didInitRef = React.useRef(false);
 
     React.useLayoutEffect(() => {
@@ -89,12 +103,7 @@ vi.mock('@xyflow/react', async () => {
         <button
           type="button"
           data-testid="pane-click"
-          onClick={() => (props.onPaneClick as ((event: Record<string, unknown>) => void) | undefined)?.({
-            preventDefault() {},
-            stopPropagation() {},
-            clientX: 0,
-            clientY: 0,
-          })}
+          onClick={() => (props.onPaneClick as (() => void) | undefined)?.()}
         >
           Pane click
         </button>
@@ -111,7 +120,50 @@ vi.mock('@xyflow/react', async () => {
           Select two nodes
         </button>
         {nodes.map((node) => (
-          <div key={node.id}>
+          <div
+            key={node.id}
+            className="react-flow__node"
+            data-id={node.id}
+            data-testid={`flow-node-${node.id}`}
+          >
+            <button
+              type="button"
+              data-testid={`node-click-${node.id}`}
+              onClick={() => {
+                (props.onSelectionChange as ((selection: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => void) | undefined)?.({
+                  nodes: [{ id: node.id }],
+                  edges: [],
+                });
+                (props.onNodeClick as ((event: Record<string, unknown>, node: { id: string; data: { title: string } }) => void) | undefined)?.({
+                  preventDefault() {},
+                  stopPropagation() {},
+                  shiftKey: false,
+                  metaKey: false,
+                  ctrlKey: false,
+                }, node);
+              }}
+            >
+              Click {node.data.title}
+            </button>
+            <button
+              type="button"
+              data-testid={`node-doubleclick-${node.id}`}
+              onClick={() => {
+                (props.onSelectionChange as ((selection: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => void) | undefined)?.({
+                  nodes: [{ id: node.id }],
+                  edges: [],
+                });
+                (props.onNodeDoubleClick as ((event: Record<string, unknown>, node: { id: string; data: { title: string } }) => void) | undefined)?.({
+                  preventDefault() {},
+                  stopPropagation() {},
+                  shiftKey: false,
+                  metaKey: false,
+                  ctrlKey: false,
+                }, node);
+              }}
+            >
+              Double click {node.data.title}
+            </button>
             <button
               type="button"
               data-testid={`node-select-${node.id}`}
@@ -123,6 +175,54 @@ vi.mock('@xyflow/react', async () => {
               }
             >
               Select {node.data.title}
+            </button>
+            <button
+              type="button"
+              data-testid={`node-drag-start-${node.id}`}
+              onClick={() => {
+                (props.onSelectionChange as ((selection: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => void) | undefined)?.({
+                  nodes: [{ id: node.id }],
+                  edges: [],
+                });
+                (props.onNodeDragStart as ((event: Record<string, unknown>, node: { id: string }, nodes: Array<{ id: string }>) => void) | undefined)?.({
+                  preventDefault() {},
+                  stopPropagation() {},
+                }, node, [node]);
+              }}
+            >
+              Drag start {node.data.title}
+            </button>
+            <button
+              type="button"
+              data-testid={`node-drag-stop-${node.id}`}
+              onClick={() => {
+                (props.onSelectionChange as ((selection: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => void) | undefined)?.({
+                  nodes: [{ id: node.id }],
+                  edges: [],
+                });
+                (props.onNodeDragStop as ((event: Record<string, unknown>, node: { id: string }, nodes: Array<{ id: string }>) => void) | undefined)?.({
+                  preventDefault() {},
+                  stopPropagation() {},
+                }, node, [node]);
+              }}
+            >
+              Drag stop {node.data.title}
+            </button>
+            <button
+              type="button"
+              data-testid={`node-drag-move-${node.id}`}
+              onClick={() =>
+                (props.onNodesChange as ((changes: Array<Record<string, unknown>>) => void) | undefined)?.([
+                  {
+                    id: node.id,
+                    type: 'position',
+                    position: { x: 360, y: 260 },
+                    dragging: true,
+                  },
+                ])
+              }
+            >
+              Drag move {node.data.title}
             </button>
             <button
               type="button"
@@ -138,6 +238,42 @@ vi.mock('@xyflow/react', async () => {
             >
               Node menu {node.data.title}
             </button>
+            {typeof node.data.__runtime?.onDeleteNode === 'function' && (
+              <button
+                type="button"
+                data-testid={`node-delete-${node.id}`}
+                onClick={() => node.data.__runtime?.onDeleteNode?.()}
+              >
+                Delete node {node.data.title}
+              </button>
+            )}
+            {node.data.__runtime?.showPlayControl && (
+              <button
+                type="button"
+                data-testid={`node-run-menu-${node.id}`}
+                onClick={() => node.data.__runtime?.onOpenRunMenu?.()}
+              >
+                Open run menu {node.data.title}
+              </button>
+            )}
+            {node.data.__runtime?.isRunMenuOpen && typeof node.data.__runtime?.onRunNode === 'function' && (
+              <button
+                type="button"
+                data-testid={`node-run-step-${node.id}`}
+                onClick={() => node.data.__runtime?.onRunNode?.()}
+              >
+                Run step {node.data.title}
+              </button>
+            )}
+            {node.data.__runtime?.isRunMenuOpen && typeof node.data.__runtime?.onRunBranch === 'function' && (
+              <button
+                type="button"
+                data-testid={`node-run-branch-${node.id}`}
+                onClick={() => node.data.__runtime?.onRunBranch?.()}
+              >
+                Run branch {node.data.title}
+              </button>
+            )}
           </div>
         ))}
         {edges.map((edge) => (
@@ -156,6 +292,15 @@ vi.mock('@xyflow/react', async () => {
             >
               Edge menu {edge.id}
             </button>
+            {typeof edge.data?.onDeleteEdge === 'function' && (
+              <button
+                type="button"
+                data-testid={`edge-delete-${edge.id}`}
+                onClick={() => edge.data?.onDeleteEdge?.(edge.id)}
+              >
+                Delete edge {edge.id}
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -165,50 +310,103 @@ vi.mock('@xyflow/react', async () => {
   return {
     addEdge: (edge: Record<string, unknown>, current: Array<Record<string, unknown>>) => [...current, edge],
     applyEdgeChanges: (_changes: Array<Record<string, unknown>>, current: Array<Record<string, unknown>>) => current,
-    applyNodeChanges: (_changes: Array<Record<string, unknown>>, current: Array<Record<string, unknown>>) => current,
+    applyNodeChanges: (changes: Array<Record<string, unknown>>, current: Array<Record<string, unknown>>) =>
+      changes.reduce<Array<Record<string, unknown>>>((nodes, change): Array<Record<string, unknown>> => {
+        if (change.type === 'position') {
+          return nodes.map((node) => (
+            node.id === change.id
+              ? { ...node, position: change.position ?? node.position }
+              : node
+          ));
+        }
+
+        if (change.type === 'select') {
+          return nodes.map((node) => (
+            node.id === change.id
+              ? { ...node, selected: change.selected }
+              : node
+          ));
+        }
+
+        if (change.type === 'remove') {
+          return nodes.filter((node) => node.id !== change.id);
+        }
+
+        if (change.type === 'add' && change.item) {
+          return [...nodes, change.item as Record<string, unknown>];
+        }
+
+        if (change.type === 'replace' && change.item) {
+          return nodes.map((node) => (
+            node.id === change.id
+              ? change.item as Record<string, unknown>
+              : node
+          ));
+        }
+
+        return nodes;
+      }, current),
     Background: () => <div data-testid="rf-background" />,
     BackgroundVariant: { Dots: 'dots' },
+    BaseEdge: () => <div data-testid="rf-base-edge" />,
     Controls: () => <div data-testid="rf-controls" />,
+    EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
     Handle: () => null,
     MiniMap: () => <div data-testid="rf-minimap" />,
     Position: { Left: 'left', Right: 'right' },
     ReactFlow,
     SelectionMode: { Partial: 'partial', Full: 'full' },
+    getBezierPath: () => ['M0 0', 120, 80],
   };
 });
 
 describe('CreateWorkflowPage', () => {
-  let canvas: WorkflowCanvasRecord;
+  let canvasesById: Record<string, WorkflowCanvasRecord>;
+  let lastRunRequest: { canvasId: string; mode: string; startNodeId: string } | null;
+  let orderedCanvasIds: string[];
 
   async function renderLoadedPage() {
-    const fetchMock = global.fetch as unknown as {
-      mock: { calls: Array<[unknown, RequestInit | undefined]> };
-    };
-
     render(<CreateWorkflowPage />);
-
-    await screen.findAllByTestId(/node-select-/);
-
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([url, init]) =>
-          String(url).endsWith(`/api/workflow-canvases/${canvas.id}`) && (init?.method || 'GET') === 'GET'
-        )
-      ).toBe(true);
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await screen.findByDisplayValue('Workflow canvas');
+    await screen.findByTestId(`node-select-${canvasesById['canvas-1']?.graph.nodes[0]?.id}`);
   }
 
   beforeEach(() => {
-    canvas = {
-      id: 'canvas-1',
-      title: 'Workflow canvas',
-      graph: createStarterGraph(),
-      created_at: '2026-03-22T00:00:00.000Z',
-      updated_at: '2026-03-22T00:00:00.000Z',
-      revision: 0,
+    mockSession = {
+      access_token: 'test-token',
+      user: { id: 'user-1' },
     };
+    lastRunRequest = null;
+    const secondGraph = createStarterGraph();
+    secondGraph.nodes = secondGraph.nodes.map((node, index) => (
+      index === 0
+        ? { ...node, data: { ...node.data, title: 'Second workflow prompt' } }
+        : node
+    ));
+
+    canvasesById = {
+      'canvas-1': {
+        id: 'canvas-1',
+        title: 'Workflow canvas',
+        graph: createStarterGraph(),
+        created_at: '2026-03-22T00:00:00.000Z',
+        updated_at: '2026-03-22T00:00:00.000Z',
+        revision: 0,
+        status: 'draft',
+        published_at: null,
+      },
+      'canvas-2': {
+        id: 'canvas-2',
+        title: 'Second workflow',
+        graph: secondGraph,
+        created_at: '2026-03-22T00:10:00.000Z',
+        updated_at: '2026-03-22T00:10:00.000Z',
+        revision: 0,
+        status: 'draft',
+        published_at: null,
+      },
+    };
+    orderedCanvasIds = ['canvas-1', 'canvas-2'];
 
     vi.stubGlobal('fetch', vi.fn(async (input, init) => {
       const url = String(input);
@@ -218,80 +416,127 @@ describe('CreateWorkflowPage', () => {
         return {
           ok: true,
           json: async () => ({
-            canvases: [{
-              id: canvas.id,
-              title: canvas.title,
-              updated_at: canvas.updated_at,
-              revision: canvas.revision,
-            }],
+            canvases: orderedCanvasIds.map((id) => {
+              const canvas = canvasesById[id];
+              return {
+                id: canvas.id,
+                title: canvas.title,
+                updated_at: canvas.updated_at,
+                revision: canvas.revision,
+                status: canvas.status,
+                published_at: canvas.published_at,
+              };
+            }),
           }),
         } as Response;
       }
 
-      if (url.endsWith(`/api/workflow-canvases/${canvas.id}`) && method === 'GET') {
+      const canvasMatch = url.match(/\/api\/workflow-canvases\/([^/]+)$/);
+      if (canvasMatch && method === 'GET') {
+        const canvas = canvasesById[canvasMatch[1]];
         return {
           ok: true,
           json: async () => ({ canvas }),
         } as Response;
       }
 
-      if (url.includes('/api/workflow-canvases/') && method === 'PATCH') {
+      if (canvasMatch && method === 'PATCH') {
+        const canvasId = canvasMatch[1];
         const payload = JSON.parse(String(init?.body || '{}'));
-        canvas = {
-          ...canvas,
-          title: payload.title ?? canvas.title,
-          graph: payload.graph ?? canvas.graph,
-          updated_at: '2026-03-22T00:01:00.000Z',
+        const current = canvasesById[canvasId];
+        canvasesById[canvasId] = {
+          ...current,
+          title: payload.title ?? current.title,
+          graph: payload.graph ?? current.graph,
+          revision: current.revision + 1,
+          updated_at: '2026-03-22T00:12:00.000Z',
         };
+
         return {
           ok: true,
-          json: async () => ({ canvas }),
+          json: async () => ({ canvas: canvasesById[canvasId] }),
         } as Response;
       }
 
-      if (url.includes('/api/workflow-canvases/') && method === 'POST') {
+      const runMatch = url.match(/\/api\/workflow-canvases\/([^/]+)\/run$/);
+      if (runMatch && method === 'POST') {
+        const payload = JSON.parse(String(init?.body || '{}'));
+        lastRunRequest = {
+          canvasId: runMatch[1],
+          mode: payload.mode,
+          startNodeId: payload.startNodeId,
+        };
+
         return {
           ok: true,
-          json: async () => ({ runId: 'run-1' }),
+          json: async () => ({
+            runId: 'run-1',
+            status: 'processing',
+          }),
+        } as Response;
+      }
+
+      const runDetailsMatch = url.match(/\/api\/workflow-canvases\/([^/]+)\/runs\/([^/]+)$/);
+      if (runDetailsMatch && method === 'GET') {
+        const canvas = canvasesById[runDetailsMatch[1]];
+        const startNodeId = lastRunRequest?.startNodeId ?? canvas.graph.nodes[0]?.id;
+        const targetNode = canvas.graph.nodes.find((node) => node.id === startNodeId);
+
+        return {
+          ok: true,
+          json: async () => ({
+            run: {
+              id: runDetailsMatch[2],
+              canvas_id: runDetailsMatch[1],
+              start_node_id: startNodeId,
+              mode: lastRunRequest?.mode ?? 'branch',
+              status: 'succeeded',
+              created_at: '2026-03-22T00:13:00.000Z',
+              finished_at: '2026-03-22T00:13:10.000Z',
+              steps: targetNode ? [{
+                id: 'step-1',
+                node_id: targetNode.id,
+                status: 'succeeded',
+                generation_id: 'gen-1',
+                input_snapshot: null,
+                output_snapshot: {
+                  outputUrl: 'generated_images/user-1/run-1.jpg',
+                  cost: 4,
+                },
+                error_message: null,
+                started_at: '2026-03-22T00:13:01.000Z',
+                finished_at: '2026-03-22T00:13:09.000Z',
+              }] : [],
+            },
+          }),
         } as Response;
       }
 
       if (url.endsWith('/api/workflow-canvases') && method === 'POST') {
-        canvas = {
-          ...canvas,
-          id: 'canvas-2',
-          title: 'Workflow 2',
-          updated_at: '2026-03-22T00:02:00.000Z',
+        const createdCanvas: WorkflowCanvasRecord = {
+          id: 'canvas-3',
+          title: 'Workflow 3',
+          graph: createStarterGraph(),
+          created_at: '2026-03-22T00:20:00.000Z',
+          updated_at: '2026-03-22T00:20:00.000Z',
           revision: 0,
+          status: 'draft',
+          published_at: null,
         };
+        canvasesById[createdCanvas.id] = createdCanvas;
+        orderedCanvasIds = [createdCanvas.id, ...orderedCanvasIds];
         return {
           ok: true,
-          json: async () => ({ canvas }),
+          json: async () => ({ canvas: createdCanvas }),
         } as Response;
       }
 
-      if (url.endsWith('/api/workflow-blueprint') && method === 'POST') {
+      if (canvasMatch && method === 'DELETE') {
+        delete canvasesById[canvasMatch[1]];
+        orderedCanvasIds = orderedCanvasIds.filter((id) => id !== canvasMatch[1]);
         return {
           ok: true,
-          json: async () => ({
-            blueprint: {
-              title: 'Sample Blueprint',
-              creativeStrategy: 'Lead with a quick hook.',
-              hook: 'Quick demo hook',
-              narrative: 'Show the before and after.',
-              voiceover: 'Here is the value fast.',
-              editingNotes: ['Keep cuts tight'],
-              assetChecklist: ['Product closeups'],
-              deliveryPlan: {
-                stillImageModel: 'nano-banana-2',
-                primaryModel: 'kling-3.0-video',
-                motionModel: 'kling-3.0',
-                recommendedSequence: ['Still', 'Video'],
-              },
-              shots: [],
-            },
-            remainingCredits: 42,
-          }),
+          json: async () => ({ success: true }),
         } as Response;
       }
 
@@ -307,57 +552,142 @@ describe('CreateWorkflowPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('opens and closes the planner drawer while preserving brief state', async () => {
+  it('renders the simplified left rail and removes lifecycle-heavy controls', async () => {
     await renderLoadedPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: /^planner$/i }));
-    expect(await screen.findByTestId('planner-assistant-drawer')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-left-rail')).toBeInTheDocument();
+    expect(screen.getByText(/build your graph/i)).toBeInTheDocument();
+    expect(screen.getByText(/^workflows$/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new workflow/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/brand name/i), {
-      target: { value: 'Acme Labs' },
+    expect(screen.queryByRole('button', { name: /ai builder/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /history/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /publish/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /command/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create draft/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps selection-first editing and opens the node-anchored popup from right click, Enter, and double click', async () => {
+    await renderLoadedPage();
+
+    const firstNodeId = canvasesById['canvas-1'].graph.nodes[0]?.id;
+    expect(firstNodeId).toBeTruthy();
+
+    fireEvent.click(await screen.findByTestId(`node-click-${firstNodeId}`));
+    expect(screen.queryByTestId('workflow-inspector-popup')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-inspector-menu')).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByTestId(`node-context-${firstNodeId}`));
+    fireEvent.click(await screen.findByRole('button', { name: /edit node/i }));
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-caret')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pane-click'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('workflow-inspector-popup')).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /close planner drawer/i }));
+    fireEvent.click(await screen.findByTestId(`node-select-${firstNodeId}`));
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pane-click'));
+    fireEvent.click(await screen.findByTestId(`node-doubleclick-${firstNodeId}`));
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByTestId(`node-select-${firstNodeId}`));
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
+  });
+
+  it('keeps the popup closed while dragging', async () => {
+    await renderLoadedPage();
+
+    const firstNodeId = canvasesById['canvas-1'].graph.nodes[0]?.id;
+    expect(firstNodeId).toBeTruthy();
+
+    fireEvent.click(await screen.findByTestId(`node-doubleclick-${firstNodeId}`));
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByTestId(`node-drag-start-${firstNodeId}`));
+    await waitFor(() => {
+      expect(screen.queryByTestId('dock-node-editor')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByTestId(`node-drag-stop-${firstNodeId}`));
+    expect(screen.queryByTestId('dock-node-editor')).not.toBeInTheDocument();
+  });
+
+  it('deletes a connection directly from the edge control callback', async () => {
+    await renderLoadedPage();
+
+    const firstEdgeId = canvasesById['canvas-1'].graph.edges[0]?.id;
+    expect(firstEdgeId).toBeTruthy();
+    expect(await screen.findByTestId(`edge-delete-${firstEdgeId}`)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId(`edge-delete-${firstEdgeId}`));
 
     await waitFor(() => {
-      expect(screen.queryByTestId('planner-assistant-drawer')).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`edge-delete-${firstEdgeId}`)).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^planner$/i }));
-    expect(await screen.findByDisplayValue('Acme Labs')).toBeInTheDocument();
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
   });
 
-  it('shows duplicate controls in the selection hud for multi-select', async () => {
+  it('saves before running a node branch from the hover control', async () => {
     await renderLoadedPage();
-
-    fireEvent.click(await screen.findByTestId('select-first-two-nodes'));
-    const selectionHud = await screen.findByTestId('canvas-selection-hud');
-    expect(selectionHud).toHaveTextContent('2 nodes');
-    expect(selectionHud).toHaveTextContent('Duplicate');
-    expect(selectionHud).toHaveTextContent('Delete');
-  });
-
-  it('does not autosave selection-only changes', async () => {
-    await renderLoadedPage();
-
     const fetchMock = global.fetch as unknown as {
-      mockClear: () => void;
       mock: { calls: Array<[unknown, RequestInit | undefined]> };
     };
-    fetchMock.mockClear();
 
-    const [firstNodeButton] = await screen.findAllByTestId(/node-select-/);
-    fireEvent.click(firstNodeButton);
-    await new Promise((resolve) => setTimeout(resolve, 950));
+    const promptNodeId = canvasesById['canvas-1'].graph.nodes[0]?.id;
+    expect(promptNodeId).toBeTruthy();
 
-    const patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
-      String(url).includes(`/api/workflow-canvases/${canvas.id}`) && init?.method === 'PATCH'
+    fireEvent.change(screen.getByLabelText(/workflow title/i), {
+      target: { value: 'Workflow canvas updated' },
+    });
+
+    fireEvent.click(await screen.findByTestId(`node-run-menu-${promptNodeId}`));
+    fireEvent.click(await screen.findByTestId(`node-run-branch-${promptNodeId}`));
+
+    await waitFor(() => {
+      expect(lastRunRequest).toEqual({
+        canvasId: 'canvas-1',
+        mode: 'branch',
+        startNodeId: promptNodeId,
+      });
+    });
+
+    const patchIndex = fetchMock.mock.calls.findIndex(([url, init]) =>
+      String(url).includes('/api/workflow-canvases/canvas-1') && init?.method === 'PATCH'
+    );
+    const runIndex = fetchMock.mock.calls.findIndex(([url, init]) =>
+      String(url).includes('/api/workflow-canvases/canvas-1/run') && init?.method === 'POST'
     );
 
-    expect(patchCalls).toHaveLength(0);
+    expect(patchIndex).toBeGreaterThan(-1);
+    expect(runIndex).toBeGreaterThan(patchIndex);
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
   });
 
-  it('persists title-only changes', async () => {
+  it('deletes a node directly from the hover control', async () => {
+    await renderLoadedPage();
+
+    const noteNodeId = canvasesById['canvas-1'].graph.nodes.find((node) => node.type === 'note')?.id;
+    expect(noteNodeId).toBeTruthy();
+    expect(await screen.findByTestId(`node-delete-${noteNodeId}`)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId(`node-delete-${noteNodeId}`));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`node-delete-${noteNodeId}`)).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+  });
+
+  it('uses manual save instead of autosave for title changes', async () => {
     await renderLoadedPage();
 
     const fetchMock = global.fetch as unknown as {
@@ -366,25 +696,92 @@ describe('CreateWorkflowPage', () => {
     };
     fetchMock.mockClear();
 
-    const titleInput = screen.getByDisplayValue('Workflow canvas');
-    fireEvent.change(titleInput, {
+    fireEvent.change(screen.getByLabelText(/workflow title/i), {
       target: { value: 'Updated workflow canvas' },
     });
-    fireEvent.blur(titleInput);
+
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+
+    await new Promise((resolve) => setTimeout(resolve, 950));
+
+    let patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
+      String(url).includes('/api/workflow-canvases/canvas-1') && init?.method === 'PATCH'
+    );
+    expect(patchCalls).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
-      const patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
-        String(url).includes(`/api/workflow-canvases/${canvas.id}`) && init?.method === 'PATCH'
+      patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
+        String(url).includes('/api/workflow-canvases/canvas-1') && init?.method === 'PATCH'
       );
       expect(patchCalls).toHaveLength(1);
     });
 
-    const patchCalls = fetchMock.mock.calls.filter(([url, init]) =>
-      String(url).includes(`/api/workflow-canvases/${canvas.id}`) && init?.method === 'PATCH'
-    );
-    expect(patchCalls).toHaveLength(1);
     const payload = JSON.parse(String(patchCalls[0]?.[1]?.body || '{}'));
     expect(payload.title).toBe('Updated workflow canvas');
   });
 
+  it('shows save discard cancel when switching workflows with unsaved changes', async () => {
+    await renderLoadedPage();
+
+    fireEvent.change(screen.getByLabelText(/workflow title/i), {
+      target: { value: 'Unsaved title' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /second workflow/i }));
+    expect(await screen.findByText(/save before continuing/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/save before continuing/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue('Unsaved title')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /second workflow/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^discard$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Second workflow')).toBeInTheDocument();
+    });
+  });
+
+  it('can create a new workflow from the left rail', async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /new workflow/i }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Workflow 3')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps unsaved graph edits when the same user session token refreshes', async () => {
+    const view = render(<CreateWorkflowPage />);
+    await screen.findByDisplayValue('Workflow canvas');
+    await screen.findByTestId(`node-select-${canvasesById['canvas-1']?.graph.nodes[0]?.id}`);
+
+    const leftRail = screen.getByTestId('workflow-left-rail');
+    const initialNodeCount = screen.getAllByTestId(/node-select-/).length;
+
+    fireEvent.click(within(leftRail).getByRole('button', { name: /^prompt$/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/node-select-/)).toHaveLength(initialNodeCount + 1);
+    });
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+
+    mockSession = {
+      access_token: 'refreshed-token',
+      user: { id: 'user-1' },
+    };
+    view.rerender(<CreateWorkflowPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/node-select-/)).toHaveLength(initialNodeCount + 1);
+    });
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Workflow canvas')).toBeInTheDocument();
+  });
 });

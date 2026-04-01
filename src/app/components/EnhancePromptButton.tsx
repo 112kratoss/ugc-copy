@@ -3,7 +3,10 @@
 import { useEffect, useState } from 'react';
 import { Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
-import { supabase } from '@/lib/supabase';
+import {
+    PromptEnhancementError,
+    requestPromptEnhancement,
+} from '@/app/components/enhancePromptClient';
 
 interface EnhancePromptButtonProps {
     prompt: string;
@@ -41,43 +44,27 @@ export default function EnhancePromptButton({
         setError(null);
 
         try {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) {
-                setError('Please log in to enhance prompts');
-                return;
-            }
-
-            const response = await fetch('/api/enhance-prompt', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify({ medium, selectedModel, prompt, context }),
+            const result = await requestPromptEnhancement({
+                medium,
+                selectedModel,
+                prompt,
+                context,
             });
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                if (response.status === 402) {
-                    setError('Not enough credits (2 required)');
-                } else {
-                    setError(data.error || 'Enhancement failed');
-                }
-                // Update credits even on failure (may have been refunded)
-                if (data.remainingCredits !== undefined) {
-                    onCreditsUpdate(data.remainingCredits);
-                }
-                return;
-            }
-
-            onEnhanced(data.enhancedPrompt);
-            if (data.remainingCredits !== undefined) {
-                onCreditsUpdate(data.remainingCredits);
+            onEnhanced(result.enhancedPrompt);
+            if (result.remainingCredits !== undefined) {
+                onCreditsUpdate(result.remainingCredits);
             }
         } catch (err) {
             console.error('Enhance prompt error:', err);
-            setError('Something went wrong. Please try again.');
+            if (err instanceof PromptEnhancementError) {
+                if (err.remainingCredits !== undefined) {
+                    onCreditsUpdate(err.remainingCredits);
+                }
+                setError(err.message);
+            } else {
+                setError('Something went wrong. Please try again.');
+            }
         } finally {
             setIsEnhancing(false);
         }

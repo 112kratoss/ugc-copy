@@ -314,6 +314,12 @@ test.describe('workflow builder smoke tests', () => {
     await expect(page.getByRole('textbox').first()).toHaveValue('Workflow canvas');
     await expect(videoGeneratorNode).toBeVisible();
 
+    const siteNavbarBox = await page.getByRole('banner').boundingBox();
+    const workflowHeaderBox = await page.getByTestId('workflow-canvas-header').boundingBox();
+    expect(siteNavbarBox).not.toBeNull();
+    expect(workflowHeaderBox).not.toBeNull();
+    expect(Math.abs((siteNavbarBox?.y ?? 0) + (siteNavbarBox?.height ?? 0) - (workflowHeaderBox?.y ?? 0))).toBeLessThan(2);
+
     await page.getByRole('button', { name: /^planner$/i }).click();
     await expect(page.getByTestId('planner-assistant-drawer')).toBeVisible();
     await page.keyboard.press('Escape');

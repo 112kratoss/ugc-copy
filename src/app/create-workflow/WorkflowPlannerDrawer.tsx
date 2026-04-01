@@ -184,6 +184,7 @@ function WorkflowPlannerTab({
   onInputChange,
   onGenerateBlueprint,
   onApplyBlueprint,
+  onCreateCanvasFromBlueprint,
 }: {
   plannerInput: WorkflowPlannerInput;
   plannerError: string | null;
@@ -195,13 +196,14 @@ function WorkflowPlannerTab({
   onInputChange: (field: keyof WorkflowPlannerInput, value: WorkflowPlannerInput[keyof WorkflowPlannerInput]) => void;
   onGenerateBlueprint: () => Promise<void>;
   onApplyBlueprint: () => Promise<void>;
+  onCreateCanvasFromBlueprint: () => Promise<void>;
 }) {
   const previewInput = generatedBlueprintInput ?? plannerInput;
 
   return (
     <div className="space-y-4">
       <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-50">
-        Generate a production-ready workflow plan from a campaign brief, then turn it into a brand-new canvas without replacing the graph you already have open.
+        Generate a production-ready workflow plan from a campaign brief, then apply it straight into the current draft or spin it out into a new draft when you want to branch.
       </div>
 
       <div className="grid gap-4 rounded-3xl border border-white/10 bg-white/[0.03] p-4">
@@ -268,16 +270,27 @@ function WorkflowPlannerTab({
               <PlannerSummaryCard label="Voiceover" value={generatedBlueprint.voiceover} />
             </div>
 
-            <button
-              type="button"
-              onClick={() => void onApplyBlueprint()}
-              disabled={isApplyingBlueprint || isGeneratingBlueprint}
-              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm font-medium text-sky-100 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isApplyingBlueprint ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
-              {isApplyingBlueprint ? 'Creating canvas...' : 'Create canvas from blueprint'}
-            </button>
-            <p className="mt-2 text-xs text-zinc-500">This creates a fresh saved canvas so your current workflow stays untouched.</p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void onApplyBlueprint()}
+                disabled={isApplyingBlueprint || isGeneratingBlueprint}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm font-medium text-sky-100 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isApplyingBlueprint ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
+                {isApplyingBlueprint ? 'Applying...' : 'Apply to current draft'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void onCreateCanvasFromBlueprint()}
+                disabled={isApplyingBlueprint || isGeneratingBlueprint}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Clapperboard className="h-4 w-4" />
+                Create new draft
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">Use the current draft path for iterative refinement. Create a new draft when you want a separate branch.</p>
           </div>
 
           <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
@@ -375,6 +388,7 @@ export function PlannerAssistantDrawer({
   onInputChange,
   onGenerateBlueprint,
   onApplyBlueprint,
+  onCreateCanvasFromBlueprint,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -388,6 +402,7 @@ export function PlannerAssistantDrawer({
   onInputChange: (field: keyof WorkflowPlannerInput, value: WorkflowPlannerInput[keyof WorkflowPlannerInput]) => void;
   onGenerateBlueprint: () => Promise<void>;
   onApplyBlueprint: () => Promise<void>;
+  onCreateCanvasFromBlueprint: () => Promise<void>;
 }) {
   if (!isOpen) {
     return null;
@@ -408,8 +423,8 @@ export function PlannerAssistantDrawer({
               <Bot className="h-5 w-5" />
             </div>
             <div>
-              <div className="text-lg font-semibold text-white">Workflow planner</div>
-              <div className="mt-1 text-sm text-zinc-400">Turn a campaign brief into a fresh canvas blueprint without leaving the workflow view.</div>
+              <div className="text-lg font-semibold text-white">AI Builder</div>
+              <div className="mt-1 text-sm text-zinc-400">Turn a campaign brief into a workflow blueprint, refine it, and apply it directly to the open draft.</div>
             </div>
           </div>
           <button
@@ -428,7 +443,7 @@ export function PlannerAssistantDrawer({
                 <Bot className="h-4 w-4" />
               </div>
               <div className="leading-relaxed">
-                Share the campaign brief, desired platform, and creative angle. I&apos;ll shape it into a production-ready workflow with shot prompts and a one-click canvas handoff.
+                Share the campaign brief, desired platform, and creative angle. I&apos;ll shape it into a production-ready workflow with shot prompts, media branches, and draft-ready delivery steps.
               </div>
             </div>
           </div>
@@ -445,6 +460,7 @@ export function PlannerAssistantDrawer({
             onInputChange={onInputChange}
             onGenerateBlueprint={onGenerateBlueprint}
             onApplyBlueprint={onApplyBlueprint}
+            onCreateCanvasFromBlueprint={onCreateCanvasFromBlueprint}
           />
         </div>
       </aside>

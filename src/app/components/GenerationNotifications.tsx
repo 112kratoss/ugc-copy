@@ -111,7 +111,7 @@ export default function GenerationNotifications() {
   }, []);
 
   useEffect(() => {
-    if (!session?.access_token) {
+    const resetNotificationsState = () => {
       knownStatusesRef.current = {};
       clearStatusCache();
       setNotifications([]);
@@ -120,6 +120,10 @@ export default function GenerationNotifications() {
         window.clearTimeout(timeoutId);
       });
       timeoutMapRef.current = {};
+    };
+
+    if (!session?.access_token) {
+      resetNotificationsState();
       return;
     }
 

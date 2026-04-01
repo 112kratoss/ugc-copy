@@ -6,7 +6,12 @@ import {
   type WorkflowNodeDependencyState,
   type WorkflowNodeKind,
 } from '@/lib/workflow-canvas';
-import type { CanvasFloatingPosition, PreviewMediaKind, WorkflowRunAffordance } from './workflowCanvasUiTypes';
+import type {
+  CanvasAnchoredPopupPosition,
+  CanvasFloatingPosition,
+  PreviewMediaKind,
+  WorkflowRunAffordance,
+} from './workflowCanvasUiTypes';
 
 export function areStringArraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) {
@@ -50,6 +55,40 @@ export function getCanvasFloatingPosition({
     left: Math.max(16, left),
     top: Math.max(16, top),
     width: panelWidth,
+  };
+}
+
+export function getNodeAnchoredPopupPosition({
+  canvasBounds,
+  nodeBounds,
+  popupWidth,
+  popupHeight,
+  gap = 14,
+  horizontalPadding = 16,
+  topPadding = 16,
+}: {
+  canvasBounds: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>;
+  nodeBounds: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>;
+  popupWidth: number;
+  popupHeight: number;
+  gap?: number;
+  horizontalPadding?: number;
+  topPadding?: number;
+}): CanvasAnchoredPopupPosition {
+  const canvasWidth = canvasBounds.width > 0 ? canvasBounds.width : 1280;
+  const nodeCenterX = (nodeBounds.left - canvasBounds.left) + (nodeBounds.width / 2);
+  const desiredLeft = nodeCenterX - (popupWidth / 2);
+  const maxLeft = Math.max(horizontalPadding, canvasWidth - popupWidth - horizontalPadding);
+  const left = Math.min(Math.max(horizontalPadding, desiredLeft), maxLeft);
+  const desiredTop = (nodeBounds.top - canvasBounds.top) - popupHeight - gap;
+  const top = Math.max(topPadding, desiredTop);
+  const caretLeft = Math.min(Math.max(24, nodeCenterX - left), popupWidth - 24);
+
+  return {
+    left,
+    top,
+    width: popupWidth,
+    caretLeft,
   };
 }
 

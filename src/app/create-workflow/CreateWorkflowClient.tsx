@@ -8,31 +8,24 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
-import {
-  addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
-  type Connection,
-  type EdgeChange,
-  type NodeChange,
-  type ReactFlowInstance,
-} from '@xyflow/react';
+import { addEdge, type Connection, type ReactFlowInstance } from '@xyflow/react';
 import { Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/app/components/AuthProvider';
-import {
-  createWorkflowGraphFromBlueprint,
-  type WorkflowBlueprint,
-  type WorkflowPlannerInput,
-} from '@/lib/workflow-blueprint';
 import {
   DEFAULT_VIEWPORT,
   createStarterGraph,
   createWorkflowNode,
   duplicateWorkflowSelection,
+  inspectWorkflowNodeCapabilities,
+  isRunnableNode,
   normalizeNodeData,
-  validateWorkflowConnection,
+  syncWorkflowGraphElementBindings,
+  validateWorkflowConnectionForGraph,
+  type WorkflowCanvasRunRecord,
   type WorkflowCanvasEdge,
   type WorkflowCanvasGraph,
   type WorkflowCanvasNode,
@@ -44,23 +37,27 @@ import {
 import { getClientE2EAuthState } from '@/lib/e2e-auth';
 import { supabase } from '@/lib/supabase';
 import { WorkflowCanvasChrome } from './WorkflowCanvasChrome';
-import { WORKFLOW_NODE_LIBRARY, decorateWorkflowEdge } from './WorkflowCanvasNodes';
-import { WorkflowCanvasSurface } from './WorkflowCanvasSurface';
+import { WorkflowCanvasLeftRail } from './WorkflowCanvasPanels';
 import {
-  DEFAULT_PLANNER_INPUT,
-  PlannerAssistantDrawer as WorkflowPlannerAssistantDrawer,
-} from './WorkflowPlannerDrawer';
+  WORKFLOW_NODE_LIBRARY,
+  decorateWorkflowEdge,
+  type WorkflowNodeRuntimeData,
+} from './WorkflowCanvasNodes';
+import { WorkflowCanvasSurface } from './WorkflowCanvasSurface';
+import { WorkflowCanvasInspector } from './WorkflowNodeEditors';
 import { useWorkflowCanvasCanvases } from './useWorkflowCanvasCanvases';
 import { useWorkflowCanvasContextMenu } from './useWorkflowCanvasContextMenu';
 import { useWorkflowCanvasPersistence } from './useWorkflowCanvasPersistence';
-import { useWorkflowCanvasRunState, mergePersistedRunStateIntoNodes } from './useWorkflowCanvasRunState';
+import { mergeWorkflowRunIntoNodes, useWorkflowCanvasRunState } from './useWorkflowCanvasRunState';
 import { useWorkflowCanvasSelection } from './useWorkflowCanvasSelection';
 import { useWorkflowRunPolling } from './useWorkflowRunPolling';
 import type {
+  CanvasAnchoredPopupPosition,
   CanvasSelectionState,
   PreviewMediaState,
+  WorkflowInspectorPanel,
 } from './workflowCanvasUiTypes';
-import { getNodeRunAffordance } from './workflowCanvasUiUtils';
+import { getNodeAnchoredPopupPosition, getNodeRunAffordance } from './workflowCanvasUiUtils';
 
 function areViewportsEqual(
   left: { x: number; y: number; zoom: number },
@@ -69,40 +66,116 @@ function areViewportsEqual(
   return left.x === right.x && left.y === right.y && left.zoom === right.zoom;
 }
 
+function areAnchoredPopupPositionsEqual(
+  left: CanvasAnchoredPopupPosition | null,
+  right: CanvasAnchoredPopupPosition | null
+) {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.left === right.left &&
+    left.top === right.top &&
+    left.width === right.width &&
+    left.caretLeft === right.caretLeft
+  );
+}
+
+type UnsavedDecision = 'save' | 'discard' | 'cancel';
+
+function UnsavedChangesDialog({
+  isOpen,
+  onCancel,
+  onDiscard,
+  onSave,
+  reason,
+}: {
+  isOpen: boolean;
+  onCancel: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+  reason: string;
+}) {
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]">
+        <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Unsaved changes</div>
+        <div className="mt-3 text-xl font-semibold text-white">Save before continuing?</div>
+        <div className="mt-2 text-sm leading-relaxed text-zinc-400">{reason}</div>
+
+        <div className="mt-6 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200 transition hover:bg-white/[0.06]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onDiscard}
+            className="rounded-full border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition hover:bg-rose-500/20"
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100 transition hover:bg-emerald-500/20"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CreateWorkflowClient() {
-  const { credits, session } = useAuth();
+  const router = useRouter();
+  const { credits, refreshSessionState, session, updateCredits } = useAuth();
   const e2eAuth = useMemo(() => getClientE2EAuthState(), []);
   const effectiveSession = session ?? e2eAuth?.session ?? null;
-  const effectiveCredits = credits ?? e2eAuth?.credits ?? null;
   const canvasSectionRef = useRef<HTMLElement | null>(null);
   const beforeCanvasTransitionRef = useRef<() => Promise<boolean>>(async () => true);
+  const hasUnsavedChangesRef = useRef(false);
   const syncPersistedCanvasRef = useRef<(canvas: WorkflowCanvasRecord) => void>(() => undefined);
   const resetSelectionRef = useRef<() => void>(() => undefined);
   const resetTransientUiRef = useRef<() => void>(() => undefined);
-  const clearRunStateOverlayRef = useRef<() => void>(() => undefined);
   const skipNextViewportSyncRef = useRef(false);
+  const viewportRef = useRef(DEFAULT_VIEWPORT);
+  const nodeLibrarySearchInputRef = useRef<HTMLInputElement | null>(null);
+  const clipboardRef = useRef<{
+    nodes: WorkflowCanvasNode[];
+    edges: WorkflowCanvasEdge[];
+  } | null>(null);
+  const unsavedDecisionResolverRef = useRef<((decision: UnsavedDecision) => void) | null>(null);
   const starter = useMemo(() => createStarterGraph(), []);
 
   const [error, setError] = useState<string | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [viewport, setViewport] = useState(DEFAULT_VIEWPORT);
-  const [isPlannerOpen, setIsPlannerOpen] = useState(false);
-  const [plannerInput, setPlannerInput] = useState<WorkflowPlannerInput>(DEFAULT_PLANNER_INPUT);
-  const [plannerError, setPlannerError] = useState<string | null>(null);
-  const [generatedBlueprint, setGeneratedBlueprint] = useState<WorkflowBlueprint | null>(null);
-  const [generatedBlueprintInput, setGeneratedBlueprintInput] = useState<WorkflowPlannerInput | null>(null);
-  const [remainingPlannerCredits, setRemainingPlannerCredits] = useState<number | null>(null);
-  const [isGeneratingBlueprint, setIsGeneratingBlueprint] = useState(false);
-  const [isApplyingBlueprint, setIsApplyingBlueprint] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<PreviewMediaState | null>(null);
+  const [activeInspectorPanel, setActiveInspectorPanel] = useState<WorkflowInspectorPanel | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [nodePopupPosition, setNodePopupPosition] = useState<CanvasAnchoredPopupPosition | null>(null);
   const [nodes, setNodes] = useState<WorkflowCanvasNode[]>(starter.nodes);
   const [edges, setEdges] = useState<WorkflowCanvasEdge[]>(starter.edges.map(decorateWorkflowEdge));
-  const [autosaveKey, setAutosaveKey] = useState(0);
-  const viewportRef = useRef(viewport);
+  const [changeKey, setChangeKey] = useState(0);
+  const [openNodeRunMenuId, setOpenNodeRunMenuId] = useState<string | null>(null);
+  const [unsavedReason, setUnsavedReason] = useState<string | null>(null);
 
   const markCanvasChanged = useCallback(() => {
-    setAutosaveKey((current) => current + 1);
+    setChangeKey((current) => current + 1);
   }, []);
 
   const authHeaders = useCallback(async () => {
@@ -117,17 +190,43 @@ export default function CreateWorkflowClient() {
     };
   }, [effectiveSession?.access_token]);
 
+  const graph = useMemo<WorkflowCanvasGraph>(() => ({
+    version: starter.version,
+    nodes,
+    edges,
+    viewport,
+  }), [edges, nodes, starter.version, viewport]);
+
+  const syncElementBindingNodes = useCallback((
+    nextNodes: WorkflowCanvasNode[],
+    nextEdges: WorkflowCanvasEdge[]
+  ) => syncWorkflowGraphElementBindings({
+    version: starter.version,
+    nodes: nextNodes,
+    edges: nextEdges,
+    viewport: viewportRef.current,
+  }).nodes, [starter.version]);
+
+  const {
+    applyRunUpdate,
+    clearRunStateOverlay,
+    renderNodes,
+  } = useWorkflowCanvasRunState(nodes);
+
   const syncCanvasState = useCallback((canvas: WorkflowCanvasRecord) => {
     syncPersistedCanvasRef.current(canvas);
-    setNodes(canvas.graph.nodes.map((node) => ({ ...node, selected: false })));
-    setEdges(canvas.graph.edges.map((edge) => decorateWorkflowEdge({ ...edge, selected: false })));
+    const syncedGraph = syncWorkflowGraphElementBindings(canvas.graph);
+    setNodes(syncedGraph.nodes.map((node) => ({ ...node, selected: false })));
+    setEdges(syncedGraph.edges.map((edge) => decorateWorkflowEdge({ ...edge, selected: false })));
     setViewport(canvas.graph.viewport || DEFAULT_VIEWPORT);
-    resetSelectionRef.current();
-    clearRunStateOverlayRef.current();
+    setActiveInspectorPanel(null);
     setActiveRunId(null);
+    setOpenNodeRunMenuId(null);
+    clearRunStateOverlay();
+    resetSelectionRef.current();
     setError(null);
     resetTransientUiRef.current();
-  }, []);
+  }, [clearRunStateOverlay]);
 
   const {
     activeCanvasId,
@@ -138,27 +237,20 @@ export default function CreateWorkflowClient() {
     isCanvasTransitionPending,
     isLoading,
     refreshActiveCanvasRecord,
-    replaceActiveCanvas,
     selectCanvas,
     setCanvasTitle,
     syncSavedCanvasMetadata,
   } = useWorkflowCanvasCanvases({
     authHeaders,
     beforeCanvasTransitionRef,
+    hasUnsavedChangesRef,
     onActivateCanvas: syncCanvasState,
     onError: setError,
-    sessionToken: effectiveSession?.access_token ?? null,
+    sessionUserId: effectiveSession?.user?.id ?? null,
   });
 
-  const graph = useMemo<WorkflowCanvasGraph>(() => ({
-    version: starter.version,
-    nodes,
-    edges,
-    viewport,
-  }), [edges, nodes, starter.version, viewport]);
-
   const {
-    flushActiveCanvasBeforeTransition,
+    hasUnsavedChanges,
     persistCanvas,
     saveState,
     syncPersistedCanvas,
@@ -166,43 +258,25 @@ export default function CreateWorkflowClient() {
     activeCanvasId,
     canvasTitle,
     graph,
-    autosaveKey,
+    changeKey,
     isLoading,
     authHeaders,
     onSavedCanvas: syncSavedCanvasMetadata,
-    onConflictCanvas: replaceActiveCanvas,
+    onConflictCanvas: syncCanvasState,
     onError: setError,
   });
 
-  syncPersistedCanvasRef.current = syncPersistedCanvas;
-  beforeCanvasTransitionRef.current = flushActiveCanvasBeforeTransition;
-
-  const handleNodesChange = useCallback((changes: NodeChange<WorkflowCanvasNode>[]) => {
-    const nextChanges = changes.filter((change) => change.type !== 'dimensions');
-    if (nextChanges.length > 0) {
-      setNodes((current) => applyNodeChanges(nextChanges, current));
-    }
-
-    if (changes.some((change) => change.type !== 'select' && change.type !== 'dimensions')) {
-      markCanvasChanged();
-    }
-  }, [markCanvasChanged]);
-
-  const handleEdgesChange = useCallback((changes: EdgeChange<WorkflowCanvasEdge>[]) => {
-    setEdges((current) => applyEdgeChanges(changes, current));
-    if (changes.some((change) => change.type !== 'select')) {
-      markCanvasChanged();
-    }
-  }, [markCanvasChanged]);
+  useEffect(() => {
+    hasUnsavedChangesRef.current = saveState === 'dirty' || hasUnsavedChanges();
+  }, [hasUnsavedChanges, saveState]);
 
   const {
     clearSelection: clearSelectionState,
     resetSelection,
-    selectAllElements: selectAllElementsState,
+    selectAllElements,
     selectedEdgeIds,
     selectedNodeIds,
     selection,
-    selectionCount,
     setManualSelection,
     syncSelectionFromCanvas,
   } = useWorkflowCanvasSelection({
@@ -212,80 +286,102 @@ export default function CreateWorkflowClient() {
     setEdges,
   });
 
-  resetSelectionRef.current = resetSelection;
-
-  const {
-    applyRunUpdate,
-    clearRunStateOverlay,
-    renderNodes,
-  } = useWorkflowCanvasRunState(nodes);
-
-  clearRunStateOverlayRef.current = clearRunStateOverlay;
-
-  const renderEdges = edges;
-  const renderGraph = useMemo<WorkflowCanvasGraph>(() => ({
-    version: starter.version,
-    nodes: renderNodes,
-    edges: renderEdges,
-    viewport,
-  }), [renderEdges, renderNodes, starter.version, viewport]);
-
-  const renderNodeById = useMemo(
-    () => new Map(renderNodes.map((node) => [node.id, node])),
-    [renderNodes]
-  );
-  const renderEdgeById = useMemo(
-    () => new Map(renderEdges.map((edge) => [edge.id, edge])),
-    [renderEdges]
-  );
-
   const selectedNode = useMemo(() => {
     if (selectedNodeIds.length !== 1 || selectedEdgeIds.length > 0) {
       return null;
     }
 
-    return renderNodeById.get(selectedNodeIds[0]) || null;
-  }, [renderNodeById, selectedEdgeIds.length, selectedNodeIds]);
+    return nodes.find((node) => node.id === selectedNodeIds[0]) || null;
+  }, [nodes, selectedEdgeIds.length, selectedNodeIds]);
 
   const selectedEdge = useMemo(() => {
     if (selectedEdgeIds.length !== 1 || selectedNodeIds.length > 0) {
       return null;
     }
 
-    return renderEdgeById.get(selectedEdgeIds[0]) || null;
-  }, [renderEdgeById, selectedEdgeIds, selectedNodeIds.length]);
+    return edges.find((edge) => edge.id === selectedEdgeIds[0]) || null;
+  }, [edges, selectedEdgeIds, selectedNodeIds.length]);
 
-  const selectedKind = selectedNode?.type;
+  const selectedNodeRunAffordance = useMemo(() => {
+    if (!selectedNode) {
+      return null;
+    }
+
+    return getNodeRunAffordance({
+      credits,
+      graph,
+      node: selectedNode,
+    });
+  }, [credits, graph, selectedNode]);
 
   const {
-    clearEdgeFloatingEditor,
     closeContextMenu,
     contextMenu,
-    edgeEditorPosition,
-    editorPosition,
     handleEdgeClick,
     handleEdgeContextMenu,
     handleNodeContextMenu,
     handlePaneContextMenu,
     resetCanvasTransientUi,
   } = useWorkflowCanvasContextMenu({
-    canvasSectionRef,
     reactFlowInstance,
-    nodes: renderNodes,
     selection,
-    selectedEdge,
-    selectedKind,
-    selectedNode,
     setManualSelection,
   });
 
-  resetTransientUiRef.current = resetCanvasTransientUi;
+  const handleNodeContextMenuWithCleanup = useCallback((event: ReactMouseEvent, node: WorkflowCanvasNode) => {
+    setOpenNodeRunMenuId(null);
+    handleNodeContextMenu(event, node);
+  }, [handleNodeContextMenu]);
 
-  const runAffordance = useMemo(() => getNodeRunAffordance({
-    credits: effectiveCredits,
-    graph: renderGraph,
-    node: selectedNode,
-  }), [effectiveCredits, renderGraph, selectedNode]);
+  const handleEdgeContextMenuWithCleanup = useCallback((event: ReactMouseEvent, edge: WorkflowCanvasEdge) => {
+    setOpenNodeRunMenuId(null);
+    handleEdgeContextMenu(event, edge);
+  }, [handleEdgeContextMenu]);
+
+  const handleEdgeClickWithCleanup = useCallback((event: ReactMouseEvent, edge: WorkflowCanvasEdge) => {
+    setOpenNodeRunMenuId(null);
+    handleEdgeClick(event, edge);
+  }, [handleEdgeClick]);
+
+  const handlePaneContextMenuWithCleanup = useCallback((event: MouseEvent | ReactMouseEvent) => {
+    setOpenNodeRunMenuId(null);
+    handlePaneContextMenu(event);
+  }, [handlePaneContextMenu]);
+
+  const requestUnsavedDecision = useCallback((reason: string) => new Promise<UnsavedDecision>((resolve) => {
+    unsavedDecisionResolverRef.current = resolve;
+    setUnsavedReason(reason);
+  }), []);
+
+  const resolveUnsavedDecision = useCallback((decision: UnsavedDecision) => {
+    const resolver = unsavedDecisionResolverRef.current;
+    unsavedDecisionResolverRef.current = null;
+    setUnsavedReason(null);
+    resolver?.(decision);
+  }, []);
+
+  const confirmBeforeTransition = useCallback(async (reason: string) => {
+    if (saveState === 'saving') {
+      const result = await persistCanvas(canvasTitle, graph);
+      return result.status === 'saved' || result.status === 'noop';
+    }
+
+    if (saveState !== 'dirty' && !hasUnsavedChanges()) {
+      return true;
+    }
+
+    const decision = await requestUnsavedDecision(reason);
+    if (decision === 'cancel') {
+      return false;
+    }
+
+    if (decision === 'discard') {
+      return true;
+    }
+
+    const result = await persistCanvas(canvasTitle, graph);
+    return result.status === 'saved' || result.status === 'noop';
+  }, [canvasTitle, graph, hasUnsavedChanges, persistCanvas, requestUnsavedDecision, saveState]);
 
   const openPreviewMedia = useCallback((preview: PreviewMediaState) => {
     setPreviewMedia(preview);
@@ -295,10 +391,54 @@ export default function CreateWorkflowClient() {
     setPreviewMedia(null);
   }, []);
 
+  const openNodeEditor = useCallback((nodeId: string) => {
+    setManualSelection({ nodeIds: [nodeId], edgeIds: [] });
+    setOpenNodeRunMenuId(null);
+    setActiveInspectorPanel('parameters');
+  }, [setManualSelection]);
+
   const clearSelection = useCallback(() => {
-    clearEdgeFloatingEditor();
+    setActiveInspectorPanel(null);
+    setOpenNodeRunMenuId(null);
     clearSelectionState();
-  }, [clearEdgeFloatingEditor, clearSelectionState]);
+  }, [clearSelectionState]);
+
+  const focusNodeLibrary = useCallback(() => {
+    nodeLibrarySearchInputRef.current?.focus();
+  }, []);
+
+  const handleSelectionChange = useCallback((nextSelection: CanvasSelectionState) => {
+    const nextSelectedNodeId = nextSelection.nodeIds.length === 1 && nextSelection.edgeIds.length === 0
+      ? nextSelection.nodeIds[0]
+      : null;
+    const nextSelectedEdgeId = nextSelection.edgeIds.length === 1 && nextSelection.nodeIds.length === 0
+      ? nextSelection.edgeIds[0]
+      : null;
+    const shouldKeepActivePanel = (
+      activeInspectorPanel === 'parameters' &&
+      selectedNodeIds.length === 1 &&
+      selectedEdgeIds.length === 0 &&
+      selectedNodeIds[0] === nextSelectedNodeId
+    ) || (
+      activeInspectorPanel === 'connection' &&
+      selectedEdgeIds.length === 1 &&
+      selectedNodeIds.length === 0 &&
+      selectedEdgeIds[0] === nextSelectedEdgeId
+    );
+
+    if (!shouldKeepActivePanel) {
+      setActiveInspectorPanel(null);
+    }
+
+    if (
+      openNodeRunMenuId &&
+      (nextSelection.nodeIds.length !== 1 || nextSelection.nodeIds[0] !== openNodeRunMenuId || nextSelection.edgeIds.length > 0)
+    ) {
+      setOpenNodeRunMenuId(null);
+    }
+
+    syncSelectionFromCanvas(nextSelection);
+  }, [activeInspectorPanel, openNodeRunMenuId, selectedEdgeIds, selectedNodeIds, syncSelectionFromCanvas]);
 
   const handleCanvasTitleChange = useCallback((title: string) => {
     setCanvasTitle(title);
@@ -306,8 +446,116 @@ export default function CreateWorkflowClient() {
   }, [markCanvasChanged, setCanvasTitle]);
 
   useEffect(() => {
+    syncPersistedCanvasRef.current = syncPersistedCanvas;
+  }, [syncPersistedCanvas]);
+
+  useEffect(() => {
+    resetSelectionRef.current = resetSelection;
+  }, [resetSelection]);
+
+  useEffect(() => {
+    resetTransientUiRef.current = () => {
+      setOpenNodeRunMenuId(null);
+      resetCanvasTransientUi();
+    };
+  }, [resetCanvasTransientUi]);
+
+  useEffect(() => {
+    beforeCanvasTransitionRef.current = () => confirmBeforeTransition('Save your changes before switching workflows?');
+  }, [confirmBeforeTransition]);
+
+  const handleRunUpdate = useCallback((run: WorkflowCanvasRunRecord) => {
+    applyRunUpdate(run);
+    setNodes((current) => mergeWorkflowRunIntoNodes(current, run));
+  }, [applyRunUpdate]);
+
+  const handleRunComplete = useCallback(() => {
+    setActiveRunId(null);
+    clearRunStateOverlay();
+    void refreshActiveCanvasRecord();
+    void refreshSessionState();
+  }, [clearRunStateOverlay, refreshActiveCanvasRecord, refreshSessionState]);
+
+  useWorkflowRunPolling({
+    activeCanvasId,
+    activeRunId,
+    authHeaders,
+    onRunUpdate: handleRunUpdate,
+    onRunComplete: handleRunComplete,
+  });
+
+  useEffect(() => {
+    if (window.scrollX !== 0 || window.scrollY !== 0) {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    }
+  }, []);
+
+  useEffect(() => {
     viewportRef.current = viewport;
   }, [viewport]);
+
+  useEffect(() => {
+    if (activeInspectorPanel !== 'parameters' || !selectedNode) {
+      return;
+    }
+
+    let isDisposed = false;
+    let frameId = 0;
+
+    const measurePosition = () => {
+      if (isDisposed) {
+        return;
+      }
+
+      const canvasElement = canvasSectionRef.current;
+      if (!canvasElement) {
+        frameId = window.requestAnimationFrame(measurePosition);
+        return;
+      }
+
+      const canvasBounds = canvasElement.getBoundingClientRect();
+      const flowNode = reactFlowInstance?.getNode(selectedNode.id) as
+        | {
+            position?: { x: number; y: number };
+            positionAbsolute?: { x: number; y: number };
+            measured?: { width?: number; height?: number };
+            width?: number;
+            height?: number;
+          }
+        | undefined;
+      const escapedNodeId = selectedNode.id.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+      const nodeElement = canvasElement.querySelector<HTMLElement>(`.react-flow__node[data-id="${escapedNodeId}"]`);
+      const nodeBounds = nodeElement?.getBoundingClientRect();
+      const fallbackNodePosition = flowNode?.positionAbsolute ?? flowNode?.position ?? selectedNode.position;
+      const screenPosition = reactFlowInstance?.flowToScreenPosition
+        ? reactFlowInstance.flowToScreenPosition(fallbackNodePosition)
+        : fallbackNodePosition;
+      const nextPosition = getNodeAnchoredPopupPosition({
+        canvasBounds,
+        nodeBounds: {
+          left: nodeBounds?.left ?? screenPosition.x,
+          top: nodeBounds?.top ?? screenPosition.y,
+          width: nodeBounds?.width ?? flowNode?.measured?.width ?? flowNode?.width ?? 248,
+          height: nodeBounds?.height ?? flowNode?.measured?.height ?? flowNode?.height ?? 136,
+        },
+        popupWidth: 420,
+        popupHeight: 480,
+      });
+
+      setNodePopupPosition((current) => (
+        areAnchoredPopupPositionsEqual(current, nextPosition) ? current : nextPosition
+      ));
+
+      frameId = window.requestAnimationFrame(measurePosition);
+    };
+
+    frameId = window.requestAnimationFrame(measurePosition);
+
+    return () => {
+      isDisposed = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeInspectorPanel, reactFlowInstance, selectedNode]);
 
   useEffect(() => {
     if (!reactFlowInstance) {
@@ -360,19 +608,27 @@ export default function CreateWorkflowClient() {
   }, [reactFlowInstance, viewport]);
 
   useEffect(() => {
-    if (!previewMedia) {
-      return;
-    }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setPreviewMedia(null);
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges()) {
+        return;
       }
+
+      event.preventDefault();
+      event.returnValue = '';
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [previewMedia]);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => (
+    () => {
+      if (unsavedDecisionResolverRef.current) {
+        unsavedDecisionResolverRef.current('cancel');
+        unsavedDecisionResolverRef.current = null;
+      }
+    }
+  ), []);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<WorkflowNodeData>) => {
     setNodes((current) => {
@@ -398,17 +654,27 @@ export default function CreateWorkflowClient() {
   }, [markCanvasChanged]);
 
   const handleConnect = useCallback((connection: Connection) => {
-    if (!validateWorkflowConnection(connection.sourceHandle as WorkflowHandleType | null, connection.targetHandle as WorkflowHandleType | null)) {
-      setError('That connection is not supported. Try matching prompt, image, or video handles.');
+    const validation = validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: connection.source,
+      sourceHandle: connection.sourceHandle as WorkflowHandleType | null,
+      targetNodeId: connection.target,
+      targetHandle: connection.targetHandle as WorkflowHandleType | null,
+    });
+
+    if (!validation.valid) {
+      setError(validation.message || 'That connection is not supported.');
       return;
     }
 
-    setEdges((current) => addEdge(decorateWorkflowEdge({
+    const nextEdges = addEdge(decorateWorkflowEdge({
       ...connection,
-    } as WorkflowCanvasEdge), current));
+    } as WorkflowCanvasEdge), edges);
+    setNodes(syncElementBindingNodes(graph.nodes, nextEdges));
+    setEdges(nextEdges);
     closeContextMenu();
     markCanvasChanged();
-  }, [closeContextMenu, markCanvasChanged]);
+  }, [closeContextMenu, edges, graph, markCanvasChanged, syncElementBindingNodes]);
 
   const addNode = useCallback((type: WorkflowNodeKind, position?: { x: number; y: number }) => {
     const canvasBounds = canvasSectionRef.current?.getBoundingClientRect();
@@ -416,7 +682,7 @@ export default function CreateWorkflowClient() {
       reactFlowInstance && canvasBounds
         ? reactFlowInstance.screenToFlowPosition({
             x: canvasBounds.left + Math.min(canvasBounds.width * 0.45, 520),
-            y: canvasBounds.top + Math.min(canvasBounds.height * 0.4, 360),
+            y: canvasBounds.top + Math.min(canvasBounds.height * 0.28, 220),
           })
         : { x: 300, y: 220 }
     );
@@ -428,9 +694,9 @@ export default function CreateWorkflowClient() {
     ]);
     setEdges((current) => current.map((edge) => decorateWorkflowEdge({ ...edge, selected: false })));
     syncSelectionFromCanvas({ nodeIds: [nextNode.id], edgeIds: [] });
+    setActiveInspectorPanel(null);
     resetCanvasTransientUi();
     markCanvasChanged();
-    return nextNode;
   }, [markCanvasChanged, reactFlowInstance, resetCanvasTransientUi, syncSelectionFromCanvas]);
 
   const deleteSelection = useCallback((targetSelection?: CanvasSelectionState) => {
@@ -441,100 +707,254 @@ export default function CreateWorkflowClient() {
 
     const nodeIdSet = new Set(nextSelection.nodeIds);
     const edgeIdSet = new Set(nextSelection.edgeIds);
-    setNodes((current) => current.filter((node) => !nodeIdSet.has(node.id)));
-    setEdges((current) => current.filter((edge) => (
+    const nextNodes = nodes.filter((node) => !nodeIdSet.has(node.id));
+    const nextEdges = edges.filter((edge) => (
       !edgeIdSet.has(edge.id) &&
       !nodeIdSet.has(edge.source) &&
       !nodeIdSet.has(edge.target)
-    )));
+    ));
+    setNodes(syncElementBindingNodes(nextNodes, nextEdges));
+    setEdges(nextEdges);
     syncSelectionFromCanvas({ nodeIds: [], edgeIds: [] });
+    setActiveInspectorPanel(null);
+    setOpenNodeRunMenuId(null);
     resetCanvasTransientUi();
     markCanvasChanged();
-  }, [markCanvasChanged, resetCanvasTransientUi, selection, syncSelectionFromCanvas]);
+  }, [edges, markCanvasChanged, nodes, resetCanvasTransientUi, selection, syncElementBindingNodes, syncSelectionFromCanvas]);
 
-  const duplicateSelection = useCallback((targetSelection?: CanvasSelectionState) => {
-    const nextSelection = targetSelection ?? selection;
-    if (nextSelection.nodeIds.length === 0) {
+  const handleDeleteNode = useCallback((nodeId: string) => {
+    const removedEdgeIds = edges
+      .filter((edge) => edge.source === nodeId || edge.target === nodeId)
+      .map((edge) => edge.id);
+
+    const nextNodes = nodes.filter((node) => node.id !== nodeId);
+    const didDelete = nextNodes.length !== nodes.length;
+    const nextEdges = edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+
+    setNodes(syncElementBindingNodes(nextNodes, nextEdges));
+    setEdges(nextEdges);
+
+    if (!didDelete) {
       return;
     }
 
-    const result = duplicateWorkflowSelection({ nodes, edges }, nextSelection.nodeIds);
-    setNodes((current) => [
-      ...current.map((node) => ({ ...node, selected: false })),
-      ...result.duplicatedNodes.map((node) => ({ ...node, selected: true })),
-    ]);
-    setEdges((current) => [
-      ...current.map((edge) => decorateWorkflowEdge({ ...edge, selected: false })),
+    const nextSelection = {
+      nodeIds: selectedNodeIds.filter((selectedId) => selectedId !== nodeId),
+      edgeIds: selectedEdgeIds.filter((selectedId) => !removedEdgeIds.includes(selectedId)),
+    };
+
+    setManualSelection(nextSelection);
+    setActiveInspectorPanel(null);
+    setOpenNodeRunMenuId((current) => (current === nodeId ? null : current));
+    closeContextMenu();
+    markCanvasChanged();
+  }, [closeContextMenu, edges, markCanvasChanged, nodes, selectedEdgeIds, selectedNodeIds, setManualSelection, syncElementBindingNodes]);
+
+  const handleDeleteEdge = useCallback((edgeId: string) => {
+    const nextEdges = edges.filter((edge) => edge.id !== edgeId);
+    const didDelete = nextEdges.length !== edges.length;
+    setNodes(syncElementBindingNodes(nodes, nextEdges));
+    setEdges(nextEdges);
+
+    if (!didDelete) {
+      return;
+    }
+
+    if (selectedEdgeIds.includes(edgeId)) {
+      setManualSelection({
+        nodeIds: selectedNodeIds,
+        edgeIds: selectedEdgeIds.filter((selectedId) => selectedId !== edgeId),
+      });
+      setActiveInspectorPanel(null);
+    }
+
+    setOpenNodeRunMenuId(null);
+    closeContextMenu();
+    markCanvasChanged();
+  }, [closeContextMenu, edges, markCanvasChanged, nodes, selectedEdgeIds, selectedNodeIds, setManualSelection, syncElementBindingNodes]);
+
+  const startWorkflowRun = useCallback(async (nodeId: string, mode: 'node' | 'branch') => {
+    if (!activeCanvasId || activeRunId) {
+      return;
+    }
+
+    setError(null);
+    setActiveInspectorPanel(null);
+    setOpenNodeRunMenuId(null);
+    closeContextMenu();
+    setManualSelection({ nodeIds: [nodeId], edgeIds: [] });
+
+    if (saveState === 'saving' || hasUnsavedChanges()) {
+      const saveResult = await persistCanvas(canvasTitle, graph);
+      if (saveResult.status !== 'saved' && saveResult.status !== 'noop') {
+        return;
+      }
+    }
+
+    try {
+      const response = await fetch(`/api/workflow-canvases/${activeCanvasId}/run`, {
+        method: 'POST',
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          startNodeId: nodeId,
+          mode,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to start workflow run.');
+      }
+
+      if (typeof data.runId === 'string' && data.runId.length > 0) {
+        setActiveRunId(data.runId);
+      }
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : 'Failed to start workflow run.');
+    }
+  }, [
+    activeCanvasId,
+    activeRunId,
+    authHeaders,
+    canvasTitle,
+    closeContextMenu,
+    graph,
+    hasUnsavedChanges,
+    persistCanvas,
+    saveState,
+    setManualSelection,
+  ]);
+
+  const handleRunNodeFromNode = useCallback((nodeId: string) => {
+    void startWorkflowRun(nodeId, 'node');
+  }, [startWorkflowRun]);
+
+  const handleRunBranchFromNode = useCallback((nodeId: string) => {
+    void startWorkflowRun(nodeId, 'branch');
+  }, [startWorkflowRun]);
+
+  const nodeRunStateById = useMemo(() => {
+    return Object.fromEntries(nodes.map((node) => {
+      if (node.type === 'note' || node.type === 'group') {
+        return [node.id, undefined];
+      }
+
+      const runAffordance = getNodeRunAffordance({
+        credits,
+        graph,
+        node,
+      });
+
+      return [node.id, {
+        canRunBranch: true,
+        canRunNode: isRunnableNode(node),
+        runBranchDisabled: Boolean(activeRunId) || Boolean(runAffordance?.runBranchDisabled),
+        runNodeDisabled: Boolean(activeRunId) || Boolean(runAffordance?.runNodeDisabled),
+      }];
+    }));
+  }, [activeRunId, credits, graph, nodes]);
+
+  const nodeActionRuntimeById = useMemo<Record<string, WorkflowNodeRuntimeData | undefined>>(() => {
+    return Object.fromEntries(nodes.map((node) => {
+      const runState = nodeRunStateById[node.id];
+      const runAffordance = getNodeRunAffordance({
+        credits,
+        graph,
+        node,
+      });
+      const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
+
+      return [node.id, {
+        capabilityValidation,
+        isRunControlDisabled: Boolean(activeRunId),
+        isRunMenuOpen: openNodeRunMenuId === node.id,
+        onCloseRunMenu: () => {
+          setOpenNodeRunMenuId((current) => (current === node.id ? null : current));
+        },
+        onDeleteNode: () => {
+          handleDeleteNode(node.id);
+        },
+        onOpenRunMenu: runState
+          ? () => {
+              setManualSelection({ nodeIds: [node.id], edgeIds: [] });
+              setActiveInspectorPanel(null);
+              setOpenNodeRunMenuId((current) => (current === node.id ? null : node.id));
+            }
+          : undefined,
+        onRunBranch: runState?.canRunBranch
+          ? () => {
+              handleRunBranchFromNode(node.id);
+            }
+          : undefined,
+        onRunNode: runState?.canRunNode
+          ? () => {
+              handleRunNodeFromNode(node.id);
+            }
+          : undefined,
+        runBranchDisabled: runState?.runBranchDisabled,
+        runMessage: activeRunId
+          ? 'A workflow run is already in progress.'
+          : runAffordance?.message ?? null,
+        runNodeDisabled: runState?.runNodeDisabled,
+        showPlayControl: node.type !== 'note' && node.type !== 'group',
+      }];
+    }));
+  }, [
+    activeRunId,
+    credits,
+    graph,
+    handleDeleteNode,
+    handleRunBranchFromNode,
+    handleRunNodeFromNode,
+    nodeRunStateById,
+    nodes,
+    openNodeRunMenuId,
+    setManualSelection,
+  ]);
+
+  const copySelection = useCallback((targetSelection?: CanvasSelectionState) => {
+    const nextSelection = targetSelection ?? selection;
+    if (nextSelection.nodeIds.length === 0) {
+      return false;
+    }
+
+    const nodeIdSet = new Set(nextSelection.nodeIds);
+    clipboardRef.current = {
+      nodes: nodes
+        .filter((node) => nodeIdSet.has(node.id))
+        .map((node) => ({ ...node, selected: false })),
+      edges: edges
+        .filter((edge) => nodeIdSet.has(edge.source) && nodeIdSet.has(edge.target))
+        .map((edge) => ({ ...edge, selected: false })),
+    };
+
+    return true;
+  }, [edges, nodes, selection]);
+
+  const pasteClipboard = useCallback(() => {
+    const snapshot = clipboardRef.current;
+    if (!snapshot || snapshot.nodes.length === 0) {
+      return;
+    }
+
+    const result = duplicateWorkflowSelection(snapshot, snapshot.nodes.map((node) => node.id));
+    const nextEdges = [
+      ...edges.map((edge) => decorateWorkflowEdge({ ...edge, selected: false })),
       ...result.duplicatedEdges.map((edge) => decorateWorkflowEdge({ ...edge, selected: true })),
-    ]);
+    ];
+    const nextNodes = syncElementBindingNodes([
+      ...nodes.map((node) => ({ ...node, selected: false })),
+      ...result.duplicatedNodes.map((node) => ({ ...node, selected: true })),
+    ], nextEdges);
+    setNodes(nextNodes);
+    setEdges(nextEdges);
     syncSelectionFromCanvas({
       nodeIds: result.duplicatedNodes.map((node) => node.id),
       edgeIds: result.duplicatedEdges.map((edge) => edge.id),
     });
+    setActiveInspectorPanel(null);
     resetCanvasTransientUi();
     markCanvasChanged();
-  }, [edges, markCanvasChanged, nodes, resetCanvasTransientUi, selection, syncSelectionFromCanvas]);
-
-  const selectAllElements = useCallback(() => {
-    selectAllElementsState();
-    resetCanvasTransientUi();
-  }, [resetCanvasTransientUi, selectAllElementsState]);
-
-  const updatePlannerInput = useCallback((
-    field: keyof WorkflowPlannerInput,
-    value: WorkflowPlannerInput[keyof WorkflowPlannerInput]
-  ) => {
-    setPlannerInput((current) => ({ ...current, [field]: value }));
-  }, []);
-
-  const generateBlueprint = useCallback(async () => {
-    setPlannerError(null);
-    setError(null);
-    setIsGeneratingBlueprint(true);
-
-    try {
-      const response = await fetch('/api/workflow-blueprint', {
-        method: 'POST',
-        headers: await authHeaders(),
-        body: JSON.stringify(plannerInput),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to generate workflow blueprint');
-      }
-
-      const snapshot = { ...plannerInput };
-      setGeneratedBlueprint(data.blueprint as WorkflowBlueprint);
-      setGeneratedBlueprintInput(snapshot);
-      setRemainingPlannerCredits(typeof data.remainingCredits === 'number' ? data.remainingCredits : null);
-    } catch (generationError) {
-      setPlannerError(generationError instanceof Error ? generationError.message : 'Failed to generate workflow blueprint');
-    } finally {
-      setIsGeneratingBlueprint(false);
-    }
-  }, [authHeaders, plannerInput]);
-
-  const applyBlueprintToCanvas = useCallback(async () => {
-    if (!generatedBlueprint || !generatedBlueprintInput) {
-      return;
-    }
-
-    setPlannerError(null);
-    setIsApplyingBlueprint(true);
-
-    const createdCanvas = await createCanvas({
-      title: generatedBlueprint.title,
-      graph: createWorkflowGraphFromBlueprint(generatedBlueprint, generatedBlueprintInput.aspectRatio),
-    });
-
-    if (createdCanvas) {
-      setIsPlannerOpen(false);
-    } else {
-      setPlannerError('Failed to create canvas from blueprint.');
-    }
-
-    setIsApplyingBlueprint(false);
-  }, [createCanvas, generatedBlueprint, generatedBlueprintInput]);
+  }, [edges, markCanvasChanged, nodes, resetCanvasTransientUi, syncElementBindingNodes, syncSelectionFromCanvas]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -545,26 +965,50 @@ export default function CreateWorkflowClient() {
       );
 
       if (event.key === 'Escape') {
-        event.preventDefault();
         if (previewMedia) {
+          event.preventDefault();
           setPreviewMedia(null);
           return;
         }
+
         if (contextMenu) {
+          event.preventDefault();
           closeContextMenu();
           return;
         }
-        if (isPlannerOpen) {
-          setIsPlannerOpen(false);
+
+        if (openNodeRunMenuId) {
+          event.preventDefault();
+          setOpenNodeRunMenuId(null);
           return;
         }
+
+        if (activeInspectorPanel) {
+          event.preventDefault();
+          setActiveInspectorPanel(null);
+          return;
+        }
+
         if (selection.nodeIds.length > 0 || selection.edgeIds.length > 0) {
+          event.preventDefault();
           clearSelection();
         }
         return;
       }
 
       if (isEditableTarget) {
+        return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        focusNodeLibrary();
+        return;
+      }
+
+      if (event.key === 'Enter' && selection.nodeIds.length === 1 && selection.edgeIds.length === 0) {
+        event.preventDefault();
+        openNodeEditor(selection.nodeIds[0]);
         return;
       }
 
@@ -576,11 +1020,24 @@ export default function CreateWorkflowClient() {
         return;
       }
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd') {
-        if (selection.nodeIds.length > 0) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        copySelection();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'x') {
+        if (selection.nodeIds.length > 0 || selection.edgeIds.length > 0) {
           event.preventDefault();
-          duplicateSelection();
+          copySelection();
+          deleteSelection();
         }
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        pasteClipboard();
         return;
       }
 
@@ -592,15 +1049,101 @@ export default function CreateWorkflowClient() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [clearSelection, closeContextMenu, contextMenu, deleteSelection, duplicateSelection, isPlannerOpen, previewMedia, selectAllElements, selection]);
+  }, [
+    activeInspectorPanel,
+    clearSelection,
+    closeContextMenu,
+    contextMenu,
+    copySelection,
+    deleteSelection,
+    focusNodeLibrary,
+    openNodeRunMenuId,
+    openNodeEditor,
+    pasteClipboard,
+    previewMedia,
+    selectAllElements,
+    selection,
+  ]);
 
-  const uploadAssetToBucket = useCallback(async (file: File, bucket: 'generated_images' | 'generated_videos' | 'generated_audio') => {
+  const handleNodeClick = useCallback((event: ReactMouseEvent) => {
+    event.stopPropagation();
+    closeContextMenu();
+    setOpenNodeRunMenuId(null);
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      return;
+    }
+
+    setActiveInspectorPanel(null);
+  }, [closeContextMenu]);
+
+  const handleNodeDoubleClick = useCallback((event: ReactMouseEvent, node: WorkflowCanvasNode) => {
+    event.stopPropagation();
+    closeContextMenu();
+    openNodeEditor(node.id);
+  }, [closeContextMenu, openNodeEditor]);
+
+  const handleNodeDragStart = useCallback(() => {
+    closeContextMenu();
+    setOpenNodeRunMenuId(null);
+    setActiveInspectorPanel(null);
+  }, [closeContextMenu]);
+
+  const handleCommitNodePositions = useCallback((updates: Array<{ id: string; position: { x: number; y: number } }>) => {
+    if (updates.length === 0) {
+      return;
+    }
+
+    const positionById = new Map(updates.map((update) => [update.id, update.position]));
+    let didChange = false;
+
+    setNodes((current) => {
+      const next = current.map((node) => {
+        const nextPosition = positionById.get(node.id);
+        if (!nextPosition || (node.position.x === nextPosition.x && node.position.y === nextPosition.y)) {
+          return node;
+        }
+
+        didChange = true;
+        return {
+          ...node,
+          position: nextPosition,
+        };
+      });
+
+      return didChange ? next : current;
+    });
+
+    if (didChange) {
+      markCanvasChanged();
+    }
+  }, [markCanvasChanged]);
+
+  const handleMoveEnd = useCallback((nextViewport: { x: number; y: number; zoom: number }) => {
+    if (areViewportsEqual(viewportRef.current, nextViewport)) {
+      return;
+    }
+
+    skipNextViewportSyncRef.current = true;
+    setViewport(nextViewport);
+    markCanvasChanged();
+  }, [markCanvasChanged]);
+
+  const uploadAssetToBucket = useCallback(async (
+    file: File,
+    bucket: 'generated_images' | 'generated_videos' | 'generated_audio'
+  ) => {
     const user = effectiveSession?.user ?? null;
     if (!user) {
       throw new Error('Please log in to upload media.');
     }
 
-    const extension = file.name.split('.').pop() || (bucket === 'generated_images' ? 'jpg' : bucket === 'generated_audio' ? 'mp3' : 'mp4');
+    const extension = file.name.split('.').pop() || (
+      bucket === 'generated_images'
+        ? 'jpg'
+        : bucket === 'generated_audio'
+          ? 'mp3'
+          : 'mp4'
+    );
     const filePath = `${user.id}/workflow-input-${crypto.randomUUID()}.${extension}`;
     const { error: uploadError } = await supabase.storage.from(bucket).upload(filePath, file, { upsert: true });
     if (uploadError) {
@@ -618,84 +1161,18 @@ export default function CreateWorkflowClient() {
     };
   }, [effectiveSession]);
 
-  const handleRunComplete = useCallback(async () => {
-    try {
-      const refreshedCanvas = await refreshActiveCanvasRecord();
-      if (refreshedCanvas) {
-        setNodes((current) => mergePersistedRunStateIntoNodes(current, refreshedCanvas.graph.nodes));
-      }
-    } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh workflow run');
-    } finally {
-      clearRunStateOverlay();
-      setActiveRunId(null);
-    }
-  }, [clearRunStateOverlay, refreshActiveCanvasRecord]);
-
-  useWorkflowRunPolling({
-    activeCanvasId,
-    activeRunId,
-    authHeaders,
-    onRunUpdate: applyRunUpdate,
-    onRunComplete: () => {
-      void handleRunComplete();
-    },
-  });
-
-  const runCanvas = useCallback(async (mode: 'node' | 'branch', startNodeId?: string) => {
-    const nodeId = startNodeId ?? selectedNodeIds[0];
-    if (!activeCanvasId || !nodeId) {
-      setError('Select a node to run this workflow.');
-      return;
-    }
-
-    const node = renderNodeById.get(nodeId) || null;
-    const nodeRunAffordance = getNodeRunAffordance({
-      credits: effectiveCredits,
-      graph: renderGraph,
-      node,
-    });
-    if (nodeRunAffordance?.runNodeDisabled || nodeRunAffordance?.runBranchDisabled) {
-      setError(nodeRunAffordance.message);
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/workflow-canvases/${activeCanvasId}/run`, {
-        method: 'POST',
-        headers: await authHeaders(),
-        body: JSON.stringify({
-          startNodeId: nodeId,
-          mode,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to run workflow');
-      }
-
-      clearRunStateOverlay();
-      setError(null);
-      setActiveRunId(data.runId as string);
-    } catch (runError) {
-      setError(runError instanceof Error ? runError.message : 'Failed to run workflow');
-    }
-  }, [activeCanvasId, authHeaders, clearRunStateOverlay, effectiveCredits, renderGraph, renderNodeById, selectedNodeIds]);
-
   const handlePaneClick = useCallback(() => {
     clearSelection();
     closeContextMenu();
+    setOpenNodeRunMenuId(null);
   }, [clearSelection, closeContextMenu]);
 
-  const handleMoveEnd = useCallback((nextViewport: { x: number; y: number; zoom: number }) => {
-    if (areViewportsEqual(viewportRef.current, nextViewport)) {
-      return;
+  const handleNavigateBack = useCallback(async () => {
+    const canLeave = await confirmBeforeTransition('Save your changes before leaving this workflow?');
+    if (canLeave) {
+      router.push('/create');
     }
-
-    skipNextViewportSyncRef.current = true;
-    setViewport(nextViewport);
-    markCanvasChanged();
-  }, [markCanvasChanged]);
+  }, [confirmBeforeTransition, router]);
 
   if (isLoading) {
     return (
@@ -707,112 +1184,128 @@ export default function CreateWorkflowClient() {
 
   return (
     <>
-      <div className="min-h-[calc(100vh-4rem)] bg-[#060606] text-white">
-        <div className="flex h-[calc(100vh-4rem)]">
+      <div className="h-[calc(100vh-4rem)] overflow-hidden bg-[#060606] text-white">
+        <div className="flex h-full">
           <WorkflowCanvasChrome
-            activeCanvasId={activeCanvasId}
             canvasTitle={canvasTitle}
-            canvases={canvases}
-            hasSelectedNode={Boolean(selectedNode)}
-            hasNodeSelection={selection.nodeIds.length > 0}
-            isCanvasTransitionPending={isCanvasTransitionPending}
-            nodeLibrary={WORKFLOW_NODE_LIBRARY}
-            onAddNode={addNode}
-            onCanvasTitleBlur={() => {
-              void persistCanvas();
-            }}
+            canvasOverlay={(
+              <WorkflowCanvasInspector
+                activePanel={activeInspectorPanel}
+                graph={graph}
+                nodePopupPosition={nodePopupPosition}
+                nodes={nodes}
+                onCreditsUpdate={updateCredits}
+                runAffordance={selectedNodeRunAffordance}
+                selectedEdge={selectedEdge}
+                selectedNode={selectedNode}
+                selection={selection}
+                onClearSelection={clearSelection}
+                onDeleteEdge={(edgeId) => {
+                  const targetEdgeId = edgeId ?? selectedEdge?.id;
+                  if (targetEdgeId) {
+                    handleDeleteEdge(targetEdgeId);
+                  }
+                }}
+                onDeleteNode={() => {
+                  if (selectedNode) {
+                    handleDeleteNode(selectedNode.id);
+                  }
+                }}
+                onDeleteSelection={() => deleteSelection()}
+                onDuplicateSelection={() => undefined}
+                onOpenPreview={openPreviewMedia}
+                onRunBranch={() => {
+                  if (selectedNode) {
+                    handleRunBranchFromNode(selectedNode.id);
+                  }
+                }}
+                onRunNode={() => {
+                  if (selectedNode) {
+                    handleRunNodeFromNode(selectedNode.id);
+                  }
+                }}
+                onSetError={setError}
+                onPanelChange={setActiveInspectorPanel}
+                onUpdateNode={updateNode}
+                onUploadAsset={uploadAssetToBucket}
+              />
+            )}
+            leftRail={(
+              <WorkflowCanvasLeftRail
+                activeCanvasId={activeCanvasId}
+                canvases={canvases}
+                isCanvasTransitionPending={isCanvasTransitionPending}
+                nodeLibrary={WORKFLOW_NODE_LIBRARY}
+                onAddNode={addNode}
+                onCreateCanvas={() => {
+                  void createCanvas();
+                }}
+                onDeleteCanvas={(canvasId) => {
+                  void deleteCanvas(canvasId);
+                }}
+                onSelectCanvas={(canvas) => {
+                  void selectCanvas(canvas);
+                }}
+                searchInputRef={nodeLibrarySearchInputRef}
+              />
+            )}
             onCanvasTitleChange={handleCanvasTitleChange}
-            onCreateCanvas={() => {
-              void createCanvas();
-            }}
-            onDeleteCanvas={(canvasId) => {
-              void deleteCanvas(canvasId);
-            }}
-            onDeleteSelection={() => deleteSelection()}
-            onDuplicateSelection={() => duplicateSelection()}
-            onOpenPlanner={() => setIsPlannerOpen(true)}
-            onRunBranch={() => {
-              void runCanvas('branch');
-            }}
-            onRunNode={() => {
-              void runCanvas('node');
+            onNavigateBack={() => {
+              void handleNavigateBack();
             }}
             onSave={() => {
-              void persistCanvas();
+              void persistCanvas(canvasTitle, graph);
             }}
-            onSelectCanvas={(canvas) => {
-              void selectCanvas(canvas);
-            }}
-            runAffordance={runAffordance}
             saveState={saveState}
-            selectionCount={selectionCount}
           >
             <WorkflowCanvasSurface
               canvasSectionRef={canvasSectionRef}
               contextMenu={contextMenu}
-              edgeEditorPosition={edgeEditorPosition}
-              editorPosition={editorPosition}
-              edges={renderEdges}
+              edges={edges}
               error={error}
+              nodeActionRuntimeById={nodeActionRuntimeById}
+              nodeRunStateById={nodeRunStateById}
               onAddNote={(position) => addNode('note', position)}
               onClearSelection={clearSelection}
               onCloseContextMenu={closeContextMenu}
               onClosePreview={closePreviewMedia}
+              onCommitNodePositions={handleCommitNodePositions}
               onConnect={handleConnect}
-              onDeleteEdge={(edgeId) => deleteSelection({ nodeIds: [], edgeIds: [edgeId] })}
-              onDeleteNode={(nodeId) => deleteSelection({ nodeIds: [nodeId], edgeIds: [] })}
+              onDeleteEdge={handleDeleteEdge}
               onDeleteSelection={() => deleteSelection()}
-              onDuplicateSelection={() => duplicateSelection()}
-              onEdgeClick={handleEdgeClick}
-              onEdgeContextMenu={handleEdgeContextMenu}
-              onEdgesChange={handleEdgesChange}
+              onEditNode={openNodeEditor}
+              onEdgeClick={handleEdgeClickWithCleanup}
+              onEdgeContextMenu={handleEdgeContextMenuWithCleanup}
               onFitView={() => {
                 void reactFlowInstance?.fitView({ padding: 0.16, duration: 240 });
               }}
               onMoveEnd={handleMoveEnd}
-              onNodeContextMenu={handleNodeContextMenu}
-              onNodesChange={handleNodesChange}
-              onOpenPlanner={() => setIsPlannerOpen(true)}
+              onNodeClick={handleNodeClick}
+              onNodeContextMenu={handleNodeContextMenuWithCleanup}
+              onNodeDoubleClick={handleNodeDoubleClick}
+              onNodeDragStart={handleNodeDragStart}
               onOpenPreview={openPreviewMedia}
               onPaneClick={handlePaneClick}
-              onPaneContextMenu={handlePaneContextMenu}
-              onRunBranch={(nodeId) => {
-                void runCanvas('branch', nodeId);
-              }}
-              onRunNode={(nodeId) => {
-                void runCanvas('node', nodeId);
-              }}
+              onPaneContextMenu={handlePaneContextMenuWithCleanup}
+              onRunBranch={handleRunBranchFromNode}
+              onRunNode={handleRunNodeFromNode}
               onSelectAll={selectAllElements}
-              onSelectionChange={syncSelectionFromCanvas}
-              onSetError={setError}
-              onUploadAsset={uploadAssetToBucket}
-              onUpdateNode={updateNode}
+              onSelectionChange={handleSelectionChange}
               previewMedia={previewMedia}
               renderNodes={renderNodes}
-              runAffordance={runAffordance}
-              selectedEdge={selectedEdge}
-              selectedKind={selectedKind}
-              selectedNode={selectedNode}
               selection={selection}
-              selectionCount={selectionCount}
               setReactFlowInstance={setReactFlowInstance}
             />
           </WorkflowCanvasChrome>
         </div>
       </div>
-      <WorkflowPlannerAssistantDrawer
-        isOpen={isPlannerOpen}
-        plannerInput={plannerInput}
-        plannerError={plannerError}
-        generatedBlueprint={generatedBlueprint}
-        generatedBlueprintInput={generatedBlueprintInput}
-        remainingPlannerCredits={remainingPlannerCredits}
-        isGeneratingBlueprint={isGeneratingBlueprint}
-        isApplyingBlueprint={isApplyingBlueprint}
-        onClose={() => setIsPlannerOpen(false)}
-        onInputChange={updatePlannerInput}
-        onGenerateBlueprint={generateBlueprint}
-        onApplyBlueprint={applyBlueprintToCanvas}
+
+      <UnsavedChangesDialog
+        isOpen={Boolean(unsavedReason)}
+        reason={unsavedReason ?? ''}
+        onCancel={() => resolveUnsavedDecision('cancel')}
+        onDiscard={() => resolveUnsavedDecision('discard')}
+        onSave={() => resolveUnsavedDecision('save')}
       />
     </>
   );

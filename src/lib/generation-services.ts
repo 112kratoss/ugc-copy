@@ -1,9 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  compileImagePromptWithElements,
+  compilePromptWithElements,
+  findUnknownPromptHandles,
+  normalizeSubmittedElementDescriptors,
+  type ImageElementDescriptor,
+} from '@/lib/image-elements';
+import {
   getImageCost,
   getMotionCost,
   getSoundEffectCost,
   getVideoCost,
+  getVideoElementSupport,
   isValidVideoDuration,
   getVoiceoverCost,
   IMAGE_MODELS,
@@ -19,6 +27,8 @@ import {
   type VideoModelId,
   type VoiceoverModelId,
 } from '@/lib/models';
+import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -32,6 +42,22 @@ interface StartGenerationResult {
 interface DialogueTurnInput {
   text: string;
   voice: string;
+}
+
+export interface VideoMultiPromptInput {
+  id?: string;
+  prompt: string;
+  duration: number;
+}
+
+export class GenerationServiceError extends Error {
+  status: number;
+
+  constructor(message: string, status = 400) {
+    super(message);
+    this.name = 'GenerationServiceError';
+    this.status = status;
+  }
 }
 
 interface SyncableGenerationRecord {
@@ -59,11 +85,11 @@ async function deductCreditsOrThrow(supabase: SupabaseClient, userId: string, co
   });
 
   if (error) {
-    throw new Error(error.message || 'Failed to verify credits');
+    throw new GenerationServiceError(error.message || 'Failed to verify credits', 500);
   }
 
   if (remainingCredits === -1) {
-    throw new Error(`Insufficient credits. This action costs ${cost} credits.`);
+    throw new GenerationServiceError(`Insufficient credits. This action costs ${cost} credits.`, 402);
   }
 
   return remainingCredits;
@@ -100,10 +126,44 @@ async function createKieTask(body: Record<string, unknown>, endpoint = 'https://
 function trimPrompt(prompt: string, errorMessage: string): string {
   const trimmed = prompt.trim();
   if (!trimmed) {
-    throw new Error(errorMessage);
+    throw new GenerationServiceError(errorMessage, 400);
   }
 
   return trimmed;
+}
+
+function assertGenerationRequest(condition: unknown, message: string, status = 400): asserts condition {
+  if (!condition) {
+    throw new GenerationServiceError(message, status);
+  }
+}
+
+function normalizeMediaUrlList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((url): url is string => typeof url === 'string' && url.length > 0);
+}
+
+async function resolveMediaUrls(
+  supabase: SupabaseClient,
+  urls: string[]
+): Promise<string[]> {
+  return Promise.all(urls.map((url) => resolveStoredMediaUrl(supabase, url)));
+}
+
+function normalizeMultiPromptInputs(value: VideoMultiPromptInput[] | undefined): VideoMultiPromptInput[] {
+  return (value || [])
+    .map((shot, index) => ({
+      id: typeof shot.id === 'string' && shot.id.trim() ? shot.id : `shot-${index + 1}`,
+      prompt: typeof shot.prompt === 'string' ? shot.prompt.trim() : '',
+      duration:
+        typeof shot.duration === 'number' && Number.isFinite(shot.duration)
+          ? Math.max(1, Math.min(12, Math.round(shot.duration)))
+          : 5,
+    }))
+    .filter((shot) => shot.prompt.length > 0);
 }
 
 function normalizeDialogueTurns(dialogueTurns: DialogueTurnInput[] | undefined): DialogueTurnInput[] {
@@ -347,10 +407,12 @@ export async function startImageGeneration(params: {
   prompt: string;
   model: ImageModelId;
   imageUrls?: string[];
+  elements?: ImageElementDescriptor[];
   aspectRatio?: string;
   resolution?: '1K' | '2K' | '4K';
   outputFormat?: 'jpg' | 'png';
   googleSearch?: boolean;
+  sourceGenerationId?: string | null;
 }): Promise<StartGenerationResult> {
   requireApiKey();
   const {
@@ -359,24 +421,54 @@ export async function startImageGeneration(params: {
     prompt,
     model,
     imageUrls = [],
+    elements = [],
     aspectRatio = 'auto',
     resolution = '1K',
     outputFormat = 'jpg',
     googleSearch = false,
+    sourceGenerationId = null,
   } = params;
 
   const trimmedPrompt = trimPrompt(prompt, 'A prompt is required to generate an image.');
   const modelConfig = IMAGE_MODELS[model];
   if (!modelConfig) {
-    throw new Error(`Unsupported image model: ${model}`);
+    throw new GenerationServiceError(`Unsupported image model: ${model}`, 400);
   }
+
+  const normalizedElements = normalizeSubmittedElementDescriptors(elements);
+  const resolvedImageUrls = await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
+
+  assertGenerationRequest(
+    normalizedElements.length <= resolvedImageUrls.length,
+    'Element metadata does not match the uploaded element images.'
+  );
+
+  assertGenerationRequest(
+    resolvedImageUrls.length <= modelConfig.maxImages,
+    `${modelConfig.displayName} supports up to ${modelConfig.maxImages} total reference images.`
+  );
+
+  const unknownPromptHandles = findUnknownPromptHandles(
+    trimmedPrompt,
+    normalizedElements.map((element) => element.handle)
+  );
+  if (unknownPromptHandles.length > 0) {
+    throw new GenerationServiceError(
+      `Unknown element mention${unknownPromptHandles.length > 1 ? 's' : ''}: ${unknownPromptHandles.join(', ')}`,
+      400
+    );
+  }
+
+  const compiledPrompt = normalizedElements.length > 0
+    ? compileImagePromptWithElements(trimmedPrompt, normalizedElements)
+    : trimmedPrompt;
 
   const cost = getImageCost(model, resolution);
   const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
 
   try {
     const input: Record<string, unknown> = {
-      prompt: trimmedPrompt,
+      prompt: compiledPrompt,
       aspect_ratio: aspectRatio,
       resolution,
       output_format: outputFormat,
@@ -386,8 +478,8 @@ export async function startImageGeneration(params: {
       input.google_search = googleSearch;
     }
 
-    if (imageUrls.length > 0) {
-      input.image_input = imageUrls.slice(0, modelConfig.maxImages);
+    if (resolvedImageUrls.length > 0) {
+      input.image_input = resolvedImageUrls;
     }
 
     const predictionId = await createKieTask({ model, input });
@@ -401,12 +493,20 @@ export async function startImageGeneration(params: {
         status: 'processing',
         prompt: trimmedPrompt,
         category: 'image',
+        source_generation_id: sourceGenerationId,
         workflow_settings: {
           model,
           aspectRatio,
           resolution,
           outputFormat,
           googleSearch,
+          ...(normalizedElements.length > 0
+            ? {
+                elements: normalizedElements,
+                promptMode: 'element-mentions-v1' as const,
+                compiledPrompt,
+              }
+            : {}),
         },
       })
       .select('id')
@@ -430,12 +530,22 @@ export async function startVideoGeneration(params: {
   prompt: string;
   model: VideoModelId;
   imageUrls?: string[];
+  isMultiShot?: boolean;
+  multiPrompts?: VideoMultiPromptInput[];
+  elements?: ImageElementDescriptor[];
+  elementImageUrls?: string[];
+  startImageUrl?: string | null;
+  endImageUrl?: string | null;
   mode?: string;
   aspectRatio?: string;
   sound?: boolean;
   duration?: number;
   resolution?: string;
   fixedLens?: boolean;
+  referenceMode?: 'frames' | 'elements';
+  startFrame?: RemixMediaAssetDescriptor | null;
+  endFrame?: RemixMediaAssetDescriptor | null;
+  sourceGenerationId?: string | null;
 }): Promise<StartGenerationResult> {
   requireApiKey();
   const {
@@ -444,25 +554,152 @@ export async function startVideoGeneration(params: {
     prompt,
     model,
     imageUrls = [],
+    isMultiShot = false,
+    multiPrompts,
+    elements = [],
+    elementImageUrls = [],
+    startImageUrl = null,
+    endImageUrl = null,
     mode = 'std',
     aspectRatio = '9:16',
     sound = false,
     duration = 5,
     resolution = '720p',
     fixedLens = false,
+    referenceMode = 'frames',
+    startFrame = null,
+    endFrame = null,
+    sourceGenerationId = null,
   } = params;
 
-  const trimmedPrompt = trimPrompt(prompt, 'A prompt is required to generate a video.');
   const selectedModel = VIDEO_MODELS[model];
   if (!selectedModel) {
-    throw new Error(`Unsupported video model: ${model}`);
+    throw new GenerationServiceError(`Unsupported video model: ${model}`, 400);
+  }
+
+  const rawPrompt = typeof prompt === 'string' ? prompt : '';
+  const trimmedPrompt = rawPrompt.trim();
+  const normalizedElements = normalizeSubmittedElementDescriptors(elements);
+  const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
+  const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
+  const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
+  const rawMultiPrompts = multiPrompts || [];
+  const normalizedMultiPrompts = rawMultiPrompts.map((shot, index) => ({
+    id: typeof shot.id === 'string' && shot.id.trim() ? shot.id : `shot-${index + 1}`,
+    prompt: typeof shot.prompt === 'string' ? shot.prompt.trim() : '',
+    duration:
+      typeof shot.duration === 'number' && Number.isFinite(shot.duration)
+        ? Math.max(1, Math.min(12, Math.round(shot.duration)))
+        : 5,
+  }));
+
+  if (isMultiShot) {
+    assertGenerationRequest(
+      selectedModel.supportsMultiShot,
+      `${selectedModel.displayName} does not support multi-shot video generation.`
+    );
+    assertGenerationRequest(
+      normalizedMultiPrompts.length > 0,
+      'At least one shot is required for multi-shot mode.'
+    );
+    assertGenerationRequest(
+      normalizedMultiPrompts.every((shot) => shot.prompt.length > 0),
+      'All multi-shot entries need a text prompt.'
+    );
+  } else {
+    trimPrompt(prompt, 'A prompt is required to generate a video.');
+  }
+
+  const videoElementSupport = getVideoElementSupport(model, { mode, isMultiShot });
+  if (normalizedElements.length > 0 && !videoElementSupport.enabled) {
+    throw new GenerationServiceError(
+      videoElementSupport.reason || 'Named elements are not available in this video mode.',
+      400
+    );
+  }
+
+  if (normalizedElements.length > videoElementSupport.maxElements) {
+    throw new GenerationServiceError(
+      `This video mode supports up to ${videoElementSupport.maxElements} named element${videoElementSupport.maxElements === 1 ? '' : 's'}.`,
+      400
+    );
+  }
+
+  const resolvedElementImageUrls = await resolveMediaUrls(supabase, normalizeMediaUrlList(elementImageUrls));
+  const resolvedLegacyImageUrls = await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
+  const resolvedStartImageUrl = startImageUrl ? await resolveStoredMediaUrl(supabase, startImageUrl) : null;
+  const resolvedEndImageUrl = endImageUrl ? await resolveStoredMediaUrl(supabase, endImageUrl) : null;
+
+  const frameImageUrls = [
+    resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null,
+    resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null,
+  ].filter((url): url is string => Boolean(url));
+
+  if (normalizedElements.length > 0 && frameImageUrls.length > 0) {
+    throw new GenerationServiceError(
+      'Named elements cannot be combined with start or end frames in the same run.',
+      400
+    );
+  }
+
+  if (isMultiShot && frameImageUrls.length > 1) {
+    throw new GenerationServiceError(
+      'End frames are not available in multi-shot mode.',
+      400
+    );
+  }
+
+  if (normalizedElements.length > 0 && normalizedElements.length !== resolvedElementImageUrls.length) {
+    throw new GenerationServiceError(
+      'Element metadata does not match the uploaded video element images.',
+      400
+    );
+  }
+
+  const activePrompt = isMultiShot ? '' : trimmedPrompt;
+  const unknownPromptHandles = !isMultiShot
+    ? findUnknownPromptHandles(activePrompt, normalizedElements.map((element) => element.handle))
+    : [];
+  if (unknownPromptHandles.length > 0) {
+    throw new GenerationServiceError(
+      `Unknown element mention${unknownPromptHandles.length > 1 ? 's' : ''}: ${unknownPromptHandles.join(', ')}`,
+      400
+    );
+  }
+
+  const compiledPrompt = normalizedElements.length > 0
+    ? compilePromptWithElements(trimmedPrompt, normalizedElements, 'video')
+    : trimmedPrompt;
+  const effectiveReferenceMode = normalizedElements.length > 0
+    ? 'elements'
+    : frameImageUrls.length > 0
+      ? 'frames'
+      : normalizedReferenceMode;
+
+  assertGenerationRequest(
+    (selectedModel.aspectRatios as readonly string[]).includes(aspectRatio),
+    `Unsupported aspect ratio for ${selectedModel.displayName}`
+  );
+  if (selectedModel.modeOptions.length > 0) {
+    assertGenerationRequest(
+      selectedModel.modeOptions.some((option) => option.value === mode),
+      `Unsupported mode for ${selectedModel.displayName}`
+    );
+  }
+  if (selectedModel.resolutions.length > 0) {
+    assertGenerationRequest(
+      (selectedModel.resolutions as readonly string[]).includes(resolution),
+      `Unsupported resolution for ${selectedModel.displayName}`
+    );
+  }
+  if (!isMultiShot && selectedModel.provider !== 'veo' && !isValidVideoDuration(model, duration)) {
+    throw new GenerationServiceError(`Unsupported duration for ${selectedModel.displayName}`, 400);
   }
 
   const soundEnabled = selectedModel.supportsSound ? sound : false;
-  if (selectedModel.provider !== 'veo' && !isValidVideoDuration(model, duration)) {
-    throw new Error(`Unsupported duration for ${selectedModel.displayName}`);
-  }
-  const totalDuration = selectedModel.provider === 'veo' ? selectedModel.durations[0] : duration;
+  const totalDuration = isMultiShot
+    ? normalizedMultiPrompts.reduce((total, shot) => total + (shot.duration || 0), 0)
+    : (selectedModel.provider === 'veo' ? selectedModel.durations[0] : duration);
   const cost = getVideoCost(model, {
     mode,
     sound: soundEnabled,
@@ -475,42 +712,67 @@ export async function startVideoGeneration(params: {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
     let providerModelId = selectedModel.apiModelId || mode;
+    const referenceImageUrls = normalizedElements.length > 0 ? resolvedElementImageUrls : [];
 
     if (selectedModel.provider === 'kling') {
+      const input: Record<string, unknown> = {
+        mode,
+        aspect_ratio: aspectRatio,
+        sound: soundEnabled,
+        multi_shots: Boolean(isMultiShot),
+        duration: String(totalDuration),
+      };
+
+      if (isMultiShot) {
+        input.multi_prompt = normalizedMultiPrompts.map((shot) => ({
+          prompt: shot.prompt,
+          duration: shot.duration,
+        }));
+      } else {
+        input.prompt = compiledPrompt;
+      }
+
+      if (frameImageUrls.length > 0) {
+        input.image_urls = frameImageUrls;
+      }
+
       body = {
         model: selectedModel.apiModelId,
-        input: {
-          prompt: trimmedPrompt,
-          mode,
-          aspect_ratio: aspectRatio,
-          sound: soundEnabled,
-          multi_shots: false,
-          duration: String(totalDuration),
-          ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
-        },
+        input,
       };
     } else if (selectedModel.provider === 'seedance') {
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+        duration: String(duration),
+        fixed_lens: fixedLens,
+        generate_audio: soundEnabled,
+      };
+
+      if (referenceImageUrls.length > 0) {
+        input.input_urls = referenceImageUrls;
+      } else if (frameImageUrls.length > 0) {
+        input.input_urls = frameImageUrls;
+      }
+
       body = {
         model: selectedModel.apiModelId,
-        input: {
-          prompt: trimmedPrompt,
-          aspect_ratio: aspectRatio,
-          resolution,
-          duration: String(duration),
-          fixed_lens: fixedLens,
-          generate_audio: soundEnabled,
-          ...(imageUrls.length > 0 ? { input_urls: imageUrls } : {}),
-        },
+        input,
       };
     } else {
       endpoint = 'https://api.kie.ai/api/v1/veo/generate';
       providerModelId = mode === 'veo3' ? 'veo3' : 'veo3_fast';
       body = {
-        prompt: trimmedPrompt,
+        prompt: compiledPrompt,
         model: providerModelId,
         aspectRatio,
-        generationType: imageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO',
-        ...(imageUrls.length > 0 ? { imageUrls } : {}),
+        generationType: referenceImageUrls.length > 0
+          ? 'REFERENCE_2_VIDEO'
+          : (frameImageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO'),
+        ...(referenceImageUrls.length > 0
+          ? { imageUrls: referenceImageUrls }
+          : (frameImageUrls.length > 0 ? { imageUrls: frameImageUrls } : {})),
       };
     }
 
@@ -524,16 +786,38 @@ export async function startVideoGeneration(params: {
         duration: totalDuration,
         prediction_id: predictionId,
         status: 'processing',
-        prompt: trimmedPrompt,
+        prompt: isMultiShot ? normalizedMultiPrompts[0]?.prompt || '' : trimmedPrompt,
         category: 'video',
+        source_generation_id: sourceGenerationId,
         workflow_settings: {
           model,
           mode,
           aspectRatio,
           sound: soundEnabled,
           duration: totalDuration,
+          multiPrompts: isMultiShot
+            ? normalizedMultiPrompts.map((shot) => ({
+                id: shot.id || null,
+                prompt: shot.prompt,
+                duration: shot.duration,
+              }))
+            : undefined,
           resolution,
           fixedLens,
+          referenceMode: effectiveReferenceMode,
+          ...(normalizedElements.length > 0
+            ? {
+                elements: normalizedElements,
+                promptMode: 'element-mentions-v1' as const,
+                compiledPrompt,
+              }
+            : {}),
+          ...(effectiveReferenceMode === 'frames' && normalizedStartFrame
+            ? { startFrame: normalizedStartFrame }
+            : {}),
+          ...(effectiveReferenceMode === 'frames' && normalizedEndFrame
+            ? { endFrame: normalizedEndFrame }
+            : {}),
         },
       })
       .select('id')

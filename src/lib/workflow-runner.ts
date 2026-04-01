@@ -15,8 +15,10 @@ import {
   getIncomingEdges,
   getNodeById,
   getNodeOutputUrl,
+  getResolvedWorkflowElementReferences,
   inspectWorkflowNodeDependencies,
   isRunnableNode,
+  normalizeNodeData,
   normalizeWorkflowGraph,
   resolveNodeInputs,
   updateNodeRunState,
@@ -67,6 +69,26 @@ interface GenerationStatusSnapshot {
 const WORKFLOW_MONITOR_INTERVAL_MS = 3000;
 const WORKFLOW_MONITOR_MAX_CYCLES = 240;
 const activeWorkflowRunMonitors = new Set<string>();
+
+function getRunnableElementPayload(
+  graph: WorkflowCanvasGraph,
+  nodeId: string
+) {
+  const resolvedElements = getResolvedWorkflowElementReferences(graph, nodeId);
+
+  return {
+    descriptors: resolvedElements.map((element) => ({
+      id: element.id,
+      displayName: element.displayName,
+      handle: element.handle,
+      storagePath: element.storagePath,
+      sourceGenerationId: element.sourceGenerationId,
+    })),
+    imageUrls: resolvedElements
+      .map((element) => element.storagePath || element.url || null)
+      .filter((url): url is string => Boolean(url)),
+  };
+}
 
 function buildBlockedError(message: string): RunnableExecutionResult {
   return {
@@ -349,13 +371,15 @@ async function executeRunnableNode(params: {
 
   if (node.type === 'image-generate') {
     if (!inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
-    const data = node.data as ImageGenerateNodeData;
+    const data = normalizeNodeData('image-generate', node.data as Partial<ImageGenerateNodeData>) as ImageGenerateNodeData;
+    const elementPayload = getRunnableElementPayload(graph, node.id);
     const result = await startImageGeneration({
       supabase,
       userId,
       prompt: inputs.prompt,
       model: data.model,
-      imageUrls: inputs.imageUrls,
+      imageUrls: [...elementPayload.imageUrls, ...inputs.imageUrls],
+      elements: elementPayload.descriptors,
       aspectRatio: data.aspectRatio,
       resolution: data.resolution,
       outputFormat: data.outputFormat,
@@ -375,20 +399,30 @@ async function executeRunnableNode(params: {
   }
 
   if (node.type === 'video-generate') {
-    if (!inputs.prompt) return buildBlockedError('Video generator is missing a prompt input.');
-    const data = node.data as VideoGenerateNodeData;
+    const data = normalizeNodeData('video-generate', node.data as Partial<VideoGenerateNodeData>) as VideoGenerateNodeData;
+    if (!data.isMultiShot && !inputs.prompt) {
+      return buildBlockedError('Video generator is missing a prompt input.');
+    }
+    const elementPayload = getRunnableElementPayload(graph, node.id);
     const result = await startVideoGeneration({
       supabase,
       userId,
-      prompt: inputs.prompt,
+      prompt: inputs.prompt || '',
       model: data.model,
+      isMultiShot: data.isMultiShot,
+      multiPrompts: data.multiPrompts,
+      elements: elementPayload.descriptors,
+      elementImageUrls: elementPayload.imageUrls,
       imageUrls: inputs.imageUrls,
+      startImageUrl: inputs.startFrameUrl,
+      endImageUrl: inputs.endFrameUrl,
       mode: data.mode,
       aspectRatio: data.aspectRatio,
       sound: data.sound,
       duration: data.duration,
       resolution: data.resolution,
       fixedLens: data.fixedLens,
+      referenceMode: data.referenceMode,
     });
 
     return {
@@ -404,7 +438,7 @@ async function executeRunnableNode(params: {
   }
 
   if (node.type === 'motion-generate') {
-    const data = node.data as MotionGenerateNodeData;
+    const data = normalizeNodeData('motion-generate', node.data as Partial<MotionGenerateNodeData>) as MotionGenerateNodeData;
     const prompt = inputs.prompt || 'Match the reference motion naturally while preserving character consistency.';
     const referenceVideoUrl = inputs.videoUrls[0] || null;
     const characterImageUrl = inputs.imageUrls[0] || null;

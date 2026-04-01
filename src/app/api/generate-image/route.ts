@@ -1,39 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
-import {
-    compileImagePromptWithElements,
-    findUnknownPromptHandles,
-    normalizeSubmittedElementDescriptors,
-} from '@/lib/image-elements';
+import { GenerationServiceError, startImageGeneration } from '@/lib/generation-services';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
-// Supported models and their constraints
-const MODEL_CONFIG: Record<string, { maxImages: number; supportsGoogleSearch: boolean }> = {
-    'nano-banana-2': { maxImages: 14, supportsGoogleSearch: true },
-    'nano-banana-pro': { maxImages: 8, supportsGoogleSearch: false },
-};
-
 export async function POST(request: NextRequest) {
-    let refundState: {
-        supabase: SupabaseClient;
-        userId: string;
-        amount: number;
-        shouldRefund: boolean;
-    } | null = null;
-
-    const refundIfNeeded = async () => {
-        if (!refundState?.shouldRefund) return;
-
-        await refundState.supabase.rpc('refund_credits', {
-            p_user_id: refundState.userId,
-            p_amount: refundState.amount,
-        });
-        refundState.shouldRefund = false;
-    };
-
     try {
         const {
             model = 'nano-banana-2',
@@ -47,21 +20,6 @@ export async function POST(request: NextRequest) {
             sourceGenerationId = null,
         } = await request.json();
 
-        if (!prompt || prompt.trim().length === 0) {
-            return NextResponse.json(
-                { error: 'A prompt is required to generate an image' },
-                { status: 400 }
-            );
-        }
-
-        const modelConfig = MODEL_CONFIG[model];
-        if (!modelConfig) {
-            return NextResponse.json(
-                { error: `Unsupported model: ${model}` },
-                { status: 400 }
-            );
-        }
-
         if (!KIE_API_KEY) {
             console.error('KIE_AI_API_KEY not found in environment variables');
             return NextResponse.json(
@@ -69,17 +27,6 @@ export async function POST(request: NextRequest) {
                 { status: 500 }
             );
         }
-
-        // Calculate cost based on model and resolution
-        let cost = 8;
-        if (model === 'nano-banana-pro') {
-            cost = resolution === '4K' ? 24 : 18;
-        } else {
-            // nano-banana-2
-            if (resolution === '2K') cost = 12;
-            if (resolution === '4K') cost = 18;
-        }
-
         // Initialize Supabase client with user context
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -109,156 +56,36 @@ export async function POST(request: NextRequest) {
             throw error;
         }
 
-        // Deduct Credits
-        const { data: remainingCredits, error: creditError } = await supabase.rpc('deduct_credits', {
-            p_user_id: user.id,
-            p_cost: cost
-        });
-
-        if (creditError) {
-            console.error('Error checking credits:', creditError);
-            return NextResponse.json({
-                error: 'Failed to verify credits',
-                details: creditError.message,
-            }, { status: 500 });
-        }
-
-        if (remainingCredits === -1) {
-            return NextResponse.json(
-                { error: `Insufficient credits. Image generation at ${resolution} costs ${cost} credits.` },
-                { status: 402 }
-            );
-        }
-
-        refundState = {
+        const result = await startImageGeneration({
             supabase,
             userId: user.id,
-            amount: cost,
-            shouldRefund: true,
-        };
-
-        const clampedImageUrls = Array.isArray(imageUrls)
-            ? imageUrls.filter((url): url is string => typeof url === 'string' && url.length > 0).slice(0, modelConfig.maxImages)
-            : [];
-        const normalizedElements = normalizeSubmittedElementDescriptors(elements).slice(0, modelConfig.maxImages);
-        const alignedElements = normalizedElements.slice(0, clampedImageUrls.length);
-        const trimmedPrompt = prompt.trim();
-        const unknownPromptHandles = findUnknownPromptHandles(trimmedPrompt, alignedElements.map((element) => element.handle));
-
-        if (unknownPromptHandles.length > 0) {
-            return NextResponse.json(
-                { error: `Unknown element mention${unknownPromptHandles.length > 1 ? 's' : ''}: ${unknownPromptHandles.join(', ')}` },
-                { status: 400 }
-            );
-        }
-
-        if (normalizedElements.length > 0 && clampedImageUrls.length !== normalizedElements.length) {
-            return NextResponse.json(
-                { error: 'Element metadata does not match the uploaded element images.' },
-                { status: 400 }
-            );
-        }
-
-        const compiledPrompt = compileImagePromptWithElements(trimmedPrompt, alignedElements);
-
-        // Build input object — model-specific
-        const input: Record<string, unknown> = {
-            prompt: compiledPrompt,
-            aspect_ratio: aspectRatio,
+            model,
+            prompt,
+            imageUrls,
+            elements,
+            aspectRatio,
             resolution,
-            output_format: outputFormat,
-        };
-
-        // Add google_search grounding only where supported
-        if (modelConfig.supportsGoogleSearch) {
-            input.google_search = googleSearch;
-        }
-
-        // Clamp reference images to model's limit
-        if (clampedImageUrls.length > 0) {
-            input.image_input = clampedImageUrls;
-        }
-
-        // Call Kie.ai API
-        const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${KIE_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ model, input })
+            outputFormat,
+            googleSearch,
+            sourceGenerationId: validatedSourceGenerationId,
         });
-
-        let data;
-        try {
-            data = await response.json();
-        } catch {
-            console.error('Kie.ai returned non-JSON response — refunding credits');
-            await refundIfNeeded();
-            return NextResponse.json({ error: 'Provider returned an invalid response' }, { status: 502 });
-        }
-
-        if (!response.ok || data.code !== 200) {
-            console.error('Kie.ai API rejected request — refunding credits', data);
-            await refundIfNeeded();
-            return NextResponse.json(
-                { error: data.msg || 'Provider rejected the request' },
-                { status: 502 }
-            );
-        }
-
-        const taskId = data.data.taskId;
-        refundState.shouldRefund = false;
-
-        // Log Generation
-        const { data: generationRecord, error: logError } = await supabase
-            .from('generations')
-            .insert({
-                user_id: user.id,
-                model,
-                cost,
-                prediction_id: taskId,
-                status: 'processing',
-                prompt: trimmedPrompt,
-                category: 'image',
-                source_generation_id: validatedSourceGenerationId,
-                workflow_settings: {
-                    model,
-                    aspectRatio,
-                    resolution,
-                    outputFormat,
-                    googleSearch,
-                    ...(alignedElements.length > 0
-                        ? {
-                            elements: alignedElements,
-                            promptMode: 'element-mentions-v1' as const,
-                            compiledPrompt,
-                        }
-                        : {}),
-                },
-            })
-            .select('id')
-            .single();
-
-        if (logError) {
-            console.error('Error logging generation:', logError);
-        }
 
         return NextResponse.json({
             success: true,
-            predictionId: taskId,
-            generationId: generationRecord?.id ?? null,
+            predictionId: result.predictionId,
+            generationId: result.generationId ?? null,
             status: 'processing',
-            remainingCredits,
+            remainingCredits: result.remainingCredits,
+            cost: result.cost,
         });
 
     } catch (error: unknown) {
-        await refundIfNeeded();
         console.error('Error starting image generation:', error);
         const message = error instanceof Error ? error.message : 'Failed to start image generation';
+        const status = error instanceof GenerationServiceError ? error.status : 500;
         return NextResponse.json(
             { error: message },
-            { status: 500 }
+            { status }
         );
     }
 }

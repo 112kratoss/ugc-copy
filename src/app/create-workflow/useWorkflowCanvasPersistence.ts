@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createWorkflowGraphHash, type WorkflowCanvasGraph, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
 import {
   drainQueuedCanvasSaves,
-  flushCanvasSaveBeforeTransition,
   hasCanvasSaveChanges,
   type CanvasSaveRequest,
   type CanvasSaveResult,
@@ -16,7 +15,7 @@ interface UseWorkflowCanvasPersistenceOptions {
   activeCanvasId: string | null;
   canvasTitle: string;
   graph: WorkflowCanvasGraph;
-  autosaveKey: number;
+  changeKey: number;
   isLoading: boolean;
   authHeaders: () => Promise<Record<string, string>>;
   onSavedCanvas: (canvas: WorkflowCanvasRecord) => void;
@@ -28,14 +27,13 @@ export function useWorkflowCanvasPersistence({
   activeCanvasId,
   canvasTitle,
   graph,
-  autosaveKey,
+  changeKey,
   isLoading,
   authHeaders,
   onSavedCanvas,
   onConflictCanvas,
   onError,
 }: UseWorkflowCanvasPersistenceOptions) {
-  const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
   const activeCanvasIdRef = useRef<string | null>(activeCanvasId);
   const activeCanvasRevisionRef = useRef(0);
   const canvasTitleRef = useRef(canvasTitle);
@@ -59,13 +57,6 @@ export function useWorkflowCanvasPersistence({
   useEffect(() => {
     graphRef.current = graph;
   }, [graph]);
-
-  const clearAutosaveTimer = useCallback(() => {
-    if (autosaveTimer.current) {
-      clearTimeout(autosaveTimer.current);
-      autosaveTimer.current = null;
-    }
-  }, []);
 
   const syncPersistedCanvas = useCallback((canvas: WorkflowCanvasRecord) => {
     activeCanvasIdRef.current = canvas.id;
@@ -226,55 +217,33 @@ export function useWorkflowCanvasPersistence({
     return savePromise;
   }, [buildSaveRequest, drainSaveQueue]);
 
-  const flushActiveCanvasBeforeTransition = useCallback(async () => {
+  const hasUnsavedChanges = useCallback(() => {
     const request = buildSaveRequest();
+    if (!request) {
+      return false;
+    }
 
-    return flushCanvasSaveBeforeTransition({
-      request,
-      lastPersistedTitle: lastPersistedTitleRef.current,
-      lastPersistedGraphHash: lastPersistedGraphHashRef.current,
-      currentSavePromise: savePromiseRef.current,
-      clearAutosaveTimer,
-      persistRequest: (pendingRequest) => persistCanvas(pendingRequest.title, pendingRequest.graph),
-    });
-  }, [buildSaveRequest, clearAutosaveTimer, persistCanvas]);
-
-  useEffect(() => {
-    if (!activeCanvasId || isLoading) return;
-    const request = buildSaveRequest();
-    if (!request) return;
-
-    const hasUnsavedChanges = hasCanvasSaveChanges(
+    return hasCanvasSaveChanges(
       request,
       lastPersistedTitleRef.current,
       lastPersistedGraphHashRef.current
     );
+  }, [buildSaveRequest]);
 
-    if (!hasUnsavedChanges) {
+  useEffect(() => {
+    if (!activeCanvasId || isLoading) return;
+
+    if (!hasUnsavedChanges()) {
       setSaveState(saveInFlightRef.current ? 'saving' : 'saved');
       return;
     }
 
     setSaveState('dirty');
-    clearAutosaveTimer();
-    autosaveTimer.current = setTimeout(() => {
-      void persistCanvas();
-    }, 900);
-
-    return () => {
-      clearAutosaveTimer();
-    };
-  }, [activeCanvasId, autosaveKey, buildSaveRequest, canvasTitle, clearAutosaveTimer, isLoading, persistCanvas]);
-
-  useEffect(() => {
-    return () => {
-      clearAutosaveTimer();
-    };
-  }, [clearAutosaveTimer]);
+  }, [activeCanvasId, canvasTitle, changeKey, hasUnsavedChanges, isLoading]);
 
   return {
     activeCanvasRevision,
-    flushActiveCanvasBeforeTransition,
+    hasUnsavedChanges,
     persistCanvas,
     saveState,
     syncPersistedCanvas,

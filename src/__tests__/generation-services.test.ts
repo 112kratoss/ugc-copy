@@ -216,6 +216,92 @@ describe('generation services', () => {
     expect(generations[0].duration).toBe(7);
   });
 
+  it('sends image generations with named elements first and stores compiled prompt metadata', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-advanced-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Use @hero on a clean tabletop scene.',
+      model: 'nano-banana-2',
+      imageUrls: [
+        'https://cdn.example.com/hero.jpg',
+        'https://cdn.example.com/reference.jpg',
+      ],
+      elements: [
+        {
+          id: 'element-1',
+          displayName: 'Hero bottle',
+          handle: '@hero',
+          storagePath: null,
+          sourceGenerationId: null,
+        },
+      ],
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'nano-banana-2',
+      input: {
+        image_input: [
+          'https://cdn.example.com/hero.jpg',
+          'https://cdn.example.com/reference.jpg',
+        ],
+      },
+    });
+    expect(generations[0].workflow_settings?.elements).toEqual([
+      expect.objectContaining({
+        handle: '@hero',
+        displayName: 'Hero bottle',
+      }),
+    ]);
+    expect(String(generations[0].workflow_settings?.compiledPrompt)).toContain('@hero');
+  });
+
+  it('sends Veo video generations with start and end frames', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-veo-frames-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Move smoothly between the supplied frames.',
+      model: 'veo-3.1',
+      mode: 'veo3_fast',
+      aspectRatio: '16:9',
+      startImageUrl: 'https://cdn.example.com/start.jpg',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'veo3_fast',
+      generationType: 'FIRST_AND_LAST_FRAMES_2_VIDEO',
+      imageUrls: [
+        'https://cdn.example.com/start.jpg',
+        'https://cdn.example.com/end.jpg',
+      ],
+    });
+    expect(generations[0].workflow_settings?.referenceMode).toBe('frames');
+  });
+
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);

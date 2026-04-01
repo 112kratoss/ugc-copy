@@ -14,6 +14,7 @@ type CanvasRow = {
 
 let canvasState: CanvasRow;
 let forceConditionalUpdateRace = false;
+let shouldFallbackToLegacyUpdate = false;
 let updateCalls = 0;
 
 function createSupabaseMock() {
@@ -60,6 +61,16 @@ function createSupabaseMock() {
             async maybeSingle() {
               updateCalls += 1;
 
+              if (shouldFallbackToLegacyUpdate && 'status' in values) {
+                return {
+                  data: null,
+                  error: {
+                    code: 'PGRST204',
+                    message: "Could not find the 'status' column of 'workflow_canvases' in the schema cache",
+                  },
+                };
+              }
+
               if (forceConditionalUpdateRace && typeof filters.revision === 'number') {
                 canvasState = {
                   ...canvasState,
@@ -105,7 +116,7 @@ const authenticateRequestMock = vi.fn(async () => ({
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
-  authenticateRequest: (..._args: unknown[]) => authenticateRequestMock(),
+  authenticateRequest: () => authenticateRequestMock(),
 }));
 
 describe('/api/workflow-canvases/[id] PATCH', () => {
@@ -121,6 +132,7 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
       revision: 2,
     };
     forceConditionalUpdateRace = false;
+    shouldFallbackToLegacyUpdate = false;
     updateCalls = 0;
   });
 
@@ -251,5 +263,28 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
       generationId: 'gen-123',
       outputUrl: 'https://example.com/output.jpg',
     });
+  });
+
+  it('falls back to the legacy update path when Supabase returns a schema-cache error for status', async () => {
+    shouldFallbackToLegacyUpdate = true;
+
+    const { PATCH } = await import('@/app/api/workflow-canvases/[id]/route');
+    const response = await PATCH(
+      new Request('http://localhost/api/workflow-canvases/canvas-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Legacy save',
+          graph: canvasState.graph,
+          baseRevision: canvasState.revision,
+        }),
+      }) as never,
+      { params: Promise.resolve({ id: 'canvas-1' }) }
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.canvas.title).toBe('Legacy save');
+    expect(updateCalls).toBe(2);
   });
 });

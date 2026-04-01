@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useCallback, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useMemo, useState } from 'react';
 
 import {
   createNodeRunState,
@@ -71,13 +71,46 @@ export function mergePersistedRunStateIntoNodes(
   return changed ? nextNodes : currentNodes;
 }
 
+export function mergeWorkflowRunIntoNodes(
+  currentNodes: WorkflowCanvasNode[],
+  run: WorkflowCanvasRunRecord
+): WorkflowCanvasNode[] {
+  if (!Array.isArray(run.steps) || run.steps.length === 0) {
+    return currentNodes;
+  }
+
+  let changed = false;
+
+  const nextNodes = currentNodes.map((node) => {
+    const step = run.steps?.find((candidate) => candidate.node_id === node.id);
+    if (!step) {
+      return node;
+    }
+
+    const nextRunState = createRunStateFromStep(node, step);
+    if (areRunStatesEqual(node.data.runState, nextRunState)) {
+      return node;
+    }
+
+    changed = true;
+    return {
+      ...node,
+      data: normalizeNodeData(node.type as WorkflowNodeKind, {
+        ...node.data,
+        runState: nextRunState,
+      }),
+    };
+  });
+
+  if (changed) {
+    return nextNodes;
+  }
+
+  return currentNodes;
+}
+
 export function useWorkflowCanvasRunState(nodes: WorkflowCanvasNode[]) {
   const [runStateOverlayByNodeId, setRunStateOverlayByNodeId] = useState<WorkflowRunStateOverlayByNodeId>({});
-  const renderedNodeCacheRef = useRef(new Map<string, {
-    baseNode: WorkflowCanvasNode;
-    overlayKey: string;
-    renderedNode: WorkflowCanvasNode;
-  }>());
 
   const clearRunStateOverlay = useCallback(() => {
     startTransition(() => {
@@ -120,40 +153,19 @@ export function useWorkflowCanvasRunState(nodes: WorkflowCanvasNode[]) {
   }, [nodes]);
 
   const renderNodes = useMemo(() => {
-    const validNodeIds = new Set(nodes.map((node) => node.id));
-    renderedNodeCacheRef.current.forEach((_, nodeId) => {
-      if (!validNodeIds.has(nodeId)) {
-        renderedNodeCacheRef.current.delete(nodeId);
-      }
-    });
-
     return nodes.map((node) => {
       const overlayRunState = runStateOverlayByNodeId[node.id];
       if (!overlayRunState || areRunStatesEqual(node.data.runState, overlayRunState)) {
         return node;
       }
 
-      const overlayKey = JSON.stringify(overlayRunState);
-      const cached = renderedNodeCacheRef.current.get(node.id);
-      if (cached && cached.baseNode === node && cached.overlayKey === overlayKey) {
-        return cached.renderedNode;
-      }
-
-      const renderedNode: WorkflowCanvasNode = {
+      return {
         ...node,
         data: normalizeNodeData(node.type as WorkflowNodeKind, {
           ...node.data,
           runState: overlayRunState,
         }),
       };
-
-      renderedNodeCacheRef.current.set(node.id, {
-        baseNode: node,
-        overlayKey,
-        renderedNode,
-      });
-
-      return renderedNode;
     });
   }, [nodes, runStateOverlayByNodeId]);
 
