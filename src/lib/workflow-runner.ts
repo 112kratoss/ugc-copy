@@ -15,7 +15,7 @@ import {
   getIncomingEdges,
   getNodeById,
   getNodeOutputUrl,
-  getResolvedWorkflowElementReferences,
+  getResolvedWorkflowImageReferences,
   inspectWorkflowNodeDependencies,
   isRunnableNode,
   normalizeNodeData,
@@ -74,19 +74,40 @@ function getRunnableElementPayload(
   graph: WorkflowCanvasGraph,
   nodeId: string
 ) {
-  const resolvedElements = getResolvedWorkflowElementReferences(graph, nodeId);
+  const resolvedReferences = getResolvedWorkflowImageReferences(graph, nodeId);
 
   return {
-    descriptors: resolvedElements.map((element) => ({
-      id: element.id,
-      displayName: element.displayName,
-      handle: element.handle,
-      storagePath: element.storagePath,
-      sourceGenerationId: element.sourceGenerationId,
-    })),
-    imageUrls: resolvedElements
-      .map((element) => element.storagePath || element.url || null)
-      .filter((url): url is string => Boolean(url)),
+    descriptors: resolvedReferences
+      .filter((reference) => Boolean(reference.handle))
+      .map((reference) => ({
+        id: reference.id,
+        displayName: reference.displayName,
+        handle: reference.handle!,
+        storagePath: reference.storagePath,
+        sourceGenerationId: reference.sourceGenerationId,
+      })),
+    references: resolvedReferences
+      .map((reference) => {
+        const url = reference.storagePath || reference.url || null;
+        if (!url) {
+          return null;
+        }
+
+        return {
+          url,
+          handle: reference.handle,
+          displayName: reference.displayName,
+          storagePath: reference.storagePath,
+          sourceGenerationId: reference.sourceGenerationId,
+        };
+      })
+      .filter((reference): reference is {
+        url: string;
+        handle: string | null;
+        displayName: string;
+        storagePath: string | null;
+        sourceGenerationId: string | null;
+      } => Boolean(reference)),
   };
 }
 
@@ -378,7 +399,7 @@ async function executeRunnableNode(params: {
       userId,
       prompt: inputs.prompt,
       model: data.model,
-      imageUrls: [...elementPayload.imageUrls, ...inputs.imageUrls],
+      references: elementPayload.references,
       elements: elementPayload.descriptors,
       aspectRatio: data.aspectRatio,
       resolution: data.resolution,
@@ -409,11 +430,10 @@ async function executeRunnableNode(params: {
       userId,
       prompt: inputs.prompt || '',
       model: data.model,
+      references: elementPayload.references,
       isMultiShot: data.isMultiShot,
       multiPrompts: data.multiPrompts,
       elements: elementPayload.descriptors,
-      elementImageUrls: elementPayload.imageUrls,
-      imageUrls: inputs.imageUrls,
       startImageUrl: inputs.startFrameUrl,
       endImageUrl: inputs.endFrameUrl,
       mode: data.mode,
@@ -422,7 +442,6 @@ async function executeRunnableNode(params: {
       duration: data.duration,
       resolution: data.resolution,
       fixedLens: data.fixedLens,
-      referenceMode: data.referenceMode,
     });
 
     return {
@@ -441,7 +460,7 @@ async function executeRunnableNode(params: {
     const data = normalizeNodeData('motion-generate', node.data as Partial<MotionGenerateNodeData>) as MotionGenerateNodeData;
     const prompt = inputs.prompt || 'Match the reference motion naturally while preserving character consistency.';
     const referenceVideoUrl = inputs.videoUrls[0] || null;
-    const characterImageUrl = inputs.imageUrls[0] || null;
+    const characterImageUrl = inputs.imageReferences[0]?.url || null;
 
     if (!referenceVideoUrl || !characterImageUrl) {
       return buildBlockedError('Motion control requires both an image input and a video input.');

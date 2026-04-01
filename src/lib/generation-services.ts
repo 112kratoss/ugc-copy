@@ -3,6 +3,8 @@ import {
   compileImagePromptWithElements,
   compilePromptWithElements,
   findUnknownPromptHandles,
+  isValidElementHandle,
+  normalizeElementDisplayName,
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -48,6 +50,14 @@ export interface VideoMultiPromptInput {
   id?: string;
   prompt: string;
   duration: number;
+}
+
+export interface ReferenceImageInput {
+  url: string;
+  handle?: string | null;
+  displayName?: string;
+  storagePath?: string | null;
+  sourceGenerationId?: string | null;
 }
 
 export class GenerationServiceError extends Error {
@@ -144,6 +154,58 @@ function normalizeMediaUrlList(value: unknown): string[] {
   }
 
   return value.filter((url): url is string => typeof url === 'string' && url.length > 0);
+}
+
+function normalizeReferenceHandle(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!normalized) {
+    return null;
+  }
+
+  const handle = `@${normalized}`;
+  return isValidElementHandle(handle) ? handle : null;
+}
+
+function normalizeReferenceImageInputs(value: ReferenceImageInput[] | undefined) {
+  return (value || [])
+    .map((reference, index) => {
+      if (!reference || typeof reference !== 'object') {
+        return null;
+      }
+
+      const url = typeof reference.url === 'string' ? reference.url.trim() : '';
+      if (!url) {
+        return null;
+      }
+
+      return {
+        url,
+        handle: normalizeReferenceHandle(reference.handle),
+        displayName: normalizeElementDisplayName(reference.displayName, index + 1),
+        storagePath: typeof reference.storagePath === 'string' ? reference.storagePath : null,
+        sourceGenerationId:
+          typeof reference.sourceGenerationId === 'string'
+            ? reference.sourceGenerationId
+            : null,
+      };
+    })
+    .filter((reference): reference is {
+      url: string;
+      handle: string | null;
+      displayName: string;
+      storagePath: string | null;
+      sourceGenerationId: string | null;
+    } => Boolean(reference));
 }
 
 async function resolveMediaUrls(
@@ -406,6 +468,7 @@ export async function startImageGeneration(params: {
   userId: string;
   prompt: string;
   model: ImageModelId;
+  references?: ReferenceImageInput[];
   imageUrls?: string[];
   elements?: ImageElementDescriptor[];
   aspectRatio?: string;
@@ -420,6 +483,7 @@ export async function startImageGeneration(params: {
     userId,
     prompt,
     model,
+    references,
     imageUrls = [],
     elements = [],
     aspectRatio = 'auto',
@@ -435,8 +499,24 @@ export async function startImageGeneration(params: {
     throw new GenerationServiceError(`Unsupported image model: ${model}`, 400);
   }
 
-  const normalizedElements = normalizeSubmittedElementDescriptors(elements);
-  const resolvedImageUrls = await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
+  const normalizedReferences = normalizeReferenceImageInputs(references);
+  const normalizedElements = normalizedReferences.length > 0
+    ? normalizedReferences
+      .filter((reference) => Boolean(reference.handle))
+      .map((reference, index) => ({
+        id: `reference-${index + 1}`,
+        displayName: reference.displayName,
+        handle: reference.handle!,
+        storagePath: reference.storagePath,
+        sourceGenerationId: reference.sourceGenerationId,
+      }) satisfies ImageElementDescriptor)
+    : normalizeSubmittedElementDescriptors(elements);
+  const resolvedImageUrls = await resolveMediaUrls(
+    supabase,
+    normalizedReferences.length > 0
+      ? normalizedReferences.map((reference) => reference.url)
+      : normalizeMediaUrlList(imageUrls)
+  );
 
   assertGenerationRequest(
     normalizedElements.length <= resolvedImageUrls.length,
@@ -529,6 +609,7 @@ export async function startVideoGeneration(params: {
   userId: string;
   prompt: string;
   model: VideoModelId;
+  references?: ReferenceImageInput[];
   imageUrls?: string[];
   isMultiShot?: boolean;
   multiPrompts?: VideoMultiPromptInput[];
@@ -553,6 +634,7 @@ export async function startVideoGeneration(params: {
     userId,
     prompt,
     model,
+    references,
     imageUrls = [],
     isMultiShot = false,
     multiPrompts,
@@ -579,10 +661,28 @@ export async function startVideoGeneration(params: {
 
   const rawPrompt = typeof prompt === 'string' ? prompt : '';
   const trimmedPrompt = rawPrompt.trim();
-  const normalizedElements = normalizeSubmittedElementDescriptors(elements);
+  const normalizedReferences = normalizeReferenceImageInputs(references);
+  const normalizedElements = normalizedReferences.length > 0
+    ? normalizedReferences
+      .filter((reference) => Boolean(reference.handle))
+      .map((reference, index) => ({
+        id: `reference-${index + 1}`,
+        displayName: reference.displayName,
+        handle: reference.handle!,
+        storagePath: reference.storagePath,
+        sourceGenerationId: reference.sourceGenerationId,
+      }) satisfies ImageElementDescriptor)
+    : normalizeSubmittedElementDescriptors(elements);
   const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
   const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
   const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
+  const useLegacyFrameUrls = normalizedReferences.length === 0 && (
+    normalizedReferenceMode === 'frames'
+    || Boolean(startImageUrl)
+    || Boolean(endImageUrl)
+    || Boolean(normalizedStartFrame)
+    || Boolean(normalizedEndFrame)
+  );
   const rawMultiPrompts = multiPrompts || [];
   const normalizedMultiPrompts = rawMultiPrompts.map((shot, index) => ({
     id: typeof shot.id === 'string' && shot.id.trim() ? shot.id : `shot-${index + 1}`,
@@ -611,22 +711,34 @@ export async function startVideoGeneration(params: {
   }
 
   const videoElementSupport = getVideoElementSupport(model, { mode, isMultiShot });
-  if (normalizedElements.length > 0 && !videoElementSupport.enabled) {
+  const resolvedReferenceImageUrls = normalizedReferences.length > 0
+    ? await resolveMediaUrls(supabase, normalizedReferences.map((reference) => reference.url))
+    : useLegacyFrameUrls
+      ? []
+      : await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
+  const resolvedElementImageUrls = normalizedReferences.length > 0
+    ? resolvedReferenceImageUrls.filter((_url, index) => Boolean(normalizedReferences[index]?.handle))
+    : await resolveMediaUrls(supabase, normalizeMediaUrlList(elementImageUrls));
+  const resolvedLegacyImageUrls = normalizedReferences.length > 0
+    ? []
+    : useLegacyFrameUrls
+      ? await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls))
+      : [];
+  const totalReferenceImageCount = resolvedReferenceImageUrls.length;
+
+  if (totalReferenceImageCount > 0 && !videoElementSupport.enabled) {
     throw new GenerationServiceError(
-      videoElementSupport.reason || 'Named elements are not available in this video mode.',
+      videoElementSupport.reason || 'Image references are not available in this video mode.',
       400
     );
   }
 
-  if (normalizedElements.length > videoElementSupport.maxElements) {
+  if (totalReferenceImageCount > videoElementSupport.maxElements) {
     throw new GenerationServiceError(
-      `This video mode supports up to ${videoElementSupport.maxElements} named element${videoElementSupport.maxElements === 1 ? '' : 's'}.`,
+      `This video mode supports up to ${videoElementSupport.maxElements} image reference${videoElementSupport.maxElements === 1 ? '' : 's'}.`,
       400
     );
   }
-
-  const resolvedElementImageUrls = await resolveMediaUrls(supabase, normalizeMediaUrlList(elementImageUrls));
-  const resolvedLegacyImageUrls = await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
   const resolvedStartImageUrl = startImageUrl ? await resolveStoredMediaUrl(supabase, startImageUrl) : null;
   const resolvedEndImageUrl = endImageUrl ? await resolveStoredMediaUrl(supabase, endImageUrl) : null;
 
@@ -635,9 +747,9 @@ export async function startVideoGeneration(params: {
     resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null,
   ].filter((url): url is string => Boolean(url));
 
-  if (normalizedElements.length > 0 && frameImageUrls.length > 0) {
+  if (totalReferenceImageCount > 0 && frameImageUrls.length > 0) {
     throw new GenerationServiceError(
-      'Named elements cannot be combined with start or end frames in the same run.',
+      'Image references cannot be combined with start or end frames in the same run.',
       400
     );
   }
@@ -670,8 +782,8 @@ export async function startVideoGeneration(params: {
   const compiledPrompt = normalizedElements.length > 0
     ? compilePromptWithElements(trimmedPrompt, normalizedElements, 'video')
     : trimmedPrompt;
-  const effectiveReferenceMode = normalizedElements.length > 0
-    ? 'elements'
+  const effectiveReferenceMode = totalReferenceImageCount > 0
+    ? 'references'
     : frameImageUrls.length > 0
       ? 'frames'
       : normalizedReferenceMode;
@@ -712,7 +824,7 @@ export async function startVideoGeneration(params: {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
     let providerModelId = selectedModel.apiModelId || mode;
-    const referenceImageUrls = normalizedElements.length > 0 ? resolvedElementImageUrls : [];
+    const referenceImageUrls = resolvedReferenceImageUrls;
 
     if (selectedModel.provider === 'kling') {
       const input: Record<string, unknown> = {

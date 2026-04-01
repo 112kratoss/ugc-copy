@@ -40,12 +40,19 @@ function renderInteractiveInspector(
     onCreditsUpdate?: (remainingCredits: number | null) => void;
     selectedNodeId?: string;
     onDeleteEdgeSpy?: (edgeId?: string) => void;
+    uploadAssetImpl?: (file: File, bucket: 'generated_images' | 'generated_videos' | 'generated_audio') => Promise<{ signedUrl: string; storagePath: string }>;
   }
 ) {
-  const uploadAsset = vi.fn(async () => ({
-    signedUrl: 'https://example.com/test.jpg',
-    storagePath: 'generated_images/user-1/test.jpg',
-  }));
+  const uploadAsset = vi.fn(async (file: File, bucket: 'generated_images' | 'generated_videos' | 'generated_audio') => {
+    if (options?.uploadAssetImpl) {
+      return options.uploadAssetImpl(file, bucket);
+    }
+
+    return {
+      signedUrl: `https://example.com/${file.name || 'test'}`,
+      storagePath: `${bucket}/user-1/${file.name || 'test'}`,
+    };
+  });
   const resolvedGraph = 'nodes' in initialNodeOrGraph
     ? initialNodeOrGraph
     : {
@@ -112,7 +119,10 @@ function renderInteractiveInspector(
     );
   }
 
-  return render(<Harness />);
+  return {
+    ...render(<Harness />),
+    uploadAsset,
+  };
 }
 
 describe('WorkflowNodeEditors', () => {
@@ -314,68 +324,54 @@ describe('WorkflowNodeEditors', () => {
     renderInteractiveInspector(graph, { selectedNodeId: imageNode.id });
 
     expect(screen.getByText(/capabilities & limits/i)).toBeInTheDocument();
-    expect(screen.getByText('Connected refs')).toBeInTheDocument();
+    expect(screen.getByText('Image refs')).toBeInTheDocument();
     expect(screen.getAllByText('9/8').length).toBeGreaterThan(0);
-    expect(screen.getByText(/supports up to 8 total reference images in workflows/i)).toBeInTheDocument();
+    expect(screen.getByText(/supports up to 8 total image references in workflows/i)).toBeInTheDocument();
   });
 
-  it('shows connected named elements for image generators instead of an upload widget', () => {
+  it('shows inherited source handles in image-generator references instead of inline handle editors', () => {
     const imageSource = createWorkflowNode('image-input', { x: 0, y: 0 });
     const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
     const graph = normalizeWorkflowGraph({
       nodes: [
         {
           ...imageSource,
-          data: {
+          data: normalizeNodeData('image-input', {
             ...imageSource.data,
             title: 'Hero Product',
             imageUrl: 'https://example.com/hero.png',
-          },
+            referenceHandle: '@hero_product',
+          }),
         },
         imageNode,
       ],
       edges: [
-        { id: 'element-edge', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'element-image' },
+        { id: 'image-ref', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
       ],
     });
 
     renderInteractiveInspector(graph, { selectedNodeId: imageNode.id });
 
-    expect(screen.getAllByText(/connected named elements/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^image references$/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/source:/i)).toBeInTheDocument();
     expect(screen.getByText('Hero Product')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('@hero_product')).toBeInTheDocument();
+    expect(screen.getByText('@hero_product')).toBeInTheDocument();
+    expect(screen.getByText(/^Source handle$/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/hero product handle/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/add named elements/i)).not.toBeInTheDocument();
   });
 
-  it('updates connected element handles inline for image generators', () => {
+  it('updates source-owned reference handles on image-input nodes', () => {
     const imageSource = createWorkflowNode('image-input', { x: 0, y: 0 });
-    const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
-    const graph = normalizeWorkflowGraph({
-      nodes: [
-        {
-          ...imageSource,
-          data: {
-            ...imageSource.data,
-            title: 'Hero Product',
-            imageUrl: 'https://example.com/hero.png',
-          },
-        },
-        imageNode,
-      ],
-      edges: [
-        { id: 'element-edge', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'element-image' },
-      ],
-    });
 
-    renderInteractiveInspector(graph, { selectedNodeId: imageNode.id });
+    renderInteractiveInspector(imageSource);
 
-    fireEvent.change(screen.getByLabelText(/hero product handle/i), {
-      target: { value: '@lead_product' },
+    fireEvent.change(screen.getByLabelText('Reference handle'), {
+      target: { value: 'lead_product' },
     });
 
     expect(screen.getByDisplayValue('@lead_product')).toBeInTheDocument();
-    expect(screen.getByText('@lead_product')).toBeInTheDocument();
+    expect(screen.getByText(/optional global @handle for this image source/i)).toBeInTheDocument();
   });
 
   it('removes connected named-element edges from the inspector', () => {
@@ -386,16 +382,17 @@ describe('WorkflowNodeEditors', () => {
       nodes: [
         {
           ...imageSource,
-          data: {
+          data: normalizeNodeData('image-input', {
             ...imageSource.data,
             title: 'Hero Product',
             imageUrl: 'https://example.com/hero.png',
-          },
+            referenceHandle: '@hero_product',
+          }),
         },
         imageNode,
       ],
       edges: [
-        { id: 'element-edge', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'element-image' },
+        { id: 'image-ref', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
       ],
     });
 
@@ -406,11 +403,11 @@ describe('WorkflowNodeEditors', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /disconnect/i }));
 
-    expect(onDeleteEdgeSpy).toHaveBeenCalledWith('element-edge');
-    expect(screen.queryByDisplayValue('@hero_product')).not.toBeInTheDocument();
+    expect(onDeleteEdgeSpy).toHaveBeenCalledWith('image-ref');
+    expect(screen.queryByText('@hero_product')).not.toBeInTheDocument();
   });
 
-  it('shows legacy attached elements as compatibility-only state', () => {
+  it('shows legacy handled references as compatibility-only state', () => {
     const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
     const graph = normalizeWorkflowGraph({
       nodes: [
@@ -436,7 +433,7 @@ describe('WorkflowNodeEditors', () => {
 
     renderInteractiveInspector(graph, { selectedNodeId: imageNode.id });
 
-    expect(screen.getByText(/legacy attached elements/i)).toBeInTheDocument();
+    expect(screen.getByText(/legacy handled references/i)).toBeInTheDocument();
     expect(screen.getByText('Legacy Hero')).toBeInTheDocument();
     expect(screen.getByText('@legacy_hero')).toBeInTheDocument();
   });
@@ -479,18 +476,20 @@ describe('WorkflowNodeEditors', () => {
     const graph = normalizeWorkflowGraph({
       nodes: [videoNode, imageInput],
       edges: [
-        { id: 'video-ref-1', source: imageInput.id, target: videoNode.id, sourceHandle: 'image', targetHandle: 'reference-image' },
+        { id: 'video-start-1', source: imageInput.id, target: videoNode.id, sourceHandle: 'image', targetHandle: 'start-frame' },
       ],
     });
 
     renderInteractiveInspector(graph, { selectedNodeId: videoNode.id });
 
     expect(screen.getByText(/capabilities & limits/i)).toBeInTheDocument();
+    expect(screen.getAllByText('Start frame').length).toBeGreaterThan(0);
     expect(screen.getByText('1/1')).toBeInTheDocument();
-    expect(screen.getByText(/frames mode uses graph-connected start and optional end frame inputs/i)).toBeInTheDocument();
+    expect(screen.getByText(/connect one image to Start frame, then connect another image to End frame/i)).toBeInTheDocument();
     expect(
       screen.getByText(/single-shot video uses the shared upstream prompt text unless you switch into multi-shot/i)
     ).toBeInTheDocument();
+    expect(screen.queryByText(/^Image references$/i)).not.toBeInTheDocument();
   });
 
   it('shows motion validation errors and the reference-video limit when a connected clip is too long', () => {
@@ -542,6 +541,189 @@ describe('WorkflowNodeEditors', () => {
     renderInteractiveInspector(graph, { selectedNodeId: videoInput.id });
 
     expect(screen.getByText('Detected duration: 12.4s')).toBeInTheDocument();
+  });
+
+  it('renders a custom clickable upload tile for image inputs and uploads selected files', async () => {
+    const imageInput = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const view = renderInteractiveInspector(imageInput);
+    const file = new File(['image-bytes'], 'hero.png', { type: 'image/png' });
+
+    const uploadTile = screen.getByText('Click to upload image').closest('label');
+    expect(uploadTile).toHaveClass('cursor-pointer');
+
+    fireEvent.change(screen.getByLabelText('Upload image file'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(view.uploadAsset).toHaveBeenCalledWith(file, 'generated_images');
+    });
+
+    const previewImage = view.container.querySelector('img');
+    expect(previewImage).not.toBeNull();
+    expect(previewImage?.getAttribute('src')).toContain('/api/media?');
+  });
+
+  it('renders a custom clickable upload tile for audio inputs and uploads selected files', async () => {
+    const audioInput = createWorkflowNode('audio-input', { x: 0, y: 0 });
+    const view = renderInteractiveInspector(audioInput);
+    const file = new File(['audio-bytes'], 'track.mp3', { type: 'audio/mpeg' });
+
+    const uploadTile = screen.getByText('Click to upload audio').closest('label');
+    expect(uploadTile).toHaveClass('cursor-pointer');
+
+    fireEvent.change(screen.getByLabelText('Upload audio file'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(view.uploadAsset).toHaveBeenCalledWith(file, 'generated_audio');
+    });
+
+    expect(view.container.querySelector('audio')).not.toBeNull();
+  });
+
+  it('renders a custom clickable upload tile for video inputs and keeps duration detection after upload', async () => {
+    const videoInput = createWorkflowNode('video-input', { x: 0, y: 0 });
+    const view = renderInteractiveInspector(videoInput);
+    const file = new File(['video-bytes'], 'reference.mp4', { type: 'video/mp4' });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const originalCreateElement = document.createElement.bind(document);
+
+    URL.createObjectURL = vi.fn(() => 'blob:workflow-video') as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
+
+    vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
+      if (tagName === 'video') {
+        const previewVideo = originalCreateElement('video') as HTMLVideoElement;
+        Object.defineProperty(previewVideo, 'duration', {
+          configurable: true,
+          get: () => 12.4,
+        });
+        Object.defineProperty(previewVideo, 'src', {
+          configurable: true,
+          get: () => 'blob:workflow-video',
+          set: () => {
+            setTimeout(() => {
+              previewVideo.onloadedmetadata?.(new Event('loadedmetadata'));
+            }, 0);
+          },
+        });
+        previewVideo.load = vi.fn();
+        return previewVideo;
+      }
+
+      return originalCreateElement(tagName);
+    }) as typeof document.createElement);
+
+    const uploadTile = screen.getByText('Click to upload video').closest('label');
+    expect(uploadTile).toHaveClass('cursor-pointer');
+
+    fireEvent.change(screen.getByLabelText('Upload video file'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(view.uploadAsset).toHaveBeenCalledWith(file, 'generated_videos');
+    });
+
+    expect(screen.getByText('Detected duration: 12.4s')).toBeInTheDocument();
+    expect(view.container.querySelector('video')).not.toBeNull();
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('shows workflow prompt mention suggestions for reachable handled refs and inserts the selected handle', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const handledSource = createWorkflowNode('image-input', { x: 0, y: 140 });
+    const anonymousSource = createWorkflowNode('image-input', { x: 0, y: 280 });
+    const imageNode = createWorkflowNode('image-generate', { x: 260, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...handledSource,
+          data: normalizeNodeData('image-input', {
+            ...handledSource.data,
+            title: 'Hero Product',
+            imageUrl: 'https://example.com/hero.png',
+            referenceHandle: '@hero_product',
+          }),
+        },
+        {
+          ...anonymousSource,
+          data: normalizeNodeData('image-input', {
+            ...anonymousSource.data,
+            title: 'Mood Board',
+            imageUrl: 'https://example.com/mood.png',
+          }),
+        },
+        imageNode,
+      ],
+      edges: [
+        { id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'handled-ref', source: handledSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+        { id: 'anonymous-ref', source: anonymousSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+      ],
+    });
+
+    renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
+
+    const textarea = screen.getByLabelText('Prompt') as HTMLTextAreaElement;
+    fireEvent.change(textarea, {
+      target: {
+        value: 'Describe @',
+        selectionStart: 10,
+        selectionEnd: 10,
+      },
+    });
+
+    expect(screen.getByText(/insert reference/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /insert @hero_product/i })).toBeInTheDocument();
+    expect(screen.queryByText('Mood Board')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /insert @hero_product/i }));
+
+    expect(screen.getByDisplayValue('Describe @hero_product')).toBeInTheDocument();
+  });
+
+  it('does not open workflow prompt mention suggestions when no handled refs are reachable', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageSource = createWorkflowNode('image-input', { x: 0, y: 140 });
+    const imageNode = createWorkflowNode('image-generate', { x: 260, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...imageSource,
+          data: normalizeNodeData('image-input', {
+            ...imageSource.data,
+            title: 'Mood Board',
+            imageUrl: 'https://example.com/mood.png',
+          }),
+        },
+        imageNode,
+      ],
+      edges: [
+        { id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'anonymous-ref', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+      ],
+    });
+
+    renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
+
+    fireEvent.change(screen.getByLabelText('Prompt'), {
+      target: {
+        value: 'Describe @',
+        selectionStart: 10,
+        selectionEnd: 10,
+      },
+    });
+
+    expect(screen.queryByText(/insert reference/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /insert @/i })).not.toBeInTheDocument();
   });
 
   it('disables prompt enhancement when the prompt does not feed image, video, or motion generation', () => {

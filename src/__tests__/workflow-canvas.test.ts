@@ -6,6 +6,8 @@ import {
   createWorkflowNode,
   duplicateWorkflowSelection,
   getExecutionOrder,
+  getResolvedWorkflowImageReferences,
+  getWorkflowPromptMentionCandidates,
   getPromptEnhancementTargets,
   inspectWorkflowNodeCapabilities,
   inspectWorkflowNodeDependencies,
@@ -31,14 +33,20 @@ function createImageReferenceGraph(count: number, model: 'nano-banana-2' | 'nano
           model,
         }),
       },
-      ...imageInputs,
+      ...imageInputs.map((inputNode, index) => ({
+        ...inputNode,
+        data: {
+          ...inputNode.data,
+          imageUrl: `https://example.com/ref-${index}.png`,
+        },
+      })),
     ],
     edges: imageInputs.map((inputNode, index) => ({
       id: `image-ref-${index}`,
       source: inputNode.id,
       target: imageNode.id,
       sourceHandle: 'image',
-      targetHandle: 'reference-image',
+      targetHandle: 'image-reference',
     })),
   });
 }
@@ -46,6 +54,7 @@ function createImageReferenceGraph(count: number, model: 'nano-banana-2' | 'nano
 describe('workflow canvas helpers', () => {
   it('validates supported handle pairings', () => {
     expect(validateWorkflowConnection('text', 'prompt')).toBe(true);
+    expect(validateWorkflowConnection('image', 'image-reference')).toBe(true);
     expect(validateWorkflowConnection('image', 'reference-image')).toBe(true);
     expect(validateWorkflowConnection('video', 'reference-video')).toBe(true);
     expect(validateWorkflowConnection('audio', 'reference-audio')).toBe(false);
@@ -58,7 +67,7 @@ describe('workflow canvas helpers', () => {
     expect(videoNode).toBeDefined();
     const resolved = resolveNodeInputs(graph, videoNode!.id);
     expect(resolved.prompt).toContain('UGC creator');
-    expect(resolved.imageUrls).toEqual([]);
+    expect(resolved.imageReferences).toEqual([]);
     expect(resolved.startFrameUrl).toBeNull();
   });
 
@@ -88,7 +97,7 @@ describe('workflow canvas helpers', () => {
     const capabilityValidation = inspectWorkflowNodeCapabilities(graph, videoNode);
 
     expect(resolved.startFrameUrl).toBe('https://example.com/start-frame.jpg');
-    expect(resolved.imageUrls).toEqual([]);
+    expect(resolved.imageReferences).toEqual([]);
     expect(capabilityValidation.startFrameCount).toBe(1);
   });
 
@@ -187,6 +196,133 @@ describe('workflow canvas helpers', () => {
         depth: 1,
       },
     ]);
+  });
+
+  it('returns handled prompt-mention candidates from reachable image branches', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageSource = createWorkflowNode('image-input', { x: 0, y: 120 });
+    const videoSource = createWorkflowNode('image-input', { x: 0, y: 240 });
+    const imageNode = createWorkflowNode('image-generate', { x: 260, y: 0 });
+    const videoNode = createWorkflowNode('video-generate', { x: 260, y: 220 });
+
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...imageSource,
+          data: {
+            ...imageSource.data,
+            title: 'Hero Bottle',
+            imageUrl: 'https://example.com/image-ref.png',
+            referenceHandle: '@hero',
+          },
+        },
+        {
+          ...videoSource,
+          data: {
+            ...videoSource.data,
+            title: 'Hero Performer',
+            imageUrl: 'https://example.com/video-ref.png',
+            referenceHandle: '@hero',
+          },
+        },
+        {
+          ...imageNode,
+          data: normalizeNodeData('image-generate', {
+            ...imageNode.data,
+            title: 'Poster Still',
+          }),
+        },
+        {
+          ...videoNode,
+          data: normalizeNodeData('video-generate', {
+            ...videoNode.data,
+            title: 'Launch Video',
+            model: 'seedance-1.5-pro',
+          }),
+        },
+      ],
+      edges: [
+        { id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'prompt-video', source: promptNode.id, target: videoNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'image-ref', source: imageSource.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+        { id: 'video-ref', source: videoSource.id, target: videoNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+      ],
+    });
+
+    expect(getWorkflowPromptMentionCandidates(graph, promptNode.id)).toEqual([
+      {
+        handle: '@hero',
+        displayName: 'Hero Bottle',
+        branchLabels: ['Poster Still (Nano Banana 2.0)'],
+        sourceCount: 1,
+      },
+    ]);
+  });
+
+  it('excludes frame-mode and multi-shot video branches from prompt mention candidates', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageSource = createWorkflowNode('image-input', { x: 0, y: 120 });
+    const startFrameSource = createWorkflowNode('image-input', { x: 0, y: 240 });
+    const multiShotSource = createWorkflowNode('image-input', { x: 0, y: 360 });
+    const frameVideoNode = createWorkflowNode('video-generate', { x: 260, y: 0 });
+    const multiShotVideoNode = createWorkflowNode('video-generate', { x: 260, y: 220 });
+
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...imageSource,
+          data: {
+            ...imageSource.data,
+            title: 'Ignored Performer',
+            imageUrl: 'https://example.com/ignored-ref.png',
+            referenceHandle: '@frame_actor',
+          },
+        },
+        {
+          ...startFrameSource,
+          data: {
+            ...startFrameSource.data,
+            title: 'Opening Frame',
+            imageUrl: 'https://example.com/frame.png',
+          },
+        },
+        {
+          ...multiShotSource,
+          data: {
+            ...multiShotSource.data,
+            title: 'Multi Shot Talent',
+            imageUrl: 'https://example.com/multi-shot.png',
+            referenceHandle: '@multi_actor',
+          },
+        },
+        {
+          ...frameVideoNode,
+          data: normalizeNodeData('video-generate', {
+            ...frameVideoNode.data,
+            title: 'Frame Video',
+          }),
+        },
+        {
+          ...multiShotVideoNode,
+          data: normalizeNodeData('video-generate', {
+            ...multiShotVideoNode.data,
+            title: 'Multi Shot Video',
+            isMultiShot: true,
+          }),
+        },
+      ],
+      edges: [
+        { id: 'prompt-frame-video', source: promptNode.id, target: frameVideoNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'prompt-multi-video', source: promptNode.id, target: multiShotVideoNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'frame-video-ref', source: imageSource.id, target: frameVideoNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+        { id: 'frame-video-start', source: startFrameSource.id, target: frameVideoNode.id, sourceHandle: 'image', targetHandle: 'start-frame' },
+        { id: 'multi-shot-ref', source: multiShotSource.id, target: multiShotVideoNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+      ],
+    });
+
+    expect(getWorkflowPromptMentionCandidates(graph, promptNode.id)).toEqual([]);
   });
 
   it('keeps join nodes after every reachable upstream branch', () => {
@@ -356,11 +492,11 @@ describe('workflow canvas helpers', () => {
       sourceNodeId: extraInput.id,
       sourceHandle: 'image',
       targetNodeId: imageNode!.id,
-      targetHandle: 'reference-image',
+      targetHandle: 'image-reference',
     });
 
     expect(validation.valid).toBe(false);
-    expect(validation.message).toMatch(/up to 14 total named elements and reference images/i);
+    expect(validation.message).toMatch(/up to 14 total image references/i);
   });
 
   it('creates default graph-sourced element bindings and resolves connected element inputs', () => {
@@ -392,15 +528,138 @@ describe('workflow canvas helpers', () => {
     const normalizedImageNode = graph.nodes.find((node) => node.id === imageNode.id);
     const resolved = resolveNodeInputs(graph, imageNode.id);
 
-    expect((normalizedImageNode?.data as { elementBindings?: Array<{ edgeId: string; handle: string }> }).elementBindings).toEqual([
+    expect((normalizedImageNode?.data as { referenceBindings?: Array<{ edgeId: string; handle: string | null }> }).referenceBindings).toEqual([
       { edgeId: 'element-edge', handle: '@hero_product' },
     ]);
-    expect(resolved.elementImages).toEqual([
+    expect(resolved.imageReferences).toEqual([
       expect.objectContaining({
         edgeId: 'element-edge',
         sourceNodeId: imageSource.id,
         sourceTitle: 'Hero Product',
         url: 'https://example.com/hero.png',
+      }),
+    ]);
+  });
+
+  it('prefers source-owned handles over legacy target-owned bindings for connected refs', () => {
+    const imageSource = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...imageSource,
+          data: normalizeNodeData('image-input', {
+            ...imageSource.data,
+            title: 'Hero Bottle',
+            imageUrl: 'https://example.com/hero.png',
+            referenceHandle: '@hero',
+          }),
+        },
+        {
+          ...imageNode,
+          data: normalizeNodeData('image-generate', {
+            ...imageNode.data,
+            referenceBindings: [{ edgeId: 'image-ref', handle: '@legacy_hero' }],
+          }),
+        },
+      ],
+      edges: [
+        {
+          id: 'image-ref',
+          source: imageSource.id,
+          target: imageNode.id,
+          sourceHandle: 'image',
+          targetHandle: 'image-reference',
+        },
+      ],
+    });
+
+    expect(getResolvedWorkflowImageReferences(graph, imageNode.id)).toEqual([
+      expect.objectContaining({
+        edgeId: 'image-ref',
+        handle: '@hero',
+        handleSource: 'source',
+      }),
+    ]);
+  });
+
+  it('falls back to legacy target-owned bindings when the source has no handle yet', () => {
+    const imageSource = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...imageSource,
+          data: normalizeNodeData('image-input', {
+            ...imageSource.data,
+            title: 'Hero Bottle',
+            imageUrl: 'https://example.com/hero.png',
+          }),
+        },
+        {
+          ...imageNode,
+          data: normalizeNodeData('image-generate', {
+            ...imageNode.data,
+            referenceBindings: [{ edgeId: 'image-ref', handle: '@legacy_hero' }],
+          }),
+        },
+      ],
+      edges: [
+        {
+          id: 'image-ref',
+          source: imageSource.id,
+          target: imageNode.id,
+          sourceHandle: 'image',
+          targetHandle: 'image-reference',
+        },
+      ],
+    });
+
+    expect(getResolvedWorkflowImageReferences(graph, imageNode.id)).toEqual([
+      expect.objectContaining({
+        edgeId: 'image-ref',
+        handle: '@legacy_hero',
+        handleSource: 'legacy-binding',
+      }),
+    ]);
+  });
+
+  it('uses source-owned handles from upstream image-generator outputs too', () => {
+    const upstreamImageNode = createWorkflowNode('image-generate', { x: 0, y: 0 });
+    const downstreamImageNode = createWorkflowNode('image-generate', { x: 260, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...upstreamImageNode,
+          data: normalizeNodeData('image-generate', {
+            ...upstreamImageNode.data,
+            title: 'Styled Bottle',
+            referenceHandle: '@styled_bottle',
+            runState: createNodeRunState({
+              status: 'succeeded',
+              outputUrl: 'https://example.com/styled-bottle.png',
+            }),
+          }),
+        },
+        downstreamImageNode,
+      ],
+      edges: [
+        {
+          id: 'upstream-ref',
+          source: upstreamImageNode.id,
+          target: downstreamImageNode.id,
+          sourceHandle: 'image',
+          targetHandle: 'image-reference',
+        },
+      ],
+    });
+
+    expect(getResolvedWorkflowImageReferences(graph, downstreamImageNode.id)).toEqual([
+      expect.objectContaining({
+        edgeId: 'upstream-ref',
+        handle: '@styled_bottle',
+        handleSource: 'source',
+        displayName: 'Styled Bottle',
       }),
     ]);
   });
@@ -415,14 +674,14 @@ describe('workflow canvas helpers', () => {
     expect(capabilityValidation.isValid).toBe(false);
     expect(capabilityValidation.referenceImageCount).toBe(9);
     expect(capabilityValidation.referenceImageLimit).toBe(8);
-    expect(capabilityValidation.issues[0]?.message).toMatch(/up to 8 total reference images/i);
+    expect(capabilityValidation.issues[0]?.message).toMatch(/up to 8 total image references/i);
 
     const dependencyState = inspectWorkflowNodeDependencies(graph, imageNode!);
     expect(dependencyState.kind).toBe('blocked');
-    expect(dependencyState.message).toMatch(/remove extra named elements or image connections/i);
+    expect(dependencyState.message).toMatch(/remove extra references/i);
   });
 
-  it('validates prompt handles against connected named-element bindings', () => {
+  it('validates prompt handles against connected source-owned reference handles', () => {
     const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
     const sourceImage = createWorkflowNode('image-input', { x: 0, y: 120 });
     const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
@@ -441,13 +700,14 @@ describe('workflow canvas helpers', () => {
             ...sourceImage.data,
             title: 'Hero',
             imageUrl: 'https://example.com/hero.png',
+            referenceHandle: '@hero',
           },
         },
         imageNode,
       ],
       edges: [
         { id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
-        { id: 'element-edge', source: sourceImage.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'element-image' },
+        { id: 'image-ref', source: sourceImage.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
       ],
     });
 
@@ -456,36 +716,44 @@ describe('workflow canvas helpers', () => {
     expect(capabilityValidation.namedElementCount).toBe(1);
   });
 
-  it('rejects a second reference image on workflow video nodes', () => {
-    const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+  it('flags duplicate source-owned handles only on the affected generator node', () => {
     const firstImage = createWorkflowNode('image-input', { x: 0, y: 0 });
-    const secondImage = createWorkflowNode('image-input', { x: 0, y: 120 });
+    const secondImage = createWorkflowNode('image-input', { x: 0, y: 140 });
+    const imageNode = createWorkflowNode('image-generate', { x: 260, y: 0 });
+    const unrelatedImageNode = createWorkflowNode('image-generate', { x: 260, y: 220 });
     const graph = normalizeWorkflowGraph({
-      nodes: [videoNode, firstImage, secondImage],
-      edges: [
+      nodes: [
         {
-          id: 'video-ref-1',
-          source: firstImage.id,
-          target: videoNode.id,
-          sourceHandle: 'image',
-          targetHandle: 'reference-image',
+          ...firstImage,
+          data: normalizeNodeData('image-input', {
+            ...firstImage.data,
+            imageUrl: 'https://example.com/hero-a.png',
+            referenceHandle: '@hero',
+          }),
         },
+        {
+          ...secondImage,
+          data: normalizeNodeData('image-input', {
+            ...secondImage.data,
+            imageUrl: 'https://example.com/hero-b.png',
+            referenceHandle: '@hero',
+          }),
+        },
+        imageNode,
+        unrelatedImageNode,
+      ],
+      edges: [
+        { id: 'image-ref-1', source: firstImage.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+        { id: 'image-ref-2', source: secondImage.id, target: imageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
+        { id: 'image-ref-3', source: firstImage.id, target: unrelatedImageNode.id, sourceHandle: 'image', targetHandle: 'image-reference' },
       ],
     });
 
-    const validation = validateWorkflowConnectionForGraph({
-      graph,
-      sourceNodeId: secondImage.id,
-      sourceHandle: 'image',
-      targetNodeId: videoNode.id,
-      targetHandle: 'reference-image',
-    });
-
-    expect(validation.valid).toBe(false);
-    expect(validation.message).toMatch(/only 1 start frame/i);
+    expect(inspectWorkflowNodeCapabilities(graph, imageNode).issues.map((issue) => issue.code)).toContain('duplicate-element-handles');
+    expect(inspectWorkflowNodeCapabilities(graph, unrelatedImageNode).issues.map((issue) => issue.code)).not.toContain('duplicate-element-handles');
   });
 
-  it('rejects connected named elements on workflow video nodes until named-elements mode is active', () => {
+  it('rejects new general image-reference connections on workflow video nodes', () => {
     const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
     const sourceImage = createWorkflowNode('image-input', { x: 0, y: 0 });
     const graph = normalizeWorkflowGraph({
@@ -498,11 +766,39 @@ describe('workflow canvas helpers', () => {
       sourceNodeId: sourceImage.id,
       sourceHandle: 'image',
       targetNodeId: videoNode.id,
-      targetHandle: 'element-image',
+      targetHandle: 'image-reference',
     });
 
     expect(validation.valid).toBe(false);
-    expect(validation.message).toMatch(/switch this video node to named elements mode/i);
+    expect(validation.message).toMatch(/use Start frame and optional End frame/i);
+  });
+
+  it('still allows start and end frame connections on workflow video nodes', () => {
+    const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+    const startImage = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const endImage = createWorkflowNode('image-input', { x: 0, y: 120 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [videoNode, startImage, endImage],
+      edges: [
+        {
+          id: 'video-start',
+          source: startImage.id,
+          target: videoNode.id,
+          sourceHandle: 'image',
+          targetHandle: 'start-frame',
+        },
+      ],
+    });
+
+    const endFrameValidation = validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: endImage.id,
+      sourceHandle: 'image',
+      targetNodeId: videoNode.id,
+      targetHandle: 'end-frame',
+    });
+
+    expect(endFrameValidation.valid).toBe(true);
   });
 
   it('blocks image runs when a connected named-element source has no output yet', () => {
@@ -764,7 +1060,7 @@ describe('workflow canvas helpers', () => {
     const duplicatedImageNode = result.duplicatedNodes.find((node) => node.type === 'image-generate');
 
     expect(duplicatedImageNode?.data).toMatchObject({
-      elementBindings: [
+      referenceBindings: [
         {
           edgeId: result.duplicatedEdges[0]?.id,
           handle: '@hero_product',
@@ -772,7 +1068,7 @@ describe('workflow canvas helpers', () => {
       ],
     });
     expect(duplicatedImageNode?.data).not.toMatchObject({
-      elementBindings: [
+      referenceBindings: [
         {
           edgeId: 'element-edge',
         },

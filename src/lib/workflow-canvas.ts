@@ -42,6 +42,7 @@ export type WorkflowHandleType =
   | 'video'
   | 'audio'
   | 'prompt'
+  | 'image-reference'
   | 'start-frame'
   | 'end-frame'
   | 'element-image'
@@ -77,6 +78,7 @@ export interface NoteNodeData extends BaseWorkflowNodeData {
 export interface ImageInputNodeData extends BaseWorkflowNodeData {
   imageUrl: string | null;
   storagePath: string | null;
+  referenceHandle: string | null;
 }
 
 export interface VideoInputNodeData extends BaseWorkflowNodeData {
@@ -94,10 +96,12 @@ export interface WorkflowReferenceElement extends ImageElementDescriptor {
   url: string | null;
 }
 
-export interface WorkflowElementBinding {
+export interface WorkflowReferenceBinding {
   edgeId: string;
-  handle: string;
+  handle: string | null;
 }
+
+export type WorkflowElementBinding = WorkflowReferenceBinding;
 
 export interface WorkflowMultiPrompt {
   id: string;
@@ -111,7 +115,8 @@ export interface ImageGenerateNodeData extends BaseWorkflowNodeData {
   resolution: '1K' | '2K' | '4K';
   outputFormat: 'jpg' | 'png';
   googleSearch: boolean;
-  elementBindings: WorkflowElementBinding[];
+  referenceHandle: string | null;
+  referenceBindings: WorkflowReferenceBinding[];
   elements: WorkflowReferenceElement[];
 }
 
@@ -124,7 +129,7 @@ export interface VideoGenerateNodeData extends BaseWorkflowNodeData {
   resolution: string;
   fixedLens: boolean;
   referenceMode: 'frames' | 'elements';
-  elementBindings: WorkflowElementBinding[];
+  referenceBindings: WorkflowReferenceBinding[];
   elements: WorkflowReferenceElement[];
   isMultiShot: boolean;
   multiPrompts: WorkflowMultiPrompt[];
@@ -314,11 +319,11 @@ export const WORKFLOW_NODE_HANDLE_SCHEMAS: Record<WorkflowNodeKind, WorkflowNode
     outputs: ['audio'],
   },
   'image-generate': {
-    inputs: ['prompt', 'reference-image', 'element-image'],
+    inputs: ['prompt', 'image-reference'],
     outputs: ['image'],
   },
   'video-generate': {
-    inputs: ['prompt', 'start-frame', 'end-frame', 'element-image', 'reference-image'],
+    inputs: ['prompt', 'start-frame', 'end-frame'],
     outputs: ['video'],
   },
   'motion-generate': {
@@ -365,7 +370,14 @@ export function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
     case 'text-input':
       return { title: 'Prompt', subtitle: 'Text input', text: 'Describe the scene, offer, or instruction here.', runState: createNodeRunState() };
     case 'image-input':
-      return { title: 'Image input', subtitle: 'Upload or connect image', imageUrl: null, storagePath: null, runState: createNodeRunState() };
+      return {
+        title: 'Image input',
+        subtitle: 'Upload or connect image',
+        imageUrl: null,
+        storagePath: null,
+        referenceHandle: null,
+        runState: createNodeRunState(),
+      };
     case 'video-input':
       return { title: 'Video input', subtitle: 'Upload or connect video', videoUrl: null, storagePath: null, durationSeconds: null, runState: createNodeRunState() };
     case 'audio-input':
@@ -379,7 +391,8 @@ export function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
         resolution: DEFAULT_IMAGE_RESOLUTION,
         outputFormat: DEFAULT_IMAGE_OUTPUT_FORMAT,
         googleSearch: false,
-        elementBindings: [],
+        referenceHandle: null,
+        referenceBindings: [],
         elements: [],
         runState: createNodeRunState(),
       };
@@ -395,7 +408,7 @@ export function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
         resolution: '',
         fixedLens: false,
         referenceMode: 'frames',
-        elementBindings: [],
+        referenceBindings: [],
         elements: [],
         isMultiShot: false,
         multiPrompts: [
@@ -653,7 +666,15 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'note':
       return { ...(base as NoteNodeData), title, subtitle, text: typeof (data as NoteNodeData | undefined)?.text === 'string' ? (data as NoteNodeData).text : (base as NoteNodeData).text, runState };
     case 'image-input':
-      return { ...(base as ImageInputNodeData), title, subtitle, imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null, storagePath: typeof (data as ImageInputNodeData | undefined)?.storagePath === 'string' ? (data as ImageInputNodeData).storagePath : null, runState };
+      return {
+        ...(base as ImageInputNodeData),
+        title,
+        subtitle,
+        imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null,
+        storagePath: typeof (data as ImageInputNodeData | undefined)?.storagePath === 'string' ? (data as ImageInputNodeData).storagePath : null,
+        referenceHandle: normalizeWorkflowReferenceHandle((data as ImageInputNodeData | undefined)?.referenceHandle),
+        runState,
+      };
     case 'video-input':
       return {
         ...(base as VideoInputNodeData),
@@ -774,7 +795,10 @@ function normalizeImageGenerateNodeData(params: {
     resolution,
     outputFormat,
     googleSearch: modelConfig.supportsGoogleSearch ? Boolean(data?.googleSearch) : false,
-    elementBindings: normalizeWorkflowElementBindings(data?.elementBindings),
+    referenceHandle: normalizeWorkflowReferenceHandle(data?.referenceHandle),
+    referenceBindings: normalizeWorkflowReferenceBindings(
+      data?.referenceBindings ?? (data as Partial<ImageGenerateNodeData> & { elementBindings?: unknown } | undefined)?.elementBindings
+    ),
     elements: normalizeWorkflowReferenceElements(data?.elements),
     runState,
   };
@@ -823,7 +847,9 @@ function normalizeVideoGenerateNodeData(params: {
       : '',
     fixedLens: modelConfig.supportsFixedLens ? Boolean(data?.fixedLens) : false,
     referenceMode: data?.referenceMode === 'elements' ? 'elements' : 'frames',
-    elementBindings: normalizeWorkflowElementBindings(data?.elementBindings),
+    referenceBindings: normalizeWorkflowReferenceBindings(
+      data?.referenceBindings ?? (data as Partial<VideoGenerateNodeData> & { elementBindings?: unknown } | undefined)?.elementBindings
+    ),
     elements: normalizeWorkflowReferenceElements(data?.elements),
     isMultiShot: Boolean(data?.isMultiShot),
     multiPrompts: normalizeWorkflowMultiPrompts(data?.multiPrompts),
@@ -831,13 +857,32 @@ function normalizeVideoGenerateNodeData(params: {
   };
 }
 
-function normalizeWorkflowElementBindings(value: unknown): WorkflowElementBinding[] {
+function normalizeWorkflowReferenceHandle(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!normalized) {
+    return null;
+  }
+
+  const handle = `@${normalized}`;
+  return isValidElementHandle(handle) ? handle : null;
+}
+
+function normalizeWorkflowReferenceBindings(value: unknown): WorkflowReferenceBinding[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
   const seenEdgeIds = new Set<string>();
-  const usedHandles = new Set<string>();
 
   return value
     .map((binding, index) => {
@@ -851,19 +896,12 @@ function normalizeWorkflowElementBindings(value: unknown): WorkflowElementBindin
       }
       seenEdgeIds.add(typedBinding.edgeId);
 
-      let handle = typeof typedBinding.handle === 'string' ? typedBinding.handle : '';
-      if (!isValidElementHandle(handle) || usedHandles.has(handle)) {
-        handle = buildElementHandle(`Element ${index + 1}`, usedHandles, index + 1);
-      } else {
-        usedHandles.add(handle);
-      }
-
       return {
         edgeId: typedBinding.edgeId,
-        handle,
-      } satisfies WorkflowElementBinding;
+        handle: normalizeWorkflowReferenceHandle(typedBinding.handle),
+      } satisfies WorkflowReferenceBinding;
     })
-    .filter((binding): binding is WorkflowElementBinding => Boolean(binding));
+    .filter((binding): binding is WorkflowReferenceBinding => Boolean(binding));
 }
 
 function normalizeWorkflowReferenceElements(value: unknown): WorkflowReferenceElement[] {
@@ -1049,7 +1087,7 @@ export function isRunnableNode(node: WorkflowCanvasNode): boolean {
 export function validateWorkflowConnection(sourceType: WorkflowHandleType | null | undefined, targetType: WorkflowHandleType | null | undefined): boolean {
   if (!sourceType || !targetType) return false;
   if (sourceType === 'text' && targetType === 'prompt') return true;
-  if (sourceType === 'image' && (targetType === 'reference-image' || targetType === 'element-image' || targetType === 'start-frame' || targetType === 'end-frame' || targetType === 'image')) return true;
+  if (sourceType === 'image' && (targetType === 'image-reference' || targetType === 'reference-image' || targetType === 'element-image' || targetType === 'start-frame' || targetType === 'end-frame' || targetType === 'image')) return true;
   if (sourceType === 'video' && targetType === 'reference-video') return true;
   return false;
 }
@@ -1147,7 +1185,7 @@ export interface WorkflowNodeCapabilityValidation {
   namedElementLimit: number | null;
   startFrameCount: number;
   endFrameCount: number;
-  activeReferenceMode: 'frames' | 'elements' | null;
+  activeReferenceMode: 'frames' | 'references' | null;
   isMultiShot: boolean;
   multiPromptCount: number;
   unsupportedFeatureNotes: string[];
@@ -1171,6 +1209,13 @@ export interface WorkflowPromptEnhancementTarget {
   depth: number;
 }
 
+export interface WorkflowPromptMentionCandidate {
+  handle: string;
+  displayName: string;
+  branchLabels: string[];
+  sourceCount: number;
+}
+
 const WORKFLOW_PROMPT_ENHANCEMENT_MEDIA: Record<
   WorkflowPromptEnhancementNodeType,
   WorkflowPromptEnhancementMedium
@@ -1186,17 +1231,22 @@ function isWorkflowPromptEnhancementNodeType(
   return value === 'image-generate' || value === 'video-generate' || value === 'motion-generate';
 }
 
+function isWorkflowPromptMentionNodeType(
+  value: WorkflowNodeKind
+): value is 'image-generate' | 'video-generate' {
+  return value === 'image-generate' || value === 'video-generate';
+}
+
 export interface ResolvedWorkflowInputs extends Record<string, unknown> {
   prompt: string | null;
-  imageUrls: string[];
-  elementImages: ResolvedWorkflowElementImageInput[];
+  imageReferences: ResolvedWorkflowImageReferenceInput[];
   videoUrls: string[];
   audioUrls: string[];
   startFrameUrl: string | null;
   endFrameUrl: string | null;
 }
 
-export interface ResolvedWorkflowElementImageInput {
+export interface ResolvedWorkflowImageReferenceInput {
   edgeId: string;
   sourceNodeId: string;
   sourceTitle: string;
@@ -1205,10 +1255,11 @@ export interface ResolvedWorkflowElementImageInput {
   sourceGenerationId: string | null;
 }
 
-export interface WorkflowResolvedElementReference {
+export interface WorkflowResolvedImageReference {
   id: string;
   edgeId: string;
-  handle: string;
+  handle: string | null;
+  handleSource: 'source' | 'legacy-binding' | 'legacy-element' | null;
   displayName: string;
   url: string | null;
   storagePath: string | null;
@@ -1217,6 +1268,8 @@ export interface WorkflowResolvedElementReference {
   sourceTitle: string;
   legacy: boolean;
 }
+
+export type WorkflowResolvedElementReference = WorkflowResolvedImageReference;
 
 export interface WorkflowNodeDependencyState {
   kind: 'ready' | 'queued' | 'blocked';
@@ -1242,11 +1295,20 @@ function getNormalizedIncomingTargetHandle(
     return null;
   }
 
-  if (
-    targetNode?.type === 'video-generate'
-    && edge.targetHandle === 'reference-image'
-  ) {
-    return 'start-frame';
+  if (targetNode?.type === 'image-generate') {
+    if (edge.targetHandle === 'reference-image' || edge.targetHandle === 'element-image') {
+      return 'image-reference';
+    }
+  }
+
+  if (targetNode?.type === 'video-generate') {
+    if (edge.targetHandle === 'reference-image') {
+      return 'start-frame';
+    }
+
+    if (edge.targetHandle === 'element-image') {
+      return 'image-reference';
+    }
   }
 
   return edge.targetHandle as WorkflowHandleType;
@@ -1263,9 +1325,29 @@ function getWorkflowElementSourceDisplayName(
   );
 }
 
-function areElementBindingsEqual(
-  left: WorkflowElementBinding[],
-  right: WorkflowElementBinding[]
+function getWorkflowSourceReferenceHandle(
+  sourceNode: WorkflowCanvasNode | undefined
+): string | null {
+  if (!sourceNode) {
+    return null;
+  }
+
+  if (sourceNode.type === 'image-input') {
+    const data = normalizeNodeData('image-input', sourceNode.data as Partial<WorkflowNodeData>) as ImageInputNodeData;
+    return normalizeWorkflowReferenceHandle(data.referenceHandle);
+  }
+
+  if (sourceNode.type === 'image-generate') {
+    const data = normalizeNodeData('image-generate', sourceNode.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData;
+    return normalizeWorkflowReferenceHandle(data.referenceHandle);
+  }
+
+  return null;
+}
+
+function areReferenceBindingsEqual(
+  left: WorkflowReferenceBinding[],
+  right: WorkflowReferenceBinding[]
 ): boolean {
   if (left.length !== right.length) {
     return false;
@@ -1280,7 +1362,7 @@ function areElementBindingsEqual(
   return true;
 }
 
-function syncNodeElementBindings(
+function syncNodeReferenceBindings(
   graph: WorkflowCanvasGraph,
   node: WorkflowCanvasNode
 ): WorkflowCanvasNode {
@@ -1289,32 +1371,36 @@ function syncNodeElementBindings(
   }
 
   const data = normalizeNodeData(node.type, node.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData | VideoGenerateNodeData;
-  const existingBindings = new Map(data.elementBindings.map((binding) => [binding.edgeId, binding]));
-  const usedHandles = new Set<string>();
-  const elementEdges = getIncomingEdges(graph, node.id)
-    .filter((edge) => getNormalizedIncomingTargetHandle(edge, node) === 'element-image');
+  const existingBindings = new Map(data.referenceBindings.map((binding) => [binding.edgeId, binding]));
+  const reservedHandles = new Set(
+    data.referenceBindings
+      .map((binding) => normalizeWorkflowReferenceHandle(binding.handle))
+      .filter((handle): handle is string => Boolean(handle))
+  );
+  const referenceEdges = getIncomingEdges(graph, node.id)
+    .filter((edge) => getNormalizedIncomingTargetHandle(edge, node) === 'image-reference');
 
-  const nextBindings = elementEdges.map((edge, index) => {
+  const nextBindings = referenceEdges.map((edge, index) => {
     const existingBinding = existingBindings.get(edge.id);
-    let handle = existingBinding?.handle ?? '';
-
-    if (!isValidElementHandle(handle) || usedHandles.has(handle)) {
-      handle = buildElementHandle(
-        getWorkflowElementSourceDisplayName(getNodeById(graph, edge.source), index + 1),
-        usedHandles,
-        index + 1
-      );
-    } else {
-      usedHandles.add(handle);
-    }
+    const normalizedExistingHandle = normalizeWorkflowReferenceHandle(existingBinding?.handle);
+    const isLegacyNamedReference = edge.targetHandle === 'element-image';
+    const handle = normalizedExistingHandle ?? (
+      isLegacyNamedReference
+        ? buildElementHandle(
+            getWorkflowElementSourceDisplayName(getNodeById(graph, edge.source), index + 1),
+            reservedHandles,
+            index + 1
+          )
+        : null
+    );
 
     return {
       edgeId: edge.id,
       handle,
-    } satisfies WorkflowElementBinding;
+    } satisfies WorkflowReferenceBinding;
   });
 
-  if (areElementBindingsEqual(data.elementBindings, nextBindings)) {
+  if (areReferenceBindingsEqual(data.referenceBindings, nextBindings)) {
     return node;
   }
 
@@ -1322,15 +1408,15 @@ function syncNodeElementBindings(
     ...node,
     data: normalizeNodeData(node.type, {
       ...data,
-      elementBindings: nextBindings,
+      referenceBindings: nextBindings,
     }),
   };
 }
 
-export function syncWorkflowGraphElementBindings(
+export function syncWorkflowGraphReferenceBindings(
   graph: WorkflowCanvasGraph
 ): WorkflowCanvasGraph {
-  const nextNodes = graph.nodes.map((node) => syncNodeElementBindings(graph, node));
+  const nextNodes = graph.nodes.map((node) => syncNodeReferenceBindings(graph, node));
   const changed = nextNodes.some((node, index) => node !== graph.nodes[index]);
 
   return changed
@@ -1339,6 +1425,12 @@ export function syncWorkflowGraphElementBindings(
         nodes: nextNodes,
       }
     : graph;
+}
+
+export function syncWorkflowGraphElementBindings(
+  graph: WorkflowCanvasGraph
+): WorkflowCanvasGraph {
+  return syncWorkflowGraphReferenceBindings(graph);
 }
 
 export function getWorkflowReferenceElementDescriptors(
@@ -1359,10 +1451,10 @@ export function getWorkflowReferenceElementSourceUrl(
   return element.storagePath || element.url || null;
 }
 
-export function getResolvedWorkflowElementReferences(
+export function getResolvedWorkflowImageReferences(
   graph: WorkflowCanvasGraph,
   nodeId: string
-): WorkflowResolvedElementReference[] {
+): WorkflowResolvedImageReference[] {
   const node = getNodeById(graph, nodeId);
   if (!node || (node.type !== 'image-generate' && node.type !== 'video-generate')) {
     return [];
@@ -1370,30 +1462,41 @@ export function getResolvedWorkflowElementReferences(
 
   const data = normalizeNodeData(node.type, node.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData | VideoGenerateNodeData;
   const resolvedInputs = resolveNodeInputs(graph, nodeId);
-  const bindingByEdgeId = new Map(data.elementBindings.map((binding) => [binding.edgeId, binding]));
+  const bindingByEdgeId = new Map(data.referenceBindings.map((binding) => [binding.edgeId, binding]));
 
-  const connectedElements = resolvedInputs.elementImages.map((element, index) => {
-    const binding = bindingByEdgeId.get(element.edgeId);
-    const displayName = getWorkflowElementSourceDisplayName(getNodeById(graph, element.sourceNodeId), index + 1);
+  const connectedReferences = resolvedInputs.imageReferences.map((reference, index) => {
+    const sourceNode = getNodeById(graph, reference.sourceNodeId);
+    const binding = bindingByEdgeId.get(reference.edgeId);
+    const displayName = getWorkflowElementSourceDisplayName(sourceNode, index + 1);
+    const sourceHandle = getWorkflowSourceReferenceHandle(sourceNode);
+    const legacyBindingHandle = normalizeWorkflowReferenceHandle(binding?.handle);
+    const handle = sourceHandle ?? legacyBindingHandle;
+    const handleSource = sourceHandle
+      ? 'source'
+      : legacyBindingHandle
+        ? 'legacy-binding'
+        : null;
 
     return {
-      id: element.edgeId,
-      edgeId: element.edgeId,
-      handle: binding?.handle ?? buildElementHandle(displayName, new Set<string>(), index + 1),
+      id: reference.edgeId,
+      edgeId: reference.edgeId,
+      handle,
+      handleSource,
       displayName,
-      url: element.url,
-      storagePath: element.storagePath,
-      sourceGenerationId: element.sourceGenerationId,
-      sourceNodeId: element.sourceNodeId,
-      sourceTitle: element.sourceTitle,
+      url: reference.url,
+      storagePath: reference.storagePath,
+      sourceGenerationId: reference.sourceGenerationId,
+      sourceNodeId: reference.sourceNodeId,
+      sourceTitle: reference.sourceTitle,
       legacy: false,
-    } satisfies WorkflowResolvedElementReference;
+    } satisfies WorkflowResolvedImageReference;
   });
 
   const legacyElements = data.elements.map((element) => ({
     id: element.id,
     edgeId: `legacy:${element.id}`,
     handle: element.handle,
+    handleSource: 'legacy-element' as const,
     displayName: element.displayName,
     url: getWorkflowReferenceElementSourceUrl(element),
     storagePath: element.storagePath ?? null,
@@ -1401,9 +1504,16 @@ export function getResolvedWorkflowElementReferences(
     sourceNodeId: null,
     sourceTitle: element.displayName,
     legacy: true,
-  }) satisfies WorkflowResolvedElementReference);
+  }) satisfies WorkflowResolvedImageReference);
 
-  return [...connectedElements, ...legacyElements];
+  return [...connectedReferences, ...legacyElements];
+}
+
+export function getResolvedWorkflowElementReferences(
+  graph: WorkflowCanvasGraph,
+  nodeId: string
+): WorkflowResolvedImageReference[] {
+  return getResolvedWorkflowImageReferences(graph, nodeId);
 }
 
 function getKnownWorkflowSourceVideoDurationSeconds(node: WorkflowCanvasNode | undefined): number | null {
@@ -1456,7 +1566,7 @@ function buildUnknownHandleIssueMessage(params: {
   handles: string[];
   validHandles: string[];
   mediumLabel: 'image' | 'video';
-  referenceMode?: 'frames' | 'elements';
+  referenceMode?: 'frames' | 'references';
   isMultiShot?: boolean;
 }): string {
   const { handles, validHandles, mediumLabel, referenceMode, isMultiShot } = params;
@@ -1467,14 +1577,14 @@ function buildUnknownHandleIssueMessage(params: {
   }
 
   if (referenceMode === 'frames') {
-    return `This ${mediumLabel} prompt mentions ${handleLabel}, but the node is currently using Frames mode. Switch to Named elements or remove the @handles.`;
+    return `This ${mediumLabel} prompt mentions ${handleLabel}, but the node is currently using Frames mode. Remove the frame connections or remove the @handles.`;
   }
 
   if (validHandles.length === 0) {
-    return `This ${mediumLabel} prompt mentions ${handleLabel}, but no named elements are attached to this node yet. Add the missing named elements or remove the @handles.`;
+    return `This ${mediumLabel} prompt mentions ${handleLabel}, but no handled image references are attached to this node yet. Add @handles on the matching source image nodes or remove the @handles.`;
   }
 
-  return `This ${mediumLabel} prompt mentions ${handleLabel}, but this node only has ${validHandles.join(', ')} attached. Add the missing named elements or remove the @handles.`;
+  return `This ${mediumLabel} prompt mentions ${handleLabel}, but this node only has ${validHandles.join(', ')} available. Add @handles on the matching source image nodes or remove the @handles.`;
 }
 
 function findDuplicateHandles(handles: string[]): string[] {
@@ -1493,8 +1603,8 @@ export function inspectWorkflowNodeCapabilities(
   graph: WorkflowCanvasGraph,
   node: WorkflowCanvasNode
 ): WorkflowNodeCapabilityValidation {
-  const referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'reference-image');
-  const connectedElementCount = countIncomingEdgesForTargetHandle(graph, node.id, 'element-image');
+  let referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'image-reference');
+  let connectedElementCount = 0;
   const referenceVideoCount = countIncomingEdgesForTargetHandle(graph, node.id, 'reference-video');
   const startFrameCount = countIncomingEdgesForTargetHandle(graph, node.id, 'start-frame');
   const endFrameCount = countIncomingEdgesForTargetHandle(graph, node.id, 'end-frame');
@@ -1506,62 +1616,68 @@ export function inspectWorkflowNodeCapabilities(
   let legacyElementCount = 0;
   let namedElementCount = 0;
   let namedElementLimit: number | null = null;
-  let activeReferenceMode: 'frames' | 'elements' | null = null;
+  let activeReferenceMode: 'frames' | 'references' | null = null;
   let isMultiShot = false;
   let multiPromptCount = 0;
   let unsupportedFeatureNotes: string[] = [];
   const connectedPrompt = getConnectedPromptText(graph, node.id);
-  const resolvedElementReferences = getResolvedWorkflowElementReferences(graph, node.id);
-  const connectedElementReferences = resolvedElementReferences.filter((element) => !element.legacy);
-  const elementHandles = resolvedElementReferences.map((element) => element.handle);
+  const resolvedImageReferences = getResolvedWorkflowImageReferences(graph, node.id);
+  const connectedImageReferences = resolvedImageReferences.filter((reference) => !reference.legacy);
+  const handledReferences = resolvedImageReferences.filter((reference) => Boolean(reference.handle));
+  const connectedHandledReferences = connectedImageReferences.filter((reference) => Boolean(reference.handle));
+  const handledReferenceHandles = handledReferences
+    .map((reference) => reference.handle)
+    .filter((handle): handle is string => Boolean(handle));
 
   if (node.type === 'image-generate') {
     const data = normalizeNodeData('image-generate', node.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData;
     const model = IMAGE_MODELS[data.model];
     legacyElementCount = data.elements.length;
-    namedElementCount = connectedElementCount + legacyElementCount;
+    referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'image-reference');
+    connectedElementCount = connectedHandledReferences.length;
+    namedElementCount = connectedHandledReferences.length + legacyElementCount;
     referenceImageLimit = model.maxImages;
-    totalReferenceImageCount = referenceImageCount + namedElementCount;
+    totalReferenceImageCount = referenceImageCount + legacyElementCount;
     namedElementLimit = model.maxImages;
-    activeReferenceMode = namedElementCount > 0 ? 'elements' : null;
+    activeReferenceMode = totalReferenceImageCount > 0 ? 'references' : null;
     unsupportedFeatureNotes = [
-      `Named elements and connected reference images share the ${model.maxImages}-image budget for ${model.displayName}.`,
-      connectedElementCount > 0
-        ? 'Use the connected element handles in the upstream prompt when you want a named element to stay locked.'
-        : 'Connect image outputs to the named-element handle when you need reusable characters or products inside a shared prompt branch.',
+      `All connected image references share the ${model.maxImages}-image budget for ${model.displayName}.`,
+      handledReferenceHandles.length > 0
+        ? 'Only references whose source image nodes have handles are compiled into the prompt. Leave the source handle blank when you only want visual guidance.'
+        : 'Add an optional @handle on any connected image source when you want the prompt to address it directly.',
     ];
 
     if (totalReferenceImageCount > model.maxImages) {
       issues.push({
         code: 'too-many-reference-images',
-        message: `${model.displayName} supports up to ${model.maxImages} total reference images in workflows. Remove extra named elements or image connections to run this node.`,
+        message: `${model.displayName} supports up to ${model.maxImages} total image references in workflows. Remove extra references to run this node.`,
       });
     }
 
-    if (connectedElementReferences.some((element) => !element.url)) {
+    if (connectedImageReferences.some((reference) => !reference.url)) {
       issues.push({
         code: 'missing-element-sources',
-        message: 'A connected named element does not have an image output yet. Run or upload the upstream image source before continuing.',
+        message: 'A connected image reference does not have an image output yet. Run or upload the upstream image source before continuing.',
       });
     }
 
-    const duplicateHandles = findDuplicateHandles(elementHandles);
+    const duplicateHandles = findDuplicateHandles(handledReferenceHandles);
     if (duplicateHandles.length > 0) {
       issues.push({
         code: 'duplicate-element-handles',
-        message: `Named element handles must be unique per node. Update ${duplicateHandles.join(', ')} to continue.`,
+        message: `Reference handles must be unique per node. Update ${duplicateHandles.join(', ')} to continue.`,
       });
     }
 
     const unknownHandles = connectedPrompt
-      ? findUnknownPromptHandles(connectedPrompt, elementHandles)
+      ? findUnknownPromptHandles(connectedPrompt, handledReferenceHandles)
       : [];
     if (unknownHandles.length > 0) {
       issues.push({
         code: 'unknown-element-handles',
         message: buildUnknownHandleIssueMessage({
           handles: unknownHandles,
-          validHandles: elementHandles,
+          validHandles: handledReferenceHandles,
           mediumLabel: 'image',
         }),
       });
@@ -1575,28 +1691,34 @@ export function inspectWorkflowNodeCapabilities(
       mode: data.mode,
       isMultiShot: data.isMultiShot,
     });
-    const activeHandles = data.referenceMode === 'elements' && !data.isMultiShot
-      ? elementHandles
-      : [];
-
-    totalReferenceImageCount = startFrameCount + endFrameCount;
+    const singleShotPrompt = connectedPrompt || '';
+    const multiShotPrompt = data.multiPrompts.map((shot) => shot.prompt.trim()).filter(Boolean).join('\n\n');
+    const promptToInspect = data.isMultiShot ? multiShotPrompt : singleShotPrompt;
     legacyElementCount = data.elements.length;
-    namedElementCount = connectedElementCount + legacyElementCount;
+    referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'image-reference');
+    connectedElementCount = connectedHandledReferences.length;
+    totalReferenceImageCount = referenceImageCount + legacyElementCount;
+    const handledReferenceCount = connectedElementCount + legacyElementCount;
+    namedElementCount = handledReferenceCount;
     namedElementLimit = videoElementSupport.maxElements;
-    activeReferenceMode = data.isMultiShot ? 'frames' : data.referenceMode;
+    activeReferenceMode = data.isMultiShot
+      ? 'frames'
+      : totalReferenceImageCount > 0
+        ? 'references'
+        : (startFrameCount > 0 || endFrameCount > 0 ? 'frames' : null);
     isMultiShot = data.isMultiShot;
     multiPromptCount = data.multiPrompts.length;
-    referenceImageLimit = activeReferenceMode === 'frames'
-      ? (isMultiShot ? 1 : 2)
-      : 0;
+    referenceImageLimit = data.isMultiShot ? 0 : videoElementSupport.maxElements;
     unsupportedFeatureNotes = [
-      'Frames mode uses the graph-connected start and end frame handles on the node.',
+      'Workflow video nodes use the graph-connected Start frame and End frame handles for new authoring.',
       data.isMultiShot
         ? 'Multi-shot owns its shot prompts locally and ignores any connected upstream prompt text.'
         : 'Single-shot video uses the shared upstream prompt text unless you switch into multi-shot.',
-      videoElementSupport.enabled
-        ? `Named elements are available in single-shot with up to ${videoElementSupport.maxElements} connected element${videoElementSupport.maxElements === 1 ? '' : 's'}.`
-        : videoElementSupport.reason || 'Named elements are not available in this video mode.',
+      data.isMultiShot
+        ? 'Multi-shot allows an optional start frame only. End frames stay disabled in this mode.'
+        : totalReferenceImageCount > 0
+          ? 'This node still has legacy general image references attached. New workflow video nodes should use Start frame and End frame instead.'
+          : 'Connect Start frame for first-frame guidance, then add End frame when you want the video to land on a second frame.',
     ];
 
     if (startFrameCount > 1) {
@@ -1634,53 +1756,61 @@ export function inspectWorkflowNodeCapabilities(
       });
     }
 
-    if (namedElementCount > 0 && !videoElementSupport.enabled) {
+    if (data.isMultiShot && totalReferenceImageCount > 0) {
       issues.push({
         code: 'unsupported-elements-mode',
-        message: videoElementSupport.reason || 'Named elements are not available in this video mode.',
+        message: 'Image references are not available while this video node is in multi-shot mode. Remove them or switch back to single-shot.',
       });
     }
 
-    if (namedElementCount > videoElementSupport.maxElements) {
+    if (!data.isMultiShot && totalReferenceImageCount > 0 && !videoElementSupport.enabled) {
       issues.push({
-        code: 'too-many-elements',
-        message: `This video mode supports up to ${videoElementSupport.maxElements} named element${videoElementSupport.maxElements === 1 ? '' : 's'}. Remove extra elements to run this node.`,
+        code: 'unsupported-elements-mode',
+        message: videoElementSupport.reason || 'Image references are not available in this video mode.',
       });
     }
 
-    if (connectedElementReferences.some((element) => !element.url)) {
+    if (!data.isMultiShot && totalReferenceImageCount > videoElementSupport.maxElements) {
+      issues.push({
+        code: 'too-many-reference-images',
+        message: `This video mode supports up to ${videoElementSupport.maxElements} image reference${videoElementSupport.maxElements === 1 ? '' : 's'}. Remove extra references to run this node.`,
+      });
+    }
+
+    if (connectedImageReferences.some((reference) => !reference.url)) {
       issues.push({
         code: 'missing-element-sources',
-        message: 'A connected named element does not have an image output yet. Run or upload the upstream image source before continuing.',
+        message: 'A connected image reference does not have an image output yet. Run or upload the upstream image source before continuing.',
       });
     }
 
-    const duplicateHandles = findDuplicateHandles(elementHandles);
+    const duplicateHandles = findDuplicateHandles(handledReferenceHandles);
     if (duplicateHandles.length > 0) {
       issues.push({
         code: 'duplicate-element-handles',
-        message: `Named element handles must be unique per node. Update ${duplicateHandles.join(', ')} to continue.`,
+        message: `Reference handles must be unique per node. Update ${duplicateHandles.join(', ')} to continue.`,
       });
     }
 
-    if (namedElementCount > 0 && (startFrameCount > 0 || endFrameCount > 0)) {
+    if (totalReferenceImageCount > 0 && (startFrameCount > 0 || endFrameCount > 0)) {
       issues.push({
         code: 'frame-element-conflict',
-        message: 'Named elements cannot run together with start or end frames in the same video node. Keep one mode active at a time.',
+        message: 'Image references cannot run together with start or end frames in the same video node. Keep one mode active at a time.',
       });
     }
 
-    const unknownHandles = connectedPrompt
-      ? findUnknownPromptHandles(connectedPrompt, activeHandles)
+    const unknownHandles = promptToInspect
+      ? findUnknownPromptHandles(promptToInspect, handledReferenceHandles)
       : [];
-    if (!data.isMultiShot && unknownHandles.length > 0) {
+    if (unknownHandles.length > 0) {
       issues.push({
         code: 'unknown-element-handles',
         message: buildUnknownHandleIssueMessage({
           handles: unknownHandles,
-          validHandles: elementHandles,
+          validHandles: handledReferenceHandles,
           mediumLabel: 'video',
-          referenceMode: data.referenceMode,
+          referenceMode: activeReferenceMode ?? undefined,
+          isMultiShot: data.isMultiShot,
         }),
       });
     }
@@ -1689,6 +1819,7 @@ export function inspectWorkflowNodeCapabilities(
   if (node.type === 'motion-generate') {
     const data = normalizeNodeData('motion-generate', node.data as Partial<WorkflowNodeData>) as MotionGenerateNodeData;
     const model = MOTION_MODELS[data.model];
+    referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'reference-image');
     referenceImageLimit = 1;
     referenceVideoLimit = 1;
     referenceVideoDurationLimitSeconds = model.maxDuration;
@@ -1810,20 +1941,30 @@ export function validateWorkflowConnectionForGraph(params: {
     targetNode
   );
 
-  if (normalizedTargetHandle === 'reference-image') {
-    const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-image');
-
+  if (normalizedTargetHandle === 'image-reference') {
     if (targetNode.type === 'image-generate') {
       const data = normalizeNodeData('image-generate', targetNode.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData;
-      const namedElementCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'element-image') + data.elements.length;
+      const totalImageBudget = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference') + data.elements.length;
       const maxImages = IMAGE_MODELS[data.model].maxImages;
-      if (currentCount + namedElementCount >= maxImages) {
+
+      if (totalImageBudget >= maxImages) {
         return {
           valid: false,
-          message: `${IMAGE_MODELS[data.model].displayName} supports up to ${maxImages} total named elements and reference images in workflows.`,
+          message: `${IMAGE_MODELS[data.model].displayName} supports up to ${maxImages} total image references in workflows.`,
         };
       }
     }
+
+    if (targetNode.type === 'video-generate') {
+      return {
+        valid: false,
+        message: 'Workflow video nodes now use Start frame and optional End frame instead of general image references.',
+      };
+    }
+  }
+
+  if (normalizedTargetHandle === 'reference-image') {
+    const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-image');
 
     if (targetNode.type === 'motion-generate' && currentCount >= 1) {
       return {
@@ -1833,74 +1974,14 @@ export function validateWorkflowConnectionForGraph(params: {
     }
   }
 
-  if (normalizedTargetHandle === 'element-image') {
-    if (targetNode.type === 'image-generate') {
-      const data = normalizeNodeData('image-generate', targetNode.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData;
-      const currentElementCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'element-image');
-      const totalImageBudget = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-image') + currentElementCount + data.elements.length;
-      const maxImages = IMAGE_MODELS[data.model].maxImages;
-
-      if (totalImageBudget >= maxImages) {
-        return {
-          valid: false,
-          message: `${IMAGE_MODELS[data.model].displayName} supports up to ${maxImages} total named elements and reference images in workflows.`,
-        };
-      }
-    }
-
-    if (targetNode.type === 'video-generate') {
-      const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
-      const videoElementSupport = getVideoElementSupport(data.model, {
-        mode: data.mode,
-        isMultiShot: data.isMultiShot,
-      });
-
-      if (data.isMultiShot) {
-        return {
-          valid: false,
-          message: 'Named elements are not available while this video node is in multi-shot mode.',
-        };
-      }
-
-      if (data.referenceMode !== 'elements') {
-        return {
-          valid: false,
-          message: 'Switch this video node to Named elements mode before adding a connected element.',
-        };
-      }
-
-      if (countIncomingEdgesForTargetHandle(graph, targetNodeId, 'start-frame') > 0 || countIncomingEdgesForTargetHandle(graph, targetNodeId, 'end-frame') > 0) {
-        return {
-          valid: false,
-          message: 'Remove the connected start/end frames before adding named elements to this video node.',
-        };
-      }
-
-      if (!videoElementSupport.enabled) {
-        return {
-          valid: false,
-          message: videoElementSupport.reason || 'Named elements are not available in this video mode.',
-        };
-      }
-
-      const currentElementCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'element-image') + data.elements.length;
-      if (currentElementCount >= videoElementSupport.maxElements) {
-        return {
-          valid: false,
-          message: `This video mode supports up to ${videoElementSupport.maxElements} named element${videoElementSupport.maxElements === 1 ? '' : 's'}.`,
-        };
-      }
-    }
-  }
-
   if (targetNode.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
 
     if (normalizedTargetHandle === 'start-frame') {
-      if (!data.isMultiShot && data.referenceMode === 'elements') {
+      if (countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference') + data.elements.length > 0) {
         return {
           valid: false,
-          message: 'This video node is in Named elements mode. Switch back to Frames mode before adding a start frame.',
+          message: 'This video node already has connected image references. Remove them before adding a start frame.',
         };
       }
 
@@ -1914,10 +1995,10 @@ export function validateWorkflowConnectionForGraph(params: {
     }
 
     if (normalizedTargetHandle === 'end-frame') {
-      if (!data.isMultiShot && data.referenceMode === 'elements') {
+      if (countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference') + data.elements.length > 0) {
         return {
           valid: false,
-          message: 'This video node is in Named elements mode. Switch back to Frames mode before adding an end frame.',
+          message: 'This video node already has connected image references. Remove them before adding an end frame.',
         };
       }
 
@@ -2008,12 +2089,139 @@ export function getPromptEnhancementTargets(
   return targets;
 }
 
+function getPromptMentionBranchLabel(node: WorkflowCanvasNode): string {
+  if (node.type === 'image-generate') {
+    const data = normalizeNodeData('image-generate', node.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData;
+    return `${data.title} (${IMAGE_MODELS[data.model].displayName})`;
+  }
+
+  const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+  return `${data.title} (${VIDEO_MODELS[data.model].displayName})`;
+}
+
+function getPromptMentionableReferencesForNode(
+  graph: WorkflowCanvasGraph,
+  node: WorkflowCanvasNode
+): WorkflowResolvedImageReference[] {
+  if (!isWorkflowPromptMentionNodeType(node.type)) {
+    return [];
+  }
+
+  if (node.type === 'video-generate') {
+    const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+    const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
+
+    if (
+      data.isMultiShot
+      || capabilityValidation.startFrameCount > 0
+      || capabilityValidation.endFrameCount > 0
+      || capabilityValidation.issues.some((issue) =>
+        issue.code === 'unsupported-elements-mode' || issue.code === 'frame-element-conflict')
+    ) {
+      return [];
+    }
+  }
+
+  const resolvedReferences = getResolvedWorkflowImageReferences(graph, node.id)
+    .filter((reference) => !reference.legacy && Boolean(reference.handle) && Boolean(reference.url));
+  const handleCounts = new Map<string, number>();
+
+  resolvedReferences.forEach((reference) => {
+    if (!reference.handle) {
+      return;
+    }
+
+    handleCounts.set(reference.handle, (handleCounts.get(reference.handle) || 0) + 1);
+  });
+
+  return resolvedReferences.filter((reference) => {
+    if (!reference.handle) {
+      return false;
+    }
+
+    return handleCounts.get(reference.handle) === 1;
+  });
+}
+
+export function getWorkflowPromptMentionCandidates(
+  graph: WorkflowCanvasGraph,
+  promptNodeId: string
+): WorkflowPromptMentionCandidate[] {
+  const startNode = getNodeById(graph, promptNodeId);
+  if (!startNode || startNode.type !== 'text-input') {
+    return [];
+  }
+
+  const queue: string[] = [promptNodeId];
+  const visitedNodeIds = new Set<string>();
+  const mentionByHandle = new Map<string, {
+    handle: string;
+    displayName: string;
+    branchLabels: Set<string>;
+  }>();
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentNodeId = queue[index];
+    if (!currentNodeId || visitedNodeIds.has(currentNodeId)) {
+      continue;
+    }
+
+    visitedNodeIds.add(currentNodeId);
+
+    for (const edge of getOutgoingEdges(graph, currentNodeId)) {
+      const nextNode = getNodeById(graph, edge.target);
+      if (!nextNode) {
+        continue;
+      }
+
+      queue.push(nextNode.id);
+
+      if (!isWorkflowPromptMentionNodeType(nextNode.type)) {
+        continue;
+      }
+
+      if (nextNode.type === 'video-generate') {
+        continue;
+      }
+
+      const branchLabel = getPromptMentionBranchLabel(nextNode);
+      const references = getPromptMentionableReferencesForNode(graph, nextNode);
+
+      references.forEach((reference) => {
+        if (!reference.handle) {
+          return;
+        }
+
+        const existing = mentionByHandle.get(reference.handle);
+        if (existing) {
+          existing.branchLabels.add(branchLabel);
+          return;
+        }
+
+        mentionByHandle.set(reference.handle, {
+          handle: reference.handle,
+          displayName: reference.displayName,
+          branchLabels: new Set([branchLabel]),
+        });
+      });
+    }
+  }
+
+  return Array.from(mentionByHandle.values())
+    .map((candidate) => ({
+      handle: candidate.handle,
+      displayName: candidate.displayName,
+      branchLabels: Array.from(candidate.branchLabels).sort((left, right) => left.localeCompare(right)),
+      sourceCount: candidate.branchLabels.size,
+    }))
+    .sort((left, right) => left.handle.localeCompare(right.handle));
+}
+
 export function resolveNodeInputs(graph: WorkflowCanvasGraph, nodeId: string): ResolvedWorkflowInputs {
   const incoming = getIncomingEdges(graph, nodeId);
   const targetNode = getNodeById(graph, nodeId);
   const promptParts: string[] = [];
-  const imageUrls: string[] = [];
-  const elementImages: ResolvedWorkflowElementImageInput[] = [];
+  const imageReferences: ResolvedWorkflowImageReferenceInput[] = [];
   const videoUrls: string[] = [];
   const audioUrls: string[] = [];
   let startFrameUrl: string | null = null;
@@ -2031,12 +2239,12 @@ export function resolveNodeInputs(graph: WorkflowCanvasGraph, nodeId: string): R
 
     if (edge.sourceHandle === 'image') {
       const url = getNodeOutputUrl(source);
-      if (normalizedTargetHandle === 'element-image') {
+      if (normalizedTargetHandle === 'image-reference' || normalizedTargetHandle === 'reference-image') {
         const sourceData = source.data as Partial<ImageInputNodeData> & { runState?: Partial<WorkflowNodeRunState> };
-        elementImages.push({
+        imageReferences.push({
           edgeId: edge.id,
           sourceNodeId: source.id,
-          sourceTitle: getWorkflowElementSourceDisplayName(source, elementImages.length + 1),
+          sourceTitle: getWorkflowElementSourceDisplayName(source, imageReferences.length + 1),
           url,
           storagePath: source.type === 'image-input' && typeof sourceData.storagePath === 'string'
             ? sourceData.storagePath
@@ -2050,8 +2258,6 @@ export function resolveNodeInputs(graph: WorkflowCanvasGraph, nodeId: string): R
           startFrameUrl ||= url;
         } else if (normalizedTargetHandle === 'end-frame') {
           endFrameUrl ||= url;
-        } else {
-          imageUrls.push(url);
         }
       }
     }
@@ -2069,8 +2275,7 @@ export function resolveNodeInputs(graph: WorkflowCanvasGraph, nodeId: string): R
 
   return {
     prompt: promptParts.filter(Boolean).join('\n\n') || null,
-    imageUrls,
-    elementImages,
+    imageReferences,
     videoUrls,
     audioUrls,
     startFrameUrl,
@@ -2369,7 +2574,7 @@ export function duplicateWorkflowSelection(
         selected: false,
         data: normalizeNodeData(node.type, {
           ...typedData,
-          elementBindings: typedData.elementBindings
+          referenceBindings: typedData.referenceBindings
             .filter((binding) => edgeIdMap[binding.edgeId])
             .map((binding) => ({
               ...binding,

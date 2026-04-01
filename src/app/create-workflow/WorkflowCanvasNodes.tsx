@@ -92,6 +92,7 @@ const HANDLE_COLORS: Record<string, string> = {
   text: '#f59e0b',
   prompt: '#f59e0b',
   image: '#38bdf8',
+  'image-reference': '#38bdf8',
   'start-frame': '#38bdf8',
   'end-frame': '#fb7185',
   'reference-image': '#38bdf8',
@@ -236,6 +237,27 @@ function TargetHandle({ id, top, hidden = false }: { id: string; top: number; hi
         pointerEvents: hidden ? 'none' : 'auto',
       }}
     />
+  );
+}
+
+function InputHandleLabel({
+  label,
+  top,
+  width = 16,
+  offset = 76,
+}: {
+  label: string;
+  top: number;
+  width?: number;
+  offset?: number;
+}) {
+  return (
+    <div
+      className="pointer-events-none absolute z-10 -translate-y-1/2 text-right text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500"
+      style={{ top, left: `-${offset}px`, width: `${width * 4}px` }}
+    >
+      {label}
+    </div>
   );
 }
 
@@ -470,14 +492,18 @@ function AudioPreview({ url, dragging }: { url: string; dragging?: boolean }) {
 
 export function getImageGenerateNodeSummary(data: ImageGenerateNodeData): string[] {
   const details = [data.resolution, data.outputFormat.toUpperCase()];
+  const handledReferenceCount = data.referenceBindings.filter((binding) => Boolean(binding.handle)).length;
 
   if (IMAGE_MODELS[data.model].supportsGoogleSearch && data.googleSearch) {
     details.push('Google Search');
   }
 
   const summary = [`Aspect ${data.aspectRatio}`, details.join(' • ')];
-  if (data.elementBindings.length > 0) {
-    summary.push(`Elements ${data.elementBindings.length}`);
+  if (data.referenceBindings.length > 0) {
+    summary.push(`Refs ${data.referenceBindings.length}`);
+    if (handledReferenceCount > 0) {
+      summary.push(`Handled ${handledReferenceCount}`);
+    }
   } else if (data.elements.length > 0) {
     summary.push(`Legacy ${data.elements.length}`);
   }
@@ -494,7 +520,7 @@ export function getImageGenerateNodeSummaryWithCapabilities(
   if (capabilityValidation?.referenceImageLimit !== null && capabilityValidation?.referenceImageLimit !== undefined) {
     summary.push(`Refs ${capabilityValidation.referenceImageCount}/${capabilityValidation.referenceImageLimit}`);
     if (capabilityValidation.connectedElementCount > 0) {
-      summary.push(`Elements ${capabilityValidation.connectedElementCount}`);
+      summary.push(`Handled ${capabilityValidation.connectedElementCount}`);
     } else if (capabilityValidation.legacyElementCount > 0) {
       summary.push(`Legacy ${capabilityValidation.legacyElementCount}`);
     }
@@ -510,6 +536,7 @@ export function getVideoGenerateNodeSummary(data: VideoGenerateNodeData): string
   const model = VIDEO_MODELS[data.model];
   const details: string[] = [];
   const activeMode = model.modeOptions.find((option) => option.value === data.mode);
+  const handledReferenceCount = data.referenceBindings.filter((binding) => Boolean(binding.handle)).length;
 
   if (activeMode) {
     details.push(activeMode.label);
@@ -532,14 +559,13 @@ export function getVideoGenerateNodeSummary(data: VideoGenerateNodeData): string
 
   if (data.isMultiShot) {
     summary.push(`${data.multiPrompts.length} shots`);
-  } else if (data.referenceMode === 'elements') {
-    if (data.elementBindings.length > 0) {
-      summary.push(`Elements ${data.elementBindings.length}`);
-    } else if (data.elements.length > 0) {
-      summary.push(`Legacy ${data.elements.length}`);
-    } else {
-      summary.push('Elements mode');
+  } else if (data.referenceBindings.length > 0) {
+    summary.push(`Refs ${data.referenceBindings.length}`);
+    if (handledReferenceCount > 0) {
+      summary.push(`Handled ${handledReferenceCount}`);
     }
+  } else if (data.elements.length > 0) {
+    summary.push(`Legacy ${data.elements.length}`);
   } else {
     summary.push('Frames mode');
   }
@@ -556,11 +582,12 @@ export function getVideoGenerateNodeSummaryWithCapabilities(
   if (capabilityValidation) {
     if (capabilityValidation.isMultiShot) {
       summary.push(`Frames: start${capabilityValidation.endFrameCount > 0 ? '/end' : ''}`);
-    } else if (capabilityValidation.activeReferenceMode === 'elements') {
+    } else if (capabilityValidation.activeReferenceMode === 'references') {
+      summary.push(
+        `Refs ${capabilityValidation.referenceImageCount}/${capabilityValidation.referenceImageLimit ?? capabilityValidation.referenceImageCount}`
+      );
       if (capabilityValidation.connectedElementCount > 0) {
-        summary.push(
-          `Elements ${capabilityValidation.connectedElementCount}/${capabilityValidation.namedElementLimit ?? capabilityValidation.connectedElementCount}`
-        );
+        summary.push(`Handled ${capabilityValidation.connectedElementCount}`);
       } else if (capabilityValidation.legacyElementCount > 0) {
         summary.push(`Legacy ${capabilityValidation.legacyElementCount}`);
       }
@@ -741,10 +768,13 @@ const ImageGenerateNode = memo(function ImageGenerateNode({ data, dragging }: No
         </PreviewMediaLink>
       ) : undefined}
     >
+      <InputHandleLabel label="PROMPT" top={38} />
+      <InputHandleLabel label="REF" top={98} />
       <TargetHandle id="prompt" top={38} />
-      <TargetHandle id="reference-image" top={78} />
-      <TargetHandle id="element-image" top={118} />
-      <SourceHandle id="image" top={154} />
+      <TargetHandle id="image-reference" top={98} />
+      <TargetHandle id="reference-image" top={98} hidden />
+      <TargetHandle id="element-image" top={98} hidden />
+      <SourceHandle id="image" top={60} />
       <div className="mt-3 grid gap-2 text-[11px] text-zinc-400">
         {summaryLines.map((line) => (
           <div key={`${typed.model}-${line}`}>{line}</div>
@@ -775,12 +805,16 @@ const VideoGenerateNode = memo(function VideoGenerateNode({ data, dragging }: No
         </PreviewMediaLink>
       ) : undefined}
     >
+      <InputHandleLabel label="PROMPT" top={34} />
+      <InputHandleLabel label="START" top={68} />
+      <InputHandleLabel label="END" top={102} />
       <TargetHandle id="prompt" top={34} />
       <TargetHandle id="start-frame" top={68} />
       <TargetHandle id="reference-image" top={68} hidden />
       <TargetHandle id="end-frame" top={102} />
-      <TargetHandle id="element-image" top={136} />
-      <SourceHandle id="video" top={176} />
+      <TargetHandle id="image-reference" top={136} hidden />
+      <TargetHandle id="element-image" top={136} hidden />
+      <SourceHandle id="video" top={72} />
       <div className="mt-3 grid gap-2 text-[11px] text-zinc-400">
         {summaryLines.map((line) => (
           <div key={`${typed.model}-${line}`}>{line}</div>
@@ -811,6 +845,9 @@ const MotionGenerateNode = memo(function MotionGenerateNode({ data, dragging }: 
         </PreviewMediaLink>
       ) : undefined}
     >
+      <InputHandleLabel label="IMAGE" top={34} width={18} offset={84} />
+      <InputHandleLabel label="VIDEO" top={72} width={18} offset={84} />
+      <InputHandleLabel label="PROMPT" top={110} width={18} offset={84} />
       <TargetHandle id="reference-image" top={34} />
       <TargetHandle id="reference-video" top={72} />
       <TargetHandle id="prompt" top={110} />

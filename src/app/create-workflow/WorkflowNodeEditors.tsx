@@ -1,13 +1,17 @@
 'use client';
 
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { AlertCircle, Loader2, Sparkles, Trash2, X } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
+import { useRef, useState, type ReactNode } from 'react';
 import {
   PromptEnhancementError,
   requestPromptEnhancement,
 } from '@/app/components/enhancePromptClient';
-import { buildElementHandle, isValidElementHandle } from '@/lib/image-elements';
+import {
+  getMentionQueryAtCaret,
+  insertHandleIntoPrompt,
+  isValidElementHandle,
+} from '@/lib/image-elements';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getVideoDurationRange, getVideoElementSupport } from '@/lib/models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
@@ -27,20 +31,21 @@ import type {
   WorkflowCanvasEdge,
   WorkflowCanvasGraph,
   WorkflowCanvasNode,
-  WorkflowElementBinding,
   WorkflowHandleType,
   WorkflowMultiPrompt,
   WorkflowNodeData,
   WorkflowNodeKind,
+  WorkflowPromptMentionCandidate,
   WorkflowPromptEnhancementTarget,
   WorkflowReferenceElement,
-  WorkflowResolvedElementReference,
+  WorkflowResolvedImageReference,
 } from '@/lib/workflow-canvas';
 import {
-  getResolvedWorkflowElementReferences,
+  getResolvedWorkflowImageReferences,
   getIncomingEdges,
   getNodeById,
   getPromptEnhancementTargets,
+  getWorkflowPromptMentionCandidates,
   getWorkflowReferenceElementSourceUrl,
   getWorkflowNodeInputHandles,
   getWorkflowNodeOutputHandles,
@@ -268,20 +273,61 @@ function StaticField({
   );
 }
 
+function UploadTile({
+  inputId,
+  inputLabel,
+  accept,
+  title,
+  description,
+  icon,
+  accentClassName,
+  onSelect,
+}: {
+  inputId: string;
+  inputLabel: string;
+  accept: string;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  accentClassName: string;
+  onSelect: (event: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">{inputLabel}</div>
+      <input
+        id={inputId}
+        type="file"
+        accept={accept}
+        aria-label={`${inputLabel} file`}
+        onChange={onSelect}
+        className="sr-only"
+      />
+      <label
+        htmlFor={inputId}
+        className="group flex cursor-pointer items-center gap-4 rounded-3xl border border-dashed border-white/10 bg-black/20 px-4 py-4 transition hover:border-white/20 hover:bg-white/[0.04]"
+      >
+        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] transition group-hover:bg-white/[0.08] ${accentClassName}`}>
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-zinc-100">{title}</div>
+          <div className="mt-1 text-xs leading-relaxed text-zinc-500">{description}</div>
+        </div>
+        <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-300 transition group-hover:border-white/20 group-hover:bg-white/[0.08] group-hover:text-white">
+          Browse
+        </div>
+      </label>
+    </div>
+  );
+}
+
 function getElementPreviewUrl(element: Pick<WorkflowReferenceElement, 'storagePath' | 'url'>): string | null {
   const sourceUrl = getWorkflowReferenceElementSourceUrl(element as WorkflowReferenceElement);
   return sourceUrl ? getDisplayMediaUrl(sourceUrl) : null;
 }
 
-function sanitizeConnectedElementHandle(
-  nextValue: string,
-  bindings: WorkflowElementBinding[],
-  edgeId: string,
-  fallbackDisplayName: string
-) {
-  const siblingHandles = new Set(bindings
-    .filter((binding) => binding.edgeId !== edgeId)
-    .map((binding) => binding.handle));
+function sanitizeWorkflowReferenceHandle(nextValue: string) {
   const normalized = nextValue
     .trim()
     .toLowerCase()
@@ -290,30 +336,32 @@ function sanitizeConnectedElementHandle(
     .replace(/^_+|_+$/g, '');
   const candidate = normalized ? `@${normalized}` : '';
 
-  if (isValidElementHandle(candidate) && !siblingHandles.has(candidate)) {
+  if (!candidate) {
+    return null;
+  }
+
+  if (isValidElementHandle(candidate)) {
     return candidate;
   }
 
-  return buildElementHandle(fallbackDisplayName, siblingHandles, siblingHandles.size + 1);
+  return null;
 }
 
-function ConnectedElementReferencesCard({
-  title = 'Connected named elements',
+function ImageReferencesCard({
+  title = 'Image references',
   references,
-  bindings,
-  maxElements,
+  maxReferences,
   helperText,
   onDeleteEdge,
-  onBindingsChange,
 }: {
   title?: string;
-  references: WorkflowResolvedElementReference[];
-  bindings: WorkflowElementBinding[];
-  maxElements: number;
+  references: WorkflowResolvedImageReference[];
+  maxReferences: number;
   helperText: string;
   onDeleteEdge: (edgeId: string) => void;
-  onBindingsChange: (nextBindings: WorkflowElementBinding[]) => void;
 }) {
+  const hasLegacyBindingHandles = references.some((reference) => reference.handleSource === 'legacy-binding');
+
   return (
     <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -322,9 +370,15 @@ function ConnectedElementReferencesCard({
           <p className="mt-2 text-sm leading-relaxed text-zinc-400">{helperText}</p>
         </div>
         <div className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-zinc-300">
-          {references.length}/{maxElements}
+          {references.length}/{maxReferences}
         </div>
       </div>
+
+      {hasLegacyBindingHandles && (
+        <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-50/90">
+          Some connected refs still use legacy target-owned handles. Move those handles onto the source image nodes to fully switch to source-owned references.
+        </div>
+      )}
 
       <div className="mt-4 space-y-3">
         {references.length > 0 ? references.map((element) => {
@@ -342,45 +396,36 @@ function ConnectedElementReferencesCard({
                   )}
                 </div>
                 <div className="min-w-0 flex-1 space-y-3">
-                  <input
-                    aria-label={`${element.displayName} handle`}
-                    value={element.handle}
-                    onChange={(event) => onBindingsChange(
-                      bindings.map((candidate) => (
-                        candidate.edgeId === element.edgeId
-                          ? {
-                              ...candidate,
-                              handle: sanitizeConnectedElementHandle(
-                                event.target.value,
-                                bindings,
-                                candidate.edgeId,
-                                element.displayName
-                              ),
-                            }
-                          : candidate
-                      ))
-                    )}
-                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm outline-none focus:border-emerald-500/40"
-                  />
                   <div className="text-xs text-zinc-400">
                     Source: <span className="text-zinc-200">{element.sourceTitle}</span>
                     {!element.url && <span className="ml-2 text-amber-300">Output pending</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-1 text-[11px] font-medium text-fuchsia-100">
-                      {element.handle}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-                          void navigator.clipboard.writeText(element.handle);
-                        }
-                      }}
-                      className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/[0.08]"
-                    >
-                      Copy handle
-                    </button>
+                    {element.handle ? (
+                      <>
+                        <span className="rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-1 text-[11px] font-medium text-fuchsia-100">
+                          {element.handle}
+                        </span>
+                        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-400">
+                          {element.handleSource === 'legacy-binding' ? 'Legacy target handle' : 'Source handle'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                              void navigator.clipboard.writeText(element.handle!);
+                            }
+                          }}
+                          className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+                        >
+                          Copy handle
+                        </button>
+                      </>
+                    ) : (
+                      <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-400">
+                        Anonymous reference
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => onDeleteEdge(element.edgeId)}
@@ -395,7 +440,7 @@ function ConnectedElementReferencesCard({
           );
         }) : (
           <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-500">
-            Connect an image output to the node’s <span className="font-medium text-white">Element</span> handle to create a named reference here.
+            Connect an image output to the node’s <span className="font-medium text-white">Image reference</span> handle to use it here.
           </div>
         )}
       </div>
@@ -403,7 +448,229 @@ function ConnectedElementReferencesCard({
   );
 }
 
-function LegacyNamedElementsCard({
+function VideoFramesCard({
+  startFrameLabel,
+  endFrameLabel,
+  isMultiShot,
+}: {
+  startFrameLabel: string | null;
+  endFrameLabel: string | null;
+  isMultiShot: boolean;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+      <div>
+        <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Frames</div>
+        <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+          {isMultiShot
+            ? 'Connect one image to Start frame when you want the first shot anchored. End frame stays disabled in multi-shot.'
+            : 'Connect one image to Start frame, then connect another image to End frame when you want the video to transition toward a second target frame.'}
+        </p>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Start frame</div>
+          <div className="mt-2 text-sm text-zinc-100">{startFrameLabel || 'Not connected'}</div>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">End frame</div>
+          <div className="mt-2 text-sm text-zinc-100">
+            {isMultiShot ? 'Unavailable in multi-shot' : (endFrameLabel || 'Optional')}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SourceReferenceHandleField({
+  value,
+  helperText,
+  onChange,
+}: {
+  value: string | null | undefined;
+  helperText: string;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Reference handle</div>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">{helperText}</p>
+        </div>
+        {value ? (
+          <span className="rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-fuchsia-100">
+            Active
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <input
+          aria-label="Reference handle"
+          value={value || ''}
+          placeholder="Optional @handle"
+          onChange={(event) => onChange(sanitizeWorkflowReferenceHandle(event.target.value))}
+          className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none focus:border-emerald-500/40"
+        />
+        {value ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                void navigator.clipboard.writeText(value);
+              }
+            }}
+            className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+          >
+            Copy handle
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowPromptField({
+  value,
+  onChange,
+  candidates,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  candidates: WorkflowPromptMentionCandidate[];
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [activeMentionQuery, setActiveMentionQuery] = useState<{
+    query: string;
+    replaceStart: number;
+    replaceEnd: number;
+  } | null>(null);
+
+  const updateMentionState = (nextValue: string, caretIndex?: number) => {
+    const fallbackCaret = typeof caretIndex === 'number'
+      ? caretIndex
+      : (textareaRef.current?.selectionStart ?? nextValue.length);
+    setActiveMentionQuery(getMentionQueryAtCaret(nextValue, fallbackCaret));
+  };
+
+  const handlePromptChange = (nextValue: string, caretIndex?: number) => {
+    onChange(nextValue);
+    updateMentionState(nextValue, caretIndex);
+  };
+
+  const syncPromptCaretState = () => {
+    updateMentionState(value);
+  };
+
+  const mentionSuggestions = activeMentionQuery
+    ? candidates.filter((candidate) => {
+        const normalizedQuery = activeMentionQuery.query.toLowerCase();
+        if (!normalizedQuery) {
+          return true;
+        }
+
+        return (
+          candidate.handle.toLowerCase().includes(`@${normalizedQuery}`)
+          || candidate.displayName.toLowerCase().includes(normalizedQuery)
+          || candidate.branchLabels.some((branchLabel) => branchLabel.toLowerCase().includes(normalizedQuery))
+        );
+      })
+    : [];
+  const showMentionSuggestions = Boolean(activeMentionQuery && candidates.length > 0);
+
+  const handleInsertMention = (handle: string) => {
+    const textarea = textareaRef.current;
+    const selectionStart = textarea?.selectionStart ?? value.length;
+    const selectionEnd = textarea?.selectionEnd ?? value.length;
+    const nextValue = insertHandleIntoPrompt(
+      value,
+      handle,
+      selectionStart,
+      selectionEnd,
+      activeMentionQuery
+    );
+
+    onChange(nextValue.prompt);
+    setActiveMentionQuery(null);
+
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(nextValue.caretIndex, nextValue.caretIndex);
+    });
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <label className="text-xs uppercase tracking-[0.18em] text-zinc-500">Prompt</label>
+        <p className="max-w-xs text-right text-[11px] leading-relaxed text-zinc-500">
+          Type <span className="font-semibold text-zinc-300">@</span> to insert handled image references from connected generator branches.
+        </p>
+      </div>
+      <textarea
+        ref={textareaRef}
+        aria-label="Prompt"
+        rows={8}
+        value={value}
+        onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart ?? event.target.value.length)}
+        onClick={syncPromptCaretState}
+        onKeyUp={syncPromptCaretState}
+        className="mt-2 w-full rounded-3xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-emerald-500/40"
+      />
+      {showMentionSuggestions ? (
+        <div className="mt-4 rounded-3xl border border-white/10 bg-black/20 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Insert reference</div>
+              <p className="mt-1 text-sm text-zinc-400">
+                {mentionSuggestions.length > 0
+                  ? 'Pick a handled reference to insert its @mention.'
+                  : 'No matching handled references yet.'}
+              </p>
+            </div>
+            {activeMentionQuery?.query ? (
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
+                @{activeMentionQuery.query}
+              </span>
+            ) : null}
+          </div>
+          {mentionSuggestions.length > 0 ? (
+            <div className="mt-3 flex flex-col gap-2">
+              {mentionSuggestions.map((candidate) => (
+                <button
+                  key={candidate.handle}
+                  type="button"
+                  aria-label={`Insert ${candidate.handle}`}
+                  onClick={() => handleInsertMention(candidate.handle)}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-left transition hover:bg-white/[0.08]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-emerald-200">{candidate.handle}</span>
+                        <span className="text-xs text-zinc-500">{candidate.displayName}</span>
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                        {candidate.branchLabels.join(' • ')}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-zinc-400">
+                      {candidate.sourceCount} branch{candidate.sourceCount === 1 ? '' : 'es'}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LegacyHandledReferencesCard({
   elements,
 }: {
   elements: WorkflowReferenceElement[];
@@ -414,9 +681,9 @@ function LegacyNamedElementsCard({
 
   return (
     <div className="rounded-3xl border border-amber-500/20 bg-amber-500/10 p-4">
-      <div className="text-xs uppercase tracking-[0.18em] text-amber-200">Legacy attached elements</div>
+      <div className="text-xs uppercase tracking-[0.18em] text-amber-200">Legacy handled references</div>
       <p className="mt-2 text-sm leading-relaxed text-amber-50/90">
-        This workflow still has older node-local elements. They remain runnable for compatibility, but new workflow editing should use connected named elements from the graph instead.
+        This workflow still has older node-local handled references. They remain runnable for compatibility, but new workflow editing should use connected image references from the graph instead.
       </p>
       <div className="mt-4 space-y-3">
         {elements.map((element) => {
@@ -629,10 +896,7 @@ function buildPromptEnhancementRequest(
   }
 
   const resolvedInputs = resolveNodeInputs(graph, node.id);
-  const referenceImageCount = Math.max(
-    countIncomingHandleConnections(graph, node.id, 'reference-image'),
-    resolvedInputs.imageUrls.length
-  );
+  const referenceImageCount = resolvedInputs.imageReferences.length;
   const legacyStartFrameConnectionCount = countIncomingHandleConnections(graph, node.id, 'reference-image');
   const startFrameConnectionCount = countIncomingHandleConnections(graph, node.id, 'start-frame') + legacyStartFrameConnectionCount;
   const endFrameConnectionCount = countIncomingHandleConnections(graph, node.id, 'end-frame');
@@ -640,9 +904,10 @@ function buildPromptEnhancementRequest(
   const hasEndImage = endFrameConnectionCount > 0 || Boolean(resolvedInputs.endFrameUrl);
   const hasReferenceVideo = countIncomingHandleConnections(graph, node.id, 'reference-video') > 0
     || resolvedInputs.videoUrls.length > 0;
-  const resolvedElementReferences = getResolvedWorkflowElementReferences(graph, node.id);
-  const elementReferences = resolvedElementReferences.map((element) => ({
-    handle: element.handle,
+  const resolvedImageReferences = getResolvedWorkflowImageReferences(graph, node.id);
+  const handledImageReferences = resolvedImageReferences.filter((reference) => Boolean(reference.handle));
+  const elementReferences = handledImageReferences.map((element) => ({
+    handle: element.handle!,
     displayName: element.displayName,
   }));
 
@@ -656,9 +921,9 @@ function buildPromptEnhancementRequest(
         aspectRatio: data.aspectRatio,
         resolution: data.resolution,
         googleSearch: data.googleSearch,
-        referenceImageCount: referenceImageCount + resolvedElementReferences.length,
-        elementEnhancementMode: resolvedElementReferences.length > 0 ? 'append-only' : undefined,
-        elementReferences,
+        referenceImageCount: referenceImageCount + data.elements.length,
+        elementEnhancementMode: handledImageReferences.length > 0 ? 'append-only' : undefined,
+        elementReferences: handledImageReferences.length > 0 ? elementReferences : undefined,
       },
     };
   }
@@ -677,11 +942,11 @@ function buildPromptEnhancementRequest(
         resolution: data.resolution || undefined,
         hasStartImage,
         hasEndImage,
-        referenceImageCount: data.referenceMode === 'elements'
-          ? resolvedElementReferences.length
+        referenceImageCount: referenceImageCount > 0
+          ? referenceImageCount + data.elements.length
           : startFrameConnectionCount + endFrameConnectionCount,
-        elementEnhancementMode: data.referenceMode === 'elements' ? 'append-only' : undefined,
-        elementReferences: data.referenceMode === 'elements' ? elementReferences : undefined,
+        elementEnhancementMode: handledImageReferences.length > 0 ? 'append-only' : undefined,
+        elementReferences: handledImageReferences.length > 0 ? elementReferences : undefined,
       },
     };
   }
@@ -1008,16 +1273,16 @@ function CapabilityLimitsCard({
 
   if (node.type === 'image-generate' && capabilityValidation.referenceImageLimit !== null) {
     rows.push({
-      label: 'Connected refs',
+      label: 'Image refs',
       value: `${capabilityValidation.referenceImageCount}/${capabilityValidation.referenceImageLimit}`,
     });
     rows.push({
-      label: 'Connected elements',
-      value: `${capabilityValidation.connectedElementCount}/${capabilityValidation.namedElementLimit ?? capabilityValidation.referenceImageLimit}`,
+      label: 'Handled refs',
+      value: `${capabilityValidation.connectedElementCount}/${capabilityValidation.referenceImageCount || 0}`,
     });
     if (capabilityValidation.legacyElementCount > 0) {
       rows.push({
-        label: 'Legacy elements',
+        label: 'Legacy handled refs',
         value: `${capabilityValidation.legacyElementCount}`,
       });
     }
@@ -1039,14 +1304,32 @@ function CapabilityLimitsCard({
         : `${capabilityValidation.endFrameCount}/1`,
     });
     rows.push({
-      label: 'Connected elements',
-      value: capabilityValidation.namedElementLimit !== null
-        ? `${capabilityValidation.connectedElementCount}/${capabilityValidation.namedElementLimit}`
-        : `${capabilityValidation.connectedElementCount}`,
+      label: 'Frame status',
+      value: capabilityValidation.isMultiShot
+        ? (capabilityValidation.startFrameCount > 0 ? 'Start connected' : 'Start optional')
+        : capabilityValidation.endFrameCount > 0
+          ? 'Start + end connected'
+          : capabilityValidation.startFrameCount > 0
+            ? 'Start connected'
+            : 'No frames yet',
     });
+    if (capabilityValidation.referenceImageCount > 0 || capabilityValidation.legacyElementCount > 0) {
+      rows.push({
+        label: 'Legacy image refs',
+        value: capabilityValidation.referenceImageLimit !== null
+          ? `${capabilityValidation.referenceImageCount}/${capabilityValidation.referenceImageLimit}`
+          : `${capabilityValidation.referenceImageCount}`,
+      });
+      rows.push({
+        label: 'Handled refs',
+        value: capabilityValidation.referenceImageCount > 0
+          ? `${capabilityValidation.connectedElementCount}/${capabilityValidation.referenceImageCount}`
+          : `${capabilityValidation.connectedElementCount}`,
+      });
+    }
     if (capabilityValidation.legacyElementCount > 0) {
       rows.push({
-        label: 'Legacy elements',
+        label: 'Legacy handled refs',
         value: `${capabilityValidation.legacyElementCount}`,
       });
     }
@@ -1096,13 +1379,13 @@ function CapabilityLimitsCard({
           <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Capabilities & Limits</div>
           <p className="mt-2 text-sm leading-relaxed text-zinc-300">
             {node.type === 'image-generate'
-              ? 'Graph-connected named elements and anonymous reference images share one model budget.'
+              ? 'All connected image references share one model budget. Only refs whose source image nodes have @handles are compiled into the prompt.'
               : node.type === 'video-generate'
                 ? capabilityValidation.isMultiShot
-                  ? 'Multi-shot video keeps prompts locally, allows an optional start frame, and does not use end frames or named elements.'
-                  : capabilityValidation.activeReferenceMode === 'elements'
-                    ? 'Named-elements mode uses graph-connected element refs and disables start/end frame usage for this run.'
-                    : 'Frames mode uses graph-connected start and optional end frame inputs for a single-shot run.'
+                  ? 'Multi-shot video keeps prompts locally, allows an optional start frame, and does not use end frames.'
+                  : capabilityValidation.activeReferenceMode === 'references'
+                    ? 'This video node still has legacy general image references attached. New workflow video authoring uses Start frame and optional End frame instead.'
+                    : 'Connect an image to Start frame and optionally another to End frame for a single-shot run.'
                 : 'Motion control needs one image reference, one video reference, and a reference clip that stays within the model limit.'}
           </p>
         </div>
@@ -1176,8 +1459,37 @@ function NodeEditorContent({
       })
     : null;
   const resolvedInputs = resolveNodeInputs(graph, node.id);
-  const resolvedElementReferences = getResolvedWorkflowElementReferences(graph, node.id);
-  const connectedElementReferences = resolvedElementReferences.filter((element) => !element.legacy);
+  const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
+  const resolvedImageReferences = getResolvedWorkflowImageReferences(graph, node.id);
+  const promptMentionCandidates = selectedKind === 'text-input'
+    ? getWorkflowPromptMentionCandidates(graph, node.id)
+    : [];
+  const connectedImageReferences = resolvedImageReferences.filter((reference) => !reference.legacy);
+  const legacyVideoReferencesPresent = selectedKind === 'video-generate' && (
+    connectedImageReferences.length > 0 || (videoGenerateNode?.elements.length || 0) > 0
+  );
+  const startFrameSourceTitle = selectedKind === 'video-generate'
+    ? (() => {
+        const edge = getIncomingEdges(graph, node.id).find((candidate) => {
+          const source = getNodeById(graph, candidate.source);
+          return candidate.sourceHandle === 'image'
+            && source
+            && (candidate.targetHandle === 'start-frame' || candidate.targetHandle === 'reference-image');
+        });
+        const source = edge ? getNodeById(graph, edge.source) : null;
+        return source?.data?.title || null;
+      })()
+    : null;
+  const endFrameSourceTitle = selectedKind === 'video-generate'
+    ? (() => {
+        const edge = getIncomingEdges(graph, node.id).find((candidate) => {
+          const source = getNodeById(graph, candidate.source);
+          return candidate.sourceHandle === 'image' && source && candidate.targetHandle === 'end-frame';
+        });
+        const source = edge ? getNodeById(graph, edge.source) : null;
+        return source?.data?.title || null;
+      })()
+    : null;
 
   return (
     <div className="space-y-4 px-5 py-5">
@@ -1198,15 +1510,11 @@ function NodeEditorContent({
             onCreditsUpdate={onCreditsUpdate}
             onUpdateNode={onUpdateNode}
           />
-          <div>
-            <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Prompt</label>
-            <textarea
-              rows={8}
-              value={(node.data as TextInputNodeData).text ?? ''}
-              onChange={(event) => onUpdateNode(node.id, { ...node.data, text: event.target.value } as Partial<WorkflowNodeData>)}
-              className="w-full rounded-3xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-emerald-500/40"
-            />
-          </div>
+          <WorkflowPromptField
+            value={(node.data as TextInputNodeData).text ?? ''}
+            candidates={promptMentionCandidates}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, text: value } as Partial<WorkflowNodeData>)}
+          />
         </>
       )}
 
@@ -1224,11 +1532,26 @@ function NodeEditorContent({
 
       {selectedKind === 'image-input' && (
         <div className="space-y-3">
-          <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Upload image</label>
-          <input
-            type="file"
+          <SourceReferenceHandleField
+            value={(node.data as ImageInputNodeData).referenceHandle}
+            helperText="Optional global @handle for this image source. Any downstream generator connected through Image reference can mention it in the prompt."
+            onChange={(referenceHandle) => onUpdateNode(node.id, { ...node.data, referenceHandle } as Partial<WorkflowNodeData>)}
+          />
+          <UploadTile
+            inputId={`workflow-image-input-${node.id}`}
+            inputLabel="Upload image"
             accept="image/*"
-            onChange={async (event) => {
+            title="Click to upload image"
+            description="PNG, JPG, WEBP and other supported image files."
+            icon={
+              <div className="relative">
+                <ImageIcon className="h-5 w-5" />
+                <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
+              </div>
+            }
+            accentClassName="text-sky-300"
+            onSelect={async (event) => {
+              const input = event.currentTarget;
               const file = event.target.files?.[0];
               if (!file) return;
               try {
@@ -1240,9 +1563,10 @@ function NodeEditorContent({
                 } as Partial<WorkflowNodeData>);
               } catch (uploadError) {
                 onSetError(uploadError instanceof Error ? uploadError.message : 'Image upload failed');
+              } finally {
+                input.value = '';
               }
             }}
-            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm"
           />
           {(node.data as ImageInputNodeData).imageUrl && (
             <img
@@ -1256,11 +1580,21 @@ function NodeEditorContent({
 
       {selectedKind === 'video-input' && (
         <div className="space-y-3">
-          <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Upload video</label>
-          <input
-            type="file"
+          <UploadTile
+            inputId={`workflow-video-input-${node.id}`}
+            inputLabel="Upload video"
             accept="video/*"
-            onChange={async (event) => {
+            title="Click to upload video"
+            description="MP4, MOV and other supported video files."
+            icon={
+              <div className="relative">
+                <Video className="h-5 w-5" />
+                <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
+              </div>
+            }
+            accentClassName="text-emerald-300"
+            onSelect={async (event) => {
+              const input = event.currentTarget;
               const file = event.target.files?.[0];
               if (!file) return;
               try {
@@ -1274,9 +1608,10 @@ function NodeEditorContent({
                 } as Partial<WorkflowNodeData>);
               } catch (uploadError) {
                 onSetError(uploadError instanceof Error ? uploadError.message : 'Video upload failed');
+              } finally {
+                input.value = '';
               }
             }}
-            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm"
           />
           {typeof (node.data as VideoInputNodeData).durationSeconds === 'number' && (
             <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-300">
@@ -1297,11 +1632,21 @@ function NodeEditorContent({
 
       {selectedKind === 'audio-input' && (
         <div className="space-y-3">
-          <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Upload audio</label>
-          <input
-            type="file"
+          <UploadTile
+            inputId={`workflow-audio-input-${node.id}`}
+            inputLabel="Upload audio"
             accept="audio/*"
-            onChange={async (event) => {
+            title="Click to upload audio"
+            description="MP3, WAV and other supported audio files."
+            icon={
+              <div className="relative">
+                <Volume2 className="h-5 w-5" />
+                <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
+              </div>
+            }
+            accentClassName="text-violet-300"
+            onSelect={async (event) => {
+              const input = event.currentTarget;
               const file = event.target.files?.[0];
               if (!file) return;
               try {
@@ -1313,9 +1658,10 @@ function NodeEditorContent({
                 } as Partial<WorkflowNodeData>);
               } catch (uploadError) {
                 onSetError(uploadError instanceof Error ? uploadError.message : 'Audio upload failed');
+              } finally {
+                input.value = '';
               }
             }}
-            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm"
           />
           {(node.data as AudioInputNodeData).audioUrl && (
             <audio
@@ -1366,19 +1712,22 @@ function NodeEditorContent({
               onChange={(checked) => onUpdateNode(node.id, { ...node.data, googleSearch: checked } as Partial<WorkflowNodeData>)}
             />
           )}
+          <SourceReferenceHandleField
+            value={imageGenerateNode?.referenceHandle}
+            helperText="Optional global @handle for this node’s generated image output. Downstream generators can mention it whenever they connect this output as an Image reference."
+            onChange={(referenceHandle) => onUpdateNode(node.id, { ...node.data, referenceHandle } as Partial<WorkflowNodeData>)}
+          />
           {imageGenerateNode && imageModel && (
-            <ConnectedElementReferencesCard
-              title="Connected named elements"
-              references={connectedElementReferences}
-              bindings={imageGenerateNode.elementBindings}
-              maxElements={imageModel.maxImages}
-              helperText="Connect image inputs or upstream image outputs into the Element handle, then reference them from the shared prompt with their @handles."
+            <ImageReferencesCard
+              title="Image references"
+              references={connectedImageReferences}
+              maxReferences={imageModel.maxImages}
+              helperText="Connect image inputs or upstream image outputs into the Image reference handle. Handles are now owned by the source image nodes and appear here automatically."
               onDeleteEdge={onDeleteEdge}
-              onBindingsChange={(elementBindings) => onUpdateNode(node.id, { ...node.data, elementBindings } as Partial<WorkflowNodeData>)}
             />
           )}
           {imageGenerateNode && imageGenerateNode.elements.length > 0 && (
-            <LegacyNamedElementsCard elements={imageGenerateNode.elements} />
+            <LegacyHandledReferencesCard elements={imageGenerateNode.elements} />
           )}
         </>
       )}
@@ -1400,17 +1749,6 @@ function NodeEditorContent({
               label="Multi-shot"
               checked={videoGenerateNode.isMultiShot}
               onChange={(checked) => onUpdateNode(node.id, { ...node.data, isMultiShot: checked } as Partial<WorkflowNodeData>)}
-            />
-          )}
-          {!videoGenerateNode.isMultiShot && (
-            <SelectField
-              label="Reference mode"
-              value={videoGenerateNode.referenceMode}
-              onChange={(value) => onUpdateNode(node.id, { ...node.data, referenceMode: value } as Partial<WorkflowNodeData>)}
-              options={[
-                { value: 'frames', label: 'Frames' },
-                { value: 'elements', label: 'Named elements' },
-              ]}
             />
           )}
           <SelectField
@@ -1486,9 +1824,11 @@ function NodeEditorContent({
                   Connected prompt text stays visible in the graph, but this node ignores it while multi-shot is active.
                 </div>
               )}
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-zinc-300">
-                Start frame is still available through the graph. End frame is disabled in multi-shot mode.
-              </div>
+              <VideoFramesCard
+                startFrameLabel={startFrameSourceTitle}
+                endFrameLabel={endFrameSourceTitle}
+                isMultiShot
+              />
               <MultiShotEditor
                 shots={videoGenerateNode.multiPrompts}
                 onChange={(multiPrompts) => onUpdateNode(node.id, { ...node.data, multiPrompts } as Partial<WorkflowNodeData>)}
@@ -1502,32 +1842,26 @@ function NodeEditorContent({
                 hasEndImage={Boolean(resolvedInputs.endFrameUrl)}
               />
             </>
-          ) : videoGenerateNode.referenceMode === 'elements' ? (
+          ) : (
             <>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-zinc-300">
-                Frames are disabled for this run while Named elements mode is active. Mention the handles in the shared prompt to activate them.
-              </div>
-              <ConnectedElementReferencesCard
-                title="Connected named elements"
-                references={connectedElementReferences}
-                bindings={videoGenerateNode.elementBindings}
-                maxElements={videoElementSupport?.maxElements ?? 0}
-                helperText={
-                  videoElementSupport?.enabled
-                    ? `Use up to ${videoElementSupport.maxElements} graph-connected named element${videoElementSupport.maxElements === 1 ? '' : 's'} with @handles in the shared prompt.`
-                    : (videoElementSupport?.reason || 'Named elements are not available in this mode.')
-                }
-                onDeleteEdge={onDeleteEdge}
-                onBindingsChange={(elementBindings) => onUpdateNode(node.id, { ...node.data, elementBindings } as Partial<WorkflowNodeData>)}
+              <VideoFramesCard
+                startFrameLabel={startFrameSourceTitle}
+                endFrameLabel={endFrameSourceTitle}
+                isMultiShot={false}
               />
+              {legacyVideoReferencesPresent && (
+                <ImageReferencesCard
+                  title="Legacy image references"
+                  references={connectedImageReferences}
+                  maxReferences={videoElementSupport?.maxElements ?? connectedImageReferences.length}
+                  helperText="This older workflow still has general image references attached. New video nodes use Start frame and optional End frame instead. Remove these legacy refs when you want to fully switch to the frame-based flow."
+                  onDeleteEdge={onDeleteEdge}
+                />
+              )}
               {videoGenerateNode.elements.length > 0 && (
-                <LegacyNamedElementsCard elements={videoGenerateNode.elements} />
+                <LegacyHandledReferencesCard elements={videoGenerateNode.elements} />
               )}
             </>
-          ) : (
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-zinc-300">
-              Frames come from the graph now: connect an image to <span className="font-medium text-white">Start frame</span> and optionally another image to <span className="font-medium text-white">End frame</span>.
-            </div>
           )}
         </>
       )}
@@ -1806,30 +2140,36 @@ function NodeDataPanel({
 
       <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
         <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Inputs</div>
-        <div className="mt-4 grid gap-3 text-sm text-zinc-300">
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Prompt</div>
-            <div className="mt-2 whitespace-pre-wrap text-zinc-200">
-              {resolvedInputs.prompt || 'No connected prompt text yet.'}
+          <div className="mt-4 grid gap-3 text-sm text-zinc-300">
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Prompt</div>
+              <div className="mt-2 whitespace-pre-wrap text-zinc-200">
+                {resolvedInputs.prompt || 'No connected prompt text yet.'}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {(() => {
+                const handledReferenceCount = getResolvedWorkflowImageReferences(graph, node.id)
+                  .filter((reference) => !reference.legacy && Boolean(reference.handle))
+                  .length;
+
+                return [
+                  { label: 'Image refs', value: resolvedInputs.imageReferences.length ? `${resolvedInputs.imageReferences.length} connected` : 'None' },
+                  { label: 'Handled refs', value: handledReferenceCount ? `${handledReferenceCount} with @handles` : 'None' },
+                  { label: 'Start frame', value: resolvedInputs.startFrameUrl ? 'Connected' : 'None' },
+                  { label: 'End frame', value: resolvedInputs.endFrameUrl ? 'Connected' : 'None' },
+                  { label: 'Videos', value: resolvedInputs.videoUrls.length ? `${resolvedInputs.videoUrls.length} connected` : 'None' },
+                  { label: 'Audio', value: resolvedInputs.audioUrls.length ? `${resolvedInputs.audioUrls.length} connected` : 'None' },
+                ];
+              })().map((item) => (
+                <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{item.label}</div>
+                  <div className="mt-2 text-sm text-zinc-200">{item.value}</div>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {[
-              { label: node.type === 'video-generate' ? 'Refs' : 'Images', value: resolvedInputs.imageUrls.length ? `${resolvedInputs.imageUrls.length} connected` : 'None' },
-              { label: 'Named elements', value: resolvedInputs.elementImages.length ? `${resolvedInputs.elementImages.length} connected` : 'None' },
-              { label: 'Start frame', value: resolvedInputs.startFrameUrl ? 'Connected' : 'None' },
-              { label: 'End frame', value: resolvedInputs.endFrameUrl ? 'Connected' : 'None' },
-              { label: 'Videos', value: resolvedInputs.videoUrls.length ? `${resolvedInputs.videoUrls.length} connected` : 'None' },
-              { label: 'Audio', value: resolvedInputs.audioUrls.length ? `${resolvedInputs.audioUrls.length} connected` : 'None' },
-            ].map((item) => (
-              <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{item.label}</div>
-                <div className="mt-2 text-sm text-zinc-200">{item.value}</div>
-              </div>
-            ))}
-          </div>
         </div>
-      </div>
 
       <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
         <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Ports</div>
@@ -1945,10 +2285,11 @@ function getNodeGuidance(nodeType: WorkflowNodeKind): string[] {
 
   if (nodeType === 'video-generate') {
     return [
-      'Single-shot video keeps using the shared upstream prompt and can run in Frames mode or Named elements mode.',
+      'Single-shot video keeps using the shared upstream prompt and now connects through Start frame plus optional End frame.',
       'If the node is blocked, check that a prompt node contains actual text and any connected reference image has an output.',
-      'Frames mode accepts one graph-connected start frame and one optional end frame. Named elements come from graph-connected image branches and use @handles from the shared prompt.',
-      'Multi-shot owns its shot prompts locally, keeps start-frame support, and disables end-frame plus named-element usage for that run.',
+      'Connect one image to Start frame, then another to End frame when you want the video to transition toward a target final frame.',
+      'Older workflows with general image references still run in compatibility mode, but new editing should stay frame-based.',
+      'Multi-shot owns its shot prompts locally, keeps start-frame support, and disables end-frame usage for that run.',
       'Native audio only applies to supported models and can increase generation cost.',
     ];
   }
@@ -1963,8 +2304,8 @@ function getNodeGuidance(nodeType: WorkflowNodeKind): string[] {
 
   if (nodeType === 'image-generate') {
     return [
-      'Image generators can mix graph-connected named elements with anonymous reference-image inputs from the graph.',
-      'Named elements and connected refs share the same per-model image budget: Nano Banana 2 allows up to 14 total, Nano Banana Pro allows up to 8.',
+      'Image generators use one unified image-reference input. Add an optional @handle only when the prompt needs to address a specific reference directly.',
+      'Handled refs and anonymous refs share the same per-model image budget: Nano Banana 2 allows up to 14 total, Nano Banana Pro allows up to 8.',
       'Use image output as a reusable first-frame source for video or motion branches.',
       'Higher resolutions increase cost and generation time, so keep test iterations at 1K until the branch is stable.',
     ];

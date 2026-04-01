@@ -19,7 +19,23 @@ vi.mock('@xyflow/react', async () => {
       path: string;
     }) => <path data-testid={`workflow-base-edge-${id}`} d={path} markerEnd={markerEnd} />,
     EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-    Handle: () => null,
+    Handle: ({
+      id,
+      position,
+      style,
+      type,
+    }: {
+      id?: string;
+      position?: string;
+      style?: React.CSSProperties;
+      type?: string;
+    }) => (
+      <div
+        data-testid={`workflow-handle-${type}-${id}`}
+        data-position={position}
+        style={style}
+      />
+    ),
     Position: { Left: 'left', Right: 'right' },
     getBezierPath: () => ['M0 0 C 24 0 72 40 120 40', 60, 20],
   };
@@ -149,5 +165,87 @@ describe('WorkflowCanvasNodes edge controls', () => {
     fireEvent.mouseEnter(nodeShell!);
     expect(screen.queryByTestId('workflow-node-action-play')).not.toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-action-delete')).toBeInTheDocument();
+  });
+
+  it('keeps image and video generator output handles vertically centered on compact cards', () => {
+    const graph = createStarterGraph();
+    const imageNode = graph.nodes.find((candidate) => candidate.type === 'image-generate');
+    const videoNode = graph.nodes.find((candidate) => candidate.type === 'video-generate');
+    expect(imageNode).toBeTruthy();
+    expect(videoNode).toBeTruthy();
+
+    const ImageGenerateNode = workflowCanvasNodeTypes['image-generate'] as unknown as ComponentType<Record<string, unknown>>;
+    const VideoGenerateNode = workflowCanvasNodeTypes['video-generate'] as unknown as ComponentType<Record<string, unknown>>;
+
+    const { rerender } = render(
+      <ImageGenerateNode
+        id={imageNode?.id}
+        data={imageNode?.data}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByTestId('workflow-handle-source-image')).toHaveStyle({ top: '60px' });
+
+    rerender(
+      <VideoGenerateNode
+        id={videoNode?.id}
+        data={videoNode?.data}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByTestId('workflow-handle-source-video')).toHaveStyle({ top: '72px' });
+  });
+
+  it('shows inline labels for multi-input workflow nodes only', () => {
+    const graph = createStarterGraph();
+    const imageNode = graph.nodes.find((candidate) => candidate.type === 'image-generate');
+    const videoNode = graph.nodes.find((candidate) => candidate.type === 'video-generate');
+    const motionNode = graph.nodes.find((candidate) => candidate.type === 'motion-generate');
+    expect(imageNode).toBeTruthy();
+    expect(videoNode).toBeTruthy();
+    expect(motionNode).toBeTruthy();
+
+    const ImageGenerateNode = workflowCanvasNodeTypes['image-generate'] as unknown as ComponentType<Record<string, unknown>>;
+    const VideoGenerateNode = workflowCanvasNodeTypes['video-generate'] as unknown as ComponentType<Record<string, unknown>>;
+    const MotionGenerateNode = workflowCanvasNodeTypes['motion-generate'] as unknown as ComponentType<Record<string, unknown>>;
+
+    const { rerender } = render(
+      <ImageGenerateNode
+        id={imageNode?.id}
+        data={imageNode?.data}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByText('PROMPT')).toBeInTheDocument();
+    expect(screen.getByText('REF')).toBeInTheDocument();
+
+    rerender(
+      <VideoGenerateNode
+        id={videoNode?.id}
+        data={videoNode?.data}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByText('PROMPT')).toBeInTheDocument();
+    expect(screen.getByText('START')).toBeInTheDocument();
+    expect(screen.getByText('END')).toBeInTheDocument();
+    expect(screen.queryByText(/^REF$/)).not.toBeInTheDocument();
+
+    rerender(
+      <MotionGenerateNode
+        id={motionNode?.id}
+        data={motionNode?.data}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByText('IMAGE')).toBeInTheDocument();
+    expect(screen.getByText('VIDEO')).toBeInTheDocument();
+    expect(screen.getByText('PROMPT')).toBeInTheDocument();
+    expect(screen.queryByText('START')).not.toBeInTheDocument();
   });
 });
