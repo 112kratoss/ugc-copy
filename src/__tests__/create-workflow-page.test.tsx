@@ -364,11 +364,28 @@ describe('CreateWorkflowPage', () => {
   let canvasesById: Record<string, WorkflowCanvasRecord>;
   let lastRunRequest: { canvasId: string; mode: string; startNodeId: string } | null;
   let orderedCanvasIds: string[];
+  let nextCanvasIdNumber: number;
 
   async function renderLoadedPage() {
     render(<CreateWorkflowPage />);
     await screen.findByDisplayValue('Workflow canvas');
     await screen.findByTestId(`node-select-${canvasesById['canvas-1']?.graph.nodes[0]?.id}`);
+  }
+
+  function getWorkflowTitleInput() {
+    return screen.getByRole('textbox', { name: /workflow title/i });
+  }
+
+  function getWorkflowButton(title: string) {
+    return screen.getByRole('button', { name: `Open workflow ${title}` });
+  }
+
+  function queryWorkflowButton(title: string) {
+    return screen.queryByRole('button', { name: `Open workflow ${title}` });
+  }
+
+  function getWorkflowActionsButton(title: string) {
+    return screen.getByRole('button', { name: `Open actions for ${title}` });
   }
 
   beforeEach(() => {
@@ -407,6 +424,8 @@ describe('CreateWorkflowPage', () => {
       },
     };
     orderedCanvasIds = ['canvas-1', 'canvas-2'];
+    nextCanvasIdNumber = 3;
+    delete (window as Window & { __ugcWorkflowListCollapsed?: boolean }).__ugcWorkflowListCollapsed;
 
     vi.stubGlobal('fetch', vi.fn(async (input, init) => {
       const url = String(input);
@@ -513,12 +532,16 @@ describe('CreateWorkflowPage', () => {
       }
 
       if (url.endsWith('/api/workflow-canvases') && method === 'POST') {
+        const payload = JSON.parse(String(init?.body || '{}'));
+        const createdCanvasNumber = nextCanvasIdNumber;
+        nextCanvasIdNumber += 1;
+        const timestampMinute = String(20 + createdCanvasNumber).padStart(2, '0');
         const createdCanvas: WorkflowCanvasRecord = {
-          id: 'canvas-3',
-          title: 'Workflow 3',
-          graph: createStarterGraph(),
-          created_at: '2026-03-22T00:20:00.000Z',
-          updated_at: '2026-03-22T00:20:00.000Z',
+          id: `canvas-${createdCanvasNumber}`,
+          title: typeof payload.title === 'string' ? payload.title : `Workflow ${createdCanvasNumber}`,
+          graph: payload.graph ?? createStarterGraph(),
+          created_at: `2026-03-22T00:${timestampMinute}:00.000Z`,
+          updated_at: `2026-03-22T00:${timestampMinute}:00.000Z`,
           revision: 0,
           status: 'draft',
           published_at: null,
@@ -567,6 +590,115 @@ describe('CreateWorkflowPage', () => {
     expect(screen.queryByRole('button', { name: /command/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /create draft/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
+  });
+
+  it('collapses the workflow list while keeping new workflow available', async () => {
+    await renderLoadedPage();
+
+    const leftRail = within(screen.getByTestId('workflow-left-rail'));
+    expect(leftRail.getByTestId('workflow-canvas-list')).toBeInTheDocument();
+    expect(leftRail.getByRole('button', { name: 'Open workflow Second workflow' })).toBeInTheDocument();
+
+    fireEvent.click(leftRail.getByRole('button', { name: /collapse workflows/i }));
+
+    expect(leftRail.queryByTestId('workflow-canvas-list')).not.toBeInTheDocument();
+    expect(leftRail.queryByRole('button', { name: 'Open workflow Second workflow' })).not.toBeInTheDocument();
+    expect(leftRail.getByRole('button', { name: /expand workflows/i })).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(leftRail.getByRole('button', { name: /new workflow/i }));
+
+    await waitFor(() => {
+      expect(getWorkflowTitleInput()).toHaveValue('Workflow 3');
+    });
+
+    expect(leftRail.queryByTestId('workflow-canvas-list')).not.toBeInTheDocument();
+
+    fireEvent.click(leftRail.getByRole('button', { name: /expand workflows/i }));
+
+    expect(await leftRail.findByRole('button', { name: 'Open workflow Second workflow' })).toBeInTheDocument();
+  });
+
+  it('opens workflow actions without switching the active workflow and allows canceling delete', async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(getWorkflowActionsButton('Second workflow'));
+
+    expect(getWorkflowTitleInput()).toHaveValue('Workflow canvas');
+    expect(screen.queryByText(/save before continuing/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /^delete workflow$/i }));
+
+    const dialog = await screen.findByTestId('workflow-delete-dialog');
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('workflow-delete-dialog')).not.toBeInTheDocument();
+    });
+
+    expect(getWorkflowButton('Second workflow')).toBeInTheDocument();
+    expect(getWorkflowTitleInput()).toHaveValue('Workflow canvas');
+  });
+
+  it('deletes an inactive workflow from the left rail actions menu', async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(getWorkflowActionsButton('Second workflow'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^delete workflow$/i }));
+    fireEvent.click(within(screen.getByTestId('workflow-delete-dialog')).getByRole('button', { name: /^delete workflow$/i }));
+
+    await waitFor(() => {
+      expect(queryWorkflowButton('Second workflow')).not.toBeInTheDocument();
+    });
+
+    expect(orderedCanvasIds).toEqual(['canvas-1']);
+    expect(getWorkflowTitleInput()).toHaveValue('Workflow canvas');
+  });
+
+  it('shows a delete-specific warning when deleting the active workflow with unsaved changes', async () => {
+    await renderLoadedPage();
+
+    fireEvent.change(getWorkflowTitleInput(), {
+      target: { value: 'Unsaved title' },
+    });
+
+    fireEvent.click(getWorkflowActionsButton('Unsaved title'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^delete workflow$/i }));
+
+    const dialog = await screen.findByTestId('workflow-delete-dialog');
+    expect(within(dialog).getByText(/any unsaved changes in it will be lost/i)).toBeInTheDocument();
+    expect(screen.queryByText(/save before continuing/i)).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^delete workflow$/i }));
+
+    await waitFor(() => {
+      expect(getWorkflowTitleInput()).toHaveValue('Second workflow');
+    });
+
+    expect(queryWorkflowButton('Unsaved title')).not.toBeInTheDocument();
+    expect(screen.queryByText(/save before continuing/i)).not.toBeInTheDocument();
+  });
+
+  it('creates a replacement workflow when deleting the last remaining canvas', async () => {
+    canvasesById = {
+      'canvas-1': canvasesById['canvas-1'],
+    };
+    orderedCanvasIds = ['canvas-1'];
+
+    await renderLoadedPage();
+
+    fireEvent.click(getWorkflowActionsButton('Workflow canvas'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^delete workflow$/i }));
+    fireEvent.click(within(screen.getByTestId('workflow-delete-dialog')).getByRole('button', { name: /^delete workflow$/i }));
+
+    await waitFor(() => {
+      expect(getWorkflowTitleInput()).toHaveValue('Workflow 2');
+    });
+
+    expect(orderedCanvasIds).toHaveLength(1);
+    expect(orderedCanvasIds[0]).not.toBe('canvas-1');
+    expect(getWorkflowButton('Workflow 2')).toBeInTheDocument();
   });
 
   it('keeps selection-first editing and opens the node-anchored popup from right click, Enter, and double click', async () => {
@@ -730,7 +862,7 @@ describe('CreateWorkflowPage', () => {
       target: { value: 'Unsaved title' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /second workflow/i }));
+    fireEvent.click(getWorkflowButton('Second workflow'));
     expect(await screen.findByText(/save before continuing/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
@@ -739,7 +871,7 @@ describe('CreateWorkflowPage', () => {
     });
     expect(screen.getByDisplayValue('Unsaved title')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /second workflow/i }));
+    fireEvent.click(getWorkflowButton('Second workflow'));
     fireEvent.click(await screen.findByRole('button', { name: /^discard$/i }));
 
     await waitFor(() => {

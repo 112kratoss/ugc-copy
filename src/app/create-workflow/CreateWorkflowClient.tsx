@@ -270,6 +270,8 @@ export default function CreateWorkflowClient() {
     hasUnsavedChangesRef.current = saveState === 'dirty' || hasUnsavedChanges();
   }, [hasUnsavedChanges, saveState]);
 
+  const activeCanvasHasUnsavedChanges = saveState === 'dirty' || hasUnsavedChanges();
+
   const {
     clearSelection: clearSelectionState,
     resetSelection,
@@ -1233,6 +1235,7 @@ export default function CreateWorkflowClient() {
             leftRail={(
               <WorkflowCanvasLeftRail
                 activeCanvasId={activeCanvasId}
+                activeCanvasHasUnsavedChanges={activeCanvasHasUnsavedChanges}
                 canvases={canvases}
                 isCanvasTransitionPending={isCanvasTransitionPending}
                 nodeLibrary={WORKFLOW_NODE_LIBRARY}

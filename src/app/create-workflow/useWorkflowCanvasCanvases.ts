@@ -190,13 +190,6 @@ export function useWorkflowCanvasCanvases({
     try {
       setIsCanvasTransitionPending(true);
       try {
-        if (canvasId === activeCanvasIdRef.current) {
-          const canTransition = await beforeCanvasTransitionRef.current();
-          if (!canTransition) {
-            return;
-          }
-        }
-
         const response = await fetch(`/api/workflow-canvases/${canvasId}`, {
           method: 'DELETE',
           headers: await authHeaders(),
@@ -227,7 +220,7 @@ export function useWorkflowCanvasCanvases({
     } catch (deleteError) {
       onError(deleteError instanceof Error ? deleteError.message : 'Failed to delete canvas');
     }
-  }, [activateCanvas, authHeaders, beforeCanvasTransitionRef, canvases, createCanvas, fetchCanvasDetails, onError]);
+  }, [activateCanvas, authHeaders, canvases, createCanvas, fetchCanvasDetails, onError]);
 
   const selectCanvas = useCallback(async (canvas: WorkflowCanvasListItem) => {
     if (canvas.id === activeCanvasIdRef.current) {
