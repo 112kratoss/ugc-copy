@@ -16,6 +16,7 @@ const mockRouter = {
   push: mockPush,
   replace: mockReplace,
 };
+const DEFAULT_IMPORTED_SHARE_ID = '11111111-1111-4111-8111-111111111111';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => mockRouter,
@@ -362,12 +363,28 @@ vi.mock('@xyflow/react', async () => {
 
 describe('CreateWorkflowPage', () => {
   let canvasesById: Record<string, WorkflowCanvasRecord>;
+  let sharesById: Record<string, {
+    id: string;
+    title: string;
+    nodeCount: number;
+    edgeCount: number;
+    importCount: number;
+    createdAt: string;
+    importPath: string;
+    importUrl: string;
+    graph: WorkflowCanvasRecord['graph'];
+  }>;
   let lastRunRequest: { canvasId: string; mode: string; startNodeId: string } | null;
   let orderedCanvasIds: string[];
   let nextCanvasIdNumber: number;
+  let nextShareIdNumber: number;
 
-  async function renderLoadedPage() {
-    render(<CreateWorkflowPage />);
+  function buildShareId(value: number) {
+    return `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+  }
+
+  async function renderLoadedPage(options?: { initialImportShareId?: string | null }) {
+    render(<CreateWorkflowPage initialImportShareId={options?.initialImportShareId ?? null} />);
     await screen.findByDisplayValue('Workflow canvas');
     await screen.findByTestId(`node-select-${canvasesById['canvas-1']?.graph.nodes[0]?.id}`);
   }
@@ -389,6 +406,8 @@ describe('CreateWorkflowPage', () => {
   }
 
   beforeEach(() => {
+    mockPush.mockReset();
+    mockReplace.mockReset();
     mockSession = {
       access_token: 'test-token',
       user: { id: 'user-1' },
@@ -425,6 +444,20 @@ describe('CreateWorkflowPage', () => {
     };
     orderedCanvasIds = ['canvas-1', 'canvas-2'];
     nextCanvasIdNumber = 3;
+    nextShareIdNumber = 1;
+    sharesById = {
+      [DEFAULT_IMPORTED_SHARE_ID]: {
+        id: DEFAULT_IMPORTED_SHARE_ID,
+        title: 'Shared workflow',
+        nodeCount: canvasesById['canvas-2'].graph.nodes.length,
+        edgeCount: canvasesById['canvas-2'].graph.edges.length,
+        importCount: 0,
+        createdAt: '2026-04-02T10:00:00.000Z',
+        importPath: `/create-workflow?import=${DEFAULT_IMPORTED_SHARE_ID}`,
+        importUrl: `http://localhost/create-workflow?import=${DEFAULT_IMPORTED_SHARE_ID}`,
+        graph: canvasesById['canvas-2'].graph,
+      },
+    };
     delete (window as Window & { __ugcWorkflowListCollapsed?: boolean }).__ugcWorkflowListCollapsed;
 
     vi.stubGlobal('fetch', vi.fn(async (input, init) => {
@@ -459,6 +492,40 @@ describe('CreateWorkflowPage', () => {
         } as Response;
       }
 
+      const shareCanvasMatch = url.match(/\/api\/workflow-canvases\/([^/]+)\/share$/);
+      if (shareCanvasMatch && method === 'POST') {
+        const canvas = canvasesById[shareCanvasMatch[1]];
+        const shareId = buildShareId(nextShareIdNumber);
+        nextShareIdNumber += 1;
+        sharesById[shareId] = {
+          id: shareId,
+          title: canvas.title,
+          nodeCount: canvas.graph.nodes.length,
+          edgeCount: canvas.graph.edges.length,
+          importCount: 0,
+          createdAt: '2026-04-02T10:10:00.000Z',
+          importPath: `/create-workflow?import=${shareId}`,
+          importUrl: `http://localhost/create-workflow?import=${shareId}`,
+          graph: canvas.graph,
+        };
+
+        return {
+          ok: true,
+          json: async () => ({
+            share: {
+              id: shareId,
+              title: canvas.title,
+              nodeCount: canvas.graph.nodes.length,
+              edgeCount: canvas.graph.edges.length,
+              importCount: 0,
+              createdAt: '2026-04-02T10:10:00.000Z',
+              importPath: `/create-workflow?import=${shareId}`,
+              importUrl: `http://localhost/create-workflow?import=${shareId}`,
+            },
+          }),
+        } as Response;
+      }
+
       if (canvasMatch && method === 'PATCH') {
         const canvasId = canvasMatch[1];
         const payload = JSON.parse(String(init?.body || '{}'));
@@ -474,6 +541,71 @@ describe('CreateWorkflowPage', () => {
         return {
           ok: true,
           json: async () => ({ canvas: canvasesById[canvasId] }),
+        } as Response;
+      }
+
+      const sharePreviewMatch = url.match(/\/api\/workflow-shares\/([^/]+)$/);
+      if (sharePreviewMatch && method === 'GET') {
+        const share = sharesById[sharePreviewMatch[1]];
+        if (!share) {
+          return {
+            ok: false,
+            status: 404,
+            json: async () => ({ error: 'Workflow share not found.' }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          json: async () => ({
+            share,
+          }),
+        } as Response;
+      }
+
+      const shareImportMatch = url.match(/\/api\/workflow-shares\/([^/]+)\/import$/);
+      if (shareImportMatch && method === 'POST') {
+        const share = sharesById[shareImportMatch[1]];
+        if (!share) {
+          return {
+            ok: false,
+            status: 404,
+            json: async () => ({ error: 'Workflow share not found.' }),
+          } as Response;
+        }
+
+        const createdCanvasNumber = nextCanvasIdNumber;
+        nextCanvasIdNumber += 1;
+        const timestampMinute = String(20 + createdCanvasNumber).padStart(2, '0');
+        const createdCanvas: WorkflowCanvasRecord = {
+          id: `canvas-${createdCanvasNumber}`,
+          title: `Copy of ${share.title}`,
+          graph: share.graph,
+          created_at: `2026-03-22T00:${timestampMinute}:00.000Z`,
+          updated_at: `2026-03-22T00:${timestampMinute}:00.000Z`,
+          revision: 0,
+          status: 'draft',
+          published_at: null,
+        };
+
+        canvasesById[createdCanvas.id] = createdCanvas;
+        orderedCanvasIds = [createdCanvas.id, ...orderedCanvasIds];
+
+        return {
+          ok: true,
+          json: async () => ({
+            canvas: createdCanvas,
+            share: {
+              id: share.id,
+              title: share.title,
+              nodeCount: share.nodeCount,
+              edgeCount: share.edgeCount,
+              importCount: share.importCount + 1,
+              createdAt: share.createdAt,
+              importPath: share.importPath,
+              importUrl: share.importUrl,
+            },
+          }),
         } as Response;
       }
 
@@ -590,6 +722,8 @@ describe('CreateWorkflowPage', () => {
     expect(screen.queryByRole('button', { name: /command/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /create draft/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^share workflow$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^import workflow$/i })).toBeInTheDocument();
   });
 
   it('collapses the workflow list while keeping new workflow available', async () => {
@@ -699,6 +833,93 @@ describe('CreateWorkflowPage', () => {
     expect(orderedCanvasIds).toHaveLength(1);
     expect(orderedCanvasIds[0]).not.toBe('canvas-1');
     expect(getWorkflowButton('Workflow 2')).toBeInTheDocument();
+  });
+
+  it('saves a dirty workflow before creating a share link snapshot', async () => {
+    await renderLoadedPage();
+    const fetchMock = global.fetch as unknown as {
+      mockClear: () => void;
+      mock: { calls: Array<[unknown, RequestInit | undefined]> };
+    };
+
+    fireEvent.change(screen.getByLabelText(/workflow title/i), {
+      target: { value: 'Workflow canvas updated' },
+    });
+
+    fetchMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^share workflow$/i }));
+
+    const dialog = await screen.findByTestId('workflow-share-dialog');
+    expect(await within(dialog).findByDisplayValue(/http:\/\/localhost\/create-workflow\?import=/i)).toBeInTheDocument();
+
+    const patchIndex = fetchMock.mock.calls.findIndex(([url, init]) =>
+      String(url).includes('/api/workflow-canvases/canvas-1') && init?.method === 'PATCH'
+    );
+    const shareIndex = fetchMock.mock.calls.findIndex(([url, init]) =>
+      String(url).includes('/api/workflow-canvases/canvas-1/share') && init?.method === 'POST'
+    );
+
+    expect(patchIndex).toBeGreaterThan(-1);
+    expect(shareIndex).toBeGreaterThan(patchIndex);
+    expect(within(dialog).getByText(/uploaded media, storage paths, run outputs/i)).toBeInTheDocument();
+  });
+
+  it('previews and imports a shared workflow from a pasted link', async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /^import workflow$/i }));
+
+    const dialog = await screen.findByTestId('workflow-import-dialog');
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /shared workflow url or id/i }), {
+      target: { value: `http://localhost/create-workflow?import=${DEFAULT_IMPORTED_SHARE_ID}` },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^preview import$/i }));
+
+    expect(await within(dialog).findByText('Shared workflow')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^import workflow$/i }));
+
+    await waitFor(() => {
+      expect(getWorkflowTitleInput()).toHaveValue('Copy of Shared workflow');
+    });
+
+    expect(orderedCanvasIds[0]).not.toBe('canvas-1');
+    expect(getWorkflowButton('Copy of Shared workflow')).toBeInTheDocument();
+  });
+
+  it('shows actionable errors for missing or invalid workflow share links', async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /^import workflow$/i }));
+
+    const dialog = await screen.findByTestId('workflow-import-dialog');
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /shared workflow url or id/i }), {
+      target: { value: 'not-a-share-id' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^preview import$/i }));
+
+    expect(await within(dialog).findByText(/paste a shared workflow link or share id/i)).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /shared workflow url or id/i }), {
+      target: { value: '22222222-2222-4222-8222-222222222222' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^preview import$/i }));
+
+    expect(await within(dialog).findByText(/workflow share not found/i)).toBeInTheDocument();
+  });
+
+  it('opens the import preview automatically from a shared workflow deep link and clears the url after import', async () => {
+    await renderLoadedPage({ initialImportShareId: DEFAULT_IMPORTED_SHARE_ID });
+
+    const dialog = await screen.findByTestId('workflow-import-dialog');
+    expect(await within(dialog).findByText('Shared workflow')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^import workflow$/i }));
+
+    await waitFor(() => {
+      expect(getWorkflowTitleInput()).toHaveValue('Copy of Shared workflow');
+    });
+
+    expect(mockReplace).toHaveBeenCalledWith('/create-workflow');
   });
 
   it('keeps selection-first editing and opens the node-anchored popup from right click, Enter, and double click', async () => {

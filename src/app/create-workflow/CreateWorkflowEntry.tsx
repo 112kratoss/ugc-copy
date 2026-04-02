@@ -15,6 +15,10 @@ const CreateWorkflowClient = dynamic(
   }
 );
 
-export default function CreateWorkflowEntry() {
-  return <CreateWorkflowClient />;
+export default function CreateWorkflowEntry({
+  initialImportShareId = null,
+}: {
+  initialImportShareId?: string | null;
+}) {
+  return <CreateWorkflowClient initialImportShareId={initialImportShareId} />;
 }

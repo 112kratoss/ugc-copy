@@ -38,6 +38,7 @@ import { getClientE2EAuthState } from '@/lib/e2e-auth';
 import { supabase } from '@/lib/supabase';
 import { WorkflowCanvasChrome } from './WorkflowCanvasChrome';
 import { WorkflowCanvasLeftRail } from './WorkflowCanvasPanels';
+import { WorkflowCanvasShareActions } from './WorkflowCanvasShareActions';
 import {
   WORKFLOW_NODE_LIBRARY,
   decorateWorkflowEdge,
@@ -140,7 +141,11 @@ function UnsavedChangesDialog({
   );
 }
 
-export default function CreateWorkflowClient() {
+export default function CreateWorkflowClient({
+  initialImportShareId = null,
+}: {
+  initialImportShareId?: string | null;
+}) {
   const router = useRouter();
   const { credits, refreshSessionState, session, updateCredits } = useAuth();
   const e2eAuth = useMemo(() => getClientE2EAuthState(), []);
@@ -169,7 +174,7 @@ export default function CreateWorkflowClient() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [nodePopupPosition, setNodePopupPosition] = useState<CanvasAnchoredPopupPosition | null>(null);
   const [nodes, setNodes] = useState<WorkflowCanvasNode[]>(starter.nodes);
-  const [edges, setEdges] = useState<WorkflowCanvasEdge[]>(starter.edges.map(decorateWorkflowEdge));
+  const [edges, setEdges] = useState<WorkflowCanvasEdge[]>(starter.edges.map((edge) => decorateWorkflowEdge(edge)));
   const [changeKey, setChangeKey] = useState(0);
   const [openNodeRunMenuId, setOpenNodeRunMenuId] = useState<string | null>(null);
   const [unsavedReason, setUnsavedReason] = useState<string | null>(null);
@@ -236,6 +241,7 @@ export default function CreateWorkflowClient() {
     deleteCanvas,
     isCanvasTransitionPending,
     isLoading,
+    replaceActiveCanvas,
     refreshActiveCanvasRecord,
     selectCanvas,
     setCanvasTitle,
@@ -1250,6 +1256,19 @@ export default function CreateWorkflowClient() {
                   void selectCanvas(canvas);
                 }}
                 searchInputRef={nodeLibrarySearchInputRef}
+              />
+            )}
+            headerActions={(
+              <WorkflowCanvasShareActions
+                activeCanvasId={activeCanvasId}
+                activeCanvasHasUnsavedChanges={activeCanvasHasUnsavedChanges}
+                authHeaders={authHeaders}
+                canvasTitle={canvasTitle}
+                graph={graph}
+                initialImportShareId={initialImportShareId}
+                onBeforeImport={() => confirmBeforeTransition('Save your changes before importing another workflow?')}
+                onImportComplete={replaceActiveCanvas}
+                onPersistCanvas={persistCanvas}
               />
             )}
             onCanvasTitleChange={handleCanvasTitleChange}

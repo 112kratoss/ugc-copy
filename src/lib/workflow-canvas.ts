@@ -210,7 +210,7 @@ export interface WorkflowCanvasListItem {
   published_at: string | null;
 }
 
-export type WorkflowGraphSerializationMode = 'storage' | 'client-save';
+export type WorkflowGraphSerializationMode = 'storage' | 'client-save' | 'share-export';
 
 export interface SerializedWorkflowCanvasNode {
   id: string;
@@ -524,7 +524,8 @@ function serializeWorkflowNodeData(
   data: Partial<WorkflowNodeData> | undefined,
   mode: WorkflowGraphSerializationMode
 ): Record<string, unknown> {
-  const normalized = normalizeNodeData(type, data) as Record<string, unknown>;
+  const normalizedData = normalizeNodeData(type, data);
+  const normalized = normalizedData as Record<string, unknown>;
 
   if (mode === 'client-save') {
     const editableData = { ...normalized };
@@ -532,10 +533,66 @@ function serializeWorkflowNodeData(
     return editableData;
   }
 
+  if (mode === 'share-export') {
+    return sanitizeWorkflowNodeDataForShare(type, normalizedData);
+  }
+
   return {
     ...normalized,
     runState: createNodeRunState((normalized.runState as Partial<WorkflowNodeRunState> | undefined) ?? undefined),
   };
+}
+
+function sanitizeWorkflowReferenceElementsForShare(elements: WorkflowReferenceElement[]) {
+  return elements.map((element) => ({
+    id: element.id,
+    displayName: element.displayName,
+    handle: element.handle,
+  }));
+}
+
+function sanitizeWorkflowNodeDataForShare(
+  type: WorkflowNodeKind,
+  data: WorkflowNodeData
+): Record<string, unknown> {
+  const editableData = {
+    ...(data as Record<string, unknown>),
+  };
+  delete editableData.runState;
+
+  switch (type) {
+    case 'image-input':
+      return {
+        ...editableData,
+        imageUrl: null,
+        storagePath: null,
+      };
+    case 'video-input':
+      return {
+        ...editableData,
+        videoUrl: null,
+        storagePath: null,
+        durationSeconds: null,
+      };
+    case 'audio-input':
+      return {
+        ...editableData,
+        audioUrl: null,
+        storagePath: null,
+      };
+    case 'image-generate':
+      return {
+        ...editableData,
+        elements: sanitizeWorkflowReferenceElementsForShare((data as ImageGenerateNodeData).elements),
+      };
+    case 'video-generate':
+      return {
+        ...editableData,
+        elements: sanitizeWorkflowReferenceElementsForShare((data as VideoGenerateNodeData).elements),
+      };
+    default:
+      return editableData;
+  }
 }
 
 export function serializeWorkflowGraph(
@@ -566,6 +623,12 @@ export function serializeWorkflowGraph(
       targetHandle: edge.targetHandle ?? null,
     })),
   };
+}
+
+export function createWorkflowShareSnapshotGraph(
+  value: Partial<WorkflowCanvasGraph> | null | undefined
+): SerializedWorkflowCanvasGraph {
+  return serializeWorkflowGraph(value, { mode: 'share-export' });
 }
 
 export function createWorkflowGraphHash(
@@ -885,7 +948,7 @@ function normalizeWorkflowReferenceBindings(value: unknown): WorkflowReferenceBi
   const seenEdgeIds = new Set<string>();
 
   return value
-    .map((binding, index) => {
+    .map((binding) => {
       if (!binding || typeof binding !== 'object') {
         return null;
       }

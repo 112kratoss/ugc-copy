@@ -8,6 +8,7 @@ interface WorkflowCanvasChromeProps {
   canvasTitle: string;
   children: ReactNode;
   canvasOverlay?: ReactNode;
+  headerActions?: ReactNode;
   leftRail: ReactNode;
   onCanvasTitleChange: (title: string) => void;
   onNavigateBack: () => void;
@@ -31,6 +32,7 @@ export function WorkflowCanvasChrome({
   canvasTitle,
   children,
   canvasOverlay,
+  headerActions,
   leftRail,
   onCanvasTitleChange,
   onNavigateBack,
@@ -69,6 +71,7 @@ export function WorkflowCanvasChrome({
           </div>
 
           <div className="flex items-center gap-3">
+            {headerActions}
             <span className={`text-xs uppercase tracking-[0.16em] ${
               saveState === 'dirty'
                 ? 'text-amber-300'
