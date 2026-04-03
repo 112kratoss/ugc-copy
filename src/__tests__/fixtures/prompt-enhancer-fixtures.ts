@@ -21,7 +21,12 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
     selectedModel: 'nano-banana-2',
     context: { aspectRatio: '9:16' },
     expectedScenario: 'image.text_to_image',
-    expectedIncludes: ['Target model: Nano Banana 2', 'Prompt scenario: image.text_to_image', 'Aspect ratio: 9:16'],
+    expectedIncludes: [
+      'Target model: Nano Banana 2',
+      'Prompt scenario: image.text_to_image',
+      'Planner mode: structured-image',
+      'Aspect ratio: 9:16',
+    ],
   },
   {
     name: 'image reference guided',
@@ -31,8 +36,9 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
     expectedScenario: 'image.reference_guided',
     expectedIncludes: [
       'Prompt scenario: image.reference_guided',
+      'Planner mode: structured-image',
       'Reference images attached: 2',
-      'Nano Banana Pro can handle richer material, lighting, composition, and texture detail while staying photorealistic and controlled',
+      'Treat Nano Banana Pro like a higher-fidelity commercial image model with stronger layout, branding, and text rendering capability',
     ],
   },
   {
@@ -43,7 +49,8 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
     expectedScenario: 'video.text_to_video_single',
     expectedIncludes: [
       'Prompt scenario: video.text_to_video_single',
-      'Veo 3.1 benefits from subject, action, context, camera, composition, and ambiance stated clearly in natural language',
+      'Planner mode: structured-video',
+      'Treat Veo 3.1 like a one-scene-per-clip model',
       'Duration: 8s',
     ],
   },
@@ -56,6 +63,7 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
     expectedIncludes: [
       'Prompt scenario: video.image_to_video_start_frame',
       'Starting frame or reference image is attached',
+      'Planner mode: structured-video',
       'Focus on how the scene should move: subject action, camera movement, timing, and environmental change while preserving the referenced look',
     ],
   },
@@ -69,7 +77,8 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
       'Prompt scenario: video.image_to_video_start_end',
       'Ending frame is attached',
       'Sound: enabled',
-      'Seedance 1.5 Pro benefits from grounded cinematic prompts with clear action, camera intent, and duration-aware pacing',
+      'Planner mode: structured-video',
+      'Treat Seedance 1.5 Pro like a layered video prompt model',
     ],
   },
   {
@@ -82,7 +91,8 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
       'Prompt scenario: video.text_to_video_multi_shot',
       'Total shots in sequence: 3',
       'Current shot index: 2',
-      'Kling 3.0 video works best with one grounded clip, explicit camera behavior, believable motion, and a strong atmospheric direction',
+      'Planner mode: structured-video',
+      'Treat Kling 3.0 like a cinematic shot engine',
     ],
   },
   {
@@ -93,6 +103,7 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
     expectedScenario: 'motion.transfer',
     expectedIncludes: [
       'Prompt scenario: motion.transfer',
+      'Planner mode: legacy-text',
       'Reference video is attached',
       'Do not invent or override the motion choreography that comes from the reference video',
       'Kling 3.0 motion control handles nuanced identity and scene polish well when the prompt stays focused on realism, environment, and subject integrity',

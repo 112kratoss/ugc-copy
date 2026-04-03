@@ -104,7 +104,22 @@ describe('/api/enhance-prompt route', () => {
     buildEnhancerSystemPromptMock.mockReset();
     callPromptEnhancerMock.mockReset();
     buildEnhancerSystemPromptMock.mockReturnValue('system prompt');
-    callPromptEnhancerMock.mockResolvedValue({ enhancedPrompt: 'Enhanced prompt output' });
+    callPromptEnhancerMock.mockResolvedValue({
+      enhancedPrompt: JSON.stringify({
+        subject: 'a premium product poster',
+        setting: 'a clean studio backdrop',
+        composition: 'clean poster composition',
+        cameraFraming: 'eye-level framing',
+        lighting: 'soft diffused light',
+        materialDetail: 'crisp packaging detail',
+        readableText: {
+          exactText: 'SALE',
+          placement: 'as the headline',
+          treatment: 'bold sans-serif type',
+        },
+        finish: 'polished commercial finish',
+      }),
+    });
   });
 
   afterEach(() => {
@@ -146,13 +161,12 @@ describe('/api/enhance-prompt route', () => {
     expect(callPromptEnhancerMock).toHaveBeenCalledWith('system prompt', 'Create a product poster and the text reads SALE');
 
     const data = await response.json();
-    expect(data).toEqual({
-      enhancedPrompt: 'Enhanced prompt output',
-      remainingCredits: 98,
-    });
+    expect(data.remainingCredits).toBe(98);
+    expect(data.enhancedPrompt).toContain('a premium product poster');
+    expect(data.enhancedPrompt).toContain('Include readable text "SALE"');
     expect(currentAdminClient.updates[0]).toMatchObject({
       status: 'succeeded',
-      output_text: 'Enhanced prompt output',
+      output_text: data.enhancedPrompt,
     });
   });
 
@@ -213,5 +227,43 @@ describe('/api/enhance-prompt route', () => {
     expect(currentAdminClient.updates.at(-1)).toMatchObject({
       error_message: 'provider failure',
     });
+  });
+
+  it('keeps append-only element prompts untouched when the compiled enhancement breaks the locked opening', async () => {
+    callPromptEnhancerMock.mockResolvedValueOnce({
+      enhancedPrompt: JSON.stringify({
+        subject: 'a premium skincare hero still',
+        setting: 'a bright daylight studio',
+        composition: 'clean editorial framing',
+        lighting: 'soft diffused light',
+        materialDetail: 'crisp glass reflections',
+        finish: 'polished commercial finish',
+      }),
+    });
+
+    const { POST } = await import('@/app/api/enhance-prompt/route');
+    const originalPrompt = 'Use @serum in a bright studio';
+    const response = await POST(
+      new Request('http://localhost/api/enhance-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          medium: 'image',
+          selectedModel: 'nano-banana-pro',
+          prompt: originalPrompt,
+          context: {
+            elementEnhancementMode: 'append-only',
+            elementReferences: [{ handle: '@serum', displayName: 'Serum bottle' }],
+          },
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.enhancedPrompt).toBe(originalPrompt);
   });
 });

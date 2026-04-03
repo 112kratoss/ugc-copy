@@ -11,6 +11,8 @@ export type PromptScenario =
   | 'video.image_to_video_start_end'
   | 'motion.transfer';
 
+export type PromptPlannerMode = 'legacy-text' | 'structured-image' | 'structured-video';
+
 export interface EnhancerContext {
   modelId?: string;
   aspectRatio?: string;
@@ -19,6 +21,7 @@ export interface EnhancerContext {
   mode?: string;
   duration?: number;
   sound?: boolean;
+  fixedLens?: boolean;
   shotIndex?: number;
   characterOrientation?: string;
   referenceImageCount?: number;
@@ -33,6 +36,55 @@ export interface EnhancerContext {
     handle: string;
     displayName: string;
   }>;
+}
+
+export interface ImagePromptSpec {
+  subject: string;
+  setting: string;
+  composition: string;
+  cameraFraming: string;
+  lighting: string;
+  materialDetail: string;
+  readableText: {
+    exactText: string;
+    placement: string;
+    treatment: string;
+  } | null;
+  referenceAnchors: string[];
+  constraints: string[];
+  finish: string;
+}
+
+export interface VideoShotPlan {
+  index: number;
+  title: string;
+  startState: string;
+  actionBeat: string;
+  endState: string;
+  camera: string;
+  transition: string;
+}
+
+export interface VideoScenePlan {
+  sceneGoal: string;
+  subjectAction: string;
+  environment: string;
+  cameraMovement: string;
+  continuityAnchors: string[];
+  ambience: string;
+  audioCue: string;
+  pacing: string;
+  dialogue: string;
+  durationBudget: string;
+  shots: VideoShotPlan[];
+}
+
+export interface PromptEnhancementArtifacts {
+  playbookId: string;
+  plannerMode: PromptPlannerMode;
+  scenario: PromptScenario;
+  plannerOutput: ImagePromptSpec | VideoScenePlan | string;
+  compiledPrompt: string;
 }
 
 interface PromptStrategyOptions {
@@ -59,11 +111,25 @@ interface PromptExample {
   enhanced: string;
 }
 
+interface EnhancerPlaybook {
+  modelId: string;
+  label: string;
+  medium: Medium;
+  plannerMode: PromptPlannerMode;
+  strategyRules: string[];
+  workflowRules: string[];
+  plannerNotes: string[];
+}
+
+export const PROMPT_ENHANCER_PROVIDER_MODEL = 'gemini-3-flash';
+
+const PROMPT_ENHANCER_ENDPOINT = `https://api.kie.ai/${PROMPT_ENHANCER_PROVIDER_MODEL}/v1/chat/completions`;
+
 export function getPromptEnhancementCost(): number {
   return 2;
 }
 
-const BASE_SYSTEM_PROMPT = `You are a prompt enhancement specialist for AI media generation.
+const BASE_REWRITE_SYSTEM_PROMPT = `You are a prompt enhancement specialist for AI media generation.
 
 Your job is to take the user's raw prompt and rewrite it into an optimized, production-quality prompt for the specific AI model and generation mode they are using.
 
@@ -75,6 +141,19 @@ Rules:
 5. Prefer positive, precise constraints over long negative laundry lists unless the user explicitly asked for exclusions.
 6. Output only a single polished prompt string with no commentary.
 7. Keep the enhanced prompt concise but rich, usually 1 to 3 sentences.`;
+
+const BASE_PLANNER_SYSTEM_PROMPT = `You are a prompt planning specialist for AI media generation.
+
+Your job is to translate the user's request into a structured, model-specific plan that this app will compile into the final generation prompt.
+
+Rules:
+1. Preserve the user's original intent, subject matter, and exact requested text.
+2. Do not add new subjects, props, scenes, or story beats the user did not ask for.
+3. Stay model-aware: choose structure and detail that fit the target model and scenario.
+4. Return valid JSON only using the exact schema provided. Do not wrap it in markdown.
+5. If a detail is unknown, use an empty string, null, or an empty array instead of inventing it.
+6. For readable text, preserve the exact requested words.
+7. For short videos, keep each clip focused on one clear scene unless multi-shot guidance explicitly asks for a sequence.`;
 
 const BASE_STRATEGY_RULES = [
   'Preserve the user intent exactly while making the prompt clearer, more specific, and easier for the target model to follow.',
@@ -110,8 +189,8 @@ const SCENARIO_RULES: Record<PromptScenario, string[]> = {
     'Avoid shot-list phrasing and keep the clip grounded in one scene.',
   ],
   'video.text_to_video_multi_shot': [
-    'This prompt belongs to a larger multi-shot sequence, but it should still read as one self-contained shot.',
-    'Give the shot a clear visual start, key action, and end state without referencing other shots.',
+    'This prompt belongs to a larger multi-shot sequence, but each shot should still read as one self-contained scene.',
+    'Give each shot a clear visual start, key action, and end state without relying on references to unseen shots.',
   ],
   'video.image_to_video_start_frame': [
     'Assume a starting reference frame is attached and do not re-describe every static detail from it.',
@@ -125,38 +204,6 @@ const SCENARIO_RULES: Record<PromptScenario, string[]> = {
     'Assume a character image and a reference video drive the motion transfer.',
     'Do not invent or override the motion choreography that comes from the reference video.',
     'Use the prompt to reinforce identity preservation, environment fit, style, realism, and deformation avoidance.',
-  ],
-};
-
-const MODEL_RULES: Record<string, string[]> = {
-  'nano-banana-2': [
-    'Nano Banana 2 responds best to concise natural-language prompting with subject, context, and style stated cleanly.',
-    'Use positive phrasing and aspect-ratio-aware composition cues instead of overstuffed modifier chains.',
-  ],
-  'nano-banana-pro': [
-    'Nano Banana Pro can handle richer material, lighting, composition, and texture detail while staying photorealistic and controlled.',
-    'Lean into fidelity, product clarity, and precise photographic language when the user asks for premium or polished output.',
-    'If reference images are present, prioritize preservation of anchored identity and product traits over inventing new ones.',
-  ],
-  'kling-3.0/video': [
-    'Kling 3.0 video works best with one grounded clip, explicit camera behavior, believable motion, and a strong atmospheric direction.',
-    'Keep the prompt cinematic and coherent rather than turning it into a sequence of disconnected moments.',
-  ],
-  'seedance-1.5-pro': [
-    'Seedance 1.5 Pro benefits from grounded cinematic prompts with clear action, camera intent, and duration-aware pacing.',
-    'Only mention sound design or ambience when audio is enabled and it materially helps the scene.',
-  ],
-  'veo-3.1': [
-    'Veo 3.1 benefits from subject, action, context, camera, composition, and ambiance stated clearly in natural language.',
-    'When frames or reference images are involved, let the prompt focus on motion and camera evolution rather than restating fixed visuals.',
-  ],
-  'kling-2.6': [
-    'Kling 2.6 motion control expects the reference video to govern the action, so keep the prompt centered on character identity, environment, and visual style.',
-    'Use the prompt to reduce distortion and help the transferred performance feel grounded in the scene.',
-  ],
-  'kling-3.0': [
-    'Kling 3.0 motion control handles nuanced identity and scene polish well when the prompt stays focused on realism, environment, and subject integrity.',
-    'Do not over-describe motion beats because the reference video already supplies them.',
   ],
 };
 
@@ -231,35 +278,163 @@ const MODEL_ALIASES: Record<string, string> = {
   'kling-3.0-video': 'kling-3.0/video',
 };
 
-const MODEL_LABELS: Record<string, string> = {
-  'nano-banana-2': 'Nano Banana 2',
-  'nano-banana-pro': 'Nano Banana Pro',
-  'kling-3.0/video': 'Kling 3.0 Video',
-  'kling-3.0-video': 'Kling 3.0 Video',
-  'seedance-1.5-pro': 'Seedance 1.5 Pro',
-  'veo-3.1': 'Veo 3.1',
-  'kling-2.6': 'Kling 2.6 Motion Control',
-  'kling-3.0': 'Kling 3.0 Motion Control',
+const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
+  'nano-banana-2': {
+    modelId: 'nano-banana-2',
+    label: 'Nano Banana 2',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat Nano Banana 2 like a clarity-first image model: keep the plan simple, concrete, and centered on one primary image idea.',
+      'Favor short, high-signal visual direction over long modifier chains or abstract styling language.',
+      'Use readable text only when the user asked for it, and keep the exact words explicit and brief.',
+      'If reference images are present, list only the anchored traits that must stay fixed instead of re-describing the whole frame.',
+    ],
+    workflowRules: [
+      'If stillImageModel is nano-banana-2, keep the prompt direct, visually clear, and centered on one strong image idea.',
+      'If stillImageModel is nano-banana-2 and text is required, state the exact words plainly and keep the typography note brief.',
+    ],
+    plannerNotes: [
+      'Use the plan to capture subject, setting, framing, lighting, and only the most important material or finish cues.',
+      'Prefer one or two strong visual sentences once the app compiles the plan.',
+    ],
+  },
+  'nano-banana-pro': {
+    modelId: 'nano-banana-pro',
+    label: 'Nano Banana Pro',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat Nano Banana Pro like a higher-fidelity commercial image model with stronger layout, branding, and text rendering capability.',
+      'Capture composition, materials, finish, and brand-safe reference anchors with more precision than Nano Banana 2.',
+      'When readable text matters, preserve the exact copy and include placement and treatment so the final layout stays legible.',
+      'If references are attached, prioritize identity, product design, packaging, and brand consistency over novel invention.',
+    ],
+    workflowRules: [
+      'If stillImageModel is nano-banana-pro, write a richer prompt with precise composition, materials, finish, and commercial polish.',
+      'If stillImageModel is nano-banana-pro and text matters, include the exact copy plus layout treatment so the image stays legible and brand-safe.',
+    ],
+    plannerNotes: [
+      'Use the plan to structure premium layouts, poster-style compositions, and reference-led product work.',
+      'The compiled prompt can be denser here, but it should still stay readable and directly usable.',
+    ],
+  },
+  'kling-3.0/video': {
+    modelId: 'kling-3.0/video',
+    label: 'Kling 3.0 Video',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    strategyRules: [
+      'Treat Kling 3.0 like a cinematic shot engine: each clip should feel deliberate, atmospheric, and visually coherent.',
+      'When multi-shot is active, maintain continuity anchors across the sequence while keeping the current shot self-contained.',
+      'Use explicit shot design, camera behavior, and continuity instead of vague cinematic filler.',
+      'If frames are attached, focus the plan on motion and scene evolution rather than repeating static frame content.',
+    ],
+    workflowRules: [
+      'If primaryModel is kling-3.0-video, write cinematic shot prompts with clear camera direction, atmosphere, and continuity.',
+      'If primaryModel is kling-3.0-video in multi-shot mode, make every shot stand on its own while preserving recurring subject and style anchors.',
+    ],
+    plannerNotes: [
+      'For single-shot, keep the plan focused on one premium scene.',
+      'For multi-shot with a current shot index, plan the sequence lightly but go deepest on the current shot.',
+    ],
+  },
+  'seedance-1.5-pro': {
+    modelId: 'seedance-1.5-pro',
+    label: 'Seedance 1.5 Pro',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    strategyRules: [
+      'Treat Seedance 1.5 Pro like a layered video prompt model: action, environment, camera, pacing, and optional audio should each be explicit.',
+      'Use fixed-lens guidance when the camera must stay static and stable; otherwise describe camera motion deliberately.',
+      'When audio is enabled, include only sound that materially supports the scene.',
+      'If images are attached, use the plan to describe how the scene evolves from those references instead of restating them.',
+    ],
+    workflowRules: [
+      'If primaryModel is seedance-1.5-pro, layer action, environment, camera intent, pacing, and optional audio explicitly.',
+      'If primaryModel is seedance-1.5-pro and the camera should stay static, say so clearly instead of leaving camera behavior ambiguous.',
+    ],
+    plannerNotes: [
+      'The final compiled prompt can be slightly more descriptive because Seedance responds well to layered scene instructions.',
+      'Audio cues should only appear when sound is enabled.',
+    ],
+  },
+  'veo-3.1': {
+    modelId: 'veo-3.1',
+    label: 'Veo 3.1',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    strategyRules: [
+      'Treat Veo 3.1 like a one-scene-per-clip model: do not chain multiple distinct events into one short prompt.',
+      'Bias toward a clean subject-action-context-camera-ambience structure for every clip.',
+      'Avoid quotation marks for dialogue in the final prompt. If speech is needed, structure it as Character says: line.',
+      'If continuity matters across shots, repeat only the necessary recurring character or product anchors.',
+    ],
+    workflowRules: [
+      'If primaryModel is veo-3.1, keep every clip focused on one scene with explicit subject, action, context, camera, and ambience.',
+      'If primaryModel is veo-3.1 and dialogue matters, describe it without quoted speech so the model does not try to render on-screen text.',
+    ],
+    plannerNotes: [
+      'For multi-shot, the planner may produce a shot list, but the final compiled prompt should only emit the current shot unless no shot index is available.',
+      'For image-to-video, emphasize motion between frames, not static frame redescription.',
+    ],
+  },
+  'kling-2.6': {
+    modelId: 'kling-2.6',
+    label: 'Kling 2.6 Motion Control',
+    medium: 'motion',
+    plannerMode: 'legacy-text',
+    strategyRules: [
+      'Kling 2.6 motion control expects the reference video to govern the action, so keep the prompt centered on character identity, environment, and visual style.',
+      'Use the prompt to reduce distortion and help the transferred performance feel grounded in the scene.',
+    ],
+    workflowRules: [
+      'If motionModel is kling-2.6, keep the prompt focused on identity, environment fit, and deformation avoidance rather than new choreography.',
+    ],
+    plannerNotes: [],
+  },
+  'kling-3.0': {
+    modelId: 'kling-3.0',
+    label: 'Kling 3.0 Motion Control',
+    medium: 'motion',
+    plannerMode: 'legacy-text',
+    strategyRules: [
+      'Kling 3.0 motion control handles nuanced identity and scene polish well when the prompt stays focused on realism, environment, and subject integrity.',
+      'Do not over-describe motion beats because the reference video already supplies them.',
+    ],
+    workflowRules: [
+      'If motionModel is kling-3.0, keep the prompt focused on realism, subject integrity, and polished scene integration rather than new motion instructions.',
+    ],
+    plannerNotes: [],
+  },
 };
 
 function normalizeModelId(selectedModel: string): string {
   return MODEL_ALIASES[selectedModel] ?? selectedModel;
 }
 
+function getEnhancerPlaybook(selectedModel: string): EnhancerPlaybook | null {
+  return ENHANCER_PLAYBOOKS[normalizeModelId(selectedModel)] ?? null;
+}
+
 function getCreativeIntent(context?: EnhancerContext): CreativeIntent {
   return context?.creativeIntent ?? 'general';
 }
 
-function getModelRules(selectedModel: string): string[] {
-  return MODEL_RULES[normalizeModelId(selectedModel)] ?? [];
-}
-
-function getTextRenderingRules(selectedModel: string): string[] {
-  return TEXT_RENDERING_RULES[normalizeModelId(selectedModel)] ?? [];
-}
-
 function getModelLabel(selectedModel: string): string {
-  return MODEL_LABELS[selectedModel] ?? MODEL_LABELS[normalizeModelId(selectedModel)] ?? selectedModel;
+  return getEnhancerPlaybook(selectedModel)?.label ?? selectedModel;
+}
+
+function getPlaybookStrategyRules(selectedModel: string): string[] {
+  return getEnhancerPlaybook(selectedModel)?.strategyRules ?? [];
+}
+
+function getPlaybookWorkflowRules(selectedModel: string): string[] {
+  return getEnhancerPlaybook(selectedModel)?.workflowRules ?? [];
+}
+
+function getPlaybookPlannerMode(selectedModel: string): PromptPlannerMode {
+  return getEnhancerPlaybook(selectedModel)?.plannerMode ?? 'legacy-text';
 }
 
 function buildRuleBlock(title: string, rules: string[]): string | null {
@@ -282,6 +457,7 @@ function buildContextBlock(context?: EnhancerContext): string | null {
   if (context.mode) lines.push(`- Mode: ${context.mode}`);
   if (typeof context.duration === 'number') lines.push(`- Duration: ${context.duration}s`);
   if (typeof context.sound === 'boolean') lines.push(`- Sound: ${context.sound ? 'enabled' : 'disabled'}`);
+  if (typeof context.fixedLens === 'boolean') lines.push(`- Fixed lens: ${context.fixedLens ? 'enabled' : 'disabled'}`);
   if (typeof context.referenceImageCount === 'number' && context.referenceImageCount > 0) {
     lines.push(`- Reference images attached: ${context.referenceImageCount}`);
   }
@@ -353,6 +529,16 @@ function summarizeRules(rules: string[], limit = 3): string {
   return summary ? `${summary}.` : 'Keep the prompt aligned with the chosen model.';
 }
 
+function formatPlannerMode(mode: PromptPlannerMode): string {
+  if (mode === 'structured-image') {
+    return 'structured-image';
+  }
+  if (mode === 'structured-video') {
+    return 'structured-video';
+  }
+  return 'legacy-text';
+}
+
 export function resolvePromptScenario(
   medium: Medium,
   _selectedModel: string,
@@ -377,17 +563,18 @@ export function buildPromptStrategyGuidance(options: PromptStrategyOptions): str
   const intent = getCreativeIntent(options.context);
   const textRules =
     options.medium === 'image' && needsTextRenderingGuidance(options.userPrompt)
-      ? getTextRenderingRules(options.selectedModel)
+      ? TEXT_RENDERING_RULES[normalizeModelId(options.selectedModel)] ?? []
       : [];
   const googleSearchRules =
     options.medium === 'image' && options.context?.googleSearch ? GOOGLE_SEARCH_RULES : [];
   const sections = [
     `Target model: ${getModelLabel(options.selectedModel)}`,
     `Prompt scenario: ${scenario}`,
+    `Planner mode: ${formatPlannerMode(getPlaybookPlannerMode(options.selectedModel))}`,
     buildRuleBlock('Core strategy:', BASE_STRATEGY_RULES),
     buildRuleBlock('Medium guidance:', MEDIUM_RULES[options.medium]),
     buildRuleBlock('Scenario guidance:', SCENARIO_RULES[scenario]),
-    buildRuleBlock('Model guidance:', getModelRules(options.selectedModel)),
+    buildRuleBlock('Model playbook guidance:', getPlaybookStrategyRules(options.selectedModel)),
     buildRuleBlock('Text rendering guidance:', textRules),
     buildRuleBlock('Google Search guidance:', googleSearchRules),
     buildRuleBlock('Intent guidance:', INTENT_RULES[intent]),
@@ -414,7 +601,7 @@ export function buildWorkflowPromptFieldGuidance(options: WorkflowFieldGuidanceO
   const modelSpecificRules = options.modelIds.map((modelId) => {
     const summary = summarizeRules([
       ...SCENARIO_RULES[options.scenario],
-      ...getModelRules(modelId),
+      ...getPlaybookWorkflowRules(modelId),
     ]);
 
     return `- If ${options.modelSelector} is ${modelId}, ${summary}`;
@@ -427,14 +614,88 @@ export function buildWorkflowPromptFieldGuidance(options: WorkflowFieldGuidanceO
   ].join('\n');
 }
 
+function buildImagePlannerSchemaBlock(): string {
+  return [
+    'Return JSON only using this ImagePromptSpec schema:',
+    '{"subject":"","setting":"","composition":"","cameraFraming":"","lighting":"","materialDetail":"","readableText":null,"referenceAnchors":[],"constraints":[],"finish":""}',
+    'Set readableText to null when the user did not request readable text. Otherwise use {"exactText":"","placement":"","treatment":""}.',
+  ].join('\n');
+}
+
+function buildVideoPlannerSchemaBlock(context?: EnhancerContext): string {
+  const sequenceGuidance = context?.isMultiShot
+    ? typeof context.shotIndex === 'number'
+      ? `Multi-shot is active. Build the sequence context lightly, but make shot ${context.shotIndex + 1} the most detailed shot in the shots array.`
+      : 'Multi-shot is active. Return an ordered shots array that can map to the full sequence.'
+    : 'Single-shot is active. Keep the plan focused on one clip and use at most one detailed shot entry.';
+
+  return [
+    'Return JSON only using this VideoScenePlan schema:',
+    '{"sceneGoal":"","subjectAction":"","environment":"","cameraMovement":"","continuityAnchors":[],"ambience":"","audioCue":"","pacing":"","dialogue":"","durationBudget":"","shots":[{"index":1,"title":"","startState":"","actionBeat":"","endState":"","camera":"","transition":""}]}',
+    sequenceGuidance,
+    'Use 1-based shot indexes when you fill the shots array.',
+  ].join('\n');
+}
+
+function buildPlannerTaskBlock(playbook: EnhancerPlaybook, scenario: PromptScenario, context?: EnhancerContext): string {
+  if (playbook.plannerMode === 'structured-image') {
+    return [
+      `Planner task: Build an ImagePromptSpec for ${playbook.label} in the ${scenario} scenario.`,
+      'The app will compile your JSON into the final prompt, so do not write the final prompt yourself.',
+      ...playbook.plannerNotes.map((note) => `- ${note}`),
+      buildImagePlannerSchemaBlock(),
+    ].join('\n');
+  }
+
+  if (playbook.plannerMode === 'structured-video') {
+    return [
+      `Planner task: Build a VideoScenePlan for ${playbook.label} in the ${scenario} scenario.`,
+      'The app will compile your JSON into the final prompt, so do not write the final prompt yourself.',
+      ...playbook.plannerNotes.map((note) => `- ${note}`),
+      buildVideoPlannerSchemaBlock(context),
+    ].join('\n');
+  }
+
+  return 'Write the final prompt string directly.';
+}
+
 export function buildEnhancerSystemPrompt(
   medium: Medium,
   selectedModel: string,
   context?: EnhancerContext,
   userPrompt?: string
 ): string {
+  const playbook = getEnhancerPlaybook(selectedModel);
+  const scenario = resolvePromptScenario(medium, selectedModel, context);
+
+  if (!playbook) {
+    return [
+      BASE_REWRITE_SYSTEM_PROMPT,
+      buildPromptStrategyGuidance({
+        medium,
+        selectedModel,
+        context,
+        userPrompt,
+        includeExamples: true,
+      }),
+    ].join('\n\n');
+  }
+
+  if (playbook.plannerMode === 'legacy-text') {
+    return [
+      BASE_REWRITE_SYSTEM_PROMPT,
+      buildPromptStrategyGuidance({
+        medium,
+        selectedModel,
+        context,
+        userPrompt,
+        includeExamples: true,
+      }),
+    ].join('\n\n');
+  }
+
   return [
-    BASE_SYSTEM_PROMPT,
+    BASE_PLANNER_SYSTEM_PROMPT,
     buildPromptStrategyGuidance({
       medium,
       selectedModel,
@@ -442,17 +703,587 @@ export function buildEnhancerSystemPrompt(
       userPrompt,
       includeExamples: true,
     }),
+    buildPlannerTaskBlock(playbook, scenario, context),
   ].join('\n\n');
 }
 
+export function applyPromptEnhancementSafeguards(
+  originalPrompt: string,
+  enhancedPrompt: string,
+  context?: EnhancerContext
+): string {
+  const trimmedOriginal = originalPrompt.trim();
+  const trimmedEnhanced = enhancedPrompt.trim();
+
+  if (!trimmedOriginal) {
+    return trimmedEnhanced;
+  }
+
+  if (context?.elementEnhancementMode !== 'append-only') {
+    return preserveNamedHandles(originalPrompt, enhancedPrompt, context);
+  }
+
+  const declaredHandles = new Set(
+    (context?.elementReferences ?? [])
+      .map((element) => element.handle)
+      .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
+  );
+  const originalHandles = extractPromptHandles(trimmedOriginal).filter((handle) => declaredHandles.has(handle));
+  const enhancedHandles = new Set(extractPromptHandles(trimmedEnhanced));
+
+  if (originalHandles.some((handle) => !enhancedHandles.has(handle))) {
+    return trimmedOriginal;
+  }
+
+  const normalizedOriginal = normalizeWhitespace(trimmedOriginal);
+  const normalizedEnhanced = normalizeWhitespace(trimmedEnhanced);
+
+  if (!normalizedEnhanced.startsWith(normalizedOriginal)) {
+    return trimmedOriginal;
+  }
+
+  return trimmedEnhanced;
+}
+
+function preserveNamedHandles(
+  originalPrompt: string,
+  enhancedPrompt: string,
+  context?: EnhancerContext
+): string {
+  const declaredHandles = new Set(
+    (context?.elementReferences ?? [])
+      .map((element) => element.handle)
+      .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
+  );
+
+  if (declaredHandles.size === 0) {
+    return enhancedPrompt;
+  }
+
+  const originalHandles = extractPromptHandles(originalPrompt).filter((handle) => declaredHandles.has(handle));
+  if (originalHandles.length === 0) {
+    return enhancedPrompt;
+  }
+
+  const enhancedHandles = new Set(extractPromptHandles(enhancedPrompt));
+  const missingHandles = originalHandles.filter((handle) => !enhancedHandles.has(handle));
+
+  if (missingHandles.length === 0) {
+    return enhancedPrompt;
+  }
+
+  const restoredHandles = missingHandles.join(', ');
+  return `${enhancedPrompt.trim()} Preserve the named reference elements ${restoredHandles} exactly as referenced.`;
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeText(value: string): string {
+  return normalizeWhitespace(value).replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, '');
+}
+
+function ensureSentence(value: string): string {
+  const trimmed = normalizeText(value);
+  if (!trimmed) {
+    return '';
+  }
+
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function sentenceFromParts(parts: Array<string | null | undefined>, separator = ', '): string {
+  const cleaned = parts
+    .map((part) => normalizeText(part ?? ''))
+    .filter((part) => part.length > 0);
+
+  return ensureSentence(cleaned.join(separator));
+}
+
+function joinPromptSentences(sentences: Array<string | null | undefined>): string {
+  return sentences
+    .map((sentence) => normalizeWhitespace(sentence ?? ''))
+    .filter((sentence) => sentence.length > 0)
+    .join(' ');
+}
+
+function quoteExactText(text: string): string {
+  const trimmed = normalizeText(text);
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed;
+  }
+
+  return `"${trimmed.replace(/^"+|"+$/g, '')}"`;
+}
+
+function listWithAnd(values: string[]): string {
+  const cleaned = values.map((value) => normalizeText(value)).filter((value) => value.length > 0);
+
+  if (cleaned.length === 0) {
+    return '';
+  }
+
+  if (cleaned.length === 1) {
+    return cleaned[0];
+  }
+
+  if (cleaned.length === 2) {
+    return `${cleaned[0]} and ${cleaned[1]}`;
+  }
+
+  return `${cleaned.slice(0, -1).join(', ')}, and ${cleaned.at(-1)}`;
+}
+
+function buildReferenceSentence(referenceAnchors: string[]): string {
+  if (referenceAnchors.length === 0) {
+    return '';
+  }
+
+  return ensureSentence(`Preserve ${listWithAnd(referenceAnchors)}`);
+}
+
+function buildReadableTextSentence(
+  readableText: ImagePromptSpec['readableText'],
+  detailLevel: 'brief' | 'rich'
+): string {
+  if (!readableText || !normalizeText(readableText.exactText)) {
+    return '';
+  }
+
+  const exactText = quoteExactText(readableText.exactText);
+  const placement = normalizeText(readableText.placement);
+  const treatment = normalizeText(readableText.treatment);
+
+  if (detailLevel === 'brief') {
+    return sentenceFromParts([
+      `Include readable text ${exactText}`,
+      placement ? `placed ${placement}` : '',
+      treatment ? treatment : '',
+    ]);
+  }
+
+  return sentenceFromParts([
+    `Include readable text ${exactText}`,
+    placement ? `placed ${placement}` : '',
+    treatment ? `with ${treatment}` : '',
+  ]);
+}
+
+function normalizeString(value: unknown): string {
+  return typeof value === 'string' ? normalizeWhitespace(value) : '';
+}
+
+function normalizeStringArray(value: unknown, limit = 8): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of value) {
+    const normalized = normalizeString(item);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function extractJsonString(rawOutput: string): string | null {
+  const fencedMatch = rawOutput.match(/```json\s*([\s\S]*?)```/i);
+  const candidate = fencedMatch?.[1] ?? rawOutput;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+
+  if (start === -1 || end === -1 || start >= end) {
+    return null;
+  }
+
+  return candidate.slice(start, end + 1);
+}
+
+function parseStructuredOutput(rawOutput: string): Record<string, unknown> | null {
+  const jsonString = extractJsonString(rawOutput);
+  if (!jsonString) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonString) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeImagePromptSpec(
+  plannerOutput: Record<string, unknown>,
+  userPrompt: string
+): ImagePromptSpec {
+  const readableTextCandidate = plannerOutput.readableText;
+  const readableText = isRecord(readableTextCandidate)
+    ? {
+      exactText: normalizeString(readableTextCandidate.exactText),
+      placement: normalizeString(readableTextCandidate.placement),
+      treatment: normalizeString(readableTextCandidate.treatment),
+    }
+    : null;
+
+  const normalizedReadableText = readableText
+    && (readableText.exactText || readableText.placement || readableText.treatment)
+    ? readableText
+    : null;
+
+  return {
+    subject: normalizeString(plannerOutput.subject) || normalizeWhitespace(userPrompt),
+    setting: normalizeString(plannerOutput.setting),
+    composition: normalizeString(plannerOutput.composition),
+    cameraFraming: normalizeString(plannerOutput.cameraFraming),
+    lighting: normalizeString(plannerOutput.lighting),
+    materialDetail: normalizeString(plannerOutput.materialDetail),
+    readableText: normalizedReadableText,
+    referenceAnchors: normalizeStringArray(plannerOutput.referenceAnchors),
+    constraints: normalizeStringArray(plannerOutput.constraints),
+    finish: normalizeString(plannerOutput.finish),
+  };
+}
+
+function normalizeVideoScenePlan(
+  plannerOutput: Record<string, unknown>,
+  userPrompt: string
+): VideoScenePlan {
+  const rawShots = Array.isArray(plannerOutput.shots) ? plannerOutput.shots : [];
+  const shots = rawShots
+    .map((shot, index) => {
+      if (!isRecord(shot)) {
+        return null;
+      }
+
+      const parsedIndex = typeof shot.index === 'number' && Number.isFinite(shot.index)
+        ? Math.max(1, Math.round(shot.index))
+        : index + 1;
+
+      return {
+        index: parsedIndex,
+        title: normalizeString(shot.title),
+        startState: normalizeString(shot.startState),
+        actionBeat: normalizeString(shot.actionBeat),
+        endState: normalizeString(shot.endState),
+        camera: normalizeString(shot.camera),
+        transition: normalizeString(shot.transition),
+      } satisfies VideoShotPlan;
+    })
+    .filter((shot): shot is VideoShotPlan => Boolean(shot));
+
+  const normalizedPlan: VideoScenePlan = {
+    sceneGoal: normalizeString(plannerOutput.sceneGoal),
+    subjectAction: normalizeString(plannerOutput.subjectAction) || normalizeWhitespace(userPrompt),
+    environment: normalizeString(plannerOutput.environment),
+    cameraMovement: normalizeString(plannerOutput.cameraMovement),
+    continuityAnchors: normalizeStringArray(plannerOutput.continuityAnchors),
+    ambience: normalizeString(plannerOutput.ambience),
+    audioCue: normalizeString(plannerOutput.audioCue),
+    pacing: normalizeString(plannerOutput.pacing),
+    dialogue: normalizeString(plannerOutput.dialogue),
+    durationBudget: normalizeString(plannerOutput.durationBudget),
+    shots,
+  };
+
+  if (normalizedPlan.shots.length === 0) {
+    normalizedPlan.shots = [{
+      index: 1,
+      title: '',
+      startState: '',
+      actionBeat: normalizedPlan.subjectAction,
+      endState: '',
+      camera: normalizedPlan.cameraMovement,
+      transition: '',
+    }];
+  }
+
+  return normalizedPlan;
+}
+
+function resolveVideoShot(plan: VideoScenePlan, context?: EnhancerContext): VideoShotPlan | null {
+  if (plan.shots.length === 0) {
+    return null;
+  }
+
+  if (typeof context?.shotIndex === 'number') {
+    const oneBasedIndex = context.shotIndex + 1;
+    return (
+      plan.shots.find((shot) => shot.index === oneBasedIndex)
+      ?? plan.shots[context.shotIndex]
+      ?? plan.shots[0]
+    );
+  }
+
+  return plan.shots[0];
+}
+
+function buildConstraintSentence(constraints: string[]): string {
+  if (constraints.length === 0) {
+    return '';
+  }
+
+  return ensureSentence(`Keep ${listWithAnd(constraints)}`);
+}
+
+function compileNanoBanana2Prompt(spec: ImagePromptSpec): string {
+  const primarySentence = sentenceFromParts([
+    spec.subject,
+    spec.setting ? `in ${spec.setting}` : '',
+    spec.composition,
+    spec.cameraFraming,
+    spec.lighting,
+  ]);
+
+  const detailSentence = sentenceFromParts([
+    spec.materialDetail,
+    spec.finish,
+  ]);
+
+  return joinPromptSentences([
+    primarySentence,
+    detailSentence,
+    buildReferenceSentence(spec.referenceAnchors),
+    buildReadableTextSentence(spec.readableText, 'brief'),
+    buildConstraintSentence(spec.constraints),
+  ]);
+}
+
+function compileNanoBananaProPrompt(spec: ImagePromptSpec): string {
+  const compositionSentence = sentenceFromParts([
+    spec.subject,
+    spec.setting ? `in ${spec.setting}` : '',
+    spec.composition,
+    spec.cameraFraming,
+  ]);
+
+  const craftSentence = sentenceFromParts([
+    spec.lighting,
+    spec.materialDetail,
+    spec.finish,
+  ]);
+
+  return joinPromptSentences([
+    compositionSentence,
+    craftSentence,
+    buildReferenceSentence(spec.referenceAnchors),
+    buildReadableTextSentence(spec.readableText, 'rich'),
+    buildConstraintSentence(spec.constraints),
+  ]);
+}
+
+function buildShotNarrative(plan: VideoScenePlan, shot: VideoShotPlan | null): string {
+  if (shot) {
+    return sentenceFromParts([
+      shot.startState,
+      shot.actionBeat || plan.subjectAction,
+      shot.endState,
+      plan.environment,
+    ]);
+  }
+
+  return sentenceFromParts([
+    plan.sceneGoal,
+    plan.subjectAction,
+    plan.environment,
+  ]);
+}
+
+function stripQuotedDialogue(dialogue: string): string {
+  return normalizeWhitespace(dialogue.replace(/["“”]/g, ''));
+}
+
+function compileVeoPrompt(plan: VideoScenePlan, context?: EnhancerContext): string {
+  const shot = resolveVideoShot(plan, context);
+  const cameraSentence = sentenceFromParts([
+    shot?.camera || plan.cameraMovement,
+    plan.ambience,
+    plan.pacing,
+    plan.durationBudget,
+  ]);
+  const continuitySentence = plan.continuityAnchors.length > 0
+    ? ensureSentence(`Maintain continuity with ${listWithAnd(plan.continuityAnchors)}`)
+    : '';
+  const dialogueSentence = normalizeText(plan.dialogue)
+    ? ensureSentence(stripQuotedDialogue(plan.dialogue))
+    : '';
+
+  return joinPromptSentences([
+    buildShotNarrative(plan, shot),
+    cameraSentence,
+    continuitySentence,
+    dialogueSentence,
+  ]);
+}
+
+function compileSeedancePrompt(plan: VideoScenePlan, context?: EnhancerContext): string {
+  const shot = resolveVideoShot(plan, context);
+  const cameraIntent = context?.fixedLens
+    ? 'static locked camera'
+    : (shot?.camera || plan.cameraMovement);
+  const audioSentence = context?.sound && normalizeText(plan.audioCue)
+    ? ensureSentence(`Audio cues: ${normalizeText(plan.audioCue)}`)
+    : '';
+
+  return joinPromptSentences([
+    buildShotNarrative(plan, shot),
+    sentenceFromParts([
+      cameraIntent,
+      plan.ambience,
+      plan.pacing,
+      plan.durationBudget,
+    ]),
+    normalizeText(plan.dialogue) ? ensureSentence(plan.dialogue) : '',
+    audioSentence,
+    plan.continuityAnchors.length > 0
+      ? ensureSentence(`Preserve ${listWithAnd(plan.continuityAnchors)}`)
+      : '',
+  ]);
+}
+
+function compileKlingShotPrompt(plan: VideoScenePlan, shot: VideoShotPlan): string {
+  return joinPromptSentences([
+    sentenceFromParts([
+      shot.title,
+      shot.startState,
+      shot.actionBeat || plan.subjectAction,
+      shot.endState,
+      plan.environment,
+    ]),
+    sentenceFromParts([
+      shot.camera || plan.cameraMovement,
+      plan.ambience,
+      plan.pacing,
+      plan.durationBudget,
+    ]),
+    plan.continuityAnchors.length > 0
+      ? ensureSentence(`Maintain continuity with ${listWithAnd(plan.continuityAnchors)}`)
+      : '',
+    normalizeText(shot.transition)
+      ? ensureSentence(shot.transition)
+      : '',
+  ]);
+}
+
+function compileKlingPrompt(plan: VideoScenePlan, context?: EnhancerContext): string {
+  if (context?.isMultiShot && typeof context.shotIndex !== 'number' && plan.shots.length > 1) {
+    return plan.shots
+      .map((shot) => `Shot ${shot.index}: ${compileKlingShotPrompt(plan, shot)}`)
+      .join('\n');
+  }
+
+  const shot = resolveVideoShot(plan, context);
+  if (shot) {
+    return compileKlingShotPrompt(plan, shot);
+  }
+
+  return joinPromptSentences([
+    sentenceFromParts([
+      plan.sceneGoal,
+      plan.subjectAction,
+      plan.environment,
+    ]),
+    sentenceFromParts([
+      plan.cameraMovement,
+      plan.ambience,
+      plan.pacing,
+      plan.durationBudget,
+    ]),
+    plan.continuityAnchors.length > 0
+      ? ensureSentence(`Maintain continuity with ${listWithAnd(plan.continuityAnchors)}`)
+      : '',
+  ]);
+}
+
+export function buildPromptEnhancementArtifacts(
+  medium: Medium,
+  selectedModel: string,
+  rawEnhancerOutput: string,
+  context?: EnhancerContext,
+  userPrompt = ''
+): PromptEnhancementArtifacts {
+  const playbook = getEnhancerPlaybook(selectedModel);
+  const scenario = resolvePromptScenario(medium, selectedModel, context);
+  const trimmedOutput = normalizeWhitespace(rawEnhancerOutput);
+
+  if (!playbook || playbook.plannerMode === 'legacy-text') {
+    return {
+      playbookId: normalizeModelId(selectedModel),
+      plannerMode: playbook?.plannerMode ?? 'legacy-text',
+      scenario,
+      plannerOutput: trimmedOutput,
+      compiledPrompt: trimmedOutput,
+    };
+  }
+
+  const parsedOutput = parseStructuredOutput(rawEnhancerOutput);
+  if (!parsedOutput) {
+    return {
+      playbookId: playbook.modelId,
+      plannerMode: playbook.plannerMode,
+      scenario,
+      plannerOutput: trimmedOutput,
+      compiledPrompt: trimmedOutput,
+    };
+  }
+
+  if (playbook.plannerMode === 'structured-image') {
+    const spec = normalizeImagePromptSpec(parsedOutput, userPrompt);
+    const compiledPrompt = playbook.modelId === 'nano-banana-pro'
+      ? compileNanoBananaProPrompt(spec)
+      : compileNanoBanana2Prompt(spec);
+
+    return {
+      playbookId: playbook.modelId,
+      plannerMode: playbook.plannerMode,
+      scenario,
+      plannerOutput: spec,
+      compiledPrompt: compiledPrompt || normalizeWhitespace(userPrompt),
+    };
+  }
+
+  const plan = normalizeVideoScenePlan(parsedOutput, userPrompt);
+  const compiledPrompt = (() => {
+    if (playbook.modelId === 'seedance-1.5-pro') {
+      return compileSeedancePrompt(plan, context);
+    }
+    if (playbook.modelId === 'veo-3.1') {
+      return compileVeoPrompt(plan, context);
+    }
+    return compileKlingPrompt(plan, context);
+  })();
+
+  return {
+    playbookId: playbook.modelId,
+    plannerMode: playbook.plannerMode,
+    scenario,
+    plannerOutput: plan,
+    compiledPrompt: compiledPrompt || normalizeWhitespace(userPrompt),
+  };
+}
+
 export const SUPPORTED_ENHANCEMENT_MODELS = new Set([
-  'nano-banana-2',
-  'nano-banana-pro',
-  'kling-3.0/video',
-  'seedance-1.5-pro',
-  'veo-3.1',
-  'kling-2.6',
-  'kling-3.0',
+  ...Object.keys(ENHANCER_PLAYBOOKS),
+  ...Object.keys(MODEL_ALIASES),
 ]);
 
 interface KieEnhancementResponse {
@@ -468,7 +1299,7 @@ export async function callPromptEnhancer(
     throw new Error('KIE_AI_API_KEY is not configured');
   }
 
-  const response = await fetch('https://api.kie.ai/gemini-3-flash/v1/chat/completions', {
+  const response = await fetch(PROMPT_ENHANCER_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -506,4 +1337,9 @@ export async function callPromptEnhancer(
   }
 
   return { enhancedPrompt: content.trim() };
+}
+
+function extractPromptHandles(prompt: string): string[] {
+  const matches = prompt.match(/@[\p{L}\p{N}_-]+/gu);
+  return matches ?? [];
 }

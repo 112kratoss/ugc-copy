@@ -1,92 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/server-helpers';
-import { extractPromptHandles } from '@/lib/image-elements';
 import {
     getPromptEnhancementCost,
     buildEnhancerSystemPrompt,
+    buildPromptEnhancementArtifacts,
+    applyPromptEnhancementSafeguards,
     callPromptEnhancer,
+    PROMPT_ENHANCER_PROVIDER_MODEL,
     SUPPORTED_ENHANCEMENT_MODELS,
     Medium,
     EnhancerContext,
 } from '@/lib/prompt-enhancer';
-
-function preserveNamedHandles(
-    originalPrompt: string,
-    enhancedPrompt: string,
-    context?: EnhancerContext
-): string {
-    const declaredHandles = new Set(
-        (context?.elementReferences ?? [])
-            .map((element) => element.handle)
-            .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
-    );
-
-    if (declaredHandles.size === 0) {
-        return enhancedPrompt;
-    }
-
-    const originalHandles = extractPromptHandles(originalPrompt).filter((handle) => declaredHandles.has(handle));
-    if (originalHandles.length === 0) {
-        return enhancedPrompt;
-    }
-
-    const enhancedHandles = new Set(extractPromptHandles(enhancedPrompt));
-    const missingHandles = originalHandles.filter((handle) => !enhancedHandles.has(handle));
-
-    if (missingHandles.length === 0) {
-        return enhancedPrompt;
-    }
-
-    const restoredHandles = missingHandles.join(', ');
-    return `${enhancedPrompt.trim()} Preserve the named reference elements ${restoredHandles} exactly as referenced.`;
-}
-
-function normalizeWhitespace(value: string): string {
-    return value.replace(/\s+/g, ' ').trim();
-}
-
-function isAppendOnlyElementPrompt(context?: EnhancerContext): boolean {
-    return context?.elementEnhancementMode === 'append-only';
-}
-
-function preserveSafeElementPrompt(
-    originalPrompt: string,
-    enhancedPrompt: string,
-    context?: EnhancerContext
-): string {
-    const trimmedOriginal = originalPrompt.trim();
-    const trimmedEnhanced = enhancedPrompt.trim();
-
-    if (!trimmedOriginal) {
-        return trimmedEnhanced;
-    }
-
-    if (!isAppendOnlyElementPrompt(context)) {
-        return preserveNamedHandles(originalPrompt, enhancedPrompt, context);
-    }
-
-    const declaredHandles = new Set(
-        (context?.elementReferences ?? [])
-            .map((element) => element.handle)
-            .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
-    );
-    const originalHandles = extractPromptHandles(trimmedOriginal).filter((handle) => declaredHandles.has(handle));
-    const enhancedHandles = new Set(extractPromptHandles(trimmedEnhanced));
-
-    if (originalHandles.some((handle) => !enhancedHandles.has(handle))) {
-        return trimmedOriginal;
-    }
-
-    const normalizedOriginal = normalizeWhitespace(trimmedOriginal);
-    const normalizedEnhanced = normalizeWhitespace(trimmedEnhanced);
-
-    if (!normalizedEnhanced.startsWith(normalizedOriginal)) {
-        return trimmedOriginal;
-    }
-
-    return trimmedEnhanced;
-}
 
 export async function POST(request: NextRequest) {
     try {
@@ -160,7 +85,7 @@ export async function POST(request: NextRequest) {
                 user_id: user.id,
                 feature: 'prompt_enhancement',
                 provider: 'kie',
-                model: 'gemini-3-flash',
+                model: PROMPT_ENHANCER_PROVIDER_MODEL,
                 medium,
                 cost,
                 status: 'pending',
@@ -186,7 +111,18 @@ export async function POST(request: NextRequest) {
             );
 
             const result = await callPromptEnhancer(systemPrompt, prompt);
-            const enhancedPrompt = preserveSafeElementPrompt(prompt, result.enhancedPrompt, context);
+            const artifacts = buildPromptEnhancementArtifacts(
+                medium as Medium,
+                selectedModel,
+                result.enhancedPrompt,
+                context,
+                prompt
+            );
+            const enhancedPrompt = applyPromptEnhancementSafeguards(
+                prompt,
+                artifacts.compiledPrompt,
+                context
+            );
 
             // 6. Update usage event to succeeded
             if (eventId) {

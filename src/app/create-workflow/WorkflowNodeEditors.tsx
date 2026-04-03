@@ -722,6 +722,7 @@ function MultiShotEditor({
   mode,
   aspectRatio,
   sound,
+  fixedLens,
   hasStartImage,
   hasEndImage,
 }: {
@@ -733,6 +734,7 @@ function MultiShotEditor({
   mode: string;
   aspectRatio: string;
   sound: boolean;
+  fixedLens: boolean;
   hasStartImage: boolean;
   hasEndImage: boolean;
 }) {
@@ -787,6 +789,7 @@ function MultiShotEditor({
                 aspectRatio,
                 duration: shot.duration,
                 sound,
+                fixedLens,
                 shotIndex: index,
                 shotCount: shots.length,
                 isMultiShot: true,
@@ -939,7 +942,10 @@ function buildPromptEnhancementRequest(
         duration: data.duration,
         mode: data.mode || undefined,
         sound: data.sound,
+        fixedLens: data.fixedLens,
         resolution: data.resolution || undefined,
+        isMultiShot: data.isMultiShot,
+        shotCount: data.isMultiShot ? data.multiPrompts.length : undefined,
         hasStartImage,
         hasEndImage,
         referenceImageCount: referenceImageCount > 0
@@ -1838,6 +1844,7 @@ function NodeEditorContent({
                 mode={videoGenerateNode.mode}
                 aspectRatio={videoGenerateNode.aspectRatio}
                 sound={videoGenerateNode.sound}
+                fixedLens={videoGenerateNode.fixedLens}
                 hasStartImage={Boolean(resolvedInputs.startFrameUrl)}
                 hasEndImage={Boolean(resolvedInputs.endFrameUrl)}
               />
