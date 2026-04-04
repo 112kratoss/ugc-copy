@@ -278,6 +278,12 @@ const MODEL_ALIASES: Record<string, string> = {
   'kling-3.0-video': 'kling-3.0/video',
 };
 
+const SEEDANCE_PLAYBOOK_MODEL_IDS = new Set([
+  'seedance-1.5-pro',
+  'seedance-2',
+  'seedance-2-fast',
+]);
+
 const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
   'nano-banana-2': {
     modelId: 'nano-banana-2',
@@ -357,6 +363,46 @@ const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
     plannerNotes: [
       'The final compiled prompt can be slightly more descriptive because Seedance responds well to layered scene instructions.',
       'Audio cues should only appear when sound is enabled.',
+    ],
+  },
+  'seedance-2': {
+    modelId: 'seedance-2',
+    label: 'Seedance 2',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    strategyRules: [
+      'Treat Seedance 2 like a reference-driven video model: keep the plan grounded in the attached image, video, and audio inputs instead of inventing new scene details.',
+      'When reference videos are present, focus on motion continuity, pacing, and scene evolution rather than frame-by-frame narration.',
+      'Use audio cues only when sound is enabled, and keep them tightly tied to the action.',
+      'If the camera should feel locked, say so explicitly so the compiled prompt does not drift into unnecessary motion language.',
+    ],
+    workflowRules: [
+      'If primaryModel is seedance-2, describe the reference-aware scene with explicit action, environment, camera intent, pacing, and optional audio.',
+      'If primaryModel is seedance-2 and the scene should stay visually anchored, call out the locked camera or reference continuity directly.',
+    ],
+    plannerNotes: [
+      'Seedance 2 works best when the plan stays tied to the connected reference assets and the final action beat remains easy to follow.',
+      'Mention audio cues only when the workflow has sound enabled.',
+    ],
+  },
+  'seedance-2-fast': {
+    modelId: 'seedance-2-fast',
+    label: 'Seedance 2 Fast',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    strategyRules: [
+      'Treat Seedance 2 Fast like a speed-oriented reference-driven model: keep the plan concise, concrete, and anchored to the connected media.',
+      'Favor one clean scene with strong motion continuity over dense camera language or layered scene concepts.',
+      'When reference videos are present, preserve the motion beat and timing instead of re-describing the same visuals in long form.',
+      'Keep sound cues short and functional when audio is enabled.',
+    ],
+    workflowRules: [
+      'If primaryModel is seedance-2-fast, keep the prompt short, reference-aware, and focused on one clear action beat.',
+      'If primaryModel is seedance-2-fast and the scene should not drift, state the camera intent and continuity anchor plainly.',
+    ],
+    plannerNotes: [
+      'Seedance 2 Fast prefers compact instructions with just enough detail to preserve the reference assets and the intended motion.',
+      'Do not over-explain the scene when a few strong references already establish the look.',
     ],
   },
   'veo-3.1': {
@@ -1263,7 +1309,7 @@ export function buildPromptEnhancementArtifacts(
 
   const plan = normalizeVideoScenePlan(parsedOutput, userPrompt);
   const compiledPrompt = (() => {
-    if (playbook.modelId === 'seedance-1.5-pro') {
+    if (SEEDANCE_PLAYBOOK_MODEL_IDS.has(playbook.modelId)) {
       return compileSeedancePrompt(plan, context);
     }
     if (playbook.modelId === 'veo-3.1') {

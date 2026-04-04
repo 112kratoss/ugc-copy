@@ -161,7 +161,7 @@ function normalizeBlueprintImageModel(value: unknown): ImageModelId {
 }
 
 function normalizeBlueprintVideoModel(value: unknown): VideoModelId {
-  if (value === 'seedance-1.5-pro' || value === 'veo-3.1') {
+  if (value === 'seedance-1.5-pro' || value === 'seedance-2' || value === 'seedance-2-fast' || value === 'veo-3.1') {
     return value;
   }
 
@@ -198,7 +198,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
     'You are an expert creative strategist building a production-ready AI generation workflow for short-form ads and videos.',
     'Return valid JSON only. No markdown. No commentary.',
     'The JSON schema is: {"title":string,"creativeStrategy":string,"hook":string,"narrative":string,"voiceover":string,"editingNotes":string[],"assetChecklist":string[],"shots":[{"id":string,"title":string,"purpose":string,"beat":string,"visualPrompt":string,"videoPrompt":string,"motionPrompt":string,"duration":number}],"deliveryPlan":{"primaryModel":string,"stillImageModel":string,"motionModel":string,"recommendedSequence":string[]}}.',
-    'Use the existing models only: stillImageModel must be nano-banana-2 or nano-banana-pro; primaryModel must be kling-3.0-video, seedance-1.5-pro, or veo-3.1; motionModel must be kling-2.6 or kling-3.0.',
+    'Use the existing models only: stillImageModel must be nano-banana-2 or nano-banana-pro; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, or veo-3.1; motionModel must be kling-2.6 or kling-3.0.',
     `Plan for a ${input.durationSeconds}-second ${input.objective} in ${input.aspectRatio} for ${input.platform}.`,
     'Generate 3 to 6 shots. Each prompt should be directly usable in an AI generation UI and must stay commercially focused.',
     buildWorkflowPromptFieldGuidance({
@@ -214,7 +214,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
       modelSelector: 'primaryModel',
       medium: 'video',
       scenario: 'video.image_to_video_start_frame',
-      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'veo-3.1'],
+      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'veo-3.1'],
       context: plannerContext,
       additionalRules: [
         'These prompts should still read clearly as standalone text prompts, but they should stay reference-friendly because the workflow often pairs them with a still frame.',

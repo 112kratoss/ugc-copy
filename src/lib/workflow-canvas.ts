@@ -67,6 +67,38 @@ interface BaseWorkflowNodeData extends Record<string, unknown> {
   runState: WorkflowNodeRunState;
 }
 
+export type SeedanceAssetKind = 'Image' | 'Video' | 'Audio';
+export type SeedanceAssetStatus = 'idle' | 'processing' | 'active' | 'failed';
+
+export interface SeedanceAssetMetadata {
+  assetId: string | null;
+  assetType: SeedanceAssetKind | null;
+  status: SeedanceAssetStatus;
+  sourceUrl: string | null;
+  error: string | null;
+  lastCheckedAt: string | null;
+}
+
+function createSeedanceAssetMetadata(overrides?: Partial<SeedanceAssetMetadata>): SeedanceAssetMetadata {
+  return {
+    assetId: null,
+    assetType: null,
+    status: 'idle',
+    sourceUrl: null,
+    error: null,
+    lastCheckedAt: null,
+    ...overrides,
+  };
+}
+
+export function isSeedanceVideoModel(modelId: VideoModelId): boolean {
+  return modelId === 'seedance-1.5-pro' || modelId === 'seedance-2' || modelId === 'seedance-2-fast';
+}
+
+export function isSeedance2VideoModel(modelId: VideoModelId): boolean {
+  return modelId === 'seedance-2' || modelId === 'seedance-2-fast';
+}
+
 export interface TextInputNodeData extends BaseWorkflowNodeData {
   text: string;
 }
@@ -79,17 +111,20 @@ export interface ImageInputNodeData extends BaseWorkflowNodeData {
   imageUrl: string | null;
   storagePath: string | null;
   referenceHandle: string | null;
+  seedanceAsset: SeedanceAssetMetadata;
 }
 
 export interface VideoInputNodeData extends BaseWorkflowNodeData {
   videoUrl: string | null;
   storagePath: string | null;
   durationSeconds: number | null;
+  seedanceAsset: SeedanceAssetMetadata;
 }
 
 export interface AudioInputNodeData extends BaseWorkflowNodeData {
   audioUrl: string | null;
   storagePath: string | null;
+  seedanceAsset: SeedanceAssetMetadata;
 }
 
 export interface WorkflowReferenceElement extends ImageElementDescriptor {
@@ -323,7 +358,7 @@ export const WORKFLOW_NODE_HANDLE_SCHEMAS: Record<WorkflowNodeKind, WorkflowNode
     outputs: ['image'],
   },
   'video-generate': {
-    inputs: ['prompt', 'start-frame', 'end-frame'],
+    inputs: ['prompt', 'start-frame', 'end-frame', 'reference-image', 'reference-video', 'reference-audio'],
     outputs: ['video'],
   },
   'motion-generate': {
@@ -376,12 +411,28 @@ export function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
         imageUrl: null,
         storagePath: null,
         referenceHandle: null,
+        seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Image' }),
         runState: createNodeRunState(),
       };
     case 'video-input':
-      return { title: 'Video input', subtitle: 'Upload or connect video', videoUrl: null, storagePath: null, durationSeconds: null, runState: createNodeRunState() };
+      return {
+        title: 'Video input',
+        subtitle: 'Upload or connect video',
+        videoUrl: null,
+        storagePath: null,
+        durationSeconds: null,
+        seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Video' }),
+        runState: createNodeRunState(),
+      };
     case 'audio-input':
-      return { title: 'Audio input', subtitle: 'Upload or connect audio', audioUrl: null, storagePath: null, runState: createNodeRunState() };
+      return {
+        title: 'Audio input',
+        subtitle: 'Upload or connect audio',
+        audioUrl: null,
+        storagePath: null,
+        seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Audio' }),
+        runState: createNodeRunState(),
+      };
     case 'image-generate':
       return {
         title: 'Image generator',
@@ -551,6 +602,17 @@ function sanitizeWorkflowReferenceElementsForShare(elements: WorkflowReferenceEl
   }));
 }
 
+function sanitizeSeedanceAssetMetadataForShare(metadata: SeedanceAssetMetadata) {
+  return createSeedanceAssetMetadata({
+    assetId: metadata.assetId,
+    assetType: metadata.assetType,
+    status: metadata.status,
+    sourceUrl: null,
+    error: metadata.error,
+    lastCheckedAt: metadata.lastCheckedAt,
+  });
+}
+
 function sanitizeWorkflowNodeDataForShare(
   type: WorkflowNodeKind,
   data: WorkflowNodeData
@@ -566,6 +628,7 @@ function sanitizeWorkflowNodeDataForShare(
         ...editableData,
         imageUrl: null,
         storagePath: null,
+        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as ImageInputNodeData).seedanceAsset),
       };
     case 'video-input':
       return {
@@ -573,12 +636,14 @@ function sanitizeWorkflowNodeDataForShare(
         videoUrl: null,
         storagePath: null,
         durationSeconds: null,
+        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as VideoInputNodeData).seedanceAsset),
       };
     case 'audio-input':
       return {
         ...editableData,
         audioUrl: null,
         storagePath: null,
+        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as AudioInputNodeData).seedanceAsset),
       };
     case 'image-generate':
       return {
@@ -736,6 +801,13 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null,
         storagePath: typeof (data as ImageInputNodeData | undefined)?.storagePath === 'string' ? (data as ImageInputNodeData).storagePath : null,
         referenceHandle: normalizeWorkflowReferenceHandle((data as ImageInputNodeData | undefined)?.referenceHandle),
+        seedanceAsset: normalizeSeedanceAssetMetadata(
+          (data as ImageInputNodeData | undefined)?.seedanceAsset,
+          'Image',
+          typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string'
+            ? (data as ImageInputNodeData).imageUrl
+            : null
+        ),
         runState,
       };
     case 'video-input':
@@ -748,10 +820,31 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         durationSeconds: typeof (data as VideoInputNodeData | undefined)?.durationSeconds === 'number'
           ? (data as VideoInputNodeData).durationSeconds
           : null,
+        seedanceAsset: normalizeSeedanceAssetMetadata(
+          (data as VideoInputNodeData | undefined)?.seedanceAsset,
+          'Video',
+          typeof (data as VideoInputNodeData | undefined)?.videoUrl === 'string'
+            ? (data as VideoInputNodeData).videoUrl
+            : null
+        ),
         runState,
       };
     case 'audio-input':
-      return { ...(base as AudioInputNodeData), title, subtitle, audioUrl: typeof (data as AudioInputNodeData | undefined)?.audioUrl === 'string' ? (data as AudioInputNodeData).audioUrl : null, storagePath: typeof (data as AudioInputNodeData | undefined)?.storagePath === 'string' ? (data as AudioInputNodeData).storagePath : null, runState };
+      return {
+        ...(base as AudioInputNodeData),
+        title,
+        subtitle,
+        audioUrl: typeof (data as AudioInputNodeData | undefined)?.audioUrl === 'string' ? (data as AudioInputNodeData).audioUrl : null,
+        storagePath: typeof (data as AudioInputNodeData | undefined)?.storagePath === 'string' ? (data as AudioInputNodeData).storagePath : null,
+        seedanceAsset: normalizeSeedanceAssetMetadata(
+          (data as AudioInputNodeData | undefined)?.seedanceAsset,
+          'Audio',
+          typeof (data as AudioInputNodeData | undefined)?.audioUrl === 'string'
+            ? (data as AudioInputNodeData).audioUrl
+            : null
+        ),
+        runState,
+      };
     case 'image-generate':
       return normalizeImageGenerateNodeData({
         base: base as ImageGenerateNodeData,
@@ -938,6 +1031,39 @@ function normalizeWorkflowReferenceHandle(value: unknown): string | null {
 
   const handle = `@${normalized}`;
   return isValidElementHandle(handle) ? handle : null;
+}
+
+function normalizeSeedanceAssetMetadata(
+  value: unknown,
+  assetType: SeedanceAssetKind,
+  fallbackSourceUrl: string | null
+): SeedanceAssetMetadata {
+  if (!value || typeof value !== 'object') {
+    return createSeedanceAssetMetadata({
+      assetType,
+      sourceUrl: fallbackSourceUrl,
+    });
+  }
+
+  const typedValue = value as Partial<SeedanceAssetMetadata>;
+  const status = typedValue.status === 'processing' || typedValue.status === 'active' || typedValue.status === 'failed'
+    ? typedValue.status
+    : 'idle';
+
+  return createSeedanceAssetMetadata({
+    assetId: typeof typedValue.assetId === 'string' && typedValue.assetId.trim() ? typedValue.assetId : null,
+    assetType: typedValue.assetType === 'Image' || typedValue.assetType === 'Video' || typedValue.assetType === 'Audio'
+      ? typedValue.assetType
+      : assetType,
+    status,
+    sourceUrl: typeof typedValue.sourceUrl === 'string' && typedValue.sourceUrl.trim()
+      ? typedValue.sourceUrl
+      : fallbackSourceUrl,
+    error: typeof typedValue.error === 'string' && typedValue.error.trim() ? typedValue.error : null,
+    lastCheckedAt: typeof typedValue.lastCheckedAt === 'string' && typedValue.lastCheckedAt.trim()
+      ? typedValue.lastCheckedAt
+      : null,
+  });
 }
 
 function normalizeWorkflowReferenceBindings(value: unknown): WorkflowReferenceBinding[] {
@@ -1152,6 +1278,7 @@ export function validateWorkflowConnection(sourceType: WorkflowHandleType | null
   if (sourceType === 'text' && targetType === 'prompt') return true;
   if (sourceType === 'image' && (targetType === 'image-reference' || targetType === 'reference-image' || targetType === 'element-image' || targetType === 'start-frame' || targetType === 'end-frame' || targetType === 'image')) return true;
   if (sourceType === 'video' && targetType === 'reference-video') return true;
+  if (sourceType === 'audio' && targetType === 'reference-audio') return true;
   return false;
 }
 
@@ -1240,6 +1367,7 @@ export interface WorkflowNodeCapabilityValidation {
   referenceImageLimit: number | null;
   totalReferenceImageCount: number;
   referenceVideoCount: number;
+  referenceAudioCount: number;
   referenceVideoLimit: number | null;
   referenceVideoDurationLimitSeconds: number | null;
   connectedElementCount: number;
@@ -1365,7 +1493,21 @@ function getNormalizedIncomingTargetHandle(
   }
 
   if (targetNode?.type === 'video-generate') {
-    if (edge.targetHandle === 'reference-image') {
+    const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+
+    if (isSeedance2VideoModel(data.model)) {
+      if (edge.targetHandle === 'reference-image') {
+        return 'image-reference';
+      }
+
+      if (edge.targetHandle === 'reference-video') {
+        return 'reference-video';
+      }
+
+      if (edge.targetHandle === 'reference-audio') {
+        return 'reference-audio';
+      }
+    } else if (edge.targetHandle === 'reference-image') {
       return 'start-frame';
     }
 
@@ -1669,6 +1811,7 @@ export function inspectWorkflowNodeCapabilities(
   let referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'image-reference');
   let connectedElementCount = 0;
   const referenceVideoCount = countIncomingEdgesForTargetHandle(graph, node.id, 'reference-video');
+  const referenceAudioCount = countIncomingEdgesForTargetHandle(graph, node.id, 'reference-audio');
   const startFrameCount = countIncomingEdgesForTargetHandle(graph, node.id, 'start-frame');
   const endFrameCount = countIncomingEdgesForTargetHandle(graph, node.id, 'end-frame');
   const issues: WorkflowCapabilityIssue[] = [];
@@ -1750,6 +1893,7 @@ export function inspectWorkflowNodeCapabilities(
   if (node.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const model = VIDEO_MODELS[data.model];
+    const isSeedance2Family = isSeedance2VideoModel(data.model);
     const videoElementSupport = getVideoElementSupport(data.model, {
       mode: data.mode,
       isMultiShot: data.isMultiShot,
@@ -1766,23 +1910,38 @@ export function inspectWorkflowNodeCapabilities(
     namedElementLimit = videoElementSupport.maxElements;
     activeReferenceMode = data.isMultiShot
       ? 'frames'
-      : totalReferenceImageCount > 0
-        ? 'references'
-        : (startFrameCount > 0 || endFrameCount > 0 ? 'frames' : null);
+      : isSeedance2Family
+        ? (referenceImageCount > 0 || referenceVideoCount > 0 || referenceAudioCount > 0 ? 'references' : null)
+        : totalReferenceImageCount > 0
+          ? 'references'
+          : (startFrameCount > 0 || endFrameCount > 0 ? 'frames' : null);
     isMultiShot = data.isMultiShot;
     multiPromptCount = data.multiPrompts.length;
     referenceImageLimit = data.isMultiShot ? 0 : videoElementSupport.maxElements;
+    referenceVideoLimit = isSeedance2Family ? 3 : referenceVideoLimit;
+    referenceVideoDurationLimitSeconds = isSeedance2Family ? 15 : referenceVideoDurationLimitSeconds;
     unsupportedFeatureNotes = [
-      'Workflow video nodes use the graph-connected Start frame and End frame handles for new authoring.',
+      isSeedance2Family
+        ? 'Seedance 2 workflows use image, video, and audio references instead of start and end frames.'
+        : 'Workflow video nodes use the graph-connected Start frame and End frame handles for new authoring.',
       data.isMultiShot
         ? 'Multi-shot owns its shot prompts locally and ignores any connected upstream prompt text.'
         : 'Single-shot video uses the shared upstream prompt text unless you switch into multi-shot.',
-      data.isMultiShot
-        ? 'Multi-shot allows an optional start frame only. End frames stay disabled in this mode.'
-        : totalReferenceImageCount > 0
-          ? 'This node still has legacy general image references attached. New workflow video nodes should use Start frame and End frame instead.'
-          : 'Connect Start frame for first-frame guidance, then add End frame when you want the video to land on a second frame.',
+      isSeedance2Family
+        ? 'Prepared image, video, and audio assets are preferred when available, but URL-based references still work.'
+        : data.isMultiShot
+          ? 'Multi-shot allows an optional start frame only. End frames stay disabled in this mode.'
+          : totalReferenceImageCount > 0
+            ? 'This node still has legacy general image references attached. New workflow video nodes should use Start frame and End frame instead.'
+            : 'Connect Start frame for first-frame guidance, then add End frame when you want the video to land on a second frame.',
     ];
+
+    if (isSeedance2Family && (startFrameCount > 0 || endFrameCount > 0)) {
+      issues.push({
+        code: 'unsupported-elements-mode',
+        message: 'Seedance 2 workflows use reference images, video clips, and audio clips instead of start and end frames.',
+      });
+    }
 
     if (startFrameCount > 1) {
       issues.push({
@@ -1838,6 +1997,27 @@ export function inspectWorkflowNodeCapabilities(
         code: 'too-many-reference-images',
         message: `This video mode supports up to ${videoElementSupport.maxElements} image reference${videoElementSupport.maxElements === 1 ? '' : 's'}. Remove extra references to run this node.`,
       });
+    }
+
+    if (isSeedance2Family && referenceVideoCount > 3) {
+      issues.push({
+        code: 'too-many-reference-videos',
+        message: 'Seedance 2 supports at most 3 reference videos in a workflow node.',
+      });
+    }
+
+    if (isSeedance2Family) {
+      const referenceVideoDurations = getIncomingEdges(graph, node.id)
+        .filter((edge) => edge.targetHandle === 'reference-video')
+        .map((edge) => getKnownWorkflowSourceVideoDurationSeconds(getNodeById(graph, edge.source)))
+        .filter((duration): duration is number => typeof duration === 'number' && duration > 0);
+
+      if (referenceVideoDurations.length > 0 && referenceVideoDurations.reduce((total, duration) => total + duration, 0) > 15) {
+        issues.push({
+          code: 'reference-video-too-long',
+          message: 'Seedance 2 reference videos must stay within the 15-second combined limit.',
+        });
+      }
     }
 
     if (connectedImageReferences.some((reference) => !reference.url)) {
@@ -1927,6 +2107,7 @@ export function inspectWorkflowNodeCapabilities(
     referenceImageLimit,
     totalReferenceImageCount,
     referenceVideoCount,
+    referenceAudioCount,
     referenceVideoLimit,
     referenceVideoDurationLimitSeconds,
     connectedElementCount,
@@ -2019,10 +2200,27 @@ export function validateWorkflowConnectionForGraph(params: {
     }
 
     if (targetNode.type === 'video-generate') {
-      return {
-        valid: false,
-        message: 'Workflow video nodes now use Start frame and optional End frame instead of general image references.',
-      };
+      const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+
+      if (!isSeedance2VideoModel(data.model)) {
+        return {
+          valid: false,
+          message: 'Workflow video nodes now use Start frame and optional End frame instead of general image references.',
+        };
+      }
+
+      const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference');
+      const maxElements = getVideoElementSupport(data.model, {
+        mode: data.mode,
+        isMultiShot: data.isMultiShot,
+      }).maxElements;
+
+      if (currentCount >= maxElements) {
+        return {
+          valid: false,
+          message: `${VIDEO_MODELS[data.model].displayName} supports up to ${maxElements} total image references in workflows.`,
+        };
+      }
     }
   }
 
@@ -2039,8 +2237,16 @@ export function validateWorkflowConnectionForGraph(params: {
 
   if (targetNode.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+    const isSeedance2Family = isSeedance2VideoModel(data.model);
 
     if (normalizedTargetHandle === 'start-frame') {
+      if (isSeedance2Family) {
+        return {
+          valid: false,
+          message: 'Seedance 2 workflows use reference images, video clips, and audio clips instead of Start frame.',
+        };
+      }
+
       if (countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference') + data.elements.length > 0) {
         return {
           valid: false,
@@ -2058,6 +2264,13 @@ export function validateWorkflowConnectionForGraph(params: {
     }
 
     if (normalizedTargetHandle === 'end-frame') {
+      if (isSeedance2Family) {
+        return {
+          valid: false,
+          message: 'Seedance 2 workflows use reference images, video clips, and audio clips instead of End frame.',
+        };
+      }
+
       if (countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference') + data.elements.length > 0) {
         return {
           valid: false,
@@ -2077,6 +2290,23 @@ export function validateWorkflowConnectionForGraph(params: {
         return {
           valid: false,
           message: 'Workflow video nodes support only 1 end frame.',
+        };
+      }
+    }
+
+    if ((normalizedTargetHandle === 'reference-video' || normalizedTargetHandle === 'reference-audio') && !isSeedance2Family) {
+      return {
+        valid: false,
+        message: 'Reference videos and audio are available on Seedance 2 and Seedance 2 Fast only.',
+      };
+    }
+
+    if (normalizedTargetHandle === 'reference-video' && isSeedance2Family) {
+      const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-video');
+      if (currentCount >= 3) {
+        return {
+          valid: false,
+          message: 'Seedance 2 supports up to 3 reference videos per node.',
         };
       }
     }

@@ -65,6 +65,9 @@ describe('workflow blueprint helpers', () => {
     expect(systemPrompt).toContain('If stillImageModel is nano-banana-pro');
     expect(systemPrompt).toContain('videoPrompt guidance:');
     expect(systemPrompt).toContain('If primaryModel is kling-3.0-video');
+    expect(systemPrompt).toContain('If primaryModel is seedance-1.5-pro');
+    expect(systemPrompt).toContain('If primaryModel is seedance-2');
+    expect(systemPrompt).toContain('If primaryModel is seedance-2-fast');
     expect(systemPrompt).toContain('If primaryModel is veo-3.1');
     expect(systemPrompt).toContain('motionPrompt guidance:');
     expect(systemPrompt).toContain('If motionModel is kling-3.0');

@@ -302,6 +302,71 @@ describe('generation services', () => {
     expect(generations[0].workflow_settings?.referenceMode).toBe('frames');
   });
 
+  it('sends Seedance 2 generations with image, video, and audio references', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-seedance-advanced-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Match the motion and timing references.',
+      model: 'seedance-2-fast',
+      duration: 12,
+      aspectRatio: '16:9',
+      resolution: '480p',
+      sound: true,
+      references: [
+        {
+          url: 'asset-image-1',
+          handle: '@hero',
+          displayName: 'Hero',
+          storagePath: 'uploads/user-1/hero.png',
+          sourceGenerationId: null,
+        },
+      ],
+      referenceVideoUrls: ['asset-video-1'],
+      referenceAudioUrls: ['asset-audio-1'],
+      seedanceAssets: {
+        images: [{ assetId: 'asset-image-1', assetType: 'Image', status: 'active', sourceUrl: 'https://signed.example.com/hero.png', error: null, lastCheckedAt: '2026-04-04T00:00:00.000Z' }],
+        videos: [{ assetId: 'asset-video-1', assetType: 'Video', status: 'active', sourceUrl: 'https://signed.example.com/ref.mp4', error: null, lastCheckedAt: '2026-04-04T00:00:00.000Z' }],
+        audios: [{ assetId: 'asset-audio-1', assetType: 'Audio', status: 'active', sourceUrl: 'https://signed.example.com/ref.wav', error: null, lastCheckedAt: '2026-04-04T00:00:00.000Z' }],
+      },
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'bytedance/seedance-2-fast',
+      input: {
+        prompt: 'Match the motion and timing references.',
+        reference_image_urls: ['asset-image-1'],
+        reference_video_urls: ['asset-video-1'],
+        reference_audio_urls: ['asset-audio-1'],
+        generate_audio: true,
+        resolution: '480p',
+        aspect_ratio: '16:9',
+        duration: 12,
+        web_search: false,
+        return_last_frame: false,
+      },
+    });
+    expect(generations[0].cost).toBe(96);
+    expect(generations[0].workflow_settings).toMatchObject({
+      referenceVideoUrls: ['asset-video-1'],
+      referenceAudioUrls: ['asset-audio-1'],
+      seedanceAssets: {
+        images: [expect.objectContaining({ assetId: 'asset-image-1' })],
+      },
+    });
+  });
+
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);

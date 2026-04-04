@@ -57,7 +57,7 @@ describe('workflow canvas helpers', () => {
     expect(validateWorkflowConnection('image', 'image-reference')).toBe(true);
     expect(validateWorkflowConnection('image', 'reference-image')).toBe(true);
     expect(validateWorkflowConnection('video', 'reference-video')).toBe(true);
-    expect(validateWorkflowConnection('audio', 'reference-audio')).toBe(false);
+    expect(validateWorkflowConnection('audio', 'reference-audio')).toBe(true);
     expect(validateWorkflowConnection('video', 'prompt')).toBe(false);
   });
 
@@ -398,6 +398,49 @@ describe('workflow canvas helpers', () => {
     });
   });
 
+  it('preserves Seedance asset metadata in storage saves and strips source urls from share exports', () => {
+    const imageInput = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...imageInput,
+          data: {
+            ...imageInput.data,
+            imageUrl: 'https://example.com/image.jpg',
+            storagePath: 'generated_images/user/image.jpg',
+            seedanceAsset: {
+              assetId: 'asset-123',
+              assetType: 'Image',
+              status: 'active',
+              sourceUrl: 'https://example.com/image.jpg',
+              error: null,
+              lastCheckedAt: '2026-04-01T00:00:00.000Z',
+            },
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    const storageSerialized = serializeWorkflowGraph(graph);
+    const shareSerialized = serializeWorkflowGraph(graph, { mode: 'share-export' });
+
+    expect(storageSerialized.nodes[0].data).toMatchObject({
+      seedanceAsset: expect.objectContaining({
+        assetId: 'asset-123',
+        status: 'active',
+        sourceUrl: 'https://example.com/image.jpg',
+      }),
+    });
+    expect(shareSerialized.nodes[0].data).toMatchObject({
+      seedanceAsset: expect.objectContaining({
+        assetId: 'asset-123',
+        status: 'active',
+        sourceUrl: null,
+      }),
+    });
+  });
+
   it('ignores selection-only changes in the client-save graph hash', () => {
     const baseGraph = createStarterGraph();
     const selectedGraph = normalizeWorkflowGraph({
@@ -436,6 +479,73 @@ describe('workflow canvas helpers', () => {
 
     const resolved = resolveNodeInputs(graph, videoNode.id);
     expect(resolved.audioUrls).toEqual(['https://example.com/track.mp3']);
+  });
+
+  it('keeps Seedance 2 reference media as references instead of frames', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageNode = createWorkflowNode('image-input', { x: 0, y: 120 });
+    const videoNode = createWorkflowNode('video-input', { x: 0, y: 240 });
+    const audioNode = createWorkflowNode('audio-input', { x: 0, y: 360 });
+    const seedanceNode = createWorkflowNode('video-generate', { x: 260, y: 0 });
+
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...imageNode,
+          data: {
+            ...imageNode.data,
+            imageUrl: 'https://example.com/reference.jpg',
+            seedanceAsset: {
+              ...imageNode.data.seedanceAsset,
+              assetId: 'asset-image',
+              status: 'active',
+              sourceUrl: 'https://example.com/reference.jpg',
+              lastCheckedAt: '2026-04-01T00:00:00.000Z',
+            },
+          },
+        },
+        {
+          ...videoNode,
+          data: {
+            ...videoNode.data,
+            videoUrl: 'https://example.com/reference.mp4',
+            durationSeconds: 6,
+          },
+        },
+        {
+          ...audioNode,
+          data: {
+            ...audioNode.data,
+            audioUrl: 'https://example.com/reference.mp3',
+          },
+        },
+        {
+          ...seedanceNode,
+          data: normalizeNodeData('video-generate', {
+            ...seedanceNode.data,
+            model: 'seedance-2',
+          }),
+        },
+      ],
+      edges: [
+        { id: 'prompt-video', source: promptNode.id, target: seedanceNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'image-ref', source: imageNode.id, target: seedanceNode.id, sourceHandle: 'image', targetHandle: 'reference-image' },
+        { id: 'video-ref', source: videoNode.id, target: seedanceNode.id, sourceHandle: 'video', targetHandle: 'reference-video' },
+        { id: 'audio-ref', source: audioNode.id, target: seedanceNode.id, sourceHandle: 'audio', targetHandle: 'reference-audio' },
+      ],
+    });
+
+    const resolved = resolveNodeInputs(graph, seedanceNode.id);
+    const capabilityValidation = inspectWorkflowNodeCapabilities(graph, seedanceNode);
+
+    expect(resolved.imageReferences).toHaveLength(1);
+    expect(resolved.startFrameUrl).toBeNull();
+    expect(resolved.videoUrls).toEqual(['https://example.com/reference.mp4']);
+    expect(resolved.audioUrls).toEqual(['https://example.com/reference.mp3']);
+    expect(capabilityValidation.referenceImageCount).toBe(1);
+    expect(capabilityValidation.referenceVideoCount).toBe(1);
+    expect(capabilityValidation.referenceAudioCount).toBe(1);
   });
 
   it('migrates legacy audio models to current workflow defaults', () => {
@@ -938,6 +1048,22 @@ describe('workflow canvas helpers', () => {
       resolution: '4K',
       fixedLens: true,
     } as never);
+    const seedance2 = normalizeNodeData('video-generate', {
+      model: 'seedance-2',
+      aspectRatio: '1:4',
+      duration: 2,
+      sound: true,
+      resolution: '1080p',
+      fixedLens: true,
+    } as never);
+    const seedance2Fast = normalizeNodeData('video-generate', {
+      model: 'seedance-2-fast',
+      aspectRatio: '2:3',
+      duration: 30,
+      sound: true,
+      resolution: '1080p',
+      fixedLens: true,
+    } as never);
     const kling = normalizeNodeData('video-generate', {
       model: 'kling-3.0-video',
       duration: 20,
@@ -959,6 +1085,18 @@ describe('workflow canvas helpers', () => {
     expect(seedance.resolution).toBe('480p');
     expect(seedance.sound).toBe(true);
     expect(seedance.fixedLens).toBe(true);
+
+    expect(seedance2.aspectRatio).toBe('9:16');
+    expect(seedance2.duration).toBe(4);
+    expect(seedance2.resolution).toBe('480p');
+    expect(seedance2.sound).toBe(true);
+    expect(seedance2.fixedLens).toBe(false);
+
+    expect(seedance2Fast.aspectRatio).toBe('9:16');
+    expect(seedance2Fast.duration).toBe(15);
+    expect(seedance2Fast.resolution).toBe('480p');
+    expect(seedance2Fast.sound).toBe(true);
+    expect(seedance2Fast.fixedLens).toBe(false);
 
     expect(kling.duration).toBe(15);
     expect(kling.resolution).toBe('');

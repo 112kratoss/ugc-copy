@@ -3,6 +3,7 @@
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
+import { supabase } from '@/lib/supabase';
 import {
   PromptEnhancementError,
   requestPromptEnhancement,
@@ -39,6 +40,8 @@ import type {
   WorkflowPromptEnhancementTarget,
   WorkflowReferenceElement,
   WorkflowResolvedImageReference,
+  SeedanceAssetMetadata,
+  SeedanceAssetStatus,
 } from '@/lib/workflow-canvas';
 import {
   getResolvedWorkflowImageReferences,
@@ -51,9 +54,15 @@ import {
   getWorkflowNodeOutputHandles,
   inspectWorkflowNodeCapabilities,
   inspectWorkflowNodeDependencies,
+  isSeedance2VideoModel,
   normalizeNodeData,
   resolveNodeInputs,
 } from '@/lib/workflow-canvas';
+import {
+  createSeedanceAssetMetadata,
+  getSeedanceAssetStatusLabel,
+  type SeedanceAssetKind,
+} from '@/lib/seedance-assets';
 import type {
   CanvasAnchoredPopupPosition,
   CanvasSelectionState,
@@ -484,6 +493,165 @@ function VideoFramesCard({
   );
 }
 
+function SeedanceAssetStatusCard({
+  title,
+  asset,
+  sourceUrl,
+  onError,
+  onChange,
+}: {
+  title: string;
+  asset: SeedanceAssetMetadata;
+  sourceUrl: string | null;
+  onError: (message: string) => void;
+  onChange: (asset: SeedanceAssetMetadata) => void;
+}) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const requestSeedanceAsset = async (assetType: SeedanceAssetKind, assetId?: string | null) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      throw new Error('Please log in to prepare Seedance assets.');
+    }
+
+    const response = assetId
+      ? await fetch(`/api/seedance-assets?assetId=${encodeURIComponent(assetId)}`, {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        })
+      : await fetch('/api/seedance-assets', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            url: sourceUrl,
+            assetType,
+          }),
+        });
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Seedance asset request failed');
+    }
+
+    return createSeedanceAssetMetadata({
+      assetId: typeof data.assetId === 'string' ? data.assetId : null,
+      assetType,
+      status: data.status,
+      sourceUrl: typeof data.sourceUrl === 'string' ? data.sourceUrl : sourceUrl,
+      error: typeof data.error === 'string' ? data.error : null,
+      lastCheckedAt: typeof data.lastCheckedAt === 'string' ? data.lastCheckedAt : new Date().toISOString(),
+    });
+  };
+
+  const handlePrepare = async () => {
+    if (!asset.assetType) {
+      onError('Upload media first so Seedance knows which asset type to prepare.');
+      return;
+    }
+
+    if (!sourceUrl) {
+      onError('Upload media first so Seedance has a source URL to prepare.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      onChange(await requestSeedanceAsset(asset.assetType));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : 'Failed to prepare Seedance asset');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (!asset.assetType || !asset.assetId) {
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      onChange(await requestSeedanceAsset(asset.assetType, asset.assetId));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : 'Failed to refresh Seedance asset');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">{title}</div>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+            Track whether this uploaded source has already been prepared for Seedance 2 references.
+          </p>
+        </div>
+        <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-zinc-300">
+          {getSeedanceAssetStatusLabel(asset.status)}
+        </span>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void handlePrepare()}
+          disabled={isLoading || !sourceUrl}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {asset.assetId ? 'Retry prep' : 'Prepare asset'}
+        </button>
+        {asset.assetId ? (
+          <button
+            type="button"
+            onClick={() => void handleRefresh()}
+            disabled={isLoading}
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Refresh status
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <StaticField
+          label="Asset status"
+          value={getSeedanceAssetStatusLabel(asset.status)}
+        />
+        <StaticField
+          label="Asset ID"
+          value={asset.assetId || 'Not prepared yet'}
+        />
+        <StaticField
+          label="Asset type"
+          value={asset.assetType || 'Unassigned'}
+        />
+        <StaticField
+          label="Source URL"
+          value={sourceUrl || asset.sourceUrl || 'Not captured yet'}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <StaticField
+          label="Error"
+          value={asset.error || 'No provider error'}
+        />
+        <StaticField
+          label="Last checked"
+          value={asset.lastCheckedAt || 'Never'}
+        />
+      </div>
+    </div>
+  );
+}
+
 function SourceReferenceHandleField({
   value,
   helperText,
@@ -846,6 +1014,72 @@ function countIncomingHandleConnections(
   targetHandle: WorkflowHandleType
 ) {
   return getIncomingEdges(graph, nodeId).filter((edge) => edge.targetHandle === targetHandle).length;
+}
+
+type SeedanceReferenceSummaryItem = {
+  edgeId: string;
+  mediaType: 'Image' | 'Video' | 'Audio';
+  sourceTitle: string;
+  status: SeedanceAssetStatus;
+  assetId: string | null;
+  sourceUrl: string | null;
+  prepared: boolean;
+};
+
+function getSeedanceAssetSummaryItems(
+  graph: WorkflowCanvasGraph,
+  nodeId: string
+): SeedanceReferenceSummaryItem[] {
+  return getIncomingEdges(graph, nodeId)
+    .filter((edge) => edge.sourceHandle === 'image' || edge.sourceHandle === 'video' || edge.sourceHandle === 'audio')
+    .map((edge) => {
+      const source = getNodeById(graph, edge.source);
+      if (!source) {
+        return null;
+      }
+
+      const sourceData = source.data as Partial<WorkflowNodeData> & {
+        seedanceAsset?: SeedanceAssetMetadata;
+        runState?: { status?: string; outputUrl?: string | null };
+      };
+      const asset = sourceData.seedanceAsset ?? null;
+      const outputUrl = getDisplayMediaUrl(
+        source.type === 'image-input'
+          ? (source.data as ImageInputNodeData).storagePath || (source.data as ImageInputNodeData).imageUrl || ''
+          : source.type === 'video-input'
+            ? (source.data as VideoInputNodeData).storagePath || (source.data as VideoInputNodeData).videoUrl || ''
+            : source.type === 'audio-input'
+              ? (source.data as AudioInputNodeData).storagePath || (source.data as AudioInputNodeData).audioUrl || ''
+              : sourceData.runState?.outputUrl || ''
+      ) || null;
+
+      const sourceTitle = source.data.title || source.id;
+      const mediaType = source.type === 'image-input'
+        ? 'Image'
+        : source.type === 'video-input'
+          ? 'Video'
+          : source.type === 'audio-input'
+            ? 'Audio'
+            : edge.sourceHandle === 'video'
+              ? 'Video'
+              : edge.sourceHandle === 'audio'
+                ? 'Audio'
+                : 'Image';
+
+      const status = asset?.status ?? (sourceData.runState?.status === 'succeeded' ? 'active' : 'idle');
+      const assetId = asset?.assetId ?? null;
+
+      return {
+        edgeId: edge.id,
+        mediaType,
+        sourceTitle,
+        status,
+        assetId,
+        sourceUrl: asset?.sourceUrl ?? outputUrl,
+        prepared: status === 'active' && Boolean(assetId),
+      } satisfies SeedanceReferenceSummaryItem;
+    })
+    .filter((item): item is SeedanceReferenceSummaryItem => Boolean(item));
 }
 
 function getPromptEnhancementTargetOption(
@@ -1299,27 +1533,36 @@ function CapabilityLimitsCard({
   }
 
   if (node.type === 'video-generate') {
+    const videoData = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+    const seedanceFamily = isSeedance2VideoModel(videoData.model);
+
     rows.push({
-      label: 'Start frame',
-      value: `${capabilityValidation.startFrameCount}/1`,
+      label: seedanceFamily ? 'Image refs' : 'Start frame',
+      value: seedanceFamily
+        ? `${capabilityValidation.referenceImageCount}/${capabilityValidation.referenceImageLimit ?? capabilityValidation.referenceImageCount}`
+        : `${capabilityValidation.startFrameCount}/1`,
     });
     rows.push({
-      label: 'End frame',
-      value: capabilityValidation.isMultiShot
-        ? `${capabilityValidation.endFrameCount}/0`
-        : `${capabilityValidation.endFrameCount}/1`,
+      label: seedanceFamily ? 'Video refs' : 'End frame',
+      value: seedanceFamily
+        ? `${capabilityValidation.referenceVideoCount}/${capabilityValidation.referenceVideoLimit ?? 3}`
+        : capabilityValidation.isMultiShot
+          ? `${capabilityValidation.endFrameCount}/0`
+          : `${capabilityValidation.endFrameCount}/1`,
     });
     rows.push({
-      label: 'Frame status',
-      value: capabilityValidation.isMultiShot
-        ? (capabilityValidation.startFrameCount > 0 ? 'Start connected' : 'Start optional')
-        : capabilityValidation.endFrameCount > 0
-          ? 'Start + end connected'
-          : capabilityValidation.startFrameCount > 0
-            ? 'Start connected'
-            : 'No frames yet',
+      label: seedanceFamily ? 'Audio refs' : 'Frame status',
+      value: seedanceFamily
+        ? `${capabilityValidation.referenceAudioCount} connected`
+        : capabilityValidation.isMultiShot
+          ? (capabilityValidation.startFrameCount > 0 ? 'Start connected' : 'Start optional')
+          : capabilityValidation.endFrameCount > 0
+            ? 'Start + end connected'
+            : capabilityValidation.startFrameCount > 0
+              ? 'Start connected'
+              : 'No frames yet',
     });
-    if (capabilityValidation.referenceImageCount > 0 || capabilityValidation.legacyElementCount > 0) {
+    if (!seedanceFamily && (capabilityValidation.referenceImageCount > 0 || capabilityValidation.legacyElementCount > 0)) {
       rows.push({
         label: 'Legacy image refs',
         value: capabilityValidation.referenceImageLimit !== null
@@ -1340,10 +1583,12 @@ function CapabilityLimitsCard({
       });
     }
     rows.push({
-      label: 'Shot prompts',
-      value: capabilityValidation.isMultiShot
-        ? `${capabilityValidation.multiPromptCount} active`
-        : 'Single-shot',
+      label: seedanceFamily ? 'Prepared assets' : 'Shot prompts',
+      value: seedanceFamily
+        ? `${getSeedanceAssetSummaryItems(graph, node.id).filter((item) => item.prepared).length} ready`
+        : capabilityValidation.isMultiShot
+          ? `${capabilityValidation.multiPromptCount} active`
+          : 'Single-shot',
     });
   }
 
@@ -1382,16 +1627,22 @@ function CapabilityLimitsCard({
     <div className={`rounded-3xl border p-4 ${toneClasses}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Capabilities & Limits</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Capabilities & Limits</div>
           <p className="mt-2 text-sm leading-relaxed text-zinc-300">
             {node.type === 'image-generate'
               ? 'All connected image references share one model budget. Only refs whose source image nodes have @handles are compiled into the prompt.'
               : node.type === 'video-generate'
-                ? capabilityValidation.isMultiShot
-                  ? 'Multi-shot video keeps prompts locally, allows an optional start frame, and does not use end frames.'
-                  : capabilityValidation.activeReferenceMode === 'references'
-                    ? 'This video node still has legacy general image references attached. New workflow video authoring uses Start frame and optional End frame instead.'
-                    : 'Connect an image to Start frame and optionally another to End frame for a single-shot run.'
+                ? (() => {
+                    const videoData = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+                    if (isSeedance2VideoModel(videoData.model)) {
+                      return 'Seedance 2 uses connected image, video, and audio references. Prepared assets are preferred automatically when available.';
+                    }
+                    return capabilityValidation.isMultiShot
+                      ? 'Multi-shot video keeps prompts locally, allows an optional start frame, and does not use end frames.'
+                      : capabilityValidation.activeReferenceMode === 'references'
+                        ? 'This video node still has legacy general image references attached. New workflow video authoring uses Start frame and optional End frame instead.'
+                        : 'Connect an image to Start frame and optionally another to End frame for a single-shot run.';
+                  })()
                 : 'Motion control needs one image reference, one video reference, and a reference clip that stays within the model limit.'}
           </p>
         </div>
@@ -1454,6 +1705,7 @@ function NodeEditorContent({
   const imageModel = imageGenerateNode ? IMAGE_MODELS[imageGenerateNode.model] : null;
   const videoGenerateNode = selectedKind === 'video-generate' ? node.data as VideoGenerateNodeData : null;
   const videoModel = videoGenerateNode ? VIDEO_MODELS[videoGenerateNode.model] : null;
+  const isSeedance2Family = Boolean(videoGenerateNode && isSeedance2VideoModel(videoGenerateNode.model));
   const motionGenerateNode = selectedKind === 'motion-generate' ? node.data as MotionGenerateNodeData : null;
   const motionModel = motionGenerateNode ? MOTION_MODELS[motionGenerateNode.model] : null;
   const videoDurationRange = videoGenerateNode ? getVideoDurationRange(videoGenerateNode.model) : null;
@@ -1471,9 +1723,12 @@ function NodeEditorContent({
     ? getWorkflowPromptMentionCandidates(graph, node.id)
     : [];
   const connectedImageReferences = resolvedImageReferences.filter((reference) => !reference.legacy);
-  const legacyVideoReferencesPresent = selectedKind === 'video-generate' && (
+  const legacyVideoReferencesPresent = selectedKind === 'video-generate' && !isSeedance2Family && (
     connectedImageReferences.length > 0 || (videoGenerateNode?.elements.length || 0) > 0
   );
+  const seedanceReferenceSummary = selectedKind === 'video-generate' && isSeedance2Family
+    ? getSeedanceAssetSummaryItems(graph, node.id)
+    : [];
   const startFrameSourceTitle = selectedKind === 'video-generate'
     ? (() => {
         const edge = getIncomingEdges(graph, node.id).find((candidate) => {
@@ -1538,144 +1793,207 @@ function NodeEditorContent({
 
       {selectedKind === 'image-input' && (
         <div className="space-y-3">
-          <SourceReferenceHandleField
-            value={(node.data as ImageInputNodeData).referenceHandle}
-            helperText="Optional global @handle for this image source. Any downstream generator connected through Image reference can mention it in the prompt."
-            onChange={(referenceHandle) => onUpdateNode(node.id, { ...node.data, referenceHandle } as Partial<WorkflowNodeData>)}
-          />
-          <UploadTile
-            inputId={`workflow-image-input-${node.id}`}
-            inputLabel="Upload image"
-            accept="image/*"
-            title="Click to upload image"
-            description="PNG, JPG, WEBP and other supported image files."
-            icon={
-              <div className="relative">
-                <ImageIcon className="h-5 w-5" />
-                <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
-              </div>
-            }
-            accentClassName="text-sky-300"
-            onSelect={async (event) => {
-              const input = event.currentTarget;
-              const file = event.target.files?.[0];
-              if (!file) return;
-              try {
-                const uploaded = await onUploadAsset(file, 'generated_images');
-                onUpdateNode(node.id, {
-                  ...node.data,
-                  imageUrl: uploaded.signedUrl,
-                  storagePath: uploaded.storagePath,
-                } as Partial<WorkflowNodeData>);
-              } catch (uploadError) {
-                onSetError(uploadError instanceof Error ? uploadError.message : 'Image upload failed');
-              } finally {
-                input.value = '';
-              }
-            }}
-          />
-          {(node.data as ImageInputNodeData).imageUrl && (
-            <img
-              src={getDisplayMediaUrl((node.data as ImageInputNodeData).storagePath || (node.data as ImageInputNodeData).imageUrl || '')}
-              alt=""
-              className="w-full rounded-2xl border border-white/10"
-            />
-          )}
+          {(() => {
+            const imageInput = node.data as ImageInputNodeData;
+            return (
+              <>
+                <SourceReferenceHandleField
+                  value={imageInput.referenceHandle}
+                  helperText="Optional global @handle for this image source. Any downstream generator connected through Image reference can mention it in the prompt."
+                  onChange={(referenceHandle) => onUpdateNode(node.id, { ...node.data, referenceHandle } as Partial<WorkflowNodeData>)}
+                />
+                <UploadTile
+                  inputId={`workflow-image-input-${node.id}`}
+                  inputLabel="Upload image"
+                  accept="image/*"
+                  title="Click to upload image"
+                  description="PNG, JPG, WEBP and other supported image files."
+                  icon={
+                    <div className="relative">
+                      <ImageIcon className="h-5 w-5" />
+                      <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
+                    </div>
+                  }
+                  accentClassName="text-sky-300"
+                  onSelect={async (event) => {
+                    const input = event.currentTarget;
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const uploaded = await onUploadAsset(file, 'generated_images');
+                      onUpdateNode(node.id, {
+                        ...node.data,
+                        imageUrl: uploaded.signedUrl,
+                        storagePath: uploaded.storagePath,
+                        seedanceAsset: {
+                          ...imageInput.seedanceAsset,
+                          assetType: 'Image',
+                          sourceUrl: uploaded.signedUrl,
+                          status: imageInput.seedanceAsset.status === 'active' ? 'active' : 'idle',
+                          lastCheckedAt: new Date().toISOString(),
+                        },
+                      } as Partial<WorkflowNodeData>);
+                    } catch (uploadError) {
+                      onSetError(uploadError instanceof Error ? uploadError.message : 'Image upload failed');
+                    } finally {
+                      input.value = '';
+                    }
+                  }}
+                />
+                {imageInput.imageUrl && (
+                  <img
+                    src={getDisplayMediaUrl(imageInput.storagePath || imageInput.imageUrl || '')}
+                    alt=""
+                    className="w-full rounded-2xl border border-white/10"
+                  />
+                )}
+                <SeedanceAssetStatusCard
+                  title="Seedance asset"
+                  asset={imageInput.seedanceAsset}
+                  sourceUrl={imageInput.storagePath || imageInput.imageUrl || imageInput.seedanceAsset.sourceUrl}
+                  onError={onSetError}
+                  onChange={(asset) => onUpdateNode(node.id, { ...node.data, seedanceAsset: asset } as Partial<WorkflowNodeData>)}
+                />
+              </>
+            );
+          })()}
         </div>
       )}
 
       {selectedKind === 'video-input' && (
         <div className="space-y-3">
-          <UploadTile
-            inputId={`workflow-video-input-${node.id}`}
-            inputLabel="Upload video"
-            accept="video/*"
-            title="Click to upload video"
-            description="MP4, MOV and other supported video files."
-            icon={
-              <div className="relative">
-                <Video className="h-5 w-5" />
-                <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
-              </div>
-            }
-            accentClassName="text-emerald-300"
-            onSelect={async (event) => {
-              const input = event.currentTarget;
-              const file = event.target.files?.[0];
-              if (!file) return;
-              try {
-                const durationSeconds = await readVideoDurationSeconds(file);
-                const uploaded = await onUploadAsset(file, 'generated_videos');
-                onUpdateNode(node.id, {
-                  ...node.data,
-                  videoUrl: uploaded.signedUrl,
-                  storagePath: uploaded.storagePath,
-                  durationSeconds,
-                } as Partial<WorkflowNodeData>);
-              } catch (uploadError) {
-                onSetError(uploadError instanceof Error ? uploadError.message : 'Video upload failed');
-              } finally {
-                input.value = '';
-              }
-            }}
-          />
-          {typeof (node.data as VideoInputNodeData).durationSeconds === 'number' && (
-            <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-300">
-              Detected duration: {formatSecondsLabel((node.data as VideoInputNodeData).durationSeconds!)}
-            </div>
-          )}
-          {(node.data as VideoInputNodeData).videoUrl && (
-            <video
-              src={getDisplayMediaUrl((node.data as VideoInputNodeData).storagePath || (node.data as VideoInputNodeData).videoUrl || '')}
-              className="w-full rounded-2xl border border-white/10"
-              controls
-              muted
-              playsInline
-            />
-          )}
+          {(() => {
+            const videoInput = node.data as VideoInputNodeData;
+            return (
+              <>
+                <UploadTile
+                  inputId={`workflow-video-input-${node.id}`}
+                  inputLabel="Upload video"
+                  accept="video/*"
+                  title="Click to upload video"
+                  description="MP4, MOV and other supported video files."
+                  icon={
+                    <div className="relative">
+                      <Video className="h-5 w-5" />
+                      <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
+                    </div>
+                  }
+                  accentClassName="text-emerald-300"
+                  onSelect={async (event) => {
+                    const input = event.currentTarget;
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const durationSeconds = await readVideoDurationSeconds(file);
+                      const uploaded = await onUploadAsset(file, 'generated_videos');
+                      onUpdateNode(node.id, {
+                        ...node.data,
+                        videoUrl: uploaded.signedUrl,
+                        storagePath: uploaded.storagePath,
+                        durationSeconds,
+                        seedanceAsset: {
+                          ...videoInput.seedanceAsset,
+                          assetType: 'Video',
+                          sourceUrl: uploaded.signedUrl,
+                          status: videoInput.seedanceAsset.status === 'active' ? 'active' : 'idle',
+                          lastCheckedAt: new Date().toISOString(),
+                        },
+                      } as Partial<WorkflowNodeData>);
+                    } catch (uploadError) {
+                      onSetError(uploadError instanceof Error ? uploadError.message : 'Video upload failed');
+                    } finally {
+                      input.value = '';
+                    }
+                  }}
+                />
+                {typeof videoInput.durationSeconds === 'number' && (
+                  <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-300">
+                    Detected duration: {formatSecondsLabel(videoInput.durationSeconds!)}
+                  </div>
+                )}
+                {videoInput.videoUrl && (
+                  <video
+                    src={getDisplayMediaUrl(videoInput.storagePath || videoInput.videoUrl || '')}
+                    className="w-full rounded-2xl border border-white/10"
+                    controls
+                    muted
+                    playsInline
+                  />
+                )}
+                <SeedanceAssetStatusCard
+                  title="Seedance asset"
+                  asset={videoInput.seedanceAsset}
+                  sourceUrl={videoInput.storagePath || videoInput.videoUrl || videoInput.seedanceAsset.sourceUrl}
+                  onError={onSetError}
+                  onChange={(asset) => onUpdateNode(node.id, { ...node.data, seedanceAsset: asset } as Partial<WorkflowNodeData>)}
+                />
+              </>
+            );
+          })()}
         </div>
       )}
 
       {selectedKind === 'audio-input' && (
         <div className="space-y-3">
-          <UploadTile
-            inputId={`workflow-audio-input-${node.id}`}
-            inputLabel="Upload audio"
-            accept="audio/*"
-            title="Click to upload audio"
-            description="MP3, WAV and other supported audio files."
-            icon={
-              <div className="relative">
-                <Volume2 className="h-5 w-5" />
-                <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
-              </div>
-            }
-            accentClassName="text-violet-300"
-            onSelect={async (event) => {
-              const input = event.currentTarget;
-              const file = event.target.files?.[0];
-              if (!file) return;
-              try {
-                const uploaded = await onUploadAsset(file, 'generated_audio');
-                onUpdateNode(node.id, {
-                  ...node.data,
-                  audioUrl: uploaded.signedUrl,
-                  storagePath: uploaded.storagePath,
-                } as Partial<WorkflowNodeData>);
-              } catch (uploadError) {
-                onSetError(uploadError instanceof Error ? uploadError.message : 'Audio upload failed');
-              } finally {
-                input.value = '';
-              }
-            }}
-          />
-          {(node.data as AudioInputNodeData).audioUrl && (
-            <audio
-              src={getDisplayMediaUrl((node.data as AudioInputNodeData).storagePath || (node.data as AudioInputNodeData).audioUrl || '')}
-              className="w-full rounded-2xl border border-white/10"
-              controls
-            />
-          )}
+          {(() => {
+            const audioInput = node.data as AudioInputNodeData;
+            return (
+              <>
+                <UploadTile
+                  inputId={`workflow-audio-input-${node.id}`}
+                  inputLabel="Upload audio"
+                  accept="audio/*"
+                  title="Click to upload audio"
+                  description="MP3, WAV and other supported audio files."
+                  icon={
+                    <div className="relative">
+                      <Volume2 className="h-5 w-5" />
+                      <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
+                    </div>
+                  }
+                  accentClassName="text-violet-300"
+                  onSelect={async (event) => {
+                    const input = event.currentTarget;
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const uploaded = await onUploadAsset(file, 'generated_audio');
+                      onUpdateNode(node.id, {
+                        ...node.data,
+                        audioUrl: uploaded.signedUrl,
+                        storagePath: uploaded.storagePath,
+                        seedanceAsset: {
+                          ...audioInput.seedanceAsset,
+                          assetType: 'Audio',
+                          sourceUrl: uploaded.signedUrl,
+                          status: audioInput.seedanceAsset.status === 'active' ? 'active' : 'idle',
+                          lastCheckedAt: new Date().toISOString(),
+                        },
+                      } as Partial<WorkflowNodeData>);
+                    } catch (uploadError) {
+                      onSetError(uploadError instanceof Error ? uploadError.message : 'Audio upload failed');
+                    } finally {
+                      input.value = '';
+                    }
+                  }}
+                />
+                {audioInput.audioUrl && (
+                  <audio
+                    src={getDisplayMediaUrl(audioInput.storagePath || audioInput.audioUrl || '')}
+                    className="w-full rounded-2xl border border-white/10"
+                    controls
+                  />
+                )}
+                <SeedanceAssetStatusCard
+                  title="Seedance asset"
+                  asset={audioInput.seedanceAsset}
+                  sourceUrl={audioInput.storagePath || audioInput.audioUrl || audioInput.seedanceAsset.sourceUrl}
+                  onError={onSetError}
+                  onChange={(asset) => onUpdateNode(node.id, { ...node.data, seedanceAsset: asset } as Partial<WorkflowNodeData>)}
+                />
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -1823,7 +2141,63 @@ function NodeEditorContent({
               onChange={(checked) => onUpdateNode(node.id, { ...node.data, fixedLens: checked } as Partial<WorkflowNodeData>)}
             />
           )}
-          {videoGenerateNode.isMultiShot ? (
+          {isSeedance2Family ? (
+            <>
+              <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Seedance references</div>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                  Seedance 2 and Seedance 2 Fast run on connected image, video, and audio references. Prepared assets are preferred automatically when the source nodes have an active Seedance asset id.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Image refs</div>
+                    <div className="mt-2 text-sm text-zinc-100">{capabilityValidation.referenceImageCount} connected</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Video refs</div>
+                    <div className="mt-2 text-sm text-zinc-100">{capabilityValidation.referenceVideoCount} connected</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Audio refs</div>
+                    <div className="mt-2 text-sm text-zinc-100">{capabilityValidation.referenceAudioCount} connected</div>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Prepared assets</div>
+                    <div className="mt-2 text-sm text-zinc-100">
+                      {seedanceReferenceSummary.filter((item) => item.prepared).length}/{seedanceReferenceSummary.length || 0} ready
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Reference mode</div>
+                    <div className="mt-2 text-sm text-zinc-100">
+                      {seedanceReferenceSummary.length > 0 ? 'References' : 'Waiting for connected refs'}
+                    </div>
+                  </div>
+                </div>
+                {seedanceReferenceSummary.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    {seedanceReferenceSummary.map((item) => (
+                      <div key={item.edgeId} className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-300">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium text-zinc-100">{item.sourceTitle}</span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-zinc-300">
+                            {item.mediaType}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-zinc-400">
+                          <span>Status: {getSeedanceAssetStatusLabel(item.status)}</span>
+                          <span>Asset ID: {item.assetId || 'none'}</span>
+                          <span>{item.prepared ? 'Prepared asset ready' : 'URL reference only'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : videoGenerateNode.isMultiShot ? (
             <>
               {resolvedInputs.prompt && (
                 <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-3 text-sm text-cyan-100">
@@ -2131,6 +2505,12 @@ function NodeDataPanel({
   const inputHandles = getWorkflowNodeInputHandles(node.type as WorkflowNodeKind);
   const outputHandles = getWorkflowNodeOutputHandles(node.type as WorkflowNodeKind);
   const outputUrl = node.data.runState.outputUrl ? getDisplayMediaUrl(node.data.runState.outputUrl) : null;
+  const videoNode = node.type === 'video-generate'
+    ? normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData
+    : null;
+  const seedanceReadiness = videoNode && isSeedance2VideoModel(videoNode.model)
+    ? getSeedanceAssetSummaryItems(graph, node.id)
+    : [];
 
   return (
     <div className="space-y-4 px-5 py-5">
@@ -2159,6 +2539,7 @@ function NodeDataPanel({
                 const handledReferenceCount = getResolvedWorkflowImageReferences(graph, node.id)
                   .filter((reference) => !reference.legacy && Boolean(reference.handle))
                   .length;
+                const seedanceActiveCount = seedanceReadiness.filter((item) => item.prepared).length;
 
                 return [
                   { label: 'Image refs', value: resolvedInputs.imageReferences.length ? `${resolvedInputs.imageReferences.length} connected` : 'None' },
@@ -2167,6 +2548,10 @@ function NodeDataPanel({
                   { label: 'End frame', value: resolvedInputs.endFrameUrl ? 'Connected' : 'None' },
                   { label: 'Videos', value: resolvedInputs.videoUrls.length ? `${resolvedInputs.videoUrls.length} connected` : 'None' },
                   { label: 'Audio', value: resolvedInputs.audioUrls.length ? `${resolvedInputs.audioUrls.length} connected` : 'None' },
+                  ...(seedanceReadiness.length > 0 ? [
+                    { label: 'Prepared assets', value: `${seedanceActiveCount}/${seedanceReadiness.length} active` },
+                    { label: 'Reference mode', value: 'Seedance references' },
+                  ] : []),
                 ];
               })().map((item) => (
                 <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 p-3">
@@ -2292,7 +2677,8 @@ function getNodeGuidance(nodeType: WorkflowNodeKind): string[] {
 
   if (nodeType === 'video-generate') {
     return [
-      'Single-shot video keeps using the shared upstream prompt and now connects through Start frame plus optional End frame.',
+      'Single-shot video keeps using the shared upstream prompt and now connects through Start frame plus optional End frame unless you switch to Seedance 2 references.',
+      'Seedance 2 and Seedance 2 Fast accept connected image, video, and audio references, and they prefer prepared assets when the source nodes have an active Seedance asset id.',
       'If the node is blocked, check that a prompt node contains actual text and any connected reference image has an output.',
       'Connect one image to Start frame, then another to End frame when you want the video to transition toward a target final frame.',
       'Older workflows with general image references still run in compatibility mode, but new editing should stay frame-based.',

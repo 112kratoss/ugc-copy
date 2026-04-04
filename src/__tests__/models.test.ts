@@ -61,6 +61,12 @@ describe('Model Pricing', () => {
         it('seedance 1080p 12s with sound', () => {
             expect(getVideoCost('seedance-1.5-pro', { resolution: '1080p', sound: true, durationSeconds: 12 })).toBe(180);
         });
+        it('seedance 2 720p 12s without reference video uses the base tier', () => {
+            expect(getVideoCost('seedance-2', { resolution: '720p', durationSeconds: 12 })).toBe(492);
+        });
+        it('seedance 2 fast 480p 12s with reference video uses the lower tier', () => {
+            expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(96);
+        });
         it('veo 3.1 fast has flat pricing', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3_fast' })).toBe(60);
         });
@@ -73,6 +79,12 @@ describe('Model Pricing', () => {
         it('exposes the Kling single-shot range and default duration', () => {
             expect(getVideoDurationRange('kling-3.0-video')).toEqual({ min: 3, max: 15, default: 5 });
             expect(getDefaultVideoDuration('kling-3.0-video')).toBe(5);
+        });
+
+        it('exposes the Seedance 2 single-shot range and default duration', () => {
+            expect(getVideoDurationRange('seedance-2')).toEqual({ min: 4, max: 15, default: 15 });
+            expect(getDefaultVideoDuration('seedance-2-fast')).toBe(15);
+            expect(isValidVideoDuration('seedance-2', 16)).toBe(false);
         });
     });
 

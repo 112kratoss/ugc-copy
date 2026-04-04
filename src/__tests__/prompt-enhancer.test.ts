@@ -171,6 +171,31 @@ describe('prompt enhancer strategy', () => {
     expect(artifacts.compiledPrompt).toContain('Audio cues: clinking glasses and soft crowd chatter.');
   });
 
+  it('compiles Seedance 2 prompts using the matching playbook', () => {
+    const artifacts = buildPromptEnhancementArtifacts(
+      'video',
+      'seedance-2',
+      JSON.stringify({
+        sceneGoal: 'creator demo in a kitchen',
+        subjectAction: 'a creator lifts the frother and demonstrates it to camera',
+        environment: 'inside a bright modern kitchen',
+        cameraMovement: 'steady medium shot',
+        continuityAnchors: ['the same creator', 'the same countertop'],
+        ambience: 'warm daylight',
+        audioCue: 'gentle appliance hum and light room tone',
+        pacing: 'clear and paced',
+        durationBudget: '12-second clip',
+      }),
+      { duration: 12, sound: true, hasReferenceVideo: true },
+      'Creator kitchen demo'
+    );
+
+    expect(artifacts.plannerMode).toBe('structured-video');
+    expect(artifacts.compiledPrompt).toContain('steady medium shot');
+    expect(artifacts.compiledPrompt).toContain('Audio cues: gentle appliance hum and light room tone.');
+    expect(artifacts.compiledPrompt).toContain('Preserve the same creator and the same countertop');
+  });
+
   it('compiles Kling multi-shot prompts into the current shot when shot index is known', () => {
     const artifacts = buildPromptEnhancementArtifacts(
       'video',
@@ -293,7 +318,7 @@ describe('prompt enhancer strategy', () => {
       modelSelector: 'primaryModel',
       medium: 'video',
       scenario: 'video.image_to_video_start_frame',
-      modelIds: ['kling-3.0-video', 'veo-3.1'],
+      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'veo-3.1'],
       context: { creativeIntent: 'ugc-ad' },
       additionalRules: ['These prompts should remain reference-friendly.'],
     });
@@ -301,6 +326,9 @@ describe('prompt enhancer strategy', () => {
     expect(guidance).toContain('videoPrompt guidance:');
     expect(guidance).toContain('These prompts should remain reference-friendly.');
     expect(guidance).toContain('If primaryModel is kling-3.0-video');
+    expect(guidance).toContain('If primaryModel is seedance-1.5-pro');
+    expect(guidance).toContain('If primaryModel is seedance-2');
+    expect(guidance).toContain('If primaryModel is seedance-2-fast');
     expect(guidance).toContain('If primaryModel is veo-3.1');
     expect(guidance).toContain('creator-led commercial realism');
     expect(guidance).toContain('one scene with explicit subject, action, context, camera, and ambience');

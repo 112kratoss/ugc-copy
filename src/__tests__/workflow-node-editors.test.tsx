@@ -34,6 +34,20 @@ vi.mock('@/app/components/enhancePromptClient', () => {
   };
 });
 
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn(async () => ({
+        data: {
+          session: {
+            access_token: 'test-token',
+          },
+        },
+      })),
+    },
+  },
+}));
+
 function renderInteractiveInspector(
   initialNodeOrGraph: WorkflowCanvasNode | WorkflowCanvasGraph,
   options?: {
@@ -374,6 +388,47 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.getByText(/optional global @handle for this image source/i)).toBeInTheDocument();
   });
 
+  it('shows Seedance asset prep controls on input nodes and persists asset metadata edits', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        success: true,
+        assetId: 'asset-123',
+        status: 'processing',
+        sourceUrl: 'https://example.com/hero.png',
+        lastCheckedAt: '2026-04-04T00:00:00.000Z',
+      }),
+    })));
+
+    const baseImageSource = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const imageSource = {
+      ...baseImageSource,
+      data: normalizeNodeData('image-input', {
+        ...baseImageSource.data,
+        imageUrl: 'https://example.com/hero.png',
+        seedanceAsset: {
+          assetId: null,
+          assetType: 'Image',
+          status: 'idle',
+          sourceUrl: 'https://example.com/hero.png',
+          error: null,
+          lastCheckedAt: null,
+        },
+      }),
+    };
+
+    renderInteractiveInspector(imageSource);
+
+    expect(screen.getByText(/track whether this uploaded source has already been prepared for Seedance 2 references/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare asset/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('asset-123')).toBeInTheDocument();
+      expect(screen.getAllByText('Processing').length).toBeGreaterThan(0);
+    });
+  });
+
   it('removes connected named-element edges from the inspector', () => {
     const onDeleteEdgeSpy = vi.fn();
     const imageSource = createWorkflowNode('image-input', { x: 0, y: 0 });
@@ -458,6 +513,15 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.getByLabelText('Duration').tagName).toBe('SELECT');
 
     fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'seedance-2' },
+    });
+
+    expect(screen.getByText(/Seedance references/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/prepared assets/i).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText(/fixed lens/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Duration').tagName).toBe('INPUT');
+
+    fireEvent.change(screen.getByLabelText('Model'), {
       target: { value: 'veo-3.1' },
     });
 
@@ -468,6 +532,81 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.queryByRole('spinbutton', { name: 'Duration' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Duration')).not.toBeInTheDocument();
     expect(screen.getByText('8 sec fixed')).toBeInTheDocument();
+  });
+
+  it('shows Seedance 2 readiness summaries for connected reference assets', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageInput = createWorkflowNode('image-input', { x: 0, y: 120 });
+    const videoInput = createWorkflowNode('video-input', { x: 0, y: 240 });
+    const audioInput = createWorkflowNode('audio-input', { x: 0, y: 360 });
+    const seedanceNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...imageInput,
+          data: normalizeNodeData('image-input', {
+            ...imageInput.data,
+            imageUrl: 'https://example.com/reference.jpg',
+            seedanceAsset: {
+              ...imageInput.data.seedanceAsset,
+              assetId: 'asset-image',
+              status: 'active',
+              sourceUrl: 'https://example.com/reference.jpg',
+            },
+          }),
+        },
+        {
+          ...videoInput,
+          data: normalizeNodeData('video-input', {
+            ...videoInput.data,
+            videoUrl: 'https://example.com/reference.mp4',
+            durationSeconds: 6,
+            seedanceAsset: {
+              ...videoInput.data.seedanceAsset,
+              assetId: 'asset-video',
+              status: 'processing',
+              sourceUrl: 'https://example.com/reference.mp4',
+            },
+          }),
+        },
+        {
+          ...audioInput,
+          data: normalizeNodeData('audio-input', {
+            ...audioInput.data,
+            audioUrl: 'https://example.com/reference.mp3',
+            seedanceAsset: {
+              ...audioInput.data.seedanceAsset,
+              assetId: null,
+              status: 'idle',
+              sourceUrl: 'https://example.com/reference.mp3',
+            },
+          }),
+        },
+        {
+          ...seedanceNode,
+          data: normalizeNodeData('video-generate', {
+            ...seedanceNode.data,
+            model: 'seedance-2-fast',
+          }),
+        },
+      ],
+      edges: [
+        { id: 'prompt', source: promptNode.id, target: seedanceNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'image', source: imageInput.id, target: seedanceNode.id, sourceHandle: 'image', targetHandle: 'reference-image' },
+        { id: 'video', source: videoInput.id, target: seedanceNode.id, sourceHandle: 'video', targetHandle: 'reference-video' },
+        { id: 'audio', source: audioInput.id, target: seedanceNode.id, sourceHandle: 'audio', targetHandle: 'reference-audio' },
+      ],
+    });
+
+    renderInteractiveInspector(graph, { selectedNodeId: seedanceNode.id });
+
+    expect(screen.getByText(/Seedance references/i)).toBeInTheDocument();
+    expect(screen.getByText(/1\/3 ready/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Image refs/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Video refs/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Audio refs/i).length).toBeGreaterThan(0);
   });
 
   it('shows workflow-video limits and unsupported standalone feature messaging', () => {

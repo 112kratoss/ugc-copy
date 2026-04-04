@@ -17,9 +17,23 @@ export interface PersistedImageElementRecord {
   file: File;
 }
 
+export interface PersistedMediaRecord {
+  id: string;
+  displayName: string;
+  file: File;
+  durationSeconds: number | null;
+}
+
 interface StoredImageElementRecord {
   id: string;
   displayName: string;
+  file: StoredMediaFile | File | Blob;
+}
+
+interface StoredMediaRecord {
+  id: string;
+  displayName: string;
+  durationSeconds?: number | null;
   file: StoredMediaFile | File | Blob;
 }
 
@@ -33,6 +47,9 @@ export const PERSISTED_MEDIA_KEYS = {
   createImageElementDrafts: 'create-image:element-drafts',
   createVideoStartImage: 'create-video:start-image',
   createVideoEndImage: 'create-video:end-image',
+  createVideoReferenceVideos: 'create-video:reference-videos',
+  createVideoReferenceAudios: 'create-video:reference-audios',
+  createVideoSeedanceAssets: 'create-video:seedance-assets',
 } as const;
 
 function getFallbackExtension(type: string | undefined): string {
@@ -50,6 +67,18 @@ function isStoredMediaFile(value: unknown): value is StoredMediaFile {
 }
 
 function isStoredImageElementRecord(value: unknown): value is StoredImageElementRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    typeof value.id === 'string' &&
+    'displayName' in value &&
+    typeof value.displayName === 'string' &&
+    'file' in value
+  );
+}
+
+function isStoredMediaRecord(value: unknown): value is StoredMediaRecord {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -140,6 +169,51 @@ export async function setPersistedImageElementRecords(
       id: element.id,
       displayName: element.displayName,
       file: toStoredMediaFile(element.file),
+    }))
+  );
+}
+
+export async function getPersistedMediaRecords(key: string): Promise<PersistedMediaRecord[]> {
+  const value = await persistedMediaStore.getItem<StoredMediaRecord[] | null>(key);
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item, index) => {
+      if (!isStoredMediaRecord(item)) {
+        return null;
+      }
+
+      const restoredFile = restoreFile(item.file, `${key}-${index + 1}`);
+      if (!restoredFile) {
+        return null;
+      }
+
+      return {
+        id: item.id,
+        displayName: item.displayName,
+        durationSeconds: typeof item.durationSeconds === 'number' ? item.durationSeconds : null,
+        file: restoredFile,
+      } satisfies PersistedMediaRecord;
+    })
+    .filter((item): item is PersistedMediaRecord => item !== null);
+}
+
+export async function setPersistedMediaRecords(
+  key: string,
+  records: PersistedMediaRecord[]
+): Promise<void> {
+  if (records.length === 0) {
+    await persistedMediaStore.removeItem(key);
+    return;
+  }
+
+  await persistedMediaStore.setItem(
+    key,
+    records.map((record) => ({
+      id: record.id,
+      displayName: record.displayName,
+      durationSeconds: typeof record.durationSeconds === 'number' ? record.durationSeconds : null,
+      file: toStoredMediaFile(record.file),
     }))
   );
 }

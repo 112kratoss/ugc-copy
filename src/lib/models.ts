@@ -146,6 +146,66 @@ export const VIDEO_MODELS = {
             },
         },
     },
+    'seedance-2': {
+        id: 'seedance-2' as const,
+        displayName: 'Seedance 2',
+        description: 'ByteDance video model with image, video, audio, and audio generation controls',
+        provider: 'seedance' as const,
+        apiModelId: 'bytedance/seedance-2',
+        enhancerModelId: 'seedance-2',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
+        durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 4,
+            max: 15,
+            default: 15,
+        } as const,
+        modeOptions: [] as const,
+        resolutions: ['480p', '720p'] as const,
+        pricing: {
+            '480p': {
+                noVideo: 19,
+                withVideo: 11.5,
+            },
+            '720p': {
+                noVideo: 41,
+                withVideo: 25,
+            },
+        },
+    },
+    'seedance-2-fast': {
+        id: 'seedance-2-fast' as const,
+        displayName: 'Seedance 2 Fast',
+        description: 'Faster ByteDance video model with image, video, and audio references',
+        provider: 'seedance' as const,
+        apiModelId: 'bytedance/seedance-2-fast',
+        enhancerModelId: 'seedance-2-fast',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
+        durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 4,
+            max: 15,
+            default: 15,
+        } as const,
+        modeOptions: [] as const,
+        resolutions: ['480p', '720p'] as const,
+        pricing: {
+            '480p': {
+                noVideo: 15.5,
+                withVideo: 8,
+            },
+            '720p': {
+                noVideo: 33,
+                withVideo: 20,
+            },
+        },
+    },
     'veo-3.1': {
         id: 'veo-3.1' as const,
         displayName: 'Veo 3.1',
@@ -189,6 +249,14 @@ export function getVideoElementSupport(
         return {
             enabled: true,
             maxElements: 2,
+            reason: null,
+        };
+    }
+
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast') {
+        return {
+            enabled: true,
+            maxElements: 5,
             reason: null,
         };
     }
@@ -344,6 +412,7 @@ export function getVideoCost(
         sound?: boolean;
         durationSeconds?: number;
         resolution?: string;
+        hasReferenceVideo?: boolean;
     }
 ): number {
     if (modelId === 'kling-3.0-video') {
@@ -363,6 +432,17 @@ export function getVideoCost(
         const pricing = VIDEO_MODELS['seedance-1.5-pro'].pricing[resolution];
         const durationKey = durationSeconds in pricing.noSound ? durationSeconds : 8;
         return options.sound ? pricing.withSound[durationKey] : pricing.noSound[durationKey];
+    }
+
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast') {
+        const pricingTable = VIDEO_MODELS[modelId].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '720p';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        const pricing = pricingTable[resolution];
+        const perSecond = options.hasReferenceVideo ? pricing.withVideo : pricing.noVideo;
+        return Math.ceil(durationSeconds * perSecond);
     }
 
     const mode = options.mode === 'veo3' ? 'veo3' : 'veo3_fast';

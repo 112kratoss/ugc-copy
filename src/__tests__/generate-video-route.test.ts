@@ -90,7 +90,7 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: vi.fn(),
-  resolveStoredMediaUrl: vi.fn(),
+  resolveStoredMediaUrl: vi.fn(async (_supabase: unknown, value: string) => value),
 }));
 
 describe('/api/generate-video route', () => {
@@ -152,7 +152,7 @@ describe('/api/generate-video route', () => {
         sound: true,
       },
     });
-    expect((providerBody?.input as Record<string, unknown>).multi_prompt).toBeUndefined();
+    expect(((providerBody as { input?: Record<string, unknown> } | null)?.input ?? {}).multi_prompt).toBeUndefined();
   });
 
   it('sends Kling multi-shot requests with total duration and prompt segments', async () => {
@@ -207,7 +207,7 @@ describe('/api/generate-video route', () => {
         ],
       },
     });
-    expect((providerBody?.input as Record<string, unknown>).prompt).toBeUndefined();
+    expect(((providerBody as { input?: Record<string, unknown> } | null)?.input ?? {}).prompt).toBeUndefined();
   });
 
   it('persists frame descriptors when remixing with start and end frames', async () => {
@@ -263,6 +263,82 @@ describe('/api/generate-video route', () => {
         kind: 'image',
         label: 'End frame',
         storagePath: 'uploads/user-1/end.png',
+      },
+    });
+  });
+
+  it('passes Seedance 2 reference video and audio arrays through to the provider payload', async () => {
+    let providerBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ code: 200, data: { taskId: 'task-seedance-2' } }),
+        };
+      })
+    );
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'seedance-2',
+          prompt: 'Keep the energy of the reference clips.',
+          duration: 10,
+          aspectRatio: '16:9',
+          resolution: '720p',
+          sound: true,
+          elements: [
+            {
+              id: 'element-1',
+              displayName: 'Hero',
+              handle: '@hero',
+              storagePath: 'uploads/user-1/hero.png',
+              sourceGenerationId: null,
+            },
+          ],
+          elementImageUrls: ['https://signed.example.com/hero.png'],
+          referenceVideoUrls: ['asset-video-1'],
+          referenceAudioUrls: ['asset-audio-1'],
+          seedanceAssets: {
+            images: [{ assetId: 'asset-image-1', assetType: 'Image', status: 'active', sourceUrl: 'https://signed.example.com/hero.png', error: null, lastCheckedAt: '2026-04-04T00:00:00.000Z' }],
+            videos: [{ assetId: 'asset-video-1', assetType: 'Video', status: 'active', sourceUrl: 'https://signed.example.com/ref.mp4', error: null, lastCheckedAt: '2026-04-04T00:00:00.000Z' }],
+            audios: [{ assetId: 'asset-audio-1', assetType: 'Audio', status: 'active', sourceUrl: 'https://signed.example.com/ref.wav', error: null, lastCheckedAt: '2026-04-04T00:00:00.000Z' }],
+          },
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(providerBody).toMatchObject({
+      model: 'bytedance/seedance-2',
+      input: {
+        prompt: 'Keep the energy of the reference clips.',
+        reference_image_urls: ['https://signed.example.com/hero.png'],
+        reference_video_urls: ['asset-video-1'],
+        reference_audio_urls: ['asset-audio-1'],
+        generate_audio: true,
+        resolution: '720p',
+        aspect_ratio: '16:9',
+        duration: 10,
+        web_search: false,
+        return_last_frame: false,
+      },
+    });
+    expect(currentSupabaseMock.inserts[0].workflow_settings).toMatchObject({
+      referenceVideoUrls: ['asset-video-1'],
+      referenceAudioUrls: ['asset-audio-1'],
+      seedanceAssets: {
+        videos: [expect.objectContaining({ assetId: 'asset-video-1' })],
+        audios: [expect.objectContaining({ assetId: 'asset-audio-1' })],
       },
     });
   });

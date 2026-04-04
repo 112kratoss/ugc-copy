@@ -30,6 +30,11 @@ import {
   type VoiceoverModelId,
 } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import {
+  hasSeedanceAssetCollections,
+  isSeedance2VideoModelId,
+  type SeedanceAssetCollections,
+} from '@/lib/seedance-assets';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -611,6 +616,8 @@ export async function startVideoGeneration(params: {
   model: VideoModelId;
   references?: ReferenceImageInput[];
   imageUrls?: string[];
+  referenceVideoUrls?: string[];
+  referenceAudioUrls?: string[];
   isMultiShot?: boolean;
   multiPrompts?: VideoMultiPromptInput[];
   elements?: ImageElementDescriptor[];
@@ -626,6 +633,7 @@ export async function startVideoGeneration(params: {
   referenceMode?: 'frames' | 'elements';
   startFrame?: RemixMediaAssetDescriptor | null;
   endFrame?: RemixMediaAssetDescriptor | null;
+  seedanceAssets?: SeedanceAssetCollections | null;
   sourceGenerationId?: string | null;
 }): Promise<StartGenerationResult> {
   requireApiKey();
@@ -636,6 +644,8 @@ export async function startVideoGeneration(params: {
     model,
     references,
     imageUrls = [],
+    referenceVideoUrls = [],
+    referenceAudioUrls = [],
     isMultiShot = false,
     multiPrompts,
     elements = [],
@@ -651,6 +661,7 @@ export async function startVideoGeneration(params: {
     referenceMode = 'frames',
     startFrame = null,
     endFrame = null,
+    seedanceAssets = null,
     sourceGenerationId = null,
   } = params;
 
@@ -711,11 +722,18 @@ export async function startVideoGeneration(params: {
   }
 
   const videoElementSupport = getVideoElementSupport(model, { mode, isMultiShot });
+  const isSeedance2Family = isSeedance2VideoModelId(model);
   const resolvedReferenceImageUrls = normalizedReferences.length > 0
     ? await resolveMediaUrls(supabase, normalizedReferences.map((reference) => reference.url))
     : useLegacyFrameUrls
       ? []
       : await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
+  const resolvedReferenceVideoUrls = isSeedance2Family
+    ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceVideoUrls))
+    : [];
+  const resolvedReferenceAudioUrls = isSeedance2Family
+    ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceAudioUrls))
+    : [];
   const resolvedElementImageUrls = normalizedReferences.length > 0
     ? resolvedReferenceImageUrls.filter((_url, index) => Boolean(normalizedReferences[index]?.handle))
     : await resolveMediaUrls(supabase, normalizeMediaUrlList(elementImageUrls));
@@ -739,6 +757,14 @@ export async function startVideoGeneration(params: {
       400
     );
   }
+
+  if (resolvedReferenceVideoUrls.length > 3) {
+    throw new GenerationServiceError(
+      'Seedance 2 supports up to 3 reference videos per run.',
+      400
+    );
+  }
+
   const resolvedStartImageUrl = startImageUrl ? await resolveStoredMediaUrl(supabase, startImageUrl) : null;
   const resolvedEndImageUrl = endImageUrl ? await resolveStoredMediaUrl(supabase, endImageUrl) : null;
 
@@ -782,11 +808,19 @@ export async function startVideoGeneration(params: {
   const compiledPrompt = normalizedElements.length > 0
     ? compilePromptWithElements(trimmedPrompt, normalizedElements, 'video')
     : trimmedPrompt;
-  const effectiveReferenceMode = totalReferenceImageCount > 0
-    ? 'references'
-    : frameImageUrls.length > 0
-      ? 'frames'
-      : normalizedReferenceMode;
+  const hasAnySeedanceReference = isSeedance2Family && (
+    totalReferenceImageCount > 0
+    || frameImageUrls.length > 0
+    || resolvedReferenceVideoUrls.length > 0
+    || resolvedReferenceAudioUrls.length > 0
+  );
+  const effectiveReferenceMode = isSeedance2Family
+    ? (hasAnySeedanceReference ? 'references' : normalizedReferenceMode)
+    : totalReferenceImageCount > 0
+      ? 'references'
+      : frameImageUrls.length > 0
+        ? 'frames'
+        : normalizedReferenceMode;
 
   assertGenerationRequest(
     (selectedModel.aspectRatios as readonly string[]).includes(aspectRatio),
@@ -817,6 +851,7 @@ export async function startVideoGeneration(params: {
     sound: soundEnabled,
     durationSeconds: totalDuration,
     resolution,
+    hasReferenceVideo: resolvedReferenceVideoUrls.length > 0,
   });
   const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
 
@@ -825,6 +860,9 @@ export async function startVideoGeneration(params: {
     let body: Record<string, unknown>;
     let providerModelId = selectedModel.apiModelId || mode;
     const referenceImageUrls = resolvedReferenceImageUrls;
+    const seedanceReferenceImageUrls = referenceImageUrls.length > 0
+      ? referenceImageUrls
+      : (resolvedElementImageUrls.length > 0 ? resolvedElementImageUrls : frameImageUrls);
 
     if (selectedModel.provider === 'kling') {
       const input: Record<string, unknown> = {
@@ -853,25 +891,54 @@ export async function startVideoGeneration(params: {
         input,
       };
     } else if (selectedModel.provider === 'seedance') {
-      const input: Record<string, unknown> = {
-        prompt: compiledPrompt,
-        aspect_ratio: aspectRatio,
-        resolution,
-        duration: String(duration),
-        fixed_lens: fixedLens,
-        generate_audio: soundEnabled,
-      };
+      if (isSeedance2Family) {
+        const input: Record<string, unknown> = {
+          prompt: compiledPrompt,
+          resolution,
+          aspect_ratio: aspectRatio,
+          duration,
+          generate_audio: soundEnabled,
+          web_search: false,
+          return_last_frame: false,
+        };
 
-      if (referenceImageUrls.length > 0) {
-        input.input_urls = referenceImageUrls;
-      } else if (frameImageUrls.length > 0) {
-        input.input_urls = frameImageUrls;
+        if (seedanceReferenceImageUrls.length > 0) {
+          input.reference_image_urls = seedanceReferenceImageUrls;
+        }
+
+        if (resolvedReferenceVideoUrls.length > 0) {
+          input.reference_video_urls = resolvedReferenceVideoUrls;
+        }
+
+        if (resolvedReferenceAudioUrls.length > 0) {
+          input.reference_audio_urls = resolvedReferenceAudioUrls;
+        }
+
+        body = {
+          model: selectedModel.apiModelId,
+          input,
+        };
+      } else {
+        const input: Record<string, unknown> = {
+          prompt: compiledPrompt,
+          aspect_ratio: aspectRatio,
+          resolution,
+          duration: String(duration),
+          fixed_lens: fixedLens,
+          generate_audio: soundEnabled,
+        };
+
+        if (referenceImageUrls.length > 0) {
+          input.input_urls = referenceImageUrls;
+        } else if (frameImageUrls.length > 0) {
+          input.input_urls = frameImageUrls;
+        }
+
+        body = {
+          model: selectedModel.apiModelId,
+          input,
+        };
       }
-
-      body = {
-        model: selectedModel.apiModelId,
-        input,
-      };
     } else {
       endpoint = 'https://api.kie.ai/api/v1/veo/generate';
       providerModelId = mode === 'veo3' ? 'veo3' : 'veo3_fast';
@@ -917,6 +984,18 @@ export async function startVideoGeneration(params: {
           resolution,
           fixedLens,
           referenceMode: effectiveReferenceMode,
+          ...(seedanceReferenceImageUrls.length > 0
+            ? { referenceImageUrls: seedanceReferenceImageUrls }
+            : {}),
+          ...(resolvedReferenceVideoUrls.length > 0
+            ? { referenceVideoUrls: resolvedReferenceVideoUrls }
+            : {}),
+          ...(resolvedReferenceAudioUrls.length > 0
+            ? { referenceAudioUrls: resolvedReferenceAudioUrls }
+            : {}),
+          ...(hasSeedanceAssetCollections(seedanceAssets)
+            ? { seedanceAssets }
+            : {}),
           ...(normalizedElements.length > 0
             ? {
                 elements: normalizedElements,

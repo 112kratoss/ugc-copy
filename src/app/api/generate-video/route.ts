@@ -37,6 +37,14 @@ function getWorkflowModelId(localGeneration: { workflow_settings?: unknown; mode
         return 'seedance-1.5-pro';
     }
 
+    if (localGeneration?.model === 'bytedance/seedance-2') {
+        return 'seedance-2';
+    }
+
+    if (localGeneration?.model === 'bytedance/seedance-2-fast') {
+        return 'seedance-2-fast';
+    }
+
     return 'kling-3.0-video';
 }
 
@@ -120,6 +128,8 @@ export async function POST(request: NextRequest) {
             multiPrompts,
             elements = [],
             elementImageUrls = [],
+            referenceVideoUrls = [],
+            referenceAudioUrls = [],
             startImageUrl = null,
             endImageUrl = null,
             mode = 'std',
@@ -131,6 +141,7 @@ export async function POST(request: NextRequest) {
             referenceMode = 'frames',
             startFrame = null,
             endFrame = null,
+            seedanceAssets = null,
             sourceGenerationId = null,
         } = await request.json();
 
@@ -178,6 +189,8 @@ export async function POST(request: NextRequest) {
             multiPrompts,
             elements,
             elementImageUrls,
+            referenceVideoUrls,
+            referenceAudioUrls,
             startImageUrl,
             endImageUrl,
             imageUrls: buildImageUrls(startImageUrl, endImageUrl),
@@ -190,6 +203,7 @@ export async function POST(request: NextRequest) {
             referenceMode,
             startFrame,
             endFrame,
+            seedanceAssets,
             sourceGenerationId: validatedSourceGenerationId,
         });
 

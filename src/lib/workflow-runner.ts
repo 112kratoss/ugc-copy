@@ -11,12 +11,14 @@ import {
 import {
   createWorkflowGraphHash,
   type AudioInputNodeData,
+  type ImageInputNodeData,
   getExecutionOrder,
   getIncomingEdges,
   getNodeById,
   getNodeOutputUrl,
   getResolvedWorkflowImageReferences,
   inspectWorkflowNodeDependencies,
+  isSeedance2VideoModel,
   isRunnableNode,
   normalizeNodeData,
   normalizeWorkflowGraph,
@@ -26,6 +28,7 @@ import {
   type MotionGenerateNodeData,
   type WorkflowCanvasRunRecord,
   type SoundEffectsGenerateNodeData,
+  type VideoInputNodeData,
   type VideoGenerateNodeData,
   type VoiceoverGenerateNodeData,
   type WorkflowCanvasGraph,
@@ -33,6 +36,12 @@ import {
   type WorkflowCanvasRunStepRecord,
   type WorkflowRunStatus,
 } from '@/lib/workflow-canvas';
+import {
+  createSeedanceAssetMetadata,
+  getPreferredSeedanceReferenceValue,
+  type SeedanceAssetCollections,
+  type SeedanceAssetMetadata,
+} from '@/lib/seedance-assets';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -114,6 +123,112 @@ function getRunnableElementPayload(
         storagePath: string | null;
         sourceGenerationId: string | null;
       } => Boolean(reference)),
+  };
+}
+
+function getSeedanceAssetFromSourceNode(source: WorkflowCanvasNode | undefined): SeedanceAssetMetadata | null {
+  if (!source) {
+    return null;
+  }
+
+  if (source.type === 'image-input') {
+    return (normalizeNodeData('image-input', source.data as Partial<ImageInputNodeData>) as ImageInputNodeData).seedanceAsset;
+  }
+
+  if (source.type === 'video-input') {
+    return (normalizeNodeData('video-input', source.data as Partial<VideoInputNodeData>) as VideoInputNodeData).seedanceAsset;
+  }
+
+  if (source.type === 'audio-input') {
+    return (normalizeNodeData('audio-input', source.data as Partial<AudioInputNodeData>) as AudioInputNodeData).seedanceAsset;
+  }
+
+  return null;
+}
+
+function getSeedanceReferenceCollections(
+  graph: WorkflowCanvasGraph,
+  nodeId: string
+): {
+  descriptors: ReturnType<typeof getRunnableElementPayload>['descriptors'];
+  references: ReturnType<typeof getRunnableElementPayload>['references'];
+  referenceVideoUrls: string[];
+  referenceAudioUrls: string[];
+  seedanceAssets: SeedanceAssetCollections;
+} {
+  const resolvedImageReferences = getResolvedWorkflowImageReferences(graph, nodeId);
+  const references = resolvedImageReferences
+    .map((reference) => {
+      const source = reference.sourceNodeId ? getNodeById(graph, reference.sourceNodeId) : null;
+      const asset = getSeedanceAssetFromSourceNode(source || undefined);
+      const url = getPreferredSeedanceReferenceValue(reference.storagePath || reference.url || null, asset);
+      if (!url) {
+        return null;
+      }
+
+      return {
+        url,
+        handle: reference.handle,
+        displayName: reference.displayName,
+        storagePath: reference.storagePath,
+        sourceGenerationId: reference.sourceGenerationId,
+      };
+    })
+    .filter((reference): reference is ReturnType<typeof getRunnableElementPayload>['references'][number] => Boolean(reference));
+  const descriptors = resolvedImageReferences
+    .filter((reference) => Boolean(reference.handle))
+    .map((reference) => ({
+      id: reference.id,
+      displayName: reference.displayName,
+      handle: reference.handle!,
+      storagePath: reference.storagePath,
+      sourceGenerationId: reference.sourceGenerationId,
+    }));
+
+  const videoAssets: SeedanceAssetMetadata[] = [];
+  const audioAssets: SeedanceAssetMetadata[] = [];
+  const referenceVideoUrls: string[] = [];
+  const referenceAudioUrls: string[] = [];
+
+  for (const edge of getIncomingEdges(graph, nodeId)) {
+    if (edge.targetHandle !== 'reference-video' && edge.targetHandle !== 'reference-audio') {
+      continue;
+    }
+
+    const source = getNodeById(graph, edge.source);
+    const outputUrl = source ? getNodeOutputUrl(source) : null;
+    const asset = getSeedanceAssetFromSourceNode(source);
+    const referenceValue = getPreferredSeedanceReferenceValue(outputUrl, asset);
+    if (!referenceValue) {
+      continue;
+    }
+
+    if (edge.targetHandle === 'reference-video') {
+      referenceVideoUrls.push(referenceValue);
+      videoAssets.push(asset ? { ...asset } : createSeedanceAssetMetadata({ assetType: 'Video', sourceUrl: outputUrl }));
+      continue;
+    }
+
+    referenceAudioUrls.push(referenceValue);
+    audioAssets.push(asset ? { ...asset } : createSeedanceAssetMetadata({ assetType: 'Audio', sourceUrl: outputUrl }));
+  }
+
+  return {
+    descriptors,
+    references,
+    referenceVideoUrls,
+    referenceAudioUrls,
+    seedanceAssets: {
+      images: resolvedImageReferences.map((reference) => {
+        const source = reference.sourceNodeId ? getNodeById(graph, reference.sourceNodeId) : null;
+        const asset = getSeedanceAssetFromSourceNode(source || undefined);
+        return asset
+          ? { ...asset }
+          : createSeedanceAssetMetadata({ assetType: 'Image', sourceUrl: reference.storagePath || reference.url });
+      }),
+      videos: videoAssets,
+      audios: audioAssets,
+    },
   };
 }
 
@@ -449,7 +564,15 @@ async function executeRunnableNode(params: {
     if (!data.isMultiShot && !inputs.prompt) {
       return buildBlockedError('Video generator is missing a prompt input.');
     }
-    const elementPayload = getRunnableElementPayload(graph, node.id);
+    const isSeedance2Family = isSeedance2VideoModel(data.model);
+    const elementPayload = isSeedance2Family
+      ? getSeedanceReferenceCollections(graph, node.id)
+      : {
+          ...getRunnableElementPayload(graph, node.id),
+          referenceVideoUrls: [] as string[],
+          referenceAudioUrls: [] as string[],
+          seedanceAssets: null as SeedanceAssetCollections | null,
+        };
     const result = await startVideoGeneration({
       supabase,
       userId,
@@ -459,6 +582,8 @@ async function executeRunnableNode(params: {
       isMultiShot: data.isMultiShot,
       multiPrompts: data.multiPrompts,
       elements: elementPayload.descriptors,
+      referenceVideoUrls: elementPayload.referenceVideoUrls,
+      referenceAudioUrls: elementPayload.referenceAudioUrls,
       startImageUrl: inputs.startFrameUrl,
       endImageUrl: inputs.endFrameUrl,
       mode: data.mode,
@@ -467,6 +592,7 @@ async function executeRunnableNode(params: {
       duration: data.duration,
       resolution: data.resolution,
       fixedLens: data.fixedLens,
+      seedanceAssets: elementPayload.seedanceAssets,
     });
 
     return {
