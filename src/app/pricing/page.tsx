@@ -10,6 +10,7 @@ import { JsonLd } from "@/app/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
 import { supabase } from "@/lib/supabase";
 import { buildSoftwareApplicationSchema } from "@/lib/seo";
+import { convertFromUsd, formatMoney, inferCurrencyFromNavigator, type SupportedCurrency } from "@/lib/currency";
 
 const iconByPlanId: Record<PricingPlanId, LucideIcon> = {
     starter: Sparkles,
@@ -55,7 +56,7 @@ const faqSchema = {
             "name": "Which currency is used at checkout?",
             "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Checkout is processed in INR. USD figures on the page are reference amounts to help international visitors compare pack sizes."
+                "text": "Prices are shown in your local currency as an estimate. Checkout is processed in INR through Razorpay."
             }
         },
         {
@@ -105,9 +106,29 @@ const relatedLinks = [
     },
 ];
 
+const CURRENCY_STORAGE_KEY = 'ugc_currency';
+
+const currencyOptions: Array<{ value: SupportedCurrency; label: string }> = [
+    { value: 'INR', label: 'INR' },
+    { value: 'USD', label: 'USD' },
+    { value: 'EUR', label: 'EUR' },
+    { value: 'GBP', label: 'GBP' },
+    { value: 'AUD', label: 'AUD' },
+    { value: 'CAD', label: 'CAD' },
+    { value: 'SGD', label: 'SGD' },
+];
+
+function isSupportedCurrency(value: string): value is SupportedCurrency {
+    return currencyOptions.some((option) => option.value === value);
+}
+
 export default function Pricing() {
     const [userId, setUserId] = useState<string | null>(null);
     const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
+    const [selectedCurrency, setSelectedCurrency] = useState<SupportedCurrency>('INR');
+    const [fxRates, setFxRates] = useState<Record<string, number> | null>(null);
+    const [fxUpdatedAt, setFxUpdatedAt] = useState<string | null>(null);
+    const [fxStatus, setFxStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
     const router = useRouter();
 
     useEffect(() => {
@@ -118,6 +139,44 @@ export default function Pricing() {
             }
         };
         fetchUser();
+    }, []);
+
+    useEffect(() => {
+        const storedCurrency = typeof window !== 'undefined'
+            ? window.localStorage.getItem(CURRENCY_STORAGE_KEY)
+            : null;
+
+        if (storedCurrency && isSupportedCurrency(storedCurrency)) {
+            setSelectedCurrency(storedCurrency);
+        } else if (typeof navigator !== 'undefined') {
+            setSelectedCurrency(inferCurrencyFromNavigator(navigator.languages ?? []));
+        }
+
+        const fetchFx = async () => {
+            try {
+                setFxStatus('loading');
+                const response = await fetch('/api/fx');
+                if (!response.ok) {
+                    throw new Error('FX unavailable');
+                }
+
+                const data = await response.json();
+                if (!data || data.base !== 'INR' || !data.rates) {
+                    throw new Error('Invalid FX response');
+                }
+
+                setFxRates(data.rates as Record<string, number>);
+                setFxUpdatedAt(typeof data.updatedAt === 'string' ? data.updatedAt : null);
+                setFxStatus('ready');
+            } catch (error) {
+                console.warn('FX fetch failed:', error);
+                setFxRates(null);
+                setFxUpdatedAt(null);
+                setFxStatus('unavailable');
+            }
+        };
+
+        fetchFx();
     }, []);
 
     const handlePayment = async (planId: string) => {
@@ -211,6 +270,18 @@ export default function Pricing() {
         }
     };
 
+    const canConvertCurrency =
+        selectedCurrency !== 'INR' &&
+        (selectedCurrency === 'USD' ||
+            (fxStatus === 'ready' &&
+                fxRates !== null &&
+                typeof fxRates.USD === 'number' &&
+                Number.isFinite(fxRates.USD) &&
+                typeof fxRates[selectedCurrency] === 'number' &&
+                Number.isFinite(fxRates[selectedCurrency])));
+
+    const locale = typeof navigator !== 'undefined' ? navigator.language : undefined;
+
     return (
         <div className="min-h-screen bg-black text-white">
             <JsonLd data={[faqSchema, pricingSchema]} />
@@ -241,9 +312,49 @@ export default function Pricing() {
                         No subscription lock-in, no hidden platform fee.
                     </p>
                     <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-zinc-500">
-                        Checkout is processed in <strong className="text-zinc-300">INR</strong> through Razorpay.
-                        USD amounts are shown as rough reference points for international visitors.
+                        Prices are shown in your local currency as an estimate. Checkout is processed in{' '}
+                        <strong className="text-zinc-300">INR</strong> through Razorpay.
                     </p>
+
+                    <div className="mt-6 flex flex-col items-center gap-3">
+                        <label
+                            htmlFor="pricing-currency"
+                            className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-500"
+                        >
+                            Currency
+                        </label>
+                        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200">
+                            <select
+                                id="pricing-currency"
+                                value={selectedCurrency}
+                                onChange={(event) => {
+                                    const value = event.target.value;
+                                    if (!isSupportedCurrency(value)) {
+                                        return;
+                                    }
+
+                                    setSelectedCurrency(value);
+                                    window.localStorage.setItem(CURRENCY_STORAGE_KEY, value);
+                                }}
+                                className="bg-transparent text-zinc-100 outline-none"
+                            >
+                                {currencyOptions.map((option) => (
+                                    <option key={option.value} value={option.value} className="bg-zinc-950">
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <span className="text-xs text-zinc-500">
+                                {fxStatus === 'loading'
+                                    ? 'Updating FX…'
+                                    : fxStatus === 'unavailable'
+                                        ? 'FX unavailable'
+                                        : fxUpdatedAt
+                                            ? `Updated ${fxUpdatedAt}`
+                                            : null}
+                            </span>
+                        </div>
+                    </div>
                 </div>
 
                 <div className="mb-20 grid gap-8 md:grid-cols-3">
@@ -269,12 +380,33 @@ export default function Pricing() {
                             </div>
 
                             <div className="mb-2 flex items-baseline gap-2">
-                                <span className={`text-5xl font-extrabold tracking-tighter ${plan.popular ? "text-white" : "text-zinc-200"}`}>
-                                    ₹{plan.priceInr.toLocaleString('en-IN')}
-                                </span>
-                                <span className="font-medium text-zinc-500">INR</span>
+                                {canConvertCurrency ? (
+                                    <>
+                                        <span className={`text-5xl font-extrabold tracking-tighter ${plan.popular ? "text-white" : "text-zinc-200"}`}>
+                                            {selectedCurrency === 'USD'
+                                                ? formatMoney(plan.priceUsd, 'USD', locale)
+                                                : `≈${formatMoney(convertFromUsd(plan.priceUsd, selectedCurrency, fxRates ?? {}), selectedCurrency, locale)}`}
+                                        </span>
+                                        <span className="font-medium text-zinc-500">{selectedCurrency}</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className={`text-5xl font-extrabold tracking-tighter ${plan.popular ? "text-white" : "text-zinc-200"}`}>
+                                            ₹{plan.priceInr.toLocaleString('en-IN')}
+                                        </span>
+                                        <span className="font-medium text-zinc-500">INR</span>
+                                    </>
+                                )}
                             </div>
-                            <p className="mb-6 text-sm text-zinc-500">Approx. US${plan.priceUsd}</p>
+                            {canConvertCurrency ? (
+                                <p className="mb-6 text-sm text-zinc-500">
+                                    Charged ₹{plan.priceInr.toLocaleString('en-IN')} INR at checkout.
+                                </p>
+                            ) : (
+                                <p className="mb-6 text-sm text-zinc-500">
+                                    Charged in INR at checkout.
+                                </p>
+                            )}
 
                             <p className="mb-8 min-h-[48px] leading-relaxed text-zinc-400">{plan.description}</p>
 
@@ -335,7 +467,7 @@ export default function Pricing() {
                         <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
                             <h3 className="mb-2 text-lg font-semibold">Which currency is used at checkout?</h3>
                             <p className="text-zinc-400">
-                                Checkout is processed in INR through Razorpay. We show approximate USD figures on the page only as a quick point of reference.
+                                Prices are shown in your local currency as an estimate. Checkout is processed in INR through Razorpay.
                             </p>
                         </div>
 
