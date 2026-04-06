@@ -90,7 +90,7 @@ export default function PrivacyPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">5. Third-Party Services</h2>
                         <p className="mb-4">We use trusted third-party services for:</p>
                         <ul className="list-disc list-inside space-y-2 ml-4">
-                            <li><strong>Payment Processing:</strong> Razorpay - for secure payment handling</li>
+                            <li><strong>Payment Processing:</strong> Stripe and Razorpay - for secure payment handling</li>
                             <li><strong>Cloud Storage:</strong> Supabase - for file storage</li>
                             <li><strong>AI Processing:</strong> Kie.ai - for video generation</li>
                             <li><strong>Service Improvement:</strong> To understand how our Service is used and improve performance</li>

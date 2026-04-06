@@ -1,8 +1,17 @@
 import Link from "next/link";
-import { Mail, MessageSquare } from "lucide-react";
+import { Mail, MapPin, MessageSquare, Phone } from "lucide-react";
 import { ContactForm } from "./ContactForm";
 
 export default function Contact() {
+    // Stripe and other payment processors often require a public India phone number and address.
+    // These are meant to be shown publicly; env vars can override without a code change.
+    const defaultSupportPhone = "+91 73565 68282";
+    const defaultBusinessAddress = ["WISHCRAFTER", "PNA Road, Manjeri", "Malappuram 676123", "Kerala, India"].join("\n");
+
+    const supportPhone = process.env.NEXT_PUBLIC_SUPPORT_PHONE ?? defaultSupportPhone;
+    const supportPhoneTel = supportPhone ? supportPhone.replace(/[^\d+]/g, "") : null;
+    const businessAddress = process.env.NEXT_PUBLIC_BUSINESS_ADDRESS ?? defaultBusinessAddress;
+
     return (
         <div className="min-h-screen bg-black text-white">
             <div className="max-w-4xl mx-auto px-6 py-16">
@@ -53,6 +62,36 @@ export default function Contact() {
                                         <p className="text-sm text-zinc-500 mt-1">For partnerships and press</p>
                                     </div>
                                 </div>
+
+                                {!!supportPhone && !!supportPhoneTel && (
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
+                                            <Phone className="w-6 h-6 text-purple-400" />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-medium mb-1">Phone</h3>
+                                            <a
+                                                href={`tel:${supportPhoneTel}`}
+                                                className="text-purple-400 hover:text-purple-300"
+                                            >
+                                                {supportPhone}
+                                            </a>
+                                            <p className="text-sm text-zinc-500 mt-1">India support number</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {!!businessAddress && (
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
+                                            <MapPin className="w-6 h-6 text-purple-400" />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-medium mb-1">Registered Address</h3>
+                                            <p className="text-sm text-zinc-300 whitespace-pre-wrap">{businessAddress}</p>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -62,6 +101,11 @@ export default function Contact() {
                                 <li>
                                     <Link href="/pricing" className="hover:text-white transition-colors">
                                         → View Pricing Plans
+                                    </Link>
+                                </li>
+                                <li>
+                                    <Link href="/cancellation" className="hover:text-white transition-colors">
+                                        → Cancellation &amp; Refund Policy
                                     </Link>
                                 </li>
                                 <li>

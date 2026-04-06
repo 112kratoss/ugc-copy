@@ -523,6 +523,7 @@ export default function Pricing() {
                     <div className="mt-4 flex justify-center gap-6">
                         <Link href="/terms" className="transition-colors hover:text-white">Terms of Service</Link>
                         <Link href="/privacy" className="transition-colors hover:text-white">Privacy Policy</Link>
+                        <Link href="/cancellation" className="transition-colors hover:text-white">Cancellation &amp; Refund</Link>
                         <Link href="/contact" className="transition-colors hover:text-white">Contact</Link>
                     </div>
                 </div>
