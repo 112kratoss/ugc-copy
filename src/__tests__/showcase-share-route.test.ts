@@ -1,43 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const recordGenerationShareEventMock = vi.fn(async () => undefined);
+const recordPostShareEventMock = vi.fn(async (_payload?: unknown) => undefined);
+const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const createUserClientMock = vi.fn();
-const maybeSingleMock = vi.fn();
 
-vi.mock('@/lib/generation-share-events', () => ({
-  recordGenerationShareEvent: (payload: unknown) => recordGenerationShareEventMock(payload),
+vi.mock('@/lib/post-share-events', () => ({
+  recordPostShareEvent: (payload: unknown) => recordPostShareEventMock(payload),
+}));
+
+vi.mock('@/lib/posts-server', () => ({
+  findPublicPostReferenceByIdOrGenerationId: (id: string) =>
+    findPublicPostReferenceByIdOrGenerationIdMock(id),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
-  createServiceClient: () => ({
-    from(table: string) {
-      if (table !== 'generations') {
-        throw new Error(`Unexpected table: ${table}`);
-      }
-
-      return {
-        select() {
-          return {
-            eq() {
-              return {
-                async maybeSingle() {
-                  return maybeSingleMock();
-                },
-              };
-            },
-          };
-        },
-      };
-    },
-  }),
   createUserClient: (request: Request) => createUserClientMock(request),
 }));
 
 describe('/api/showcase/share route', () => {
   beforeEach(() => {
     vi.resetModules();
-    recordGenerationShareEventMock.mockClear();
-    maybeSingleMock.mockReset();
+    recordPostShareEventMock.mockClear();
+    findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     createUserClientMock.mockReset();
     createUserClientMock.mockReturnValue({
       auth: {
@@ -52,10 +36,14 @@ describe('/api/showcase/share route', () => {
     vi.restoreAllMocks();
   });
 
-  it('records share clicks for public creations', async () => {
-    maybeSingleMock.mockResolvedValue({
-      data: { id: 'gen-1', is_public: true },
-      error: null,
+  it('records share clicks for public posts', async () => {
+    findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      visibility: 'public',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'ugc_copy',
     });
 
     const { POST } = await import('@/app/api/showcase/share/route');
@@ -77,8 +65,8 @@ describe('/api/showcase/share route', () => {
     const data = await response.json();
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
-    expect(recordGenerationShareEventMock).toHaveBeenCalledWith({
-      generationId: 'gen-1',
+    expect(recordPostShareEventMock).toHaveBeenCalledWith({
+      postId: 'post-1',
       eventType: 'share_click',
       sourceSurface: 'showcase',
       channel: 'copy-link',
@@ -86,11 +74,8 @@ describe('/api/showcase/share route', () => {
     });
   });
 
-  it('rejects private creations', async () => {
-    maybeSingleMock.mockResolvedValue({
-      data: { id: 'gen-2', is_public: false },
-      error: null,
-    });
+  it('rejects private or missing posts', async () => {
+    findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue(null);
 
     const { POST } = await import('@/app/api/showcase/share/route');
     const response = await POST(
@@ -100,7 +85,7 @@ describe('/api/showcase/share route', () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          generationId: 'gen-2',
+          postId: 'post-2',
           sourceSurface: 'showcase',
           channel: 'copy-link',
         }),
@@ -110,6 +95,6 @@ describe('/api/showcase/share route', () => {
     const data = await response.json();
     expect(response.status).toBe(404);
     expect(data.error).toContain('public creations');
-    expect(recordGenerationShareEventMock).not.toHaveBeenCalled();
+    expect(recordPostShareEventMock).not.toHaveBeenCalled();
   });
 });

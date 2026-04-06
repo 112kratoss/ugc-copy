@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+import {
+    findPublicPostReferenceByIdOrGenerationId,
+    isMissingPostsSchemaError,
+} from '@/lib/posts-server';
+
 export async function POST(request: NextRequest) {
     try {
         const supabase = createClient(
@@ -14,35 +19,41 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const { generationId } = await request.json();
+        const { generationId, postId } = await request.json();
+        const referenceId = typeof postId === 'string' ? postId : generationId;
 
-        if (!generationId) {
-            return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
+        if (!referenceId || typeof referenceId !== 'string') {
+            return NextResponse.json({ error: 'Missing post ID' }, { status: 400 });
         }
 
-        const { data: generation, error: fetchError } = await supabase
-            .from('generations')
-            .select('id, is_public')
-            .eq('id', generationId)
-            .single();
-
-        if (fetchError || !generation) {
-            return NextResponse.json({ error: 'Generation not found' }, { status: 404 });
+        const post = await findPublicPostReferenceByIdOrGenerationId(referenceId);
+        if (!post) {
+            return NextResponse.json({ error: 'Post not found' }, { status: 404 });
         }
 
-        if (!generation.is_public) {
-            return NextResponse.json({ error: 'Only public showcase items can be saved' }, { status: 400 });
-        }
+        let isSaved: boolean | null = null;
+        let rpcError: unknown = null;
 
-        // Toggle save atomically using the authenticated user's context.
-        const { data: isSaved, error: rpcError } = await supabase.rpc('toggle_showcase_save', {
-            p_generation_id: generationId,
+        const postSaveResult = await supabase.rpc('toggle_post_save', {
+            p_post_id: post.id,
             p_user_id: user.id
         });
 
+        isSaved = postSaveResult.data;
+        rpcError = postSaveResult.error;
+
+        if (rpcError && isMissingPostsSchemaError(rpcError)) {
+            const legacySaveResult = await supabase.rpc('toggle_showcase_save', {
+                p_generation_id: post.generation_id ?? post.id,
+                p_user_id: user.id
+            });
+
+            isSaved = legacySaveResult.data;
+            rpcError = legacySaveResult.error;
+        }
+
         if (rpcError) {
             console.error('Error toggling save:', rpcError);
-            // Example errors might be foreign key violations if generation_id is bogus
             return NextResponse.json({ error: 'Failed to update save status' }, { status: 500 });
         }
 

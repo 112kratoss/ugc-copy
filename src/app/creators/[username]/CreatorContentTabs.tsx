@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Heart, Wand2 } from 'lucide-react';
+import { BookText, Heart, ShoppingBag, Wand2 } from 'lucide-react';
 import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
@@ -17,6 +17,7 @@ interface CreatorContentTabsProps {
 export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
   const [activeTab, setActiveTab] = useState<TabType>('creations');
   const [selectedItem, setSelectedItem] = useState<CreatorProfilePageData['items'][number] | null>(null);
+  const getItemSummary = (item: CreatorProfilePageData['items'][number]) => item.body || item.prompt || 'No note or prompt captured yet.';
 
   return (
     <div className="mt-10">
@@ -73,18 +74,31 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                     className="group overflow-hidden rounded-3xl border border-white/5 bg-zinc-900/30 shadow-[0_0_40px_-30px_rgba(255,255,255,0.3)] hover:border-purple-500/30 transition-all duration-300"
                   >
                     <div className="relative bg-black">
-                      {item.category === 'video' || item.category === 'motion' ? (
+                      {item.postFormat === 'text' ? (
+                        <div className="flex aspect-[4/5] items-start bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.16),transparent_38%),linear-gradient(180deg,rgba(10,10,14,1),rgba(7,7,10,1))] p-5">
+                          <div className="w-full rounded-[1.5rem] border border-white/8 bg-zinc-950/80 p-5">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Tip / Note</div>
+                            <p className="mt-4 line-clamp-8 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
+                              {getItemSummary(item)}
+                            </p>
+                          </div>
+                        </div>
+                      ) : item.mediaKind === 'video' && item.mediaUrl ? (
                         <video
-                          src={item.url}
+                          src={item.mediaUrl}
                           muted
                           loop
                           playsInline
                           autoPlay
                           className="aspect-[4/5] w-full object-cover"
                         />
-                      ) : (
+                      ) : item.mediaUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.url} alt={item.title} className="aspect-[4/5] w-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                        <img src={item.mediaUrl} alt={item.title} className="aspect-[4/5] w-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                      ) : (
+                        <div className="flex aspect-[4/5] items-center justify-center text-zinc-500">
+                          <BookText className="h-10 w-10" />
+                        </div>
                       )}
                       <div className="absolute left-4 top-4 rounded-full border border-white/10 bg-black/50 px-3 py-1 text-xs font-medium capitalize text-zinc-100 backdrop-blur">
                         {item.category}
@@ -94,8 +108,14 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                     <div className="space-y-4 p-5">
                       <div>
                         <h3 className="text-lg font-semibold text-white group-hover:text-purple-300 transition-colors">{item.title}</h3>
+                        {item.asset ? (
+                          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
+                            <ShoppingBag className="h-3.5 w-3.5" />
+                            {item.asset.type === 'prompt_pack' ? 'Prompt Pack' : item.asset.type === 'guide' ? 'Guide' : 'Workflow'}
+                          </div>
+                        ) : null}
                         <p className="mt-2 line-clamp-3 text-sm leading-6 text-zinc-400">
-                          {item.prompt || 'No prompt captured for this creation yet.'}
+                          {getItemSummary(item)}
                         </p>
                       </div>
 
@@ -111,7 +131,7 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                         <PublicShareButton
                           generationId={item.id}
                           title={item.title}
-                          description={item.prompt}
+                          description={item.body || item.prompt}
                           sourceSurface="creator-profile"
                           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
                         />
@@ -122,6 +142,15 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                         >
                           Open page
                         </Link>
+                        {item.asset ? (
+                          <Link
+                            href={`/marketplace/${item.asset.id}`}
+                            onClick={(event) => event.stopPropagation()}
+                            className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+                          >
+                            View resource
+                          </Link>
+                        ) : null}
                       </div>
                     </div>
                   </article>
@@ -147,18 +176,27 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
       <MediaDetailsPreviewModal
         isOpen={Boolean(selectedItem)}
         onClose={() => setSelectedItem(null)}
-        mediaType={selectedItem && (selectedItem.category === 'video' || selectedItem.category === 'motion') ? 'video' : 'image'}
-        src={selectedItem?.url ?? null}
+        mediaType={
+          selectedItem
+            ? selectedItem.postFormat === 'text'
+              ? 'text'
+              : selectedItem.mediaKind === 'video'
+                ? 'video'
+                : 'image'
+            : 'image'
+        }
+        src={selectedItem?.mediaUrl ?? null}
         alt={selectedItem?.title ?? 'Creator creation preview'}
         title={selectedItem?.title ?? 'Creator creation'}
         prompt={selectedItem?.prompt ?? ''}
+        body={selectedItem?.body ?? ''}
         creator={selectedItem?.creator}
         actions={selectedItem ? (
           <>
             <PublicShareButton
               generationId={selectedItem.id}
               title={selectedItem.title}
-              description={selectedItem.prompt}
+              description={selectedItem.body || selectedItem.prompt}
               sourceSurface="creator-profile"
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
             />
@@ -168,6 +206,14 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
             >
               Open page
             </Link>
+            {selectedItem.asset ? (
+              <Link
+                href={`/marketplace/${selectedItem.asset.id}`}
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+              >
+                View resource
+              </Link>
+            ) : null}
           </>
         ) : null}
       />

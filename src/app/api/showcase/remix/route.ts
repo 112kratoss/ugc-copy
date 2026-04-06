@@ -1,9 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
+
+function getRedirectPathForCategory(category: string | null | undefined): string {
+    switch (category) {
+        case 'image':
+            return '/create-image';
+        case 'video':
+        case 'ugc-ad':
+            return '/create-video';
+        case 'motion':
+            return '/create-motion';
+        default:
+            return '/create';
+    }
+}
+
 export async function POST(request: NextRequest) {
     try {
-        // Authenticate request
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -15,61 +30,45 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized: Please log in to remix creations' }, { status: 401 });
         }
 
-        const { generationId } = await request.json();
+        const { generationId, postId } = await request.json();
+        const referenceId = typeof postId === 'string' ? postId : generationId;
 
-        if (!generationId) {
-            return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
+        if (!referenceId || typeof referenceId !== 'string') {
+            return NextResponse.json({ error: 'Missing post ID' }, { status: 400 });
         }
 
-        const { data: generation, error: fetchError } = await supabase
-            .from('generations')
-            .select('id, category, prompt, workflow_settings')
-            .eq('id', generationId)
-            .eq('is_public', true)
-            .single();
-
-        if (fetchError || !generation) {
-            return NextResponse.json({ error: 'Generation is private or not found' }, { status: 404 });
+        const post = await findPublicPostReferenceByIdOrGenerationId(referenceId);
+        if (!post) {
+            return NextResponse.json({ error: 'Creation is private or not found' }, { status: 404 });
         }
 
-        // 2. Increment the remix count atomically using our RPC function
-        const { error: rpcError } = await supabase.rpc('increment_remix_count', {
-            p_generation_id: generationId
+        const redirectPath = getRedirectPathForCategory(post.category);
+
+        if (!post.generation_id) {
+            return NextResponse.json({ error: 'Only generation-backed posts can be remixed' }, { status: 400 });
+        }
+
+        const { error: rpcError } = await supabase.rpc('increment_post_remix_count', {
+            p_post_id: post.id
         });
 
         if (rpcError) {
             console.error('Error incrementing remix count:', rpcError);
-            // We don't necessarily fail the whole request if the counter fails, 
-            // the user still wants to remix it. But we should log it.
         }
 
-        // 3. Determine where to redirect the user
-        let redirectPath = '/create';
-        
-        switch (generation.category) {
-            case 'image':
-                redirectPath = '/create-image';
-                break;
-            case 'video':
-                redirectPath = '/create-video';
-                break;
-            case 'motion':
-                redirectPath = '/create-motion';
-                break;
-            case 'ugc-ad':
-                redirectPath = '/create-video'; // Assuming UGC ads are primarily videos for now
-                break;
-            default:
-                break;
-        }
+        const { data: generation, error: generationError } = await supabase
+            .from('generations')
+            .select('id, prompt, workflow_settings')
+            .eq('id', post.generation_id)
+            .single();
 
-        // Append the remix query parameter so the frontend knows what to fetch/prefill
-        // The frontend will actually re-fetch or we can just pass the data directly in the response
-        // Passing data directly is faster for the client!
+        if (generationError || !generation) {
+            return NextResponse.json({ error: 'Linked generation not found' }, { status: 404 });
+        }
 
         return NextResponse.json({ 
             success: true, 
-            redirectTo: `${redirectPath}?remix=${generationId}`,
+            redirectTo: `${redirectPath}?remix=${generation.id}`,
             prefill: {
                 prompt: generation.prompt || '',
                 settings: generation.workflow_settings || {}

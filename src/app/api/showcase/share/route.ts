@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { recordGenerationShareEvent } from '@/lib/generation-share-events';
+import { recordPostShareEvent } from '@/lib/post-share-events';
+import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import {
-  createServiceClient,
   createUserClient,
 } from '@/lib/server-helpers';
 import {
@@ -12,10 +12,11 @@ import {
 
 export async function POST(request: NextRequest) {
   try {
-    const { generationId, sourceSurface, channel } = await request.json();
+    const { generationId, postId, sourceSurface, channel } = await request.json();
+    const referenceId = typeof postId === 'string' ? postId : generationId;
 
-    if (!generationId || typeof generationId !== 'string') {
-      return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
+    if (!referenceId || typeof referenceId !== 'string') {
+      return NextResponse.json({ error: 'Missing post ID' }, { status: 400 });
     }
 
     if (!sourceSurface || typeof sourceSurface !== 'string' || !isGenerationShareSourceSurface(sourceSurface)) {
@@ -26,19 +27,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid share channel' }, { status: 400 });
     }
 
-    const adminSupabase = createServiceClient();
-    const { data: generation, error: generationError } = await adminSupabase
-      .from('generations')
-      .select('id, is_public')
-      .eq('id', generationId)
-      .maybeSingle();
-
-    if (generationError) {
-      console.error('Failed to verify shareable generation:', generationError);
-      return NextResponse.json({ error: 'Failed to verify generation' }, { status: 500 });
-    }
-
-    if (!generation?.is_public) {
+    const post = await findPublicPostReferenceByIdOrGenerationId(referenceId);
+    if (!post) {
       return NextResponse.json({ error: 'Only public creations can be shared' }, { status: 404 });
     }
 
@@ -53,8 +43,8 @@ export async function POST(request: NextRequest) {
       actorUserId = null;
     }
 
-    await recordGenerationShareEvent({
-      generationId,
+    await recordPostShareEvent({
+      postId: post.id,
       eventType: 'share_click',
       sourceSurface,
       channel,

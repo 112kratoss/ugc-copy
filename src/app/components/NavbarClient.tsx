@@ -10,15 +10,18 @@ import { getAuthAvatarUrl, getCreatorDisplayName, getUserInitials } from '@/lib/
 import { supabase } from '@/lib/supabase';
 
 const COMMUNITY_LINKS = [
-  { href: '/showcase', label: 'Showcase' },
+  { href: '/showcase', label: 'Feed' },
+  { href: '/marketplace', label: 'Marketplace' },
   { href: '/blog', label: 'Blog' },
 ];
 
+const AUTH_COMMUNITY_LINKS = [...COMMUNITY_LINKS, { href: '/post/new', label: 'New Post' }];
 const PUBLIC_LINKS = [...COMMUNITY_LINKS, { href: '/pricing', label: 'Pricing' }];
 
 const ACCOUNT_LINKS = [
   { href: '/profile', label: 'Profile', description: 'Manage your creator identity' },
   { href: '/creations', label: 'My Creations', description: 'Review your saved outputs' },
+  { href: '/marketplace/sell', label: 'Seller Dashboard', description: 'List playbooks and export sales' },
   { href: '/pricing', label: 'Credits & Pricing', description: 'Top up or manage credits' },
 ];
 
@@ -186,7 +189,7 @@ export default function NavbarClient() {
 
   const user = session?.user ?? null;
   const credits = profile?.credits ?? null;
-  const visibleLinks = user ? COMMUNITY_LINKS : PUBLIC_LINKS;
+  const visibleLinks = user ? AUTH_COMMUNITY_LINKS : PUBLIC_LINKS;
   const mobileLinks = visibleLinks;
   const isCreatePath =
     pathname === '/create' || pathname.startsWith('/create-') || pathname.startsWith('/create/');

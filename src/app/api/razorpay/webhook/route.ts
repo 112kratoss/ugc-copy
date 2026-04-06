@@ -35,6 +35,80 @@ export async function POST(req: Request) {
 
         const event = JSON.parse(body);
 
+        async function handleCreditTransaction(orderId: string, paymentId: string) {
+            const { data: txn, error: txnError } = await supabaseAdmin
+                .from('transactions')
+                .select('id, user_id, credits, status')
+                .eq('razorpay_order_id', orderId)
+                .maybeSingle();
+
+            if (txnError) {
+                console.error('Webhook: Failed to load credit transaction for order', orderId, txnError);
+                return { handled: false, shouldRetry: false };
+            }
+
+            if (!txn) {
+                return { handled: false, shouldRetry: false };
+            }
+
+            if (txn.status === 'success') {
+                console.log('Webhook: Credit transaction already processed', orderId);
+                return { handled: true, shouldRetry: false };
+            }
+
+            const { error: rpcError } = await supabaseAdmin.rpc('add_credits', {
+                p_user_id: txn.user_id,
+                p_credits: txn.credits,
+                p_transaction_id: txn.id,
+                p_payment_id: paymentId,
+            });
+
+            if (rpcError) {
+                console.error('Webhook: add_credits RPC failed', rpcError);
+                return { handled: true, shouldRetry: true };
+            }
+
+            console.log(
+                `Webhook: Credits assigned — user=${txn.user_id}, credits=${txn.credits}, order=${orderId}`
+            );
+            return { handled: true, shouldRetry: false };
+        }
+
+        async function handleMarketplaceOrder(orderId: string, paymentId: string) {
+            const { data: marketplaceOrder, error: marketplaceOrderError } = await supabaseAdmin
+                .from('marketplace_orders')
+                .select('id, status, buyer_user_id')
+                .eq('razorpay_order_id', orderId)
+                .maybeSingle();
+
+            if (marketplaceOrderError) {
+                console.error('Webhook: Failed to load marketplace order for order', orderId, marketplaceOrderError);
+                return { handled: false, shouldRetry: false };
+            }
+
+            if (!marketplaceOrder) {
+                return { handled: false, shouldRetry: false };
+            }
+
+            if (marketplaceOrder.status === 'paid') {
+                console.log('Webhook: Marketplace order already processed', orderId);
+                return { handled: true, shouldRetry: false };
+            }
+
+            const { error: rpcError } = await supabaseAdmin.rpc('complete_marketplace_purchase', {
+                p_razorpay_order_id: orderId,
+                p_razorpay_payment_id: paymentId,
+            });
+
+            if (rpcError) {
+                console.error('Webhook: complete_marketplace_purchase RPC failed', rpcError);
+                return { handled: true, shouldRetry: true };
+            }
+
+            console.log(`Webhook: Marketplace purchase completed — buyer=${marketplaceOrder.buyer_user_id}, order=${orderId}`);
+            return { handled: true, shouldRetry: false };
+        }
+
         // Handle payment.captured event
         if (event.event === 'payment.captured') {
             const payment = event.payload?.payment?.entity;
@@ -52,41 +126,23 @@ export async function POST(req: Request) {
                 return new Response('OK', { status: 200 });
             }
 
-            // Look up the transaction by Razorpay order ID
-            const { data: txn, error: txnError } = await supabaseAdmin
-                .from('transactions')
-                .select('id, user_id, credits, status')
-                .eq('razorpay_order_id', orderId)
-                .single();
-
-            if (txnError || !txn) {
-                console.error('Webhook: Transaction not found for order', orderId, txnError);
-                return new Response('OK', { status: 200 }); // Acknowledge — don't retry
+            const creditResult = await handleCreditTransaction(orderId, paymentId);
+            if (creditResult.shouldRetry) {
+                return new Response('Failed to assign credits', { status: 500 });
             }
-
-            if (txn.status === 'success') {
-                // Already processed (idempotent) — the existing add_credits RPC also checks this
-                console.log('Webhook: Transaction already processed', orderId);
+            if (creditResult.handled) {
                 return new Response('OK', { status: 200 });
             }
 
-            // Call the existing add_credits RPC to atomically credit the user
-            const { data: rpcSuccess, error: rpcError } = await supabaseAdmin.rpc('add_credits', {
-                p_user_id: txn.user_id,
-                p_credits: txn.credits,
-                p_transaction_id: txn.id,
-                p_payment_id: paymentId,
-            });
-
-            if (rpcError) {
-                console.error('Webhook: add_credits RPC failed', rpcError);
-                // Return 500 so Razorpay retries
-                return new Response('Failed to assign credits', { status: 500 });
+            const marketplaceResult = await handleMarketplaceOrder(orderId, paymentId);
+            if (marketplaceResult.shouldRetry) {
+                return new Response('Failed to finalize marketplace purchase', { status: 500 });
+            }
+            if (marketplaceResult.handled) {
+                return new Response('OK', { status: 200 });
             }
 
-            console.log(
-                `Webhook: Credits assigned — user=${txn.user_id}, credits=${txn.credits}, order=${orderId}, rpcResult=${rpcSuccess}`
-            );
+            console.log('Webhook: No matching transaction or marketplace order for order', orderId);
         }
 
         // Always return 200 for events we don't handle (to prevent Razorpay retries)

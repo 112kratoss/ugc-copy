@@ -18,11 +18,14 @@ describe('CreatorContentTabs', () => {
   const items: CreatorProfilePageData['items'] = [
     {
       id: 'item-1',
-      url: 'https://example.com/creation.jpg',
+      mediaUrl: 'https://example.com/creation.jpg',
+      mediaKind: 'image',
       model: 'nano-banana-2',
       title: 'Campaign Frame',
       prompt: 'A creator holds the product near a bright window.',
+      body: '',
       category: 'image',
+      postFormat: 'media',
       saveCount: 12,
       remixCount: 4,
       createdAt: '2026-03-27T10:00:00.000Z',
@@ -32,6 +35,11 @@ describe('CreatorContentTabs', () => {
         name: 'Creator Name',
         avatar: null,
       },
+      sourceKind: 'ugc_copy',
+      sourceTool: null,
+      generationId: 'gen-1',
+      asset: null,
+      canRemix: true,
     },
   ];
 

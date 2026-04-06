@@ -47,11 +47,14 @@ describe('HomeShowcasePreviewGrid', () => {
     const items: ShowcaseFeedItem[] = [
       {
         id: 'gen-1',
-        url: 'https://example.com/image.jpg',
+        mediaUrl: 'https://example.com/image.jpg',
+        mediaKind: 'image',
         model: 'nano-banana-2',
         title: 'Campaign Frame',
         prompt: 'A creator-style product shot by a bright window.',
+        body: '',
         category: 'image',
+        postFormat: 'media',
         saveCount: 8,
         remixCount: 3,
         createdAt: '2026-03-28T10:00:00.000Z',
@@ -62,6 +65,11 @@ describe('HomeShowcasePreviewGrid', () => {
           avatar: null,
         },
         isSaved: true,
+        sourceKind: 'ugc_copy',
+        sourceTool: null,
+        generationId: 'gen-1',
+        asset: null,
+        canRemix: true,
       },
     ];
 

@@ -24,8 +24,28 @@ type GenerationRow = {
   status: string;
 };
 
+type PostRow = {
+  id: string;
+  output_url: string | null;
+  showcase_asset_path: string | null;
+  prompt: string | null;
+  title: string | null;
+  body: string | null;
+  category: 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
+  post_format: 'text' | 'media' | 'mixed';
+  save_count: number | null;
+  remix_count: number | null;
+  created_at: string;
+  generation_id: string | null;
+  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_tool: string | null;
+  user_id: string;
+  visibility: 'public' | 'unlisted' | 'private';
+};
+
 let profilesState: ProfileRow[] = [];
 let generationsState: GenerationRow[] = [];
+let postsState: PostRow[] = [];
 
 function createServiceClientMock() {
   return {
@@ -64,6 +84,10 @@ function createServiceClientMock() {
                 filters[column] = value;
                 return this;
               },
+              async in(column: string, values: unknown[]) {
+                const rows = generationsState.filter((row) => values.includes((row as Record<string, unknown>)[column]));
+                return { data: rows, error: null };
+              },
               not() {
                 return this;
               },
@@ -77,6 +101,59 @@ function createServiceClientMock() {
                   )
                   .slice(0, limit);
                 return { data: rows, error: null };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'posts') {
+        return {
+          select() {
+            const filters: Record<string, unknown> = {};
+            return {
+              eq(column: string, value: unknown) {
+                filters[column] = value;
+                return this;
+              },
+              order() {
+                return this;
+              },
+              async limit(limit: number) {
+                const rows = postsState
+                  .filter((row) =>
+                    Object.entries(filters).every(([key, value]) => (row as Record<string, unknown>)[key] === value)
+                  )
+                  .slice(0, limit);
+                return { data: rows, error: null };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'marketplace_assets') {
+        return {
+          select() {
+            let postIds: unknown[] = [];
+            let status: unknown = null;
+
+            return {
+              in(column: string, values: unknown[]) {
+                if (column === 'post_id') {
+                  postIds = values;
+                }
+                return this;
+              },
+              async eq(column: string, value: unknown) {
+                if (column === 'status') {
+                  status = value;
+                }
+
+                return {
+                  data: [],
+                  error: null,
+                };
               },
             };
           },
@@ -135,6 +212,26 @@ describe('creator profile data loader', () => {
         created_at: '2026-03-19T09:00:00.000Z',
         is_public: false,
         status: 'succeeded',
+      },
+    ];
+    postsState = [
+      {
+        id: 'post-1',
+        user_id: 'user-1',
+        output_url: 'generated_images/user-1/file.jpg',
+        showcase_asset_path: null,
+        prompt: 'A creator unboxing a new product.',
+        title: 'Unboxing Hook',
+        body: null,
+        category: 'image',
+        post_format: 'media',
+        save_count: 12,
+        remix_count: 4,
+        created_at: '2026-03-19T10:00:00.000Z',
+        generation_id: 'gen-1',
+        source_kind: 'ugc_copy',
+        source_tool: null,
+        visibility: 'public',
       },
     ];
   });

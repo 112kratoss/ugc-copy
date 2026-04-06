@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const getShowcaseFeedPageMock = vi.fn(async () => ({
+const getShowcaseFeedPageMock = vi.fn(async (_options?: unknown) => ({
   items: [],
   pageInfo: {
     hasMore: false,

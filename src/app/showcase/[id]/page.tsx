@@ -1,12 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { headers } from 'next/headers';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { ArrowLeft, BarChart3, Eye, Heart, Share2, Wand2 } from 'lucide-react';
 
 import CreatorIdentity from '@/app/components/CreatorIdentity';
-import { recordGenerationShareEvent } from '@/lib/generation-share-events';
-import { getPublicGenerationDetail } from '@/lib/public-generations';
+import { formatUsdCents, getMarketplaceAssetTypeLabel } from '@/lib/marketplace';
+import { recordPostShareEvent } from '@/lib/post-share-events';
+import {
+  getPostReferenceForShowcaseId,
+  getPublicPostDetail,
+  getPublicPostMetaDescription,
+} from '@/lib/public-posts';
 import { createMetadata } from '@/lib/seo';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
@@ -24,7 +29,19 @@ function shouldTrackShareVisit(headerStore: Headers): boolean {
 
 export async function generateMetadata({ params }: ShowcaseDetailPageProps): Promise<Metadata> {
   const { id } = await params;
-  const detail = await getPublicGenerationDetail(id);
+  const reference = await getPostReferenceForShowcaseId(id);
+
+  if (reference && reference.id !== id) {
+    return {
+      title: 'Creation Redirect',
+      robots: {
+        index: false,
+        follow: true,
+      },
+    };
+  }
+
+  const detail = reference ? await getPublicPostDetail(reference.id) : null;
 
   if (!detail) {
     return {
@@ -34,24 +51,34 @@ export async function generateMetadata({ params }: ShowcaseDetailPageProps): Pro
 
   return createMetadata({
     title: detail.title,
-    description: detail.description,
+    description: getPublicPostMetaDescription(detail),
     path: buildShowcaseDetailPath(detail.id),
-    image: detail.category === 'image' ? detail.url : undefined,
+    image: detail.mediaKind === 'image' ? detail.mediaUrl ?? undefined : undefined,
   });
 }
 
 export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageProps) {
   const { id } = await params;
-  const detail = await getPublicGenerationDetail(id);
+  const reference = await getPostReferenceForShowcaseId(id);
+
+  if (!reference) {
+    notFound();
+  }
+
+  if (reference.id !== id) {
+    redirect(buildShowcaseDetailPath(reference.id));
+  }
+
+  const detail = await getPublicPostDetail(reference.id);
 
   if (!detail) {
     notFound();
   }
 
   const headerStore = await headers();
-  if (shouldTrackShareVisit(headerStore)) {
-    await recordGenerationShareEvent({
-      generationId: detail.id,
+  if (detail.visibility === 'public' && shouldTrackShareVisit(headerStore)) {
+    await recordPostShareEvent({
+      postId: detail.id,
       eventType: 'share_visit',
       sourceSurface: 'detail-page',
     });
@@ -82,16 +109,16 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
         <div className="grid gap-8 xl:grid-cols-[minmax(0,1.2fr)_420px]">
           <section className="overflow-hidden rounded-[32px] border border-white/8 bg-zinc-950/70 p-4 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
             <div className="overflow-hidden rounded-[24px] border border-white/5 bg-black/70">
-              {detail.category === 'image' ? (
+              {detail.mediaKind === 'image' && detail.mediaUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={detail.url}
+                  src={detail.mediaUrl}
                   alt={detail.title}
                   className="block max-h-[76vh] w-full object-contain"
                 />
-              ) : (
+              ) : detail.mediaKind === 'video' && detail.mediaUrl ? (
                 <video
-                  src={detail.url}
+                  src={detail.mediaUrl}
                   controls
                   autoPlay
                   loop
@@ -99,6 +126,15 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
                   preload="metadata"
                   className="block max-h-[76vh] w-full object-contain"
                 />
+              ) : (
+                <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">
+                  <article className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-zinc-950/85 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+                    <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tip / Note</div>
+                    <div className="mt-6 whitespace-pre-wrap text-lg leading-9 text-zinc-100">
+                      {detail.body || 'No post body available.'}
+                    </div>
+                  </article>
+                </div>
               )}
             </div>
           </section>
@@ -112,15 +148,18 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
               <div className="mt-5">
                 <CreatorIdentity creator={detail.creator} />
               </div>
-              <p className="mt-4 text-sm leading-7 text-zinc-300">
-                {detail.description}
-              </p>
+              {detail.description ? (
+                <p className="mt-4 text-sm leading-7 text-zinc-300">
+                  {detail.description}
+                </p>
+              ) : null}
               <div className="mt-6">
                 <ShowcaseDetailActions
-                  generationId={detail.id}
+                  postId={detail.id}
                   title={detail.title}
-                  description={detail.description}
+                  description={getPublicPostMetaDescription(detail)}
                   creatorUsername={detail.creator.username}
+                  canRemix={detail.canRemix}
                 />
               </div>
             </div>
@@ -156,12 +195,48 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
               </div>
             </div>
 
+            {detail.body ? (
+              <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                  {detail.postFormat === 'mixed' ? 'Note' : 'Post'}
+                </div>
+                <div className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300 custom-scrollbar">
+                  {detail.body}
+                </div>
+              </div>
+            ) : null}
+
             <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Prompt</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
+              </div>
               <p className="mt-3 max-h-64 overflow-y-auto pr-2 text-sm leading-7 text-zinc-300 custom-scrollbar">
-                {detail.prompt || 'No prompt available for this creation.'}
+                {detail.prompt || (detail.postFormat === 'text' ? 'No extra notes attached to this post yet.' : 'No prompt available for this creation.')}
               </p>
             </div>
+
+            {detail.asset ? (
+              <div className="rounded-[30px] border border-emerald-500/15 bg-emerald-500/5 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Attached resource</div>
+                <div className="mt-3 flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">{detail.asset.title}</h2>
+                    <p className="mt-2 text-sm text-zinc-300">
+                      Unlock this {getMarketplaceAssetTypeLabel(detail.asset.type).toLowerCase()} from the marketplace.
+                    </p>
+                    <div className="mt-3 inline-flex rounded-full border border-emerald-400/20 bg-black/30 px-3 py-1 text-sm font-semibold text-emerald-50">
+                      {formatUsdCents(detail.asset.priceUsdCents)}
+                    </div>
+                  </div>
+                  <Link
+                    href={`/marketplace/${detail.asset.id}`}
+                    className="inline-flex shrink-0 items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+                  >
+                    View listing
+                  </Link>
+                </div>
+              </div>
+            ) : null}
           </aside>
         </div>
       </div>

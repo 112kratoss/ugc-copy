@@ -7,7 +7,7 @@ import { Check, Copy, X } from 'lucide-react';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import type { ShowcaseCreator } from '@/lib/showcase';
 
-export type MediaDetailsType = 'image' | 'video' | 'audio';
+export type MediaDetailsType = 'image' | 'video' | 'audio' | 'text';
 
 interface MediaDetailsPreviewModalProps {
   isOpen: boolean;
@@ -17,6 +17,7 @@ interface MediaDetailsPreviewModalProps {
   alt: string;
   title: string;
   prompt?: string | null;
+  body?: string | null;
   creator?: ShowcaseCreator;
   actions?: ReactNode;
 }
@@ -29,20 +30,22 @@ export default function MediaDetailsPreviewModal({
   alt,
   title,
   prompt,
+  body,
   creator,
   actions,
 }: MediaDetailsPreviewModalProps) {
   return (
     <AnimatePresence>
-      {isOpen && src ? (
+      {isOpen && (src || mediaType === 'text') ? (
         <MediaDetailsPreviewDialog
-          key={`${mediaType}:${src}`}
+          key={`${mediaType}:${src ?? title}`}
           onClose={onClose}
           mediaType={mediaType}
           src={src}
           alt={alt}
           title={title}
           prompt={prompt}
+          body={body}
           creator={creator}
           actions={actions}
         />
@@ -58,6 +61,7 @@ function MediaDetailsPreviewDialog({
   alt,
   title,
   prompt,
+  body,
   creator,
   actions,
 }: Omit<MediaDetailsPreviewModalProps, 'isOpen'>) {
@@ -65,7 +69,9 @@ function MediaDetailsPreviewDialog({
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trimmedPrompt = prompt?.trim() ?? '';
+  const trimmedBody = body?.trim() ?? '';
   const hasPrompt = trimmedPrompt.length > 0;
+  const hasBody = trimmedBody.length > 0;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -117,6 +123,19 @@ function MediaDetailsPreviewDialog({
 
   const renderMedia = () => {
     if (!src) {
+      if (mediaType === 'text') {
+        return (
+          <div className="w-full max-w-2xl px-2 py-2">
+            <div className="rounded-[24px] border border-white/8 bg-zinc-950/80 p-6 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
+              <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Tip / Note</div>
+              <div className="mt-4 whitespace-pre-wrap text-base leading-8 text-zinc-100">
+                {hasBody ? trimmedBody : 'No note content available.'}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       return null;
     }
 
@@ -199,9 +218,20 @@ function MediaDetailsPreviewDialog({
           {renderMedia()}
         </div>
 
+        {mediaType !== 'text' && hasBody ? (
+          <div className="rounded-[22px] border border-white/5 bg-black/40 p-4">
+            <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Note</div>
+            <p className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
+              {trimmedBody}
+            </p>
+          </div>
+        ) : null}
+
         <div className="rounded-[22px] border border-white/5 bg-black/40 p-4">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
+            <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">
+              {mediaType === 'text' ? 'Workflow notes' : 'Prompt'}
+            </div>
             {hasPrompt ? (
               <button
                 type="button"
@@ -215,7 +245,7 @@ function MediaDetailsPreviewDialog({
             ) : null}
           </div>
           <p className="mt-3 max-h-40 overflow-y-auto pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
-            {hasPrompt ? trimmedPrompt : 'No prompt available'}
+            {hasPrompt ? trimmedPrompt : mediaType === 'text' ? 'No extra notes available' : 'No prompt available'}
           </p>
         </div>
       </motion.div>

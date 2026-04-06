@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp } from 'lucide-react';
+import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, ShoppingBag, BookText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
@@ -28,6 +28,7 @@ const CATEGORIES: Array<{
     { id: 'image', label: 'Images', icon: ImageIcon },
     { id: 'video', label: 'Videos', icon: Video },
     { id: 'motion', label: 'Motion', icon: Users },
+    { id: 'text', label: 'Text', icon: BookText },
 ];
 
 const SORTS: Array<{ id: ShowcaseSort; label: string }> = [
@@ -56,6 +57,20 @@ function primePreviewVideoFrame(video: HTMLVideoElement) {
     } catch {
         // Some browsers can reject seek requests before enough data is buffered.
     }
+}
+
+function getItemSummary(item: ShowcaseFeedItem): string {
+    if (item.body.trim()) {
+        return item.body;
+    }
+
+    if (item.prompt.trim()) {
+        return item.prompt;
+    }
+
+    return item.postFormat === 'text'
+        ? 'No note content added yet.'
+        : 'No prompt captured for this post yet.';
 }
 
 export default function ShowcaseClient({
@@ -301,10 +316,10 @@ export default function ShowcaseClient({
                 <div className="mb-12">
                     <h1 className="text-4xl sm:text-5xl font-bold mb-4 tracking-tight flex items-center gap-4">
                         <TrendingUp className="w-10 h-10 text-purple-400" />
-                        Community Showcase
+                        Community Feed
                     </h1>
                     <p className="text-zinc-400 text-lg max-w-2xl">
-                        Discover, save, and remix top-performing AI generations from the community.
+                        Discover creator posts, external uploads, and paid workflows, guides, and prompt packs behind the work.
                     </p>
                 </div>
 
@@ -387,10 +402,19 @@ export default function ShowcaseClient({
                                         onClick={() => openPreview(item)}
                                         className="relative bg-black overflow-hidden block w-full text-left"
                                     >
-                                        {item.category === 'video' || item.category === 'motion' ? (
+                                        {item.postFormat === 'text' ? (
+                                            <div className="min-h-[280px] bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.16),transparent_36%),linear-gradient(180deg,rgba(10,10,14,1),rgba(7,7,10,1))] p-6">
+                                                <div className="rounded-[1.4rem] border border-white/8 bg-zinc-950/80 p-5 shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
+                                                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Tip / Note</div>
+                                                    <p className="mt-4 line-clamp-8 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
+                                                        {getItemSummary(item)}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ) : item.mediaKind === 'video' && item.mediaUrl ? (
                                             <video
                                                 ref={(node) => registerPreviewVideo(item.id, node)}
-                                                src={item.url}
+                                                src={item.mediaUrl}
                                                 muted
                                                 loop
                                                 playsInline
@@ -410,34 +434,56 @@ export default function ShowcaseClient({
                                                     primePreviewVideoFrame(event.currentTarget);
                                                 }}
                                             />
-                                        ) : (
+                                        ) : item.mediaUrl ? (
                                             // eslint-disable-next-line @next/next/no-img-element
                                             <img
-                                                src={item.url}
+                                                src={item.mediaUrl}
                                                 alt={item.title}
                                                 className="w-full h-auto block object-cover transition-transform duration-500 group-hover:scale-105"
                                             />
+                                        ) : (
+                                            <div className="flex min-h-[280px] items-center justify-center bg-zinc-950 text-zinc-500">
+                                                <BookText className="h-10 w-10" />
+                                            </div>
                                         )}
 
                                         <div className="absolute top-3 left-3 px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-xs font-medium border border-white/10 flex items-center gap-1.5">
                                             {item.category === 'video' ? <Video className="w-3.5 h-3.5" /> :
                                                 item.category === 'motion' ? <Users className="w-3.5 h-3.5" /> :
-                                                    <ImageIcon className="w-3.5 h-3.5" />}
+                                                    item.category === 'text' ? <BookText className="w-3.5 h-3.5" /> :
+                                                        <ImageIcon className="w-3.5 h-3.5" />}
                                             <span className="capitalize">{item.category}</span>
                                         </div>
 
-                                        <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
-                                        </div>
+                                        {item.sourceKind === 'external' && item.sourceTool ? (
+                                            <div className="absolute right-3 top-3 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[11px] font-medium text-zinc-100 backdrop-blur-md">
+                                                {item.sourceTool}
+                                            </div>
+                                        ) : null}
+
+                                        {item.postFormat !== 'text' ? (
+                                            <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
+                                            </div>
+                                        ) : null}
                                     </button>
 
                                     <div className="p-4 bg-zinc-900 border-t border-zinc-800">
                                         <div className="mb-4 flex items-start justify-between gap-3">
                                             <div className="min-w-0">
                                                 <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
+                                                {item.asset ? (
+                                                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
+                                                        <ShoppingBag className="h-3.5 w-3.5" />
+                                                        {item.asset.type === 'prompt_pack' ? 'Prompt Pack' : item.asset.type === 'guide' ? 'Guide' : 'Workflow'}
+                                                    </div>
+                                                ) : null}
                                                 <div className="mt-3">
                                                     <CreatorIdentity creator={item.creator} compact />
                                                 </div>
+                                                <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-zinc-400">
+                                                    {getItemSummary(item)}
+                                                </p>
                                             </div>
                                             <span className="shrink-0 text-xs text-zinc-500">
                                                 {new Date(item.createdAt).toLocaleDateString('en-US', {
@@ -461,20 +507,22 @@ export default function ShowcaseClient({
                                                 <PublicShareButton
                                                     generationId={item.id}
                                                     title={item.title}
-                                                    description={item.prompt}
+                                                    description={item.body || item.prompt}
                                                     sourceSurface="showcase"
                                                     accessToken={session?.access_token ?? null}
                                                     className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
                                                 />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleRemix(item.id)}
-                                                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
-                                                >
-                                                    <Wand2 className="w-4 h-4" />
-                                                    Remix
-                                                    <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
-                                                </button>
+                                                {item.canRemix ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemix(item.id)}
+                                                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
+                                                    >
+                                                        <Wand2 className="w-4 h-4" />
+                                                        Remix
+                                                        <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
+                                                    </button>
+                                                ) : null}
                                             </div>
                                         </div>
                                     </div>
@@ -501,28 +549,55 @@ export default function ShowcaseClient({
             <MediaDetailsPreviewModal
                 isOpen={Boolean(selectedItem)}
                 onClose={closePreview}
-                mediaType={selectedItem && (selectedItem.category === 'video' || selectedItem.category === 'motion') ? 'video' : 'image'}
-                src={selectedItem?.url ?? null}
+                mediaType={
+                    selectedItem
+                        ? selectedItem.postFormat === 'text'
+                            ? 'text'
+                            : selectedItem.mediaKind === 'video'
+                                ? 'video'
+                                : 'image'
+                        : 'image'
+                }
+                src={selectedItem?.mediaUrl ?? null}
                 alt={selectedItem?.title ?? 'Selected showcase item'}
                 title={selectedItem?.title ?? 'Showcase preview'}
                 prompt={selectedItem?.prompt ?? ''}
+                body={selectedItem?.body ?? ''}
                 creator={selectedItem?.creator}
                 actions={selectedItem ? (
                     <>
                         <PublicShareButton
                             generationId={selectedItem.id}
                             title={selectedItem.title}
-                            description={selectedItem.prompt}
+                            description={selectedItem.body || selectedItem.prompt}
                             sourceSurface="showcase"
                             accessToken={session?.access_token ?? null}
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
                         />
+                        {selectedItem.asset ? (
+                            <Link
+                                href={`/marketplace/${selectedItem.asset.id}`}
+                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+                            >
+                                View resource
+                            </Link>
+                        ) : null}
                         <Link
                             href={buildShowcaseDetailPath(selectedItem.id)}
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
                         >
                             Open page
                         </Link>
+                        {selectedItem.canRemix ? (
+                            <button
+                                type="button"
+                                onClick={() => handleRemix(selectedItem.id)}
+                                className="inline-flex items-center gap-2 rounded-full bg-purple-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-purple-500"
+                            >
+                                <Wand2 className="h-4 w-4" />
+                                Remix
+                            </button>
+                        ) : null}
                     </>
                 ) : null}
             />

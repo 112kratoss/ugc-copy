@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Heart, Wand2 } from 'lucide-react';
+import { Heart, ShoppingBag, Wand2 } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { HoverVideo } from '@/app/components/HoverVideo';
@@ -145,21 +145,31 @@ export default function HomeShowcasePreviewGrid({
             onClick={() => setSelectedItemId(item.id)}
             className="group relative block w-full break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215] text-left"
           >
-            {item.category === 'video' || item.category === 'motion' ? (
+            {item.mediaKind === 'video' && item.mediaUrl ? (
               <HoverVideo
-                src={item.url}
+                src={item.mediaUrl}
                 className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
               />
-            ) : (
+            ) : item.mediaUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={item.url}
+                src={item.mediaUrl}
                 alt={item.title}
                 className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
               />
+            ) : (
+              <div className="flex min-h-[280px] items-center justify-center bg-zinc-950 text-zinc-500">
+                No media preview
+              </div>
             )}
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
               <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
+              {item.asset ? (
+                <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
+                  <ShoppingBag className="h-3.5 w-3.5" />
+                  {item.asset.type === 'prompt_pack' ? 'Prompt Pack' : item.asset.type === 'guide' ? 'Guide' : 'Workflow'}
+                </div>
+              ) : null}
             </div>
           </button>
         ))}
@@ -168,11 +178,12 @@ export default function HomeShowcasePreviewGrid({
       <MediaDetailsPreviewModal
         isOpen={Boolean(selectedItem)}
         onClose={() => setSelectedItemId(null)}
-        mediaType={selectedItem && (selectedItem.category === 'video' || selectedItem.category === 'motion') ? 'video' : 'image'}
-        src={selectedItem?.url ?? null}
+        mediaType={selectedItem?.mediaKind === 'video' ? 'video' : 'image'}
+        src={selectedItem?.mediaUrl ?? null}
         alt={selectedItem?.title ?? 'Selected creation preview'}
         title={selectedItem?.title ?? 'Creation preview'}
         prompt={selectedItem?.prompt ?? ''}
+        body={selectedItem?.body ?? ''}
         creator={selectedItem?.creator}
         actions={selectedItem ? (
           <>
@@ -192,26 +203,36 @@ export default function HomeShowcasePreviewGrid({
             <PublicShareButton
               generationId={selectedItem.id}
               title={selectedItem.title}
-              description={selectedItem.prompt}
+              description={selectedItem.body || selectedItem.prompt}
               sourceSurface="showcase"
               accessToken={session?.access_token ?? null}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
             />
-            <button
-              type="button"
-              onClick={() => void handleRemix(selectedItem.id)}
-              aria-label={`Remix ${selectedItem.title}. ${selectedItem.remixCount} remixes`}
-              className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-purple-500 hover:to-fuchsia-400"
-            >
-              <Wand2 aria-hidden="true" className="h-4 w-4" />
-              <span aria-hidden="true">Remix</span>
-              <span
-                aria-hidden="true"
-                className="rounded-full bg-black/20 px-2 py-0.5 text-xs font-bold"
+            {selectedItem.asset ? (
+              <Link
+                href={`/marketplace/${selectedItem.asset.id}`}
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
               >
-                {selectedItem.remixCount}
-              </span>
-            </button>
+                View resource
+              </Link>
+            ) : null}
+            {selectedItem.canRemix ? (
+              <button
+                type="button"
+                onClick={() => void handleRemix(selectedItem.id)}
+                aria-label={`Remix ${selectedItem.title}. ${selectedItem.remixCount} remixes`}
+                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-purple-500 hover:to-fuchsia-400"
+              >
+                <Wand2 aria-hidden="true" className="h-4 w-4" />
+                <span aria-hidden="true">Remix</span>
+                <span
+                  aria-hidden="true"
+                  className="rounded-full bg-black/20 px-2 py-0.5 text-xs font-bold"
+                >
+                  {selectedItem.remixCount}
+                </span>
+              </button>
+            ) : null}
             <Link
               href={buildShowcaseDetailPath(selectedItem.id)}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"

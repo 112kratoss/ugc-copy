@@ -41,9 +41,9 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
     return createMetadata({
         title: 'Showcase',
         description:
-            'Browse public UGC copy creations, saved community work, and production-ready examples of AI images, videos, and motion-transfer ads.',
+            'Browse public UGC copy creations, creator notes, and production-ready examples of AI images, videos, motion-transfer ads, and reusable workflows.',
         path: '/showcase',
-        keywords: ['AI showcase', 'UGC ad examples', 'AI image examples', 'AI video examples'],
+        keywords: ['AI showcase', 'UGC ad examples', 'AI image examples', 'AI video examples', 'creator tips'],
         noIndex: hasNonDefaultVariant,
     });
 }

@@ -1,9 +1,14 @@
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import { isAudioModel } from '@/lib/models';
+import {
+    isMissingMarketplaceSchemaError,
+    isMissingPostsSchemaError,
+} from '@/lib/posts-server';
 import { createServiceClient, createUserClient, getStoredMediaLocation } from '@/lib/server-helpers';
+import type { ShowcaseItemCategory } from '@/lib/showcase';
 
-type ShowcaseCategory = 'image' | 'video' | 'motion' | 'ugc-ad';
+type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 
@@ -14,6 +19,10 @@ function detectCategoryFromModel(model: string): ShowcaseCategory {
     return 'image';
 }
 
+function isPublishableShowcaseCategory(value: string | null | undefined): value is ShowcaseCategory {
+    return value === 'image' || value === 'video' || value === 'motion' || value === 'ugc-ad';
+}
+
 function inferExtension(sourceName: string, category: ShowcaseCategory): string {
     const candidate = sourceName.split('.').pop();
     if (candidate && candidate.length <= 5) {
@@ -22,6 +31,93 @@ function inferExtension(sourceName: string, category: ShowcaseCategory): string 
 
     if (category === 'image') return 'jpg';
     return 'mp4';
+}
+
+function normalizeTextValue(value: unknown): string | null {
+    return typeof value === 'string' ? value.trim() : null;
+}
+
+async function upsertPublishedPost(params: {
+    supabase: ReturnType<typeof createUserClient>;
+    generation: {
+        id: string;
+        user_id: string;
+        output_url: string | null;
+        title?: string | null;
+        description?: string | null;
+        prompt?: string | null;
+    };
+    visibility: 'public' | 'private';
+    category: ShowcaseCategory;
+    showcaseAssetPath: string | null;
+    title?: unknown;
+    description?: unknown;
+    prompt?: unknown;
+}) {
+    const {
+        supabase,
+        generation,
+        visibility,
+        category,
+        showcaseAssetPath,
+        title,
+        description,
+        prompt,
+    } = params;
+
+    const payload = {
+        user_id: generation.user_id,
+        visibility,
+        category,
+        title: normalizeTextValue(title) ?? generation.title?.trim() ?? null,
+        description: normalizeTextValue(description) ?? generation.description?.trim() ?? null,
+        prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null,
+        body: null,
+        post_format: 'media' as const,
+        source_kind: 'ugc_copy' as const,
+        source_tool: null,
+        generation_id: generation.id,
+        showcase_asset_path: showcaseAssetPath,
+        output_url: generation.output_url,
+    };
+
+    const { data, error } = await supabase
+        .from('posts')
+        .upsert(payload, {
+            onConflict: 'generation_id',
+        })
+        .select('id')
+        .single();
+
+    if (error || !data?.id) {
+        throw new Error(`Failed to sync post visibility: ${error?.message ?? 'Unknown error'}`);
+    }
+
+    return data.id as string;
+}
+
+async function downgradeAttachedListingToUnlisted(params: {
+    supabase: ReturnType<typeof createUserClient>;
+    postId: string | null;
+    sellerUserId: string;
+}) {
+    const { supabase, postId, sellerUserId } = params;
+    if (!postId) {
+        return;
+    }
+
+    const { error } = await supabase
+        .from('marketplace_assets')
+        .update({
+            status: 'unlisted',
+        })
+        .eq('post_id', postId)
+        .eq('seller_user_id', sellerUserId)
+        .eq('status', 'active');
+
+    if (error && !isMissingMarketplaceSchemaError(error)) {
+        throw error;
+    }
 }
 
 async function createShowcaseDerivative(
@@ -98,7 +194,7 @@ export async function POST(request: NextRequest) {
 
         let generationQuery = await supabase
             .from('generations')
-            .select('id, user_id, status, model, category, output_url, showcase_asset_path')
+            .select('id, user_id, status, model, category, output_url, showcase_asset_path, title, description, prompt')
             .eq('id', generationId)
             .single();
 
@@ -107,7 +203,7 @@ export async function POST(request: NextRequest) {
             hasShowcaseAssetColumn = false;
             generationQuery = await supabase
                 .from('generations')
-                .select('id, user_id, status, model, category, output_url')
+                .select('id, user_id, status, model, category, output_url, title, description, prompt')
                 .eq('id', generationId)
                 .single();
         }
@@ -130,12 +226,18 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
         }
 
-        let detectedCategory: ShowcaseCategory | undefined = category ?? generation.category ?? undefined;
+        let detectedCategory: ShowcaseCategory | undefined = isPublishableShowcaseCategory(category)
+            ? category
+            : isPublishableShowcaseCategory(generation.category)
+                ? generation.category
+                : undefined;
         if (!detectedCategory && isPublic) {
             detectedCategory = detectCategoryFromModel(generation.model);
         }
 
         const updatePayload: { is_public: boolean; [key: string]: unknown } = { is_public: isPublic };
+
+        let nextShowcaseAssetPath = hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null;
 
         if (isPublic) {
             if (!generation.output_url) {
@@ -143,11 +245,12 @@ export async function POST(request: NextRequest) {
             }
 
             if (hasShowcaseAssetColumn) {
-                updatePayload.showcase_asset_path = await createShowcaseDerivative(
+                nextShowcaseAssetPath = await createShowcaseDerivative(
                     generationId,
                     generation.output_url,
                     detectedCategory ?? 'image'
                 );
+                updatePayload.showcase_asset_path = nextShowcaseAssetPath;
             }
 
             if (title !== undefined) updatePayload.title = title;
@@ -157,6 +260,7 @@ export async function POST(request: NextRequest) {
             if (workflowSettings !== undefined) updatePayload.workflow_settings = workflowSettings;
         } else if (hasShowcaseAssetColumn) {
             updatePayload.showcase_asset_path = null;
+            nextShowcaseAssetPath = null;
         }
 
         const { error: updateError } = await supabase
@@ -167,6 +271,40 @@ export async function POST(request: NextRequest) {
         if (updateError) {
             console.error('Error updating generation visibility:', updateError);
             return NextResponse.json({ error: 'Failed to update visibility' }, { status: 500 });
+        }
+
+        let postId: string | null = null;
+        try {
+            postId = await upsertPublishedPost({
+                supabase,
+                generation,
+                visibility: isPublic ? 'public' : 'private',
+                category: detectedCategory ?? 'image',
+                showcaseAssetPath: nextShowcaseAssetPath,
+                title,
+                description,
+                prompt,
+            });
+        } catch (postError) {
+            if (isMissingPostsSchemaError(postError)) {
+                postId = null;
+            } else {
+                console.error('Failed to sync generation post:', postError);
+                return NextResponse.json({ error: 'Failed to sync showcase post' }, { status: 500 });
+            }
+        }
+
+        if (!isPublic) {
+            try {
+                await downgradeAttachedListingToUnlisted({
+                    supabase,
+                    postId,
+                    sellerUserId: user.id,
+                });
+            } catch (listingError) {
+                console.error('Failed to downgrade attached marketplace listing:', listingError);
+                return NextResponse.json({ error: 'Failed to update attached marketplace listing' }, { status: 500 });
+            }
         }
 
         if (!isPublic && hasShowcaseAssetColumn && generation.showcase_asset_path) {
@@ -181,6 +319,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             success: true,
             isPublic,
+            postId,
             message: isPublic ? 'Successfully published to showcase' : 'Successfully removed from showcase',
         });
     } catch (error) {

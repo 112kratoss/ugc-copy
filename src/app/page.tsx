@@ -32,11 +32,11 @@ function VisualPreview({
   alt,
   className,
 }: {
-  item: { category: string; title: string; url: string } | null | undefined;
+  item: { category: string; title: string; mediaUrl: string | null; mediaKind: string | null } | null | undefined;
   alt: string;
   className: string;
 }) {
-  if (!item) {
+  if (!item || !item.mediaUrl) {
     return (
       <div
         className={`h-full w-full bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] ${className}`}
@@ -44,12 +44,12 @@ function VisualPreview({
     );
   }
 
-  if (item.category === 'video' || item.category === 'motion') {
-    return <HoverVideo src={item.url} className={className} />;
+  if (item.mediaKind === 'video') {
+    return <HoverVideo src={item.mediaUrl} className={className} />;
   }
 
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={item.url} alt={alt || item.title} className={className} />;
+  return <img src={item.mediaUrl} alt={alt || item.title} className={className} />;
 }
 
 const LATEST_MODELS = [
@@ -88,10 +88,11 @@ export default async function Home() {
     limit: 12,
     viewerUserId: auth.session?.user?.id ?? null,
   });
+  const mediaFeedItems = showcaseFeed.items.filter((item) => item.mediaUrl);
 
-  const imagePreview = showcaseFeed.items.find((item) => item.category === 'image');
-  const videoPreview = showcaseFeed.items.find((item) => item.category === 'video');
-  const motionPreview = showcaseFeed.items.find((item) => item.category === 'motion');
+  const imagePreview = mediaFeedItems.find((item) => item.category === 'image');
+  const videoPreview = mediaFeedItems.find((item) => item.category === 'video');
+  const motionPreview = mediaFeedItems.find((item) => item.category === 'motion');
 
   const previewByTool = {
     image: imagePreview,
@@ -238,7 +239,7 @@ export default async function Home() {
             initialCredits={auth.credits}
             hasResolvedInitialState
           >
-            <HomeShowcasePreviewGrid items={showcaseFeed.items} />
+                <HomeShowcasePreviewGrid items={mediaFeedItems} />
           </AuthProvider>
         </section>
       </main>
