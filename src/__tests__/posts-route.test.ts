@@ -5,6 +5,7 @@ const getUserMock = vi.fn();
 const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const insertPayloads: Array<Record<string, unknown>> = [];
+let bundleUpsertError: { code?: string; message?: string } | null = null;
 
 function createRouteRequest(formData: FormData) {
   return {
@@ -20,26 +21,63 @@ vi.mock('@/lib/server-helpers', () => ({
     auth: {
       getUser: () => getUserMock(),
     },
-    from: () => ({
-      insert(payload: Record<string, unknown>) {
-        insertPayloads.push(payload);
+    from: (table: string) => {
+      if (table === 'posts') {
         return {
-          select() {
+          insert(payload: Record<string, unknown>) {
+            insertPayloads.push(payload);
             return {
-              async single() {
+              select() {
                 return {
-                  data: {
-                    id: payload.id,
-                    visibility: payload.visibility,
+                  async single() {
+                    return {
+                      data: {
+                        id: payload.id,
+                        visibility: payload.visibility,
+                      },
+                      error: null,
+                    };
                   },
-                  error: null,
                 };
               },
             };
           },
         };
-      },
-    }),
+      }
+
+      if (table === 'post_resource_bundles') {
+        const query = {
+          eq() {
+            return query;
+          },
+          then(resolve: (value: { error: null }) => void) {
+            resolve({ error: null });
+          },
+        };
+
+        return {
+          delete() {
+            return query;
+          },
+          upsert() {
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: bundleUpsertError ? null : { id: 'bundle-1', post_id: 'post-1', status: 'published' },
+                      error: bundleUpsertError,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      throw new Error(`Unexpected table access: ${table}`);
+    },
   }),
   createServiceClient: () => ({
     storage: {
@@ -65,6 +103,7 @@ describe('/api/posts route', () => {
     removeMock.mockReset();
     removeMock.mockResolvedValue({ error: null });
     insertPayloads.length = 0;
+    bundleUpsertError = null;
   });
 
   it('creates text-only posts without uploading media', async () => {
@@ -95,6 +134,7 @@ describe('/api/posts route', () => {
       title: 'Three hook ideas that keep working.',
     });
     expect(payload.success).toBe(true);
+    expect(payload.resourceBundlePath).toBe(`/showcase/${payload.postId}#resources`);
   });
 
   it('creates mixed posts with media and note content', async () => {
@@ -146,5 +186,37 @@ describe('/api/posts route', () => {
     expect(response.status).toBe(400);
     expect(payload.error).toMatch(/limited to 2000 characters/i);
     expect(insertPayloads).toHaveLength(0);
+  });
+
+  it('surfaces a clear migration error when post resource bundles are not enabled yet', async () => {
+    bundleUpsertError = {
+      code: 'PGRST205',
+      message: "Could not find the table 'public.post_resource_bundles' in the schema cache",
+    };
+
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'Hook first, then show the product payoff.');
+    formData.set('visibility', 'public');
+    formData.set(
+      'resourceBundle',
+      JSON.stringify({
+        accessMode: 'paid',
+        priceUsdCents: 200,
+        resources: {
+          promptText: 'Hook first, then show the product payoff.',
+          attachments: [],
+          allowRemix: false,
+        },
+      })
+    );
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toMatch(/resource bundles are not enabled/i);
+    expect(payload.error).toMatch(/20260406200000_post_resource_bundles\.sql/i);
   });
 });

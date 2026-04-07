@@ -1,11 +1,14 @@
 import 'server-only';
 
 import { getCreatorDisplayName } from '@/lib/profile';
+import {
+  getPostResourceBundleDetailByPostId,
+  type PostResourceBundleDetail,
+} from '@/lib/post-resource-bundles-server';
 import { getPublicGenerationDetail } from '@/lib/public-generations';
 import {
   canRemixPost,
   deriveTitleFromBody,
-  getMarketplaceAssetSummaryMap,
   getPostMediaKind,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
@@ -16,7 +19,6 @@ import {
 } from '@/lib/posts-server';
 import { createServiceClient } from '@/lib/server-helpers';
 import type {
-  ShowcaseAssetSummary,
   ShowcaseCreator,
   ShowcaseItemCategory,
   ShowcaseMediaKind,
@@ -74,7 +76,7 @@ export interface PublicPostDetail {
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
   creator: ShowcaseCreator;
-  asset: ShowcaseAssetSummary | null;
+  resourceBundle: PostResourceBundleDetail | null;
   canRemix: boolean;
 }
 
@@ -176,8 +178,16 @@ export async function getPostReferenceForShowcaseId(
   }
 }
 
-export async function getPublicPostDetail(id: string): Promise<PublicPostDetail | null> {
+export async function getPublicPostDetail(
+  id: string,
+  options?: {
+    viewerUserId?: string | null;
+    countryCode?: string | null;
+  }
+): Promise<PublicPostDetail | null> {
   const adminSupabase = createServiceClient();
+  const viewerUserId = options?.viewerUserId ?? null;
+  const countryCode = options?.countryCode ?? null;
   let row: PublicPostRow | null = null;
 
   try {
@@ -213,7 +223,7 @@ export async function getPublicPostDetail(id: string): Promise<PublicPostDetail 
       sourceKind: 'ugc_copy',
       sourceTool: null,
       creator: generation.creator,
-      asset: null,
+      resourceBundle: null,
       canRemix: true,
     };
   }
@@ -258,7 +268,10 @@ export async function getPublicPostDetail(id: string): Promise<PublicPostDetail 
     }
   }
 
-  const asset = (await getMarketplaceAssetSummaryMap([row.id], adminSupabase)).get(row.id) ?? null;
+  const resourceBundle = await getPostResourceBundleDetailByPostId(row.id, {
+    viewerUserId,
+    countryCode,
+  });
   let model =
     row.source_kind === 'manual'
       ? 'manual'
@@ -278,7 +291,7 @@ export async function getPublicPostDetail(id: string): Promise<PublicPostDetail 
     }
   }
 
-  const prompt = row.prompt?.trim() || '';
+  const prompt = resourceBundle ? '' : row.prompt?.trim() || '';
   const body = row.body?.trim() || '';
   const title =
     row.title?.trim() ||
@@ -307,8 +320,8 @@ export async function getPublicPostDetail(id: string): Promise<PublicPostDetail 
     sourceKind: row.source_kind,
     sourceTool: row.source_tool,
     creator,
-    asset,
-    canRemix: canRemixPost(row.generation_id),
+    resourceBundle,
+    canRemix: canRemixPost(row.generation_id) && (!resourceBundle?.allowRemix || resourceBundle.viewerCanAccess),
   };
 }
 
@@ -316,6 +329,8 @@ export function getPublicPostMetaDescription(detail: PublicPostDetail): string {
   return (
     detail.description ||
     summarizeBody(detail.body) ||
+    detail.resourceBundle?.summary ||
+    detail.resourceBundle?.previewText ||
     detail.prompt ||
     `Explore ${detail.title} on UGC copy.`
   );

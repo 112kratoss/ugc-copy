@@ -5,7 +5,6 @@ import { notFound, redirect } from 'next/navigation';
 import { ArrowLeft, BarChart3, Eye, Heart, Share2, Wand2 } from 'lucide-react';
 
 import CreatorIdentity from '@/app/components/CreatorIdentity';
-import { formatUsdCents, getMarketplaceAssetTypeLabel } from '@/lib/marketplace';
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import {
   getPostReferenceForShowcaseId,
@@ -14,6 +13,8 @@ import {
 } from '@/lib/public-posts';
 import { createMetadata } from '@/lib/seo';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import { getServerAuthState } from '@/lib/supabase-server';
+import PostResourceBundlePanel from './PostResourceBundlePanel';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
 
 type ShowcaseDetailPageProps = {
@@ -69,13 +70,17 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
     redirect(buildShowcaseDetailPath(reference.id));
   }
 
-  const detail = await getPublicPostDetail(reference.id);
+  const auth = await getServerAuthState();
+  const headerStore = await headers();
+  const detail = await getPublicPostDetail(reference.id, {
+    viewerUserId: auth.session?.user?.id ?? null,
+    countryCode: headerStore.get('x-vercel-ip-country'),
+  });
 
   if (!detail) {
     notFound();
   }
 
-  const headerStore = await headers();
   if (detail.visibility === 'public' && shouldTrackShareVisit(headerStore)) {
     await recordPostShareEvent({
       postId: detail.id,
@@ -206,36 +211,40 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
               </div>
             ) : null}
 
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
-              </div>
-              <p className="mt-3 max-h-64 overflow-y-auto pr-2 text-sm leading-7 text-zinc-300 custom-scrollbar">
-                {detail.prompt || (detail.postFormat === 'text' ? 'No extra notes attached to this post yet.' : 'No prompt available for this creation.')}
-              </p>
-            </div>
-
-            {detail.asset ? (
-              <div className="rounded-[30px] border border-emerald-500/15 bg-emerald-500/5 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Attached resource</div>
-                <div className="mt-3 flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">{detail.asset.title}</h2>
-                    <p className="mt-2 text-sm text-zinc-300">
-                      Unlock this {getMarketplaceAssetTypeLabel(detail.asset.type).toLowerCase()} from the marketplace.
-                    </p>
-                    <div className="mt-3 inline-flex rounded-full border border-emerald-400/20 bg-black/30 px-3 py-1 text-sm font-semibold text-emerald-50">
-                      {formatUsdCents(detail.asset.priceUsdCents)}
-                    </div>
-                  </div>
-                  <Link
-                    href={`/marketplace/${detail.asset.id}`}
-                    className="inline-flex shrink-0 items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
-                  >
-                    View listing
-                  </Link>
+            {detail.prompt ? (
+              <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                  {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
                 </div>
+                <p className="mt-3 max-h-64 overflow-y-auto pr-2 text-sm leading-7 text-zinc-300 custom-scrollbar">
+                  {detail.prompt}
+                </p>
               </div>
+            ) : null}
+
+            {detail.resourceBundle ? (
+              <PostResourceBundlePanel
+                postId={detail.id}
+                title={detail.resourceBundle.title}
+                summary={detail.resourceBundle.summary}
+                previewText={detail.resourceBundle.previewText}
+                priceLabel={detail.resourceBundle.priceQuote.formatted}
+                priceNote={detail.resourceBundle.priceQuote.note}
+                isFree={detail.resourceBundle.accessMode === 'free'}
+                viewerCanAccess={detail.resourceBundle.viewerCanAccess}
+                viewerIsOwner={detail.resourceBundle.viewerIsOwner}
+                resourceKinds={detail.resourceBundle.resourceKinds}
+                salesCount={detail.resourceBundle.salesCount}
+                initialResources={detail.resourceBundle.resources
+                  ? {
+                      promptText: detail.resourceBundle.resources.promptText,
+                      notesMarkdown: detail.resourceBundle.resources.notesMarkdown,
+                      workflowShareUrl: detail.resourceBundle.resources.workflowShareUrl,
+                      attachments: detail.resourceBundle.resources.attachments,
+                      allowRemix: detail.resourceBundle.resources.allowRemix,
+                    }
+                  : null}
+              />
             ) : null}
           </aside>
         </div>

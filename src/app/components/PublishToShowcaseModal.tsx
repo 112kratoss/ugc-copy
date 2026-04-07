@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Globe, Loader2, Share2, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowRight, Globe, Loader2, Share2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 import { sharePublicGeneration } from '@/lib/share-client';
@@ -31,6 +32,7 @@ export default function PublishToShowcaseModal({
   shareAfterPublish,
   onPublished,
 }: PublishToShowcaseModalProps) {
+  const router = useRouter();
   const [publishTitle, setPublishTitle] = useState(defaultTitle);
   const [publishDescription, setPublishDescription] = useState(defaultDescription);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -50,9 +52,9 @@ export default function PublishToShowcaseModal({
     return null;
   }
 
-  const buttonLabel = shareAfterPublish ? 'Publish & share' : 'Publish now';
+  const buttonLabel = shareAfterPublish ? 'Publish & share' : 'Publish public post now';
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleQuickPublish = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isPublishing) {
       return;
@@ -116,6 +118,11 @@ export default function PublishToShowcaseModal({
     }
   };
 
+  const handleRouteToComposer = () => {
+    onClose();
+    router.push(`/post/new?generationId=${encodeURIComponent(generationId)}`);
+  };
+
   return (
     <AnimatePresence>
       <motion.div
@@ -130,12 +137,12 @@ export default function PublishToShowcaseModal({
           animate={{ scale: 1, y: 0 }}
           exit={{ scale: 0.95, y: 20 }}
           onClick={(event) => event.stopPropagation()}
-          className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
+          className="w-full max-w-lg rounded-[30px] border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
         >
           <div className="mb-6 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 text-xl font-bold">
-              {shareAfterPublish ? <Share2 className="h-5 w-5 text-purple-400" /> : <Globe className="h-5 w-5 text-purple-400" />}
-              {shareAfterPublish ? 'Publish & share' : 'Publish to showcase'}
+            <h3 className="flex items-center gap-2 text-xl font-bold text-white">
+              {shareAfterPublish ? <Share2 className="h-5 w-5 text-emerald-300" /> : <Globe className="h-5 w-5 text-emerald-300" />}
+              {shareAfterPublish ? 'Publish & share' : 'Publish this creation'}
             </h3>
             <button
               type="button"
@@ -146,11 +153,11 @@ export default function PublishToShowcaseModal({
             </button>
           </div>
 
-          <p className="mb-6 text-sm text-zinc-400">
-            Publish this creation so it gets a public UGC copy page you can share as a link.
+          <p className="text-sm leading-7 text-zinc-400">
+            Keep this step lightweight. Publish the proof right away, or jump into the full post composer if you want to attach free or paid resources.
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleQuickPublish} className="mt-6 space-y-4">
             <div>
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-zinc-400">Title (Optional)</label>
               <input
@@ -158,7 +165,7 @@ export default function PublishToShowcaseModal({
                 value={publishTitle}
                 onChange={(event) => setPublishTitle(event.target.value)}
                 placeholder="Give your creation a name"
-                className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-white transition-colors focus:border-purple-500 focus:outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-white transition-colors focus:border-emerald-500 focus:outline-none"
                 maxLength={60}
               />
             </div>
@@ -168,34 +175,42 @@ export default function PublishToShowcaseModal({
               <textarea
                 value={publishDescription}
                 onChange={(event) => setPublishDescription(event.target.value)}
-                placeholder="Share the story behind this creation."
+                placeholder="Add a short line about what people are looking at."
                 rows={3}
-                className="w-full resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-white transition-colors focus:border-purple-500 focus:outline-none"
+                className="w-full resize-none rounded-2xl border border-white/10 bg-black px-4 py-3 text-white transition-colors focus:border-emerald-500 focus:outline-none"
                 maxLength={200}
               />
             </div>
 
-            {formError ? (
-              <p className="text-sm text-rose-300">{formError}</p>
-            ) : null}
-
-            <div className="flex gap-3 pt-4">
+            <div className="rounded-[24px] border border-white/10 bg-black/35 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Add resources later</div>
+              <p className="mt-2 text-sm leading-6 text-zinc-300">
+                If you want to unlock the prompt, workflow, files, notes, or remix access, continue in the full post composer. The generation will already be attached there.
+              </p>
               <button
                 type="button"
-                onClick={onClose}
-                className="flex-1 rounded-xl bg-zinc-800 py-3 font-medium text-white transition-colors hover:bg-zinc-700"
+                onClick={handleRouteToComposer}
+                className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
               >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isPublishing}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 py-3 font-medium text-white transition-all hover:from-purple-500 hover:to-pink-500 disabled:opacity-50"
-              >
-                {isPublishing ? <Loader2 className="h-5 w-5 animate-spin" /> : shareAfterPublish ? <Share2 className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
-                {isPublishing ? 'Publishing...' : buttonLabel}
+                Add free or paid resources
+                <ArrowRight className="h-4 w-4" />
               </button>
             </div>
+
+            {formError ? (
+              <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                {formError}
+              </div>
+            ) : null}
+
+            <button
+              type="submit"
+              disabled={isPublishing}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+              {buttonLabel}
+            </button>
           </form>
         </motion.div>
       </motion.div>

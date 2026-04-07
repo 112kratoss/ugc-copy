@@ -34,9 +34,22 @@ vi.mock('@/lib/post-share-events', () => ({
   recordPostShareEvent: (payload: unknown) => recordPostShareEventMock(payload),
 }));
 
+vi.mock('@/lib/supabase-server', () => ({
+  getServerAuthState: vi.fn(async () => ({
+    session: null,
+    credits: null,
+  })),
+}));
+
 vi.mock('@/app/showcase/[id]/ShowcaseDetailActions', () => ({
   default: ({ postId, canRemix }: { postId: string; canRemix: boolean }) => (
     <div data-testid="showcase-detail-actions">{`${postId}:${canRemix}`}</div>
+  ),
+}));
+
+vi.mock('@/app/showcase/[id]/PostResourceBundlePanel', () => ({
+  default: ({ postId }: { postId: string }) => (
+    <div data-testid="post-resource-bundle-panel">{postId}</div>
   ),
 }));
 
@@ -77,7 +90,7 @@ describe('Showcase detail page', () => {
         name: 'Creator Name',
         avatar: null,
       },
-      asset: null,
+      resourceBundle: null,
       canRemix: true,
     });
   });
@@ -177,7 +190,7 @@ describe('Showcase detail page', () => {
         name: 'Creator Name',
         avatar: null,
       },
-      asset: null,
+      resourceBundle: null,
       canRemix: false,
     });
 

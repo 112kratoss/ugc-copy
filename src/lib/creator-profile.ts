@@ -293,6 +293,7 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
         return null;
       }
 
+      const asset = assetMap.get(post.id) ?? null;
       const body = post.body?.trim() || '';
       const model = post.generation_id
         ? modelMap.get(post.generation_id) ?? 'ugc_copy'
@@ -325,8 +326,8 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
         sourceKind: post.source_kind,
         sourceTool: post.source_tool,
         generationId: post.generation_id,
-        asset: assetMap.get(post.id) ?? null,
-        canRemix: canRemixPost(post.generation_id),
+        asset,
+        canRemix: canRemixPost(post.generation_id) && !asset?.allowRemix,
       };
     })
   );

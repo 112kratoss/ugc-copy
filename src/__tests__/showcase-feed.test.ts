@@ -31,19 +31,21 @@ type GenerationModelRow = {
   model: string;
 };
 
-type MarketplaceAssetRow = {
+type ResourceBundleRow = {
   id: string;
   post_id: string;
-  type: 'workflow' | 'prompt_pack' | 'guide';
   title: string;
+  access_mode: 'free' | 'paid';
   price_usd_cents: number;
-  status: 'active' | 'unlisted' | 'draft';
+  preview_text: string;
+  allow_remix: boolean;
+  status: 'published' | 'draft';
 };
 
 let profilesState: ProfileRow[] = [];
 let postsState: PostRow[] = [];
 let generationModelsState: GenerationModelRow[] = [];
-let marketplaceAssetsState: MarketplaceAssetRow[] = [];
+let resourceBundlesState: ResourceBundleRow[] = [];
 
 function compareValues(left: string | number | null | undefined, right: string | number | null | undefined) {
   if (left === right) {
@@ -147,7 +149,7 @@ function createServiceClientMock() {
         };
       }
 
-      if (table === 'marketplace_assets') {
+      if (table === 'post_resource_bundles' || table === 'marketplace_assets') {
         let postIds: unknown[] = [];
         let status: unknown = null;
 
@@ -167,9 +169,9 @@ function createServiceClientMock() {
             }
             return query;
           },
-          then(resolve: (value: { data: MarketplaceAssetRow[]; error: null }) => void) {
+          then(resolve: (value: { data: ResourceBundleRow[]; error: null }) => void) {
             resolve({
-              data: marketplaceAssetsState.filter(
+              data: resourceBundlesState.filter(
                 (row) => postIds.includes(row.post_id) && (status === null || row.status === status)
               ),
               error: null,
@@ -227,14 +229,16 @@ describe('showcase feed', () => {
         model: 'nano-banana-2',
       },
     ];
-    marketplaceAssetsState = [
+    resourceBundlesState = [
       {
         id: 'asset-1',
         post_id: 'post-1',
-        type: 'workflow',
         title: 'Hero workflow',
+        access_mode: 'paid',
         price_usd_cents: 1900,
-        status: 'active',
+        preview_text: 'Unlock the exact prompt stack.',
+        allow_remix: true,
+        status: 'published',
       },
     ];
   });
@@ -260,12 +264,15 @@ describe('showcase feed', () => {
     expect(page.items[0].generationId).toBe('gen-1');
     expect(page.items[0].mediaUrl).toBe('https://proxy.example.com/generated_images/user-1/example.jpg');
     expect(page.items[0].postFormat).toBe('media');
-    expect(page.items[0].canRemix).toBe(true);
+    expect(page.items[0].canRemix).toBe(false);
     expect(page.items[0].asset).toEqual({
       id: 'asset-1',
-      type: 'workflow',
+      postId: 'post-1',
       title: 'Hero workflow',
+      accessMode: 'paid',
       priceUsdCents: 1900,
+      previewText: 'Unlock the exact prompt stack.',
+      allowRemix: true,
     });
   });
 
@@ -309,7 +316,7 @@ describe('showcase feed', () => {
       },
     ];
     generationModelsState = [];
-    marketplaceAssetsState = [];
+    resourceBundlesState = [];
 
     const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
     const page = await getShowcaseFeedPage({

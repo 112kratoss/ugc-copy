@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-type MarketplaceAssetRow = {
+type ResourceBundleRow = {
   id: string;
   post_id: string;
-  type: 'workflow' | 'prompt_pack' | 'guide';
   title: string;
+  access_mode: 'free' | 'paid';
   price_usd_cents: number;
-  status: 'active' | 'unlisted' | 'draft';
+  preview_text: string;
+  allow_remix: boolean;
+  status: 'published' | 'draft';
 };
 
-let marketplaceAssetsState: MarketplaceAssetRow[] = [];
+let resourceBundlesState: ResourceBundleRow[] = [];
 
 function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
   const filters: Array<(row: T) => boolean> = [];
@@ -43,11 +45,11 @@ function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
     from(table: string) {
-      if (table !== 'marketplace_assets') {
+      if (table !== 'post_resource_bundles' && table !== 'marketplace_assets') {
         throw new Error(`Unexpected table access: ${table}`);
       }
 
-      return createThenableQuery(marketplaceAssetsState);
+      return createThenableQuery(resourceBundlesState);
     },
   }),
   resolveStoredMediaUrl: vi.fn(),
@@ -56,22 +58,26 @@ vi.mock('@/lib/server-helpers', () => ({
 describe('posts-server marketplace summaries', () => {
   beforeEach(() => {
     vi.resetModules();
-    marketplaceAssetsState = [
+    resourceBundlesState = [
       {
         id: 'asset-active',
         post_id: 'post-1',
-        type: 'workflow',
         title: 'Public workflow',
+        access_mode: 'paid',
         price_usd_cents: 1900,
-        status: 'active',
+        preview_text: 'Reusable launch workflow',
+        allow_remix: true,
+        status: 'published',
       },
       {
         id: 'asset-unlisted',
         post_id: 'post-1',
-        type: 'guide',
         title: 'Hidden guide',
+        access_mode: 'paid',
         price_usd_cents: 900,
-        status: 'unlisted',
+        preview_text: 'Hidden guide preview',
+        allow_remix: false,
+        status: 'draft',
       },
     ];
   });
@@ -86,9 +92,12 @@ describe('posts-server marketplace summaries', () => {
 
     expect(assetMap.get('post-1')).toEqual({
       id: 'asset-active',
-      type: 'workflow',
+      postId: 'post-1',
       title: 'Public workflow',
+      accessMode: 'paid',
       priceUsdCents: 1900,
+      previewText: 'Reusable launch workflow',
+      allowRemix: true,
     });
   });
 });

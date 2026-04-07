@@ -4,10 +4,11 @@ export type ShowcaseCategory = 'all' | 'image' | 'video' | 'motion' | 'ugc-ad' |
 export type ShowcaseSort = 'recent' | 'top-saves' | 'top-remixes';
 export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all'>;
 export type ShowcaseSourceKind = 'ugc_copy' | 'external' | 'manual';
-export type ShowcaseAssetType = 'workflow' | 'prompt_pack' | 'guide';
 export type ShowcaseVisibility = 'public' | 'unlisted' | 'private';
 export type ShowcasePostFormat = 'text' | 'media' | 'mixed';
 export type ShowcaseMediaKind = 'image' | 'video';
+export type ShowcaseAssetType = 'workflow' | 'prompt_pack' | 'guide';
+export type ShowcaseResourceAccessMode = 'free' | 'paid';
 
 export interface ShowcaseCreator {
     id: string | null;
@@ -18,9 +19,12 @@ export interface ShowcaseCreator {
 
 export interface ShowcaseAssetSummary {
     id: string;
-    type: ShowcaseAssetType;
+    postId: string;
     title: string;
+    accessMode: ShowcaseResourceAccessMode;
     priceUsdCents: number;
+    previewText: string;
+    allowRemix: boolean;
 }
 
 export interface ShowcaseFeedItem {

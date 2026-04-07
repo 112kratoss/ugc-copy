@@ -2,7 +2,16 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
-import { deriveTitleFromBody, isMissingPostsSchemaError } from '@/lib/posts-server';
+import {
+  deriveTitleFromBody,
+  isMissingPostResourceBundlesSchemaError,
+  isMissingPostsSchemaError,
+} from '@/lib/posts-server';
+import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
+import {
+  isPostResourceBundleAccessMode,
+  type PostResourceBundleInput,
+} from '@/lib/post-resource-bundles';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
   isShowcaseItemCategory,
@@ -15,6 +24,8 @@ const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const BODY_MAX_LENGTH = 2000;
 const MISSING_POSTS_SCHEMA_ERROR =
   'Posts are not enabled on the connected Supabase project yet. Apply the posts migrations and try again.';
+const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
+  'Posts are working, but resource bundles are not enabled on the connected Supabase project yet. Apply supabase/migrations/20260406200000_post_resource_bundles.sql and try again.';
 
 function sanitizeFileStem(fileName: string): string {
   const stem = path.basename(fileName, path.extname(fileName)).toLowerCase();
@@ -121,6 +132,51 @@ function resolveTitle(title: string | null, body: string | null, postFormat: Sho
   return null;
 }
 
+function parseResourceBundle(
+  value: FormDataEntryValue | null
+): { bundle: PostResourceBundleInput | null; error: string | null } {
+  if (typeof value !== 'string' || !value.trim()) {
+    return {
+      bundle: null,
+      error: null,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(value) as PostResourceBundleInput;
+    const accessMode = parsed?.accessMode;
+    if (!isPostResourceBundleAccessMode(accessMode)) {
+      return {
+        bundle: null,
+        error: 'Choose whether the attached resources should be free or paid.',
+      };
+    }
+
+    if (accessMode === 'paid') {
+      const priceUsdCents = Number.isFinite(parsed.priceUsdCents)
+        ? Math.round(parsed.priceUsdCents ?? 0)
+        : 0;
+
+      if (priceUsdCents < 100) {
+        return {
+          bundle: null,
+          error: 'Paid resources must be priced at $1.00 or above.',
+        };
+      }
+    }
+
+    return {
+      bundle: parsed,
+      error: null,
+    };
+  } catch {
+    return {
+      bundle: null,
+      error: 'The attached resource bundle could not be parsed.',
+    };
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
@@ -178,14 +234,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Please upload an image or video and choose a matching category.' }, { status: 400 });
     }
 
-    const visibility = normalizeVisibility(
+    const requestedVisibility = normalizeVisibility(
       typeof formData.get('visibility') === 'string' ? String(formData.get('visibility')) : null
     );
     const title = resolveTitle(normalizeText(formData.get('title')), body, postFormat);
     const description = normalizeText(formData.get('description'));
-    const prompt = normalizeText(formData.get('prompt'));
     const sourceTool = file ? normalizeText(formData.get('sourceTool')) : null;
     const sourceKind = postFormat === 'text' ? 'manual' : 'external';
+    const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'));
+
+    if (resourceBundleError) {
+      return NextResponse.json({ error: resourceBundleError }, { status: 400 });
+    }
+
+    const visibility = resourceBundle?.accessMode && resourceBundle.accessMode !== 'none'
+      ? 'public'
+      : requestedVisibility;
 
     const postId = randomUUID();
     let storagePath: string | null = null;
@@ -217,7 +281,7 @@ export async function POST(request: NextRequest) {
         category,
         title,
         description,
-        prompt,
+        prompt: null,
         body,
         post_format: postFormat,
         source_kind: sourceKind,
@@ -239,12 +303,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create post.' }, { status: 500 });
     }
 
+    try {
+      await savePostResourceBundle({
+        supabase,
+        postId: post.id as string,
+        ownerUserId: user.id,
+        postTitle: title,
+        postVisibility: post.visibility as ShowcaseVisibility,
+        bundle: resourceBundle,
+      });
+    } catch (bundleError) {
+      console.error('Failed to save post resource bundle:', bundleError);
+      if (isMissingPostResourceBundlesSchemaError(bundleError)) {
+        return NextResponse.json({ error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR }, { status: 500 });
+      }
+      return NextResponse.json({ error: 'Post was created, but the attached resources could not be saved.' }, { status: 500 });
+    }
+
     return NextResponse.json({
       success: true,
       postId: post.id,
       visibility: post.visibility,
       showcasePath: `/showcase/${post.id}`,
-      attachAssetPath: `/marketplace/sell?postId=${encodeURIComponent(post.id)}`,
+      resourceBundlePath: `/showcase/${post.id}#resources`,
     });
   } catch (error) {
     console.error('External post creation failed:', error);

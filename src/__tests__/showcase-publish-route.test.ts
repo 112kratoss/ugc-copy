@@ -21,12 +21,18 @@ const listingUpdateCalls: Array<{
   payload: Record<string, unknown>;
   filters: Record<string, unknown>;
 }> = [];
+const bundleUpdateCalls: Array<{
+  payload: Record<string, unknown>;
+  filters: Record<string, unknown>;
+}> = [];
 const removeMock = vi.fn(async () => ({ data: null, error: null }));
 const createUserClientMock = vi.fn();
 
 vi.mock('@/lib/posts-server', () => ({
+  deriveTitleFromBody: vi.fn((value: string | null | undefined) => value?.split('\n')[0] ?? null),
   isMissingPostsSchemaError: vi.fn(() => false),
   isMissingMarketplaceSchemaError: vi.fn(() => false),
+  isMissingPostResourceBundlesSchemaError: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -59,6 +65,7 @@ describe('/api/showcase/publish route', () => {
     generationUpdates.length = 0;
     postUpserts.length = 0;
     listingUpdateCalls.length = 0;
+    bundleUpdateCalls.length = 0;
     removeMock.mockClear();
     createUserClientMock.mockReset();
     createUserClientMock.mockReturnValue({
@@ -144,6 +151,30 @@ describe('/api/showcase/publish route', () => {
           };
         }
 
+        if (table === 'post_resource_bundles') {
+          return {
+            update(payload: Record<string, unknown>) {
+              const call = {
+                payload,
+                filters: {} as Record<string, unknown>,
+              };
+              bundleUpdateCalls.push(call);
+
+              const query = {
+                eq(column: string, value: unknown) {
+                  call.filters[column] = value;
+                  return query;
+                },
+                then(resolve: (value: { error: null }) => void) {
+                  resolve({ error: null });
+                },
+              };
+
+              return query;
+            },
+          };
+        }
+
         throw new Error(`Unexpected table access: ${table}`);
       },
     });
@@ -178,6 +209,17 @@ describe('/api/showcase/publish route', () => {
     expect(postUpserts[0]).toMatchObject({
       generation_id: 'gen-1',
       visibility: 'private',
+    });
+    expect(bundleUpdateCalls).toHaveLength(1);
+    expect(bundleUpdateCalls[0]).toEqual({
+      payload: {
+        status: 'draft',
+      },
+      filters: {
+        post_id: 'post-1',
+        owner_user_id: 'user-1',
+        status: 'published',
+      },
     });
     expect(listingUpdateCalls).toHaveLength(1);
     expect(listingUpdateCalls[0]).toEqual({

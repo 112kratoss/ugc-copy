@@ -6,6 +6,7 @@ import { BookText, Heart, ShoppingBag, Wand2 } from 'lucide-react';
 import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
 
 type TabType = 'creations' | 'remixes' | 'saved';
@@ -111,7 +112,7 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                         {item.asset ? (
                           <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
                             <ShoppingBag className="h-3.5 w-3.5" />
-                            {item.asset.type === 'prompt_pack' ? 'Prompt Pack' : item.asset.type === 'guide' ? 'Guide' : 'Workflow'}
+                            {getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents)}
                           </div>
                         ) : null}
                         <p className="mt-2 line-clamp-3 text-sm leading-6 text-zinc-400">
@@ -144,7 +145,7 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
                         </Link>
                         {item.asset ? (
                           <Link
-                            href={`/marketplace/${item.asset.id}`}
+                            href={`${buildShowcaseDetailPath(item.id)}#resources`}
                             onClick={(event) => event.stopPropagation()}
                             className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
                           >
@@ -208,7 +209,7 @@ export function CreatorContentTabs({ items }: CreatorContentTabsProps) {
             </Link>
             {selectedItem.asset ? (
               <Link
-                href={`/marketplace/${selectedItem.asset.id}`}
+                href={`${buildShowcaseDetailPath(selectedItem.id)}#resources`}
                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
               >
                 View resource

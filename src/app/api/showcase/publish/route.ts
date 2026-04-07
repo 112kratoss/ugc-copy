@@ -1,16 +1,22 @@
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import { isAudioModel } from '@/lib/models';
+import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
 import {
+    deriveTitleFromBody,
     isMissingMarketplaceSchemaError,
     isMissingPostsSchemaError,
+    isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient, getStoredMediaLocation } from '@/lib/server-helpers';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import type { PostResourceBundleInput, PostResourceBundleAccessMode } from '@/lib/post-resource-bundles';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
+    'Posts are working, but resource bundles are not enabled on the connected Supabase project yet. Apply supabase/migrations/20260406200000_post_resource_bundles.sql and try again.';
 
 function detectCategoryFromModel(model: string): ShowcaseCategory {
     if (model.includes('banana')) return 'image';
@@ -53,6 +59,7 @@ async function upsertPublishedPost(params: {
     title?: unknown;
     description?: unknown;
     prompt?: unknown;
+    body?: unknown;
 }) {
     const {
         supabase,
@@ -63,17 +70,25 @@ async function upsertPublishedPost(params: {
         title,
         description,
         prompt,
+        body,
     } = params;
+
+    const normalizedBody = normalizeTextValue(body);
+    const resolvedTitle =
+        normalizeTextValue(title)
+        ?? generation.title?.trim()
+        ?? deriveTitleFromBody(normalizedBody)
+        ?? null;
 
     const payload = {
         user_id: generation.user_id,
         visibility,
         category,
-        title: normalizeTextValue(title) ?? generation.title?.trim() ?? null,
+        title: resolvedTitle,
         description: normalizeTextValue(description) ?? generation.description?.trim() ?? null,
         prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null,
-        body: null,
-        post_format: 'media' as const,
+        body: normalizedBody,
+        post_format: normalizedBody ? 'mixed' as const : 'media' as const,
         source_kind: 'ugc_copy' as const,
         source_tool: null,
         generation_id: generation.id,
@@ -116,6 +131,30 @@ async function downgradeAttachedListingToUnlisted(params: {
         .eq('status', 'active');
 
     if (error && !isMissingMarketplaceSchemaError(error)) {
+        throw error;
+    }
+}
+
+async function downgradePublishedBundleToDraft(params: {
+    supabase: ReturnType<typeof createUserClient>;
+    postId: string | null;
+    ownerUserId: string;
+}) {
+    const { supabase, postId, ownerUserId } = params;
+    if (!postId) {
+        return;
+    }
+
+    const { error } = await supabase
+        .from('post_resource_bundles')
+        .update({
+            status: 'draft',
+        })
+        .eq('post_id', postId)
+        .eq('owner_user_id', ownerUserId)
+        .eq('status', 'published');
+
+    if (error && !isMissingPostResourceBundlesSchemaError(error)) {
         throw error;
     }
 }
@@ -186,7 +225,18 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const { generationId, isPublic, title, description, prompt, category, workflowSettings } = await request.json();
+        const requestBody = await request.json() as {
+            generationId?: string;
+            isPublic?: boolean;
+            title?: string;
+            description?: string;
+            prompt?: string;
+            body?: string;
+            category?: string;
+            workflowSettings?: unknown;
+            resourceBundle?: PostResourceBundleInput | null;
+        };
+        const { generationId, isPublic, title, description, prompt, body, category, workflowSettings } = requestBody;
 
         if (!generationId) {
             return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
@@ -222,7 +272,11 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Cannot publish a generation that has not succeeded' }, { status: 400 });
         }
 
-        if (isPublic && (generation.category === 'audio' || isAudioModel(generation.model))) {
+        const resourceAccessMode = requestBody.resourceBundle?.accessMode as PostResourceBundleAccessMode | undefined;
+        const shouldForcePublic = resourceAccessMode === 'free' || resourceAccessMode === 'paid';
+        const effectiveIsPublic = shouldForcePublic ? true : Boolean(isPublic);
+
+        if (effectiveIsPublic && (generation.category === 'audio' || isAudioModel(generation.model))) {
             return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
         }
 
@@ -231,15 +285,15 @@ export async function POST(request: NextRequest) {
             : isPublishableShowcaseCategory(generation.category)
                 ? generation.category
                 : undefined;
-        if (!detectedCategory && isPublic) {
+        if (!detectedCategory && effectiveIsPublic) {
             detectedCategory = detectCategoryFromModel(generation.model);
         }
 
-        const updatePayload: { is_public: boolean; [key: string]: unknown } = { is_public: isPublic };
+        const updatePayload: { is_public: boolean; [key: string]: unknown } = { is_public: effectiveIsPublic };
 
         let nextShowcaseAssetPath = hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null;
 
-        if (isPublic) {
+        if (effectiveIsPublic) {
             if (!generation.output_url) {
                 return NextResponse.json({ error: 'This creation has no media to publish yet' }, { status: 400 });
             }
@@ -278,12 +332,13 @@ export async function POST(request: NextRequest) {
             postId = await upsertPublishedPost({
                 supabase,
                 generation,
-                visibility: isPublic ? 'public' : 'private',
+                visibility: effectiveIsPublic ? 'public' : 'private',
                 category: detectedCategory ?? 'image',
                 showcaseAssetPath: nextShowcaseAssetPath,
                 title,
                 description,
-                prompt,
+                body,
+                prompt: Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle') ? null : prompt,
             });
         } catch (postError) {
             if (isMissingPostsSchemaError(postError)) {
@@ -294,8 +349,13 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        if (!isPublic) {
+        if (!effectiveIsPublic) {
             try {
+                await downgradePublishedBundleToDraft({
+                    supabase,
+                    postId,
+                    ownerUserId: user.id,
+                });
                 await downgradeAttachedListingToUnlisted({
                     supabase,
                     postId,
@@ -307,7 +367,26 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        if (!isPublic && hasShowcaseAssetColumn && generation.showcase_asset_path) {
+        if (postId && Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle')) {
+            try {
+                await savePostResourceBundle({
+                    supabase,
+                    postId,
+                    ownerUserId: user.id,
+                    postTitle: normalizeTextValue(title) ?? generation.title?.trim() ?? deriveTitleFromBody(normalizeTextValue(body)) ?? null,
+                    postVisibility: effectiveIsPublic ? 'public' : 'private',
+                    bundle: requestBody.resourceBundle ?? null,
+                });
+            } catch (bundleError) {
+                console.error('Failed to save generation resource bundle:', bundleError);
+                if (isMissingPostResourceBundlesSchemaError(bundleError)) {
+                    return NextResponse.json({ error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR }, { status: 500 });
+                }
+                return NextResponse.json({ error: 'Failed to save attached resources' }, { status: 500 });
+            }
+        }
+
+        if (!effectiveIsPublic && hasShowcaseAssetColumn && generation.showcase_asset_path) {
             void adminSupabase.storage
                 .from(SHOWCASE_MEDIA_BUCKET)
                 .remove([generation.showcase_asset_path])
@@ -318,9 +397,10 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            isPublic,
+            isPublic: effectiveIsPublic,
             postId,
-            message: isPublic ? 'Successfully published to showcase' : 'Successfully removed from showcase',
+            resourceBundlePath: postId ? `/showcase/${postId}#resources` : null,
+            message: effectiveIsPublic ? 'Successfully published to showcase' : 'Successfully removed from showcase',
         });
     } catch (error) {
         console.error('Publish error:', error);

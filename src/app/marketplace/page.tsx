@@ -3,13 +3,14 @@ import { headers } from 'next/headers';
 import { ArrowRight, Layers3, ShoppingBag } from 'lucide-react';
 
 import {
-  getMarketplaceAssetList,
-} from '@/lib/marketplace-server';
+  getMarketplaceResourceList,
+} from '@/lib/post-resource-bundles-server';
 import {
-  getMarketplaceAssetTypeLabel,
-  normalizeMarketplaceAssetType,
-  normalizeMarketplaceSort,
-} from '@/lib/marketplace';
+  getBundleAccessLabel,
+  getPostResourceKindLabel,
+  normalizeMarketplaceResourceFilter,
+  normalizeMarketplaceResourceSort,
+} from '@/lib/post-resource-bundles';
 
 interface MarketplacePageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -17,20 +18,20 @@ interface MarketplacePageProps {
 
 export default async function MarketplacePage({ searchParams }: MarketplacePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
-  const type = normalizeMarketplaceAssetType(
-    Array.isArray(resolvedSearchParams.type)
-      ? resolvedSearchParams.type[0]
-      : resolvedSearchParams.type
+  const filter = normalizeMarketplaceResourceFilter(
+    Array.isArray(resolvedSearchParams.access)
+      ? resolvedSearchParams.access[0]
+      : resolvedSearchParams.access
   );
-  const sort = normalizeMarketplaceSort(
+  const sort = normalizeMarketplaceResourceSort(
     Array.isArray(resolvedSearchParams.sort)
       ? resolvedSearchParams.sort[0]
       : resolvedSearchParams.sort
   );
   const headerStore = await headers();
   const countryCode = headerStore.get('x-vercel-ip-country');
-  const assetPage = await getMarketplaceAssetList({
-    type,
+  const assetPage = await getMarketplaceResourceList({
+    filter,
     sort,
     limit: 24,
     offset: 0,
@@ -38,15 +39,14 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
   });
 
   const filterLinks = [
-    { label: 'All', href: `/marketplace?sort=${sort}`, active: type === 'all' },
-    { label: 'Workflows', href: `/marketplace?type=workflow&sort=${sort}`, active: type === 'workflow' },
-    { label: 'Prompt packs', href: `/marketplace?type=prompt_pack&sort=${sort}`, active: type === 'prompt_pack' },
-    { label: 'Guides', href: `/marketplace?type=guide&sort=${sort}`, active: type === 'guide' },
+    { label: 'All', href: `/marketplace?sort=${sort}`, active: filter === 'all' },
+    { label: 'Free', href: `/marketplace?access=free&sort=${sort}`, active: filter === 'free' },
+    { label: 'Paid', href: `/marketplace?access=paid&sort=${sort}`, active: filter === 'paid' },
   ];
 
   const sortLinks = [
-    { label: 'Recent', href: `/marketplace${type === 'all' ? '' : `?type=${type}&`}sort=recent`, active: sort === 'recent' },
-    { label: 'Top sales', href: `/marketplace${type === 'all' ? '?' : `?type=${type}&`}sort=top-sales`, active: sort === 'top-sales' },
+    { label: 'Recent', href: `/marketplace${filter === 'all' ? '?' : `?access=${filter}&`}sort=recent`, active: sort === 'recent' },
+    { label: 'Top sales', href: `/marketplace${filter === 'all' ? '?' : `?access=${filter}&`}sort=top-sales`, active: sort === 'top-sales' },
   ];
 
   return (
@@ -65,26 +65,26 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
                 Creator marketplace
               </div>
               <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                Buy the systems behind winning AI creative
+                Discover proof posts with free and paid resources
               </h1>
               <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
-                Workflows, prompt packs, and guides can now live next to the post that proved them. This turns the feed into a reusable knowledge network instead of a gallery of isolated outputs.
+                Browse public posts where creators share the proof up front and let buyers unlock the prompt, workflow, files, notes, and remix access on the same page.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/marketplace/sell"
+                href="/post/new"
                 className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
-                Sell your playbook
+                Open post composer
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href="/post/new"
+                href="/marketplace/sell"
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
-                Publish a post
+                Manage resources
               </Link>
             </div>
           </div>
@@ -126,23 +126,25 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
         {assetPage.items.length === 0 ? (
           <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <Layers3 className="mx-auto h-10 w-10 text-zinc-500" />
-            <h2 className="mt-4 text-2xl font-semibold text-white">No listings yet</h2>
+            <h2 className="mt-4 text-2xl font-semibold text-white">No resource bundles yet</h2>
             <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">
-              The marketplace is ready for workflows, prompt packs, and guides. Publish a post, attach the system behind it, and start the first layer of creator-to-creator commerce.
+              The marketplace is for discovery. Publish the proof first, then attach free or paid resources in the post flow so buyers can unlock the “how” on the same page.
             </p>
-            <Link
-              href="/marketplace/sell"
-              className="mt-6 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-            >
-              Create a listing
-            </Link>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <Link
+                href="/post/new"
+                className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+              >
+                Open post composer
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
             {assetPage.items.map((asset) => (
               <Link
                 key={asset.id}
-                href={`/marketplace/${asset.id}`}
+                href={`/showcase/${asset.postId}#resources`}
                 className="group overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14 hover:shadow-[0_28px_90px_rgba(0,0,0,0.45)]"
               >
                 <div className="relative overflow-hidden border-b border-white/8 bg-black/60">
@@ -180,7 +182,7 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
                   )}
 
                   <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full border border-black/20 bg-black/55 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white backdrop-blur-sm">
-                    {getMarketplaceAssetTypeLabel(asset.type)}
+                    {getBundleAccessLabel(asset.accessMode, asset.priceUsdCents)}
                   </div>
 
                   {asset.post?.sourceTool ? (
@@ -204,12 +206,23 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
                   </div>
 
                   <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">
-                    {asset.description || asset.preview || 'Reusable creative system ready to unlock.'}
+                    {asset.summary || asset.previewText || 'Reusable creative system ready to unlock.'}
                   </p>
 
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {(asset.resourceKinds ?? []).map((kind) => (
+                      <div
+                        key={`${asset.id}-${kind}`}
+                        className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200"
+                      >
+                        {getPostResourceKindLabel(kind)}
+                      </div>
+                    ))}
+                  </div>
+
                   <div className="mt-5 flex items-center justify-between text-xs text-zinc-500">
-                    <span>{asset.salesCount} sale{asset.salesCount === 1 ? '' : 's'}</span>
-                    <span>{asset.post ? asset.post.title : 'Standalone listing'}</span>
+                    <span>{asset.salesCount} unlock{asset.salesCount === 1 ? '' : 's'}</span>
+                    <span>{asset.post ? asset.post.title : 'Attached resources'}</span>
                   </div>
                 </div>
               </Link>

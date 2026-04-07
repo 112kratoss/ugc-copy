@@ -178,6 +178,22 @@ export function isMissingMarketplaceSchemaError(error: unknown): boolean {
   );
 }
 
+export function isMissingPostResourceBundlesSchemaError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return (
+    (code === 'PGRST205' &&
+      (
+        message.includes('public.post_resource_bundles') ||
+        message.includes('public.post_resource_bundle_orders') ||
+        message.includes('public.post_resource_bundle_purchases')
+      )) ||
+    message.includes("Could not find the table 'public.post_resource_bundles'") ||
+    message.includes('complete_post_resource_bundle_purchase')
+  );
+}
+
 function resolveShowcaseAssetUrl(
   adminSupabase: SupabaseClient,
   showcaseAssetPath: string
@@ -272,15 +288,51 @@ export async function getMarketplaceAssetSummaryMap(
     return new Map();
   }
 
+  const bundleResult = await adminSupabase
+    .from('post_resource_bundles')
+    .select('id, post_id, title, access_mode, price_usd_cents, preview_text, allow_remix, status')
+    .in('post_id', postIds)
+    .eq('status', 'published');
+
+  if (!bundleResult.error) {
+    return new Map(
+      (bundleResult.data ?? [])
+        .filter((row) =>
+          typeof row.id === 'string' &&
+          typeof row.post_id === 'string' &&
+          typeof row.title === 'string' &&
+          (row.access_mode === 'free' || row.access_mode === 'paid') &&
+          typeof row.price_usd_cents === 'number'
+        )
+        .map((row) => [
+          row.post_id as string,
+          {
+            id: row.id as string,
+            postId: row.post_id as string,
+            title: row.title as string,
+            accessMode: row.access_mode as ShowcaseAssetSummary['accessMode'],
+            priceUsdCents: row.price_usd_cents as number,
+            previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
+            allowRemix: Boolean(row.allow_remix),
+          } satisfies ShowcaseAssetSummary,
+        ])
+    );
+  }
+
+  if (!isMissingPostResourceBundlesSchemaError(bundleResult.error)) {
+    console.error('Failed to load post resource bundle summaries:', bundleResult.error);
+    return new Map();
+  }
+
   const { data, error } = await adminSupabase
     .from('marketplace_assets')
-    .select('id, post_id, type, title, price_usd_cents, status')
+    .select('id, post_id, title, price_usd_cents, status')
     .in('post_id', postIds)
     .eq('status', 'active');
 
   if (error) {
     if (!isMissingMarketplaceSchemaError(error)) {
-      console.error('Failed to load marketplace asset summaries:', error);
+      console.error('Failed to load legacy marketplace asset summaries:', error);
     }
     return new Map();
   }
@@ -291,16 +343,18 @@ export async function getMarketplaceAssetSummaryMap(
         typeof row.id === 'string' &&
         typeof row.post_id === 'string' &&
         typeof row.title === 'string' &&
-        typeof row.price_usd_cents === 'number' &&
-        (row.type === 'workflow' || row.type === 'prompt_pack' || row.type === 'guide')
+        typeof row.price_usd_cents === 'number'
       )
       .map((row) => [
         row.post_id as string,
         {
           id: row.id as string,
-          type: row.type as ShowcaseAssetSummary['type'],
+          postId: row.post_id as string,
           title: row.title as string,
+          accessMode: (row.price_usd_cents as number) === 0 ? 'free' : 'paid',
           priceUsdCents: row.price_usd_cents as number,
+          previewText: '',
+          allowRemix: false,
         } satisfies ShowcaseAssetSummary,
       ])
   );

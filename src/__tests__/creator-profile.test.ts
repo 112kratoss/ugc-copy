@@ -160,6 +160,24 @@ function createServiceClientMock() {
         };
       }
 
+      if (table === 'post_resource_bundles') {
+        return {
+          select() {
+            return {
+              in() {
+                return this;
+              },
+              async eq() {
+                return {
+                  data: [],
+                  error: null,
+                };
+              },
+            };
+          },
+        };
+      }
+
       throw new Error(`Unexpected table access: ${table}`);
     },
   };
