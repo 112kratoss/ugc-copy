@@ -4,9 +4,10 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import {
   deriveTitleFromBody,
-  isMissingPostResourceBundlesSchemaError,
   isMissingPostsSchemaError,
+  isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
+import { getOwnerPostList, type OwnerPostVisibilityFilter } from '@/lib/owner-posts';
 import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
 import {
   isPostResourceBundleAccessMode,
@@ -324,11 +325,59 @@ export async function POST(request: NextRequest) {
       success: true,
       postId: post.id,
       visibility: post.visibility,
-      showcasePath: `/showcase/${post.id}`,
-      resourceBundlePath: `/showcase/${post.id}#resources`,
+      showcasePath: post.visibility === 'private' ? null : `/showcase/${post.id}`,
+      ownerPath: `/post/${post.id}/edit`,
+      resourceBundlePath:
+        post.visibility === 'private'
+          ? `/post/${post.id}/edit#resources`
+          : `/showcase/${post.id}#resources`,
     });
   } catch (error) {
     console.error('External post creation failed:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+function normalizeOwnerPostVisibilityFilter(value: string | null): OwnerPostVisibilityFilter {
+  if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
+    return value;
+  }
+
+  return 'all';
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const supabase = createUserClient(request);
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const scope = request.nextUrl.searchParams.get('scope');
+    if (scope !== 'owner') {
+      return NextResponse.json({ error: 'Unsupported posts scope.' }, { status: 400 });
+    }
+
+    const visibility = normalizeOwnerPostVisibilityFilter(request.nextUrl.searchParams.get('visibility'));
+    const includeArchived =
+      request.nextUrl.searchParams.get('includeArchived') === 'true' || visibility === 'archived';
+
+    const posts = await getOwnerPostList(user.id, {
+      includeArchived,
+      visibility,
+    });
+
+    return NextResponse.json({
+      success: true,
+      posts,
+    });
+  } catch (error) {
+    console.error('Failed to fetch owner posts:', error);
+    return NextResponse.json({ error: 'Failed to fetch posts.' }, { status: 500 });
   }
 }

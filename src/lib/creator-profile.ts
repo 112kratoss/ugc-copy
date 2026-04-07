@@ -125,6 +125,7 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
       .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, generation_id, source_kind, source_tool')
       .eq('user_id', profile.id)
       .eq('visibility', 'public')
+      .is('archived_at', null)
       .order('created_at', { ascending: false })
       .limit(24);
 
@@ -134,6 +135,7 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
         .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, generation_id, source_kind, source_tool')
         .eq('user_id', profile.id)
         .eq('visibility', 'public')
+        .is('archived_at', null)
         .order('created_at', { ascending: false })
         .limit(24);
 

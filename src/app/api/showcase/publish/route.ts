@@ -43,6 +43,14 @@ function normalizeTextValue(value: unknown): string | null {
     return typeof value === 'string' ? value.trim() : null;
 }
 
+function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean): 'public' | 'unlisted' | 'private' {
+    if (value === 'public' || value === 'unlisted' || value === 'private') {
+        return value;
+    }
+
+    return legacyIsPublic ? 'public' : 'private';
+}
+
 async function upsertPublishedPost(params: {
     supabase: ReturnType<typeof createUserClient>;
     generation: {
@@ -53,7 +61,7 @@ async function upsertPublishedPost(params: {
         description?: string | null;
         prompt?: string | null;
     };
-    visibility: 'public' | 'private';
+    visibility: 'public' | 'unlisted' | 'private';
     category: ShowcaseCategory;
     showcaseAssetPath: string | null;
     title?: unknown;
@@ -228,6 +236,7 @@ export async function POST(request: NextRequest) {
         const requestBody = await request.json() as {
             generationId?: string;
             isPublic?: boolean;
+            visibility?: 'public' | 'unlisted' | 'private';
             title?: string;
             description?: string;
             prompt?: string;
@@ -274,9 +283,12 @@ export async function POST(request: NextRequest) {
 
         const resourceAccessMode = requestBody.resourceBundle?.accessMode as PostResourceBundleAccessMode | undefined;
         const shouldForcePublic = resourceAccessMode === 'free' || resourceAccessMode === 'paid';
-        const effectiveIsPublic = shouldForcePublic ? true : Boolean(isPublic);
+        const requestedVisibility = normalizeRequestedVisibility(requestBody.visibility, isPublic);
+        const effectiveVisibility = shouldForcePublic ? 'public' : requestedVisibility;
+        const shouldExposePost = effectiveVisibility !== 'private';
+        const effectiveIsPublic = effectiveVisibility === 'public';
 
-        if (effectiveIsPublic && (generation.category === 'audio' || isAudioModel(generation.model))) {
+        if (shouldExposePost && (generation.category === 'audio' || isAudioModel(generation.model))) {
             return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
         }
 
@@ -285,7 +297,7 @@ export async function POST(request: NextRequest) {
             : isPublishableShowcaseCategory(generation.category)
                 ? generation.category
                 : undefined;
-        if (!detectedCategory && effectiveIsPublic) {
+        if (!detectedCategory && shouldExposePost) {
             detectedCategory = detectCategoryFromModel(generation.model);
         }
 
@@ -293,7 +305,7 @@ export async function POST(request: NextRequest) {
 
         let nextShowcaseAssetPath = hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null;
 
-        if (effectiveIsPublic) {
+        if (shouldExposePost) {
             if (!generation.output_url) {
                 return NextResponse.json({ error: 'This creation has no media to publish yet' }, { status: 400 });
             }
@@ -332,7 +344,7 @@ export async function POST(request: NextRequest) {
             postId = await upsertPublishedPost({
                 supabase,
                 generation,
-                visibility: effectiveIsPublic ? 'public' : 'private',
+                visibility: effectiveVisibility,
                 category: detectedCategory ?? 'image',
                 showcaseAssetPath: nextShowcaseAssetPath,
                 title,
@@ -349,7 +361,7 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        if (!effectiveIsPublic) {
+        if (effectiveVisibility !== 'public') {
             try {
                 await downgradePublishedBundleToDraft({
                     supabase,
@@ -374,7 +386,7 @@ export async function POST(request: NextRequest) {
                     postId,
                     ownerUserId: user.id,
                     postTitle: normalizeTextValue(title) ?? generation.title?.trim() ?? deriveTitleFromBody(normalizeTextValue(body)) ?? null,
-                    postVisibility: effectiveIsPublic ? 'public' : 'private',
+                    postVisibility: effectiveVisibility,
                     bundle: requestBody.resourceBundle ?? null,
                 });
             } catch (bundleError) {
@@ -386,7 +398,7 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        if (!effectiveIsPublic && hasShowcaseAssetColumn && generation.showcase_asset_path) {
+        if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
             void adminSupabase.storage
                 .from(SHOWCASE_MEDIA_BUCKET)
                 .remove([generation.showcase_asset_path])
@@ -398,9 +410,21 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             success: true,
             isPublic: effectiveIsPublic,
+            visibility: effectiveVisibility,
             postId,
-            resourceBundlePath: postId ? `/showcase/${postId}#resources` : null,
-            message: effectiveIsPublic ? 'Successfully published to showcase' : 'Successfully removed from showcase',
+            showcasePath: postId && effectiveVisibility !== 'private' ? `/showcase/${postId}` : null,
+            ownerPath: postId ? `/post/${postId}/edit` : null,
+            resourceBundlePath: postId
+                ? effectiveVisibility === 'private'
+                    ? `/post/${postId}/edit#resources`
+                    : `/showcase/${postId}#resources`
+                : null,
+            message:
+                effectiveVisibility === 'public'
+                    ? 'Successfully published to showcase'
+                    : effectiveVisibility === 'unlisted'
+                        ? 'Saved as an unlisted post'
+                        : 'Successfully removed from showcase',
         });
     } catch (error) {
         console.error('Publish error:', error);

@@ -1,0 +1,468 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+import { getOwnerPostDetail } from '@/lib/owner-posts';
+import {
+  getPostResourceKinds,
+  isPostResourceBundleAccessMode,
+  type PostResourceBundleInput,
+} from '@/lib/post-resource-bundles';
+import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
+import {
+  isMissingMarketplaceSchemaError,
+  isMissingPostResourceBundlesSchemaError,
+} from '@/lib/posts-server';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { isShowcaseItemCategory, type ShowcaseVisibility } from '@/lib/showcase';
+
+type RouteContext = {
+  params: Promise<{ postId: string }>;
+};
+
+type MutablePostRow = {
+  id: string;
+  user_id: string;
+  generation_id: string | null;
+  visibility: ShowcaseVisibility;
+  title: string | null;
+  description: string | null;
+  body: string | null;
+  category: string;
+  post_format: 'text' | 'media' | 'mixed';
+  source_tool: string | null;
+  source_kind: 'ugc_copy' | 'external' | 'manual';
+  archived_at: string | null;
+  showcase_asset_path: string | null;
+};
+
+type BundleAuditRow = {
+  id: string;
+  access_mode: 'free' | 'paid';
+  status: 'draft' | 'published';
+  price_usd_cents: number;
+  sales_count: number;
+  earnings_usd_cents: number;
+  prompt_text: string | null;
+  notes_markdown: string | null;
+  workflow_share_url: string | null;
+  workflow_snapshot: unknown;
+  attachments: unknown;
+  allow_remix: boolean;
+};
+
+function normalizeText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeBody(value: unknown): string | null {
+  return typeof value === 'string' && value.replace(/\r\n/g, '\n').trim()
+    ? value.replace(/\r\n/g, '\n').trim()
+    : null;
+}
+
+function normalizeVisibility(value: unknown): ShowcaseVisibility | null {
+  if (value === 'public' || value === 'unlisted' || value === 'private') {
+    return value;
+  }
+
+  return null;
+}
+
+function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | null; error: string | null } {
+  if (value == null) {
+    return {
+      bundle: null,
+      error: null,
+    };
+  }
+
+  if (typeof value !== 'object') {
+    return {
+      bundle: null,
+      error: 'Invalid resource bundle payload.',
+    };
+  }
+
+  const bundle = value as PostResourceBundleInput;
+  if (!isPostResourceBundleAccessMode(bundle.accessMode)) {
+    return {
+      bundle: null,
+      error: 'Choose whether the attached resources should be free or paid.',
+    };
+  }
+
+  if (bundle.accessMode === 'paid') {
+    const priceUsdCents = Number.isFinite(bundle.priceUsdCents)
+      ? Math.round(bundle.priceUsdCents ?? 0)
+      : 0;
+
+    if (priceUsdCents < 100) {
+      return {
+        bundle: null,
+        error: 'Paid resources must be priced at $1.00 or above.',
+      };
+    }
+  }
+
+  return {
+    bundle,
+    error: null,
+  };
+}
+
+async function downgradeAttachedListingToUnlisted(params: {
+  supabase: ReturnType<typeof createServiceClient>;
+  postId: string;
+  sellerUserId: string;
+}) {
+  const { supabase, postId, sellerUserId } = params;
+  const { error } = await supabase
+    .from('marketplace_assets')
+    .update({
+      status: 'unlisted',
+    })
+    .eq('post_id', postId)
+    .eq('seller_user_id', sellerUserId)
+    .eq('status', 'active');
+
+  if (error && !isMissingMarketplaceSchemaError(error)) {
+    throw error;
+  }
+}
+
+async function downgradePublishedBundleToDraft(params: {
+  supabase: ReturnType<typeof createServiceClient>;
+  postId: string;
+  ownerUserId: string;
+}) {
+  const { supabase, postId, ownerUserId } = params;
+  const { error } = await supabase
+    .from('post_resource_bundles')
+    .update({
+      status: 'draft',
+    })
+    .eq('post_id', postId)
+    .eq('owner_user_id', ownerUserId)
+    .eq('status', 'published');
+
+  if (error && !isMissingPostResourceBundlesSchemaError(error)) {
+    throw error;
+  }
+}
+
+async function loadOwnedPost(postId: string, userId: string): Promise<MutablePostRow | null> {
+  const adminSupabase = createServiceClient();
+  const { data, error } = await adminSupabase
+    .from('posts')
+    .select(
+      'id, user_id, generation_id, visibility, title, description, body, category, post_format, source_tool, source_kind, archived_at, showcase_asset_path'
+    )
+    .eq('id', postId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as MutablePostRow | null) ?? null;
+}
+
+export async function GET(request: NextRequest, context: RouteContext) {
+  const { postId } = await context.params;
+  const supabase = createUserClient(request);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const detail = await getOwnerPostDetail(postId, user.id, {
+      countryCode: request.headers.get('x-vercel-ip-country'),
+    });
+
+    if (!detail) {
+      return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      post: detail,
+    });
+  } catch (error) {
+    console.error('Failed to fetch owner post detail:', error);
+    return NextResponse.json({ error: 'Failed to fetch post.' }, { status: 500 });
+  }
+}
+
+export async function PUT(request: NextRequest, context: RouteContext) {
+  const { postId } = await context.params;
+  const supabase = createUserClient(request);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const post = await loadOwnedPost(postId, user.id);
+    if (!post) {
+      return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
+    }
+
+    const body = (await request.json()) as {
+      title?: unknown;
+      description?: unknown;
+      body?: unknown;
+      visibility?: unknown;
+      category?: unknown;
+      sourceTool?: unknown;
+      resourceBundle?: unknown;
+    };
+
+    const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
+    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(body.resourceBundle);
+    if (resourceBundleError) {
+      return NextResponse.json({ error: resourceBundleError }, { status: 400 });
+    }
+
+    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool'].some((key) =>
+      Object.prototype.hasOwnProperty.call(body, key)
+    );
+
+    if (post.generation_id && touchesPostFields) {
+      return NextResponse.json(
+        { error: 'Generation-backed posts should be updated through the generation publish flow.' },
+        { status: 400 }
+      );
+    }
+
+    const nextBody = Object.prototype.hasOwnProperty.call(body, 'body') ? normalizeBody(body.body) : post.body;
+    if (post.post_format === 'text' && !nextBody) {
+      return NextResponse.json({ error: 'Text posts need a note or tip to save.' }, { status: 400 });
+    }
+
+    const nextVisibility =
+      (hasResourceBundlePayload && resourceBundle?.accessMode && resourceBundle.accessMode !== 'none'
+        ? 'public'
+        : normalizeVisibility(body.visibility)) ?? post.visibility;
+
+    const nextCategory =
+      post.post_format === 'text'
+        ? 'text'
+        : Object.prototype.hasOwnProperty.call(body, 'category') && isShowcaseItemCategory(body.category as string)
+          ? body.category
+          : post.category;
+
+    const updatePayload: Record<string, unknown> = {
+      visibility: nextVisibility,
+      category: nextCategory,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(body, 'title')) {
+      updatePayload.title = normalizeText(body.title);
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'description')) {
+      updatePayload.description = normalizeText(body.description);
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'body')) {
+      updatePayload.body = nextBody;
+      updatePayload.post_format = nextBody ? (post.post_format === 'media' ? 'mixed' : post.post_format) : post.post_format;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'sourceTool')) {
+      updatePayload.source_tool = normalizeText(body.sourceTool);
+    }
+
+    const adminSupabase = createServiceClient();
+    const { data: updatedPost, error: updateError } = await adminSupabase
+      .from('posts')
+      .update(updatePayload)
+      .eq('id', postId)
+      .eq('user_id', user.id)
+      .select('id, visibility')
+      .single();
+
+    if (updateError || !updatedPost) {
+      console.error('Failed to update post:', updateError);
+      return NextResponse.json({ error: 'Failed to update post.' }, { status: 500 });
+    }
+
+    if (hasResourceBundlePayload) {
+      await savePostResourceBundle({
+        supabase: adminSupabase,
+        postId,
+        ownerUserId: user.id,
+        postTitle: normalizeText(updatePayload.title) ?? normalizeText(post.title),
+        postVisibility: updatedPost.visibility as ShowcaseVisibility,
+        bundle: resourceBundle,
+      });
+    }
+
+    if ((updatedPost.visibility as ShowcaseVisibility) !== 'public') {
+      await downgradePublishedBundleToDraft({
+        supabase: adminSupabase,
+        postId,
+        ownerUserId: user.id,
+      });
+      await downgradeAttachedListingToUnlisted({
+        supabase: adminSupabase,
+        postId,
+        sellerUserId: user.id,
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      postId,
+      visibility: updatedPost.visibility,
+      showcasePath: updatedPost.visibility === 'private' ? null : `/showcase/${postId}`,
+      ownerPath: `/post/${postId}/edit`,
+      resourceBundlePath:
+        updatedPost.visibility === 'private'
+          ? `/post/${postId}/edit#resources`
+          : `/showcase/${postId}#resources`,
+    });
+  } catch (error) {
+    console.error('Failed to update owner post:', error);
+    return NextResponse.json({ error: 'Failed to update post.' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const { postId } = await context.params;
+  const supabase = createUserClient(request);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const post = await loadOwnedPost(postId, user.id);
+    if (!post) {
+      return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
+    }
+
+    const body = request.headers.get('content-length') && request.headers.get('content-length') !== '0'
+      ? ((await request.json()) as { force?: boolean })
+      : { force: false };
+    const forceDelete = Boolean(body.force);
+
+    const adminSupabase = createServiceClient();
+    const { data: bundleData, error: bundleError } = await adminSupabase
+      .from('post_resource_bundles')
+      .select(
+        'id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix'
+      )
+      .eq('post_id', postId)
+      .maybeSingle();
+
+    if (bundleError && !isMissingPostResourceBundlesSchemaError(bundleError)) {
+      console.error('Failed to load post bundle before delete:', bundleError);
+      return NextResponse.json({ error: 'Failed to delete post.' }, { status: 500 });
+    }
+
+    const bundle = (bundleData as BundleAuditRow | null) ?? null;
+    const hasPaidOrders = Boolean(bundle && bundle.access_mode === 'paid' && bundle.sales_count > 0);
+
+    if (hasPaidOrders && !forceDelete) {
+      return NextResponse.json(
+        {
+          error: 'This post already has paid unlocks. Archive is recommended, but you can still force delete it if you want to remove it permanently.',
+          requiresForceDelete: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    const bundleResources = bundle
+      ? {
+          promptText: bundle.prompt_text,
+          notesMarkdown: bundle.notes_markdown,
+          workflowShareUrl: bundle.workflow_share_url,
+          workflowSnapshot: bundle.workflow_snapshot,
+          attachments: Array.isArray(bundle.attachments) ? bundle.attachments : [],
+          allowRemix: bundle.allow_remix,
+        }
+      : null;
+
+    const { error: auditError } = await adminSupabase.from('post_deletion_audits').insert({
+      post_id: post.id,
+      owner_user_id: user.id,
+      generation_id: post.generation_id,
+      title: normalizeText(post.title) ?? 'Deleted post',
+      visibility: post.visibility,
+      source_kind: post.source_kind,
+      bundle_access_mode: bundle?.access_mode ?? null,
+      bundle_status: bundle?.status ?? null,
+      bundle_price_usd_cents: bundle?.price_usd_cents ?? null,
+      bundle_resource_kinds: bundle ? getPostResourceKinds(bundleResources) : [],
+      sales_count: bundle?.sales_count ?? 0,
+      earnings_usd_cents: bundle?.earnings_usd_cents ?? 0,
+      had_paid_orders: hasPaidOrders,
+    });
+
+    if (auditError) {
+      console.error('Failed to snapshot post deletion audit:', auditError);
+      return NextResponse.json({ error: 'Failed to delete post.' }, { status: 500 });
+    }
+
+    let removableShowcasePath: string | null = post.showcase_asset_path;
+
+    if (post.generation_id) {
+      const { data: generation, error: generationError } = await adminSupabase
+        .from('generations')
+        .select('id, showcase_asset_path')
+        .eq('id', post.generation_id)
+        .maybeSingle();
+
+      if (generationError) {
+        console.error('Failed to load linked generation before post delete:', generationError);
+      } else if (generation) {
+        await adminSupabase
+          .from('generations')
+          .update({
+            is_public: false,
+            showcase_asset_path: null,
+          })
+          .eq('id', post.generation_id);
+
+        if (!post.showcase_asset_path || generation.showcase_asset_path !== post.showcase_asset_path) {
+          removableShowcasePath = post.showcase_asset_path;
+        }
+      }
+    }
+
+    const { error: deleteError } = await adminSupabase
+      .from('posts')
+      .delete()
+      .eq('id', postId)
+      .eq('user_id', user.id);
+
+    if (deleteError) {
+      console.error('Failed to delete post:', deleteError);
+      return NextResponse.json({ error: 'Failed to delete post.' }, { status: 500 });
+    }
+
+    if (removableShowcasePath) {
+      await adminSupabase.storage.from('showcase_media').remove([removableShowcasePath]);
+    }
+
+    return NextResponse.json({
+      success: true,
+      deleted: true,
+    });
+  } catch (error) {
+    console.error('Failed to delete owner post:', error);
+    return NextResponse.json({ error: 'Failed to delete post.' }, { status: 500 });
+  }
+}

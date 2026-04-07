@@ -161,10 +161,14 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
               <div className="mt-6">
                 <ShowcaseDetailActions
                   postId={detail.id}
+                  generationId={detail.generationId}
                   title={detail.title}
                   description={getPublicPostMetaDescription(detail)}
                   creatorUsername={detail.creator.username}
                   canRemix={detail.canRemix}
+                  visibility={detail.visibility}
+                  viewerIsOwner={Boolean(auth.session?.user?.id && auth.session.user.id === detail.creator.id)}
+                  hasResourceBundle={Boolean(detail.resourceBundle)}
                 />
               </div>
             </div>

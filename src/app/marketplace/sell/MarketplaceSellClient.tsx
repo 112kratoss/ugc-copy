@@ -17,6 +17,7 @@ interface SellerBundle {
   summary: string;
   previewText: string;
   accessMode: 'free' | 'paid';
+  status: 'draft' | 'published';
   priceUsdCents: number;
   salesCount: number;
   earningsUsdCents: number;
@@ -26,7 +27,22 @@ interface SellerBundle {
     id: string;
     title: string;
     visibility: string;
+    archivedAt: string | null;
   } | null;
+}
+
+interface DeletedSnapshot {
+  id: string;
+  title: string;
+  visibility: string;
+  bundleAccessMode: 'free' | 'paid' | null;
+  bundleStatus: 'draft' | 'published' | null;
+  bundlePriceUsdCents: number | null;
+  resourceKinds: Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>;
+  salesCount: number;
+  earningsUsdCents: number;
+  hadPaidOrders: boolean;
+  deletedAt: string;
 }
 
 interface SellerSale {
@@ -41,6 +57,7 @@ interface SellerSale {
 
 interface SellerDashboardPayload {
   bundles: SellerBundle[];
+  deletedSnapshots: DeletedSnapshot[];
   sales: SellerSale[];
   totalSalesCount: number;
   totalEarningsUsdCents: number;
@@ -54,6 +71,7 @@ export default function MarketplaceSellClient({
   initialDashboard,
 }: MarketplaceSellClientProps) {
   const hasBundles = initialDashboard.bundles.length > 0;
+  const deletedSnapshots = initialDashboard.deletedSnapshots ?? [];
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
   const copyPostLink = async (postId: string) => {
@@ -183,6 +201,18 @@ export default function MarketplaceSellClient({
                       {bundle.summary || bundle.previewText || 'Attached resources for this post.'}
                     </p>
                     <div className="mt-4 flex flex-wrap gap-2">
+                      <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
+                        bundle.status === 'published'
+                          ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-50'
+                          : 'border-amber-400/20 bg-amber-500/10 text-amber-50'
+                      }`}>
+                        {bundle.status === 'published' ? 'Published' : 'Draft'}
+                      </div>
+                      {bundle.post?.visibility ? (
+                        <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
+                          {bundle.post.archivedAt ? 'Archived post' : `${bundle.post.visibility} post`}
+                        </div>
+                      ) : null}
                       {(bundle.resourceKinds ?? []).map((kind) => (
                         <div
                           key={`${bundle.id}-${kind}`}
@@ -198,28 +228,49 @@ export default function MarketplaceSellClient({
                     </div>
 
                     <div className="mt-5 flex flex-wrap gap-2">
-                      <Link
-                        href={`/showcase/${bundle.postId}`}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        View public post
-                      </Link>
-                      <Link
-                        href={`/showcase/${bundle.postId}#resources`}
-                        className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
-                      >
-                        <ArrowRight className="h-4 w-4" />
-                        Open resources
-                      </Link>
-                      <button
-                        type="button"
-                        onClick={() => void copyPostLink(bundle.postId)}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                      >
-                        <Copy className="h-4 w-4" />
-                        Copy post link
-                      </button>
+                      {bundle.post && !bundle.post.archivedAt && (bundle.post.visibility === 'public' || bundle.post.visibility === 'unlisted') ? (
+                        <>
+                          <Link
+                            href={`/showcase/${bundle.postId}`}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            View public post
+                          </Link>
+                          <Link
+                            href={`/showcase/${bundle.postId}#resources`}
+                            className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
+                          >
+                            <ArrowRight className="h-4 w-4" />
+                            Open resources
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => void copyPostLink(bundle.postId)}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                          >
+                            <Copy className="h-4 w-4" />
+                            Copy post link
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <Link
+                            href={`/post/${bundle.postId}/edit`}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            Open editor
+                          </Link>
+                          <Link
+                            href={`/post/${bundle.postId}/edit#resources`}
+                            className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
+                          >
+                            <ArrowRight className="h-4 w-4" />
+                            Edit resources
+                          </Link>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -250,6 +301,49 @@ export default function MarketplaceSellClient({
             </section>
           </div>
         )}
+
+        {deletedSnapshots.length > 0 ? (
+          <section className="mt-10 rounded-[32px] border border-white/8 bg-zinc-950/70 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.4)] backdrop-blur-sm">
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Deleted post history</div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              {deletedSnapshots.map((snapshot) => (
+                <div key={snapshot.id} className="rounded-[24px] border border-white/8 bg-black/35 p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-lg font-semibold text-white">{snapshot.title}</div>
+                      <div className="mt-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
+                        Deleted {new Date(snapshot.deletedAt).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
+                      {snapshot.hadPaidOrders ? 'Had paid unlocks' : 'No paid unlocks'}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {snapshot.bundleAccessMode ? (
+                      <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
+                        {snapshot.bundleAccessMode === 'free'
+                          ? 'Free resources'
+                          : formatUsdCents(snapshot.bundlePriceUsdCents ?? 0)}
+                      </div>
+                    ) : null}
+                    {(snapshot.resourceKinds ?? []).map((kind) => (
+                      <div
+                        key={`${snapshot.id}-${kind}`}
+                        className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200"
+                      >
+                        {getPostResourceKindLabel(kind)}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 text-sm text-zinc-300">
+                    {snapshot.salesCount} unlock{snapshot.salesCount === 1 ? '' : 's'} · {formatUsdCents(snapshot.earningsUsdCents)} tracked lifetime earnings
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
     </div>
   );

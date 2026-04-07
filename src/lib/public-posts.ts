@@ -89,6 +89,7 @@ async function fetchPublicPostRow(
     .from('posts')
     .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, created_at, post_format')
     .eq('id', id)
+    .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
     .maybeSingle();
 
@@ -97,6 +98,7 @@ async function fetchPublicPostRow(
       .from('posts')
       .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, created_at')
       .eq('id', id)
+      .is('archived_at', null)
       .in('visibility', ['public', 'unlisted'])
       .maybeSingle();
 

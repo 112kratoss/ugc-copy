@@ -12,6 +12,7 @@ const dashboard = {
       summary: 'Reusable launch notes.',
       previewText: 'See the exact structure.',
       accessMode: 'paid' as const,
+      status: 'published' as const,
       priceUsdCents: 1900,
       salesCount: 4,
       earningsUsdCents: 7600,
@@ -21,9 +22,11 @@ const dashboard = {
         id: 'post-public',
         title: 'Launch proof',
         visibility: 'public',
+        archivedAt: null,
       },
     },
   ],
+  deletedSnapshots: [],
   sales: [],
   totalSalesCount: 4,
   totalEarningsUsdCents: 7600,
@@ -48,6 +51,7 @@ describe('MarketplaceSellClient', () => {
       <MarketplaceSellClient
         initialDashboard={{
           bundles: [],
+          deletedSnapshots: [],
           sales: [],
           totalSalesCount: 0,
           totalEarningsUsdCents: 0,

@@ -14,9 +14,17 @@ type GenerationRow = {
   title: string | null;
   description: string | null;
   prompt: string | null;
+  archived_at?: string | null;
 };
 
 let generationsState: GenerationRow[] = [];
+let linkedPostsState: Array<{
+  id: string;
+  generation_id: string | null;
+  title: string | null;
+  visibility: 'public' | 'unlisted' | 'private';
+  archived_at: string | null;
+}> = [];
 const syncGenerationStatusesMock = vi.fn(async () => undefined);
 
 function createSupabaseClientMock() {
@@ -30,30 +38,81 @@ function createSupabaseClientMock() {
       })),
     },
     from(table: string) {
-      if (table !== 'generations') {
-        throw new Error(`Unexpected table: ${table}`);
+      if (table === 'generations') {
+        return {
+          select() {
+            const filters: Record<string, unknown> = {};
+            const query = {
+              eq(column: string, value: unknown) {
+                filters[column] = value;
+                return query;
+              },
+              order() {
+                return query;
+              },
+              is(column: string, value: unknown) {
+                filters[column] = value;
+                return query;
+              },
+              then(resolve: (value: { data: GenerationRow[]; error: null }) => void) {
+                const data = generationsState.filter((generation) => {
+                  if (filters.user_id && generation.user_id !== filters.user_id) {
+                    return false;
+                  }
+                  if (filters.archived_at === null && generation.archived_at) {
+                    return false;
+                  }
+                  return true;
+                });
+                resolve({ data, error: null });
+              },
+            };
+
+            return query;
+          },
+        };
       }
 
-      return {
-        select() {
-          return {
-            eq(column: string, value: unknown) {
-              if (column !== 'user_id') {
-                throw new Error(`Unexpected filter column: ${column}`);
-              }
+      if (table === 'posts') {
+        return {
+          select() {
+            const filters: Record<string, unknown> = {};
+            let generationIds: string[] = [];
+            const query = {
+              in(column: string, values: string[]) {
+                if (column === 'generation_id') {
+                  generationIds = values;
+                }
+                return query;
+              },
+              eq(column: string, value: unknown) {
+                filters[column] = value;
+                return query;
+              },
+              is(column: string, value: unknown) {
+                filters[column] = value;
+                return query;
+              },
+              then(resolve: (value: { data: typeof linkedPostsState; error: null }) => void) {
+                const data = linkedPostsState.filter((post) => {
+                  if (generationIds.length > 0 && (!post.generation_id || !generationIds.includes(post.generation_id))) {
+                    return false;
+                  }
+                  if (filters.archived_at === null && post.archived_at) {
+                    return false;
+                  }
+                  return true;
+                });
+                resolve({ data, error: null });
+              },
+            };
 
-              return {
-                async order() {
-                  return {
-                    data: generationsState.filter((generation) => generation.user_id === value),
-                    error: null,
-                  };
-                },
-              };
-            },
-          };
-        },
-      };
+            return query;
+          },
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
     },
   };
 }
@@ -109,6 +168,7 @@ describe('/api/generations route', () => {
         prompt: 'A creator-style product image with warm natural light.',
       },
     ];
+    linkedPostsState = [];
   });
 
   afterEach(() => {
@@ -125,11 +185,12 @@ describe('/api/generations route', () => {
 
     const { GET } = await import('@/app/api/generations/route');
     const response = await GET(
-      new Request('http://localhost/api/generations', {
-        headers: {
+      {
+        headers: new Headers({
           Authorization: 'Bearer test-token',
-        },
-      }) as never
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
     );
 
     const data = await response.json();
@@ -150,11 +211,12 @@ describe('/api/generations route', () => {
 
     const { GET } = await import('@/app/api/generations/route');
     const response = await GET(
-      new Request('http://localhost/api/generations', {
-        headers: {
+      {
+        headers: new Headers({
           Authorization: 'Bearer test-token',
-        },
-      }) as never
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
     );
 
     const data = await response.json();

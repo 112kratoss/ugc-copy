@@ -1,0 +1,54 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+export async function POST(request: NextRequest, context: RouteContext) {
+  const { id } = await context.params;
+  const supabase = createUserClient(request);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const adminSupabase = createServiceClient();
+    const { data, error } = await adminSupabase
+      .from('generations')
+      .update({
+        archived_at: new Date().toISOString(),
+        archived_by_user_id: user.id,
+        is_public: false,
+        showcase_asset_path: null,
+      })
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .is('archived_at', null)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      console.error('Failed to archive creation:', error);
+      return NextResponse.json({ error: 'Failed to archive creation.' }, { status: 500 });
+    }
+
+    if (!data) {
+      return NextResponse.json({ error: 'Creation not found.' }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      archived: true,
+    });
+  } catch (error) {
+    console.error('Failed to archive owner generation:', error);
+    return NextResponse.json({ error: 'Failed to archive creation.' }, { status: 500 });
+  }
+}

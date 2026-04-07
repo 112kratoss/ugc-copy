@@ -24,9 +24,11 @@ import {
   formatUsdCents,
   getPostResourceKindLabel,
   type PostResourceAttachment,
+  type PostResourceBundleInput,
   type PostResourceBundleAccessMode,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import type { EditablePostDraft } from './post-editor-types';
 
 type PostCategory = 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
 type PostVisibility = 'public' | 'unlisted' | 'private';
@@ -35,8 +37,9 @@ type PostFormat = 'text' | 'media' | 'mixed';
 
 interface CreatedPostState {
   postId: string;
-  showcasePath: string;
-  resourceBundlePath: string;
+  showcasePath: string | null;
+  ownerPath: string;
+  resourceBundlePath: string | null;
   visibility: PostVisibility;
   resourceAccessMode: PostResourceBundleAccessMode;
 }
@@ -208,37 +211,108 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
   return selectedKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ');
 }
 
-export default function NewPostClient() {
+function getInitialResourceSelections(bundle: PostResourceBundleInput | null | undefined): Record<PostResourceKind, boolean> {
+  const resources = bundle?.resources;
+  return {
+    prompt: Boolean(resources?.promptText?.trim()),
+    workflow: Boolean(resources?.workflowShareUrl?.trim() || resources?.workflowSnapshot),
+    files: Array.isArray(resources?.attachments) && resources.attachments.length > 0,
+    notes: Boolean(resources?.notesMarkdown?.trim()),
+    remix: Boolean(resources?.allowRemix),
+  };
+}
+
+function getInitialAttachmentRows(bundle: PostResourceBundleInput | null | undefined): AttachmentRow[] {
+  const attachments = Array.isArray(bundle?.resources?.attachments) ? bundle?.resources?.attachments : [];
+  if (!attachments || attachments.length === 0) {
+    return [createAttachmentRow()];
+  }
+
+  return attachments.map((attachment) =>
+    createAttachmentRow({
+      label: attachment.label,
+      url: attachment.url,
+    })
+  );
+}
+
+function getInitialPriceUsd(bundle: PostResourceBundleInput | null | undefined): string {
+  if (bundle?.accessMode !== 'paid') {
+    return '9';
+  }
+
+  const cents = typeof bundle.priceUsdCents === 'number' ? bundle.priceUsdCents : 0;
+  const dollars = cents / 100;
+  return Number.isInteger(dollars) ? String(dollars) : dollars.toFixed(2);
+}
+
+function getInitialProofMode(initialPost: EditablePostDraft | null | undefined): ProofMode {
+  if (!initialPost) {
+    return 'media';
+  }
+
+  return initialPost.postFormat === 'text' && !initialPost.mediaUrl ? 'text' : 'media';
+}
+
+interface NewPostClientProps {
+  initialPost?: EditablePostDraft | null;
+}
+
+export default function NewPostClient({ initialPost = null }: NewPostClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { session } = useAuth();
-  const generationId = searchParams.get('generationId');
+  const generationId = initialPost?.generationId ?? searchParams.get('generationId');
+  const isEditMode = Boolean(initialPost);
+  const initialBundle = initialPost?.resourceBundle ?? { accessMode: 'none' as const };
+  const initialResourceSelections = getInitialResourceSelections(initialBundle);
+  const initialCategory =
+    initialPost?.category && initialPost.category !== 'text'
+      ? initialPost.category
+      : 'image';
 
-  const [proofMode, setProofMode] = useState<ProofMode>('media');
+  const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
   const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [body, setBody] = useState('');
-  const [sourceTool, setSourceTool] = useState('');
-  const [visibility, setVisibility] = useState<PostVisibility>('public');
-  const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>('image');
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>('none');
-  const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(EMPTY_RESOURCE_SELECTIONS);
-  const [resourcePromptText, setResourcePromptText] = useState('');
-  const [resourceNotes, setResourceNotes] = useState('');
-  const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState('');
-  const [resourceAttachmentRows, setResourceAttachmentRows] = useState<AttachmentRow[]>([createAttachmentRow()]);
-  const [resourcePriceUsd, setResourcePriceUsd] = useState('9');
+  const [title, setTitle] = useState(initialPost?.title ?? '');
+  const [description, setDescription] = useState(initialPost?.description ?? '');
+  const [body, setBody] = useState(initialPost?.body ?? '');
+  const [sourceTool, setSourceTool] = useState(initialPost?.sourceTool ?? '');
+  const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
+  const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>(initialCategory);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost));
+  const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialBundle.accessMode ?? 'none');
+  const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(
+    Object.values(initialResourceSelections).some(Boolean)
+      ? initialResourceSelections
+      : EMPTY_RESOURCE_SELECTIONS
+  );
+  const [resourcePromptText, setResourcePromptText] = useState(initialBundle.resources?.promptText ?? '');
+  const [resourceNotes, setResourceNotes] = useState(initialBundle.resources?.notesMarkdown ?? '');
+  const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState(initialBundle.resources?.workflowShareUrl ?? '');
+  const [resourceAttachmentRows, setResourceAttachmentRows] = useState<AttachmentRow[]>(() => getInitialAttachmentRows(initialBundle));
+  const [resourcePriceUsd, setResourcePriceUsd] = useState(() => getInitialPriceUsd(initialBundle));
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
-  const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(null);
+  const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(() =>
+    initialPost?.generationId
+      ? {
+          id: initialPost.generationId,
+          title: initialPost.title,
+          description: initialPost.description,
+          prompt: initialPost.prompt,
+          outputUrl: initialPost.mediaUrl,
+          category: initialCategory,
+          model: 'UGC copy',
+        }
+      : null
+  );
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   const inferredCategory = useMemo(() => inferCategory(file), [file]);
+  const existingProofUrl = initialPost?.generationId ? null : initialPost?.mediaUrl ?? null;
   const hasGeneratedProof = Boolean(prefilledGeneration);
   const selectedResourceKinds = useMemo(
     () => RESOURCE_KIND_OPTIONS.filter((option) => resourceSelections[option.value]).map((option) => option.value),
@@ -246,7 +320,7 @@ export default function NewPostClient() {
   );
   const trimmedBody = body.trim();
   const bodyCount = body.length;
-  const hasMediaProof = proofMode === 'media' && (Boolean(file) || hasGeneratedProof);
+  const hasMediaProof = proofMode === 'media' && (Boolean(file) || hasGeneratedProof || Boolean(existingProofUrl));
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   const effectiveVisibility = resourceAccessMode === 'none' ? visibility : 'public';
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
@@ -479,7 +553,7 @@ export default function NewPostClient() {
     try {
       setIsSubmitting(true);
 
-      if (prefilledGeneration) {
+      if (generationId) {
         const response = await fetch('/api/showcase/publish', {
           method: 'POST',
           headers: {
@@ -487,8 +561,8 @@ export default function NewPostClient() {
             Authorization: `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({
-            generationId: prefilledGeneration.id,
-            isPublic: effectiveVisibility === 'public',
+            generationId,
+            visibility: effectiveVisibility,
             title: title.trim() || undefined,
             description: description.trim() || undefined,
             body: trimmedBody || undefined,
@@ -505,9 +579,45 @@ export default function NewPostClient() {
 
         setCreatedPost({
           postId: data.postId as string,
-          showcasePath: `/showcase/${data.postId as string}`,
-          resourceBundlePath: data.resourceBundlePath as string,
-          visibility: (data.isPublic ? 'public' : 'private') as PostVisibility,
+          showcasePath: (data.showcasePath as string | null) ?? null,
+          ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
+          resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
+          visibility: data.visibility as PostVisibility,
+          resourceAccessMode,
+        });
+
+        return;
+      }
+
+      if (isEditMode && initialPost) {
+        const response = await fetch(`/api/posts/${initialPost.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            title: title.trim() || null,
+            description: description.trim() || null,
+            body: trimmedBody || null,
+            sourceTool: sourceTool.trim() || null,
+            visibility: effectiveVisibility,
+            category,
+            resourceBundle: resourceBundle ?? { accessMode: 'none' },
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to save post.');
+        }
+
+        setCreatedPost({
+          postId: data.postId as string,
+          showcasePath: (data.showcasePath as string | null) ?? null,
+          ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
+          resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
+          visibility: data.visibility as PostVisibility,
           resourceAccessMode,
         });
 
@@ -543,8 +653,9 @@ export default function NewPostClient() {
 
       setCreatedPost({
         postId: data.postId as string,
-        showcasePath: data.showcasePath as string,
-        resourceBundlePath: data.resourceBundlePath as string,
+        showcasePath: (data.showcasePath as string | null) ?? null,
+        ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
+        resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
         visibility: data.visibility as PostVisibility,
         resourceAccessMode,
       });
@@ -557,6 +668,8 @@ export default function NewPostClient() {
 
   const createdPostHasResources = createdPost ? createdPost.resourceAccessMode !== 'none' : false;
   const selectedVisibilityOption = VISIBILITY_OPTIONS.find((option) => option.value === effectiveVisibility) ?? VISIBILITY_OPTIONS[0];
+  const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
+  const primaryPostLabel = createdPost?.showcasePath ? 'View post' : 'Open editor';
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -567,11 +680,11 @@ export default function NewPostClient() {
 
       <div className="studio-shell relative z-10 py-12 sm:py-16">
         <Link
-          href="/showcase"
+          href={isEditMode ? '/creations' : '/showcase'}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to feed
+          {isEditMode ? 'Back to workspace' : 'Back to feed'}
         </Link>
 
         <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_420px]">
@@ -581,14 +694,16 @@ export default function NewPostClient() {
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Post composer</div>
                   <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                    Publish the proof and decide what unlocks with it
+                    {isEditMode ? 'Update the post and its unlockable resources' : 'Publish the proof and decide what unlocks with it'}
                   </h1>
                   <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300">
-                    One flow, one post, one optional unlock. Start with the proof, add the story, and only attach resources if the post needs them.
+                    {isEditMode
+                      ? 'Edit the public story, adjust visibility, and keep the proof and attached resources aligned in one place.'
+                      : 'One flow, one post, one optional unlock. Start with the proof, add the story, and only attach resources if the post needs them.'}
                   </p>
                 </div>
                 <div className="hidden rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100 sm:inline-flex">
-                  Creator-first publishing
+                  {isEditMode ? 'Owner editor' : 'Creator-first publishing'}
                 </div>
               </div>
 
@@ -608,15 +723,23 @@ export default function NewPostClient() {
             </div>
 
             <form className="space-y-6" onSubmit={handleSubmit}>
+              {initialPost?.archivedAt ? (
+                <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
+                  This post is archived. It stays out of public surfaces until you restore it from your workspace.
+                </div>
+              ) : null}
+
               <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.94),rgba(9,11,16,0.96))] p-5 sm:p-6">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/75">Step 1</div>
                     <h2 className="mt-2 text-xl font-semibold text-white">Start with the proof</h2>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {hasGeneratedProof
-                        ? 'Your generated proof is already attached. You can tell the story and decide what unlocks next.'
-                        : 'Pick the simplest starting point: proof media or a note-only post.'}
+                      {isEditMode
+                        ? 'The proof is already attached. This edit screen keeps the proof fixed while you update the story, visibility, and resources around it.'
+                        : hasGeneratedProof
+                          ? 'Your generated proof is already attached. You can tell the story and decide what unlocks next.'
+                          : 'Pick the simplest starting point: proof media or a note-only post.'}
                     </p>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
@@ -624,7 +747,7 @@ export default function NewPostClient() {
                   </div>
                 </div>
 
-                {!hasGeneratedProof ? (
+                {!hasGeneratedProof && !isEditMode ? (
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">
                     {([
                       {
@@ -730,6 +853,41 @@ export default function NewPostClient() {
                             {generationError}
                           </div>
                         ) : null}
+                      </div>
+                    ) : existingProofUrl ? (
+                      <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Attached proof</div>
+                            <div className="mt-2 text-lg font-semibold text-white">
+                              {title.trim() || 'Existing post media'}
+                            </div>
+                            <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
+                              This proof is already saved on the post. Use the sections below to update the story or the resources around it.
+                            </p>
+                          </div>
+                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">
+                            Proof locked in
+                          </div>
+                        </div>
+
+                        <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
+                          {category === 'video' || category === 'motion' ? (
+                            <video
+                              src={existingProofUrl}
+                              controls
+                              playsInline
+                              className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
+                            />
+                          ) : (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={existingProofUrl}
+                              alt={title || 'Saved post preview'}
+                              className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
+                            />
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <label className="block rounded-[28px] border border-dashed border-white/14 bg-white/[0.02] p-5 transition hover:border-white/20 hover:bg-white/[0.03]">
@@ -1168,27 +1326,37 @@ export default function NewPostClient() {
                 <div className="rounded-[28px] border border-emerald-500/20 bg-emerald-500/10 p-5">
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="text-sm font-semibold text-white">
-                      {createdPostHasResources ? 'Post published with resources' : 'Post published'}
+                      {isEditMode
+                        ? 'Changes saved'
+                        : createdPostHasResources
+                          ? 'Post published with resources'
+                          : 'Post published'}
                     </div>
                     <div className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
                       {createdPost.visibility}
                     </div>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-emerald-50/90">
-                    {createdPostHasResources
-                      ? 'The proof is public and the locked resources are ready on the same post page.'
-                      : createdPost.visibility === 'public'
-                        ? 'Your post is live.'
-                        : 'Your post is saved with limited visibility.'}
+                    {isEditMode
+                      ? createdPost.visibility === 'private'
+                        ? 'Your changes are saved in the owner editor. This post is not publicly visible right now.'
+                        : 'The post has been updated and the latest version is ready.'
+                      : createdPostHasResources
+                        ? 'The proof is public and the locked resources are ready on the same post page.'
+                        : createdPost.visibility === 'public'
+                          ? 'Your post is live.'
+                          : 'Your post is saved with limited visibility.'}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-3">
-                    <Link
-                      href={createdPost.showcasePath}
-                      className="rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-                    >
-                      View post
-                    </Link>
-                    {createdPostHasResources ? (
+                    {primaryPostPath ? (
+                      <Link
+                        href={primaryPostPath}
+                        className="rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                      >
+                        {primaryPostLabel}
+                      </Link>
+                    ) : null}
+                    {createdPostHasResources && createdPost.resourceBundlePath ? (
                       <Link
                         href={createdPost.resourceBundlePath}
                         className="rounded-full border border-emerald-300/30 bg-emerald-400/15 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/20"
@@ -1214,13 +1382,13 @@ export default function NewPostClient() {
                       className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
                     >
                       {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-                      Publish post
+                      {isEditMode ? 'Save changes' : 'Publish post'}
                     </button>
                     <Link
-                      href="/showcase"
+                      href={isEditMode ? '/creations' : '/showcase'}
                       className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                     >
-                      Back to feed
+                      {isEditMode ? 'Back to workspace' : 'Back to feed'}
                     </Link>
                   </div>
                 </div>

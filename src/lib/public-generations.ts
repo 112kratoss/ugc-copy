@@ -92,6 +92,7 @@ async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow
       .select(selectClause)
       .eq('id', id)
       .eq('is_public', true)
+      .is('archived_at', null)
       .eq('status', 'succeeded')
       .maybeSingle();
 

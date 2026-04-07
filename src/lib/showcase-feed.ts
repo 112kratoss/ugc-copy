@@ -116,7 +116,8 @@ async function fetchPostRows(
   let query = adminSupabase
     .from('posts')
     .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
-    .eq('visibility', 'public');
+    .eq('visibility', 'public')
+    .is('archived_at', null);
 
   if (category === 'text') {
     query = query.or('category.eq.text,post_format.eq.mixed');
@@ -150,7 +151,8 @@ async function fetchPostRows(
     let legacyQuery = adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
-      .eq('visibility', 'public');
+      .eq('visibility', 'public')
+      .is('archived_at', null);
 
     if (category !== 'all') {
       legacyQuery = legacyQuery.eq('category', category);

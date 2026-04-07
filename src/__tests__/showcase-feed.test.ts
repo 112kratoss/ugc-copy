@@ -24,6 +24,7 @@ type PostRow = {
   source_kind: 'ugc_copy' | 'external' | 'manual';
   source_tool: string | null;
   generation_id: string | null;
+  archived_at?: string | null;
 };
 
 type GenerationModelRow = {
@@ -86,6 +87,10 @@ function createServiceClientMock() {
             filters[column] = value;
             return query;
           },
+          is(column: string, value: unknown) {
+            filters[column] = value;
+            return query;
+          },
           order(column: string, options: { ascending: boolean }) {
             sorts.push({ column: column as keyof PostRow, ascending: options.ascending });
             return query;
@@ -97,7 +102,11 @@ function createServiceClientMock() {
           async range(start: number, end: number) {
             const rows = [...postsState]
               .filter((row) =>
-                Object.entries(filters).every(([key, value]) => (row as Record<string, unknown>)[key] === value)
+                Object.entries(filters).every(([key, value]) =>
+                  key === 'archived_at' && value === null
+                    ? ((row as Record<string, unknown>)[key] ?? null) === null
+                    : (row as Record<string, unknown>)[key] === value
+                )
               )
               .filter((row) => !textFilter || row.category === 'text' || row.post_format === 'mixed')
               .sort((left, right) => {

@@ -41,6 +41,7 @@ type PostRow = {
   source_tool: string | null;
   user_id: string;
   visibility: 'public' | 'unlisted' | 'private';
+  archived_at?: string | null;
 };
 
 let profilesState: ProfileRow[] = [];
@@ -84,6 +85,10 @@ function createServiceClientMock() {
                 filters[column] = value;
                 return this;
               },
+              is(column: string, value: unknown) {
+                filters[column] = value;
+                return this;
+              },
               async in(column: string, values: unknown[]) {
                 const rows = generationsState.filter((row) => values.includes((row as Record<string, unknown>)[column]));
                 return { data: rows, error: null };
@@ -97,7 +102,11 @@ function createServiceClientMock() {
               async limit(limit: number) {
                 const rows = generationsState
                   .filter((row) =>
-                    Object.entries(filters).every(([key, value]) => (row as Record<string, unknown>)[key] === value)
+                    Object.entries(filters).every(([key, value]) =>
+                      key === 'archived_at' && value === null
+                        ? ((row as Record<string, unknown>)[key] ?? null) === null
+                        : (row as Record<string, unknown>)[key] === value
+                    )
                   )
                   .slice(0, limit);
                 return { data: rows, error: null };
@@ -116,13 +125,21 @@ function createServiceClientMock() {
                 filters[column] = value;
                 return this;
               },
+              is(column: string, value: unknown) {
+                filters[column] = value;
+                return this;
+              },
               order() {
                 return this;
               },
               async limit(limit: number) {
                 const rows = postsState
                   .filter((row) =>
-                    Object.entries(filters).every(([key, value]) => (row as Record<string, unknown>)[key] === value)
+                    Object.entries(filters).every(([key, value]) =>
+                      key === 'archived_at' && value === null
+                        ? ((row as Record<string, unknown>)[key] ?? null) === null
+                        : (row as Record<string, unknown>)[key] === value
+                    )
                   )
                   .slice(0, limit);
                 return { data: rows, error: null };

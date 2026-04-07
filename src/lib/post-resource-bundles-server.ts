@@ -87,6 +87,7 @@ interface LinkedPostRow extends PostMediaRow {
   category: ShowcaseItemCategory;
   post_format: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
+  archived_at: string | null;
   source_kind: ShowcaseSourceKind;
   source_tool: string | null;
 }
@@ -120,6 +121,7 @@ export interface PostResourceBundleLinkedPost {
   body: string;
   postFormat: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
+  archivedAt: string | null;
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
   mediaUrl: string | null;
@@ -154,8 +156,29 @@ export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
   viewerCanAccess: boolean;
 }
 
+export interface SellerResourceDashboardBundle extends MarketplaceResourceListItem {
+  status: PostResourceBundleStatus;
+  post: PostResourceBundleLinkedPost | null;
+}
+
+export interface DeletedPostResourceSnapshot {
+  id: string;
+  title: string;
+  visibility: ShowcaseVisibility;
+  sourceKind: ShowcaseSourceKind;
+  bundleAccessMode: PersistedPostResourceBundleAccessMode | null;
+  bundleStatus: PostResourceBundleStatus | null;
+  bundlePriceUsdCents: number | null;
+  resourceKinds: PostResourceKind[];
+  salesCount: number;
+  earningsUsdCents: number;
+  hadPaidOrders: boolean;
+  deletedAt: string;
+}
+
 export interface SellerPostResourceBundleDashboard {
-  bundles: MarketplaceResourceListItem[];
+  bundles: SellerResourceDashboardBundle[];
+  deletedSnapshots: DeletedPostResourceSnapshot[];
   sales: Array<{
     id: string;
     bundleId: string;
@@ -340,11 +363,11 @@ async function loadLinkedPostMap(
   const adminSupabase = createServiceClient();
   let resultQuery = adminSupabase
     .from('posts')
-    .select('id, title, body, category, post_format, visibility, showcase_asset_path, output_url, source_kind, source_tool')
+    .select('id, title, body, category, post_format, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
     .in('id', uniquePostIds);
 
   if (scope === 'public') {
-    resultQuery = resultQuery.eq('visibility', 'public');
+    resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null);
   }
 
   const result = await resultQuery;
@@ -353,11 +376,11 @@ async function loadLinkedPostMap(
   if (isMissingPostTextColumnsError(result.error)) {
     let legacyQuery = adminSupabase
       .from('posts')
-      .select('id, title, category, visibility, showcase_asset_path, output_url, source_kind, source_tool')
+      .select('id, title, category, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
-      legacyQuery = legacyQuery.eq('visibility', 'public');
+      legacyQuery = legacyQuery.eq('visibility', 'public').is('archived_at', null);
     }
 
     const legacyResult = await legacyQuery;
@@ -390,6 +413,7 @@ async function loadLinkedPostMap(
       body: row.body?.trim() || '',
       postFormat: row.post_format,
       visibility: row.visibility,
+      archivedAt: row.archived_at,
       sourceKind: row.source_kind,
       sourceTool: row.source_tool,
       mediaUrl: await resolvePostMediaUrl(adminSupabase, row),
@@ -673,6 +697,7 @@ export async function getSellerPostResourceBundleDashboard(
     if (isMissingPostResourceBundlesSchemaError(error)) {
       return {
         bundles: [],
+        deletedSnapshots: [],
         sales: [],
         totalSalesCount: 0,
         totalEarningsUsdCents: 0,
@@ -684,7 +709,11 @@ export async function getSellerPostResourceBundleDashboard(
   }
 
   const rows = (data ?? []) as BundleRow[];
-  const bundles = await hydrateBundleRows(rows, countryCode, 'owner');
+  const hydratedBundles = await hydrateBundleRows(rows, countryCode, 'owner');
+  const bundles = hydratedBundles.map((bundle, index) => ({
+    ...bundle,
+    status: rows[index]?.status ?? 'draft',
+  }));
   const bundleIdToTitle = new Map(rows.map((row) => [row.id, row.title]));
 
   let sales: SellerPostResourceBundleDashboard['sales'] = [];
@@ -727,8 +756,53 @@ export async function getSellerPostResourceBundleDashboard(
     });
   }
 
+  const { data: deletedAuditData, error: deletedAuditError } = await adminSupabase
+    .from('post_deletion_audits')
+    .select('id, title, visibility, source_kind, bundle_access_mode, bundle_status, bundle_price_usd_cents, bundle_resource_kinds, sales_count, earnings_usd_cents, had_paid_orders, deleted_at')
+    .eq('owner_user_id', userId)
+    .order('deleted_at', { ascending: false });
+
+  if (deletedAuditError) {
+    console.error('Failed to load deleted post resource snapshots:', deletedAuditError);
+    throw deletedAuditError;
+  }
+
+  const deletedSnapshots = ((deletedAuditData ?? []) as Array<{
+    id: string;
+    title: string;
+    visibility: ShowcaseVisibility;
+    source_kind: ShowcaseSourceKind;
+    bundle_access_mode: PersistedPostResourceBundleAccessMode | null;
+    bundle_status: PostResourceBundleStatus | null;
+    bundle_price_usd_cents: number | null;
+    bundle_resource_kinds: unknown;
+    sales_count: number;
+    earnings_usd_cents: number;
+    had_paid_orders: boolean;
+    deleted_at: string;
+  }>).map((row) => ({
+    id: row.id,
+    title: row.title,
+    visibility: row.visibility,
+    sourceKind: row.source_kind,
+    bundleAccessMode: row.bundle_access_mode,
+    bundleStatus: row.bundle_status,
+    bundlePriceUsdCents: row.bundle_price_usd_cents,
+    resourceKinds: Array.isArray(row.bundle_resource_kinds)
+      ? row.bundle_resource_kinds.filter(
+          (kind): kind is PostResourceKind =>
+            kind === 'prompt' || kind === 'workflow' || kind === 'files' || kind === 'notes' || kind === 'remix'
+        )
+      : [],
+    salesCount: row.sales_count,
+    earningsUsdCents: row.earnings_usd_cents,
+    hadPaidOrders: row.had_paid_orders,
+    deletedAt: row.deleted_at,
+  }));
+
   return {
     bundles,
+    deletedSnapshots,
     sales,
     totalSalesCount: rows.reduce((sum, row) => sum + row.sales_count, 0),
     totalEarningsUsdCents: rows.reduce((sum, row) => sum + row.earnings_usd_cents, 0),

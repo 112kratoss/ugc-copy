@@ -1,0 +1,379 @@
+import 'server-only';
+
+import {
+  getPostResourceKinds,
+  type PostResourceBundleInput,
+  type PostResourceBundleResources,
+  type PostResourceBundleStatus,
+  type PostResourceKind,
+} from '@/lib/post-resource-bundles';
+import { getPostResourceBundleDetailByPostId } from '@/lib/post-resource-bundles-server';
+import {
+  deriveTitleFromBody,
+  getPostMediaKind,
+  isMissingPostResourceBundlesSchemaError,
+  isMissingPostTextColumnsError,
+  normalizeLegacyPostFormat,
+  resolvePostMediaUrl,
+  type PostMediaRow,
+} from '@/lib/posts-server';
+import { createServiceClient } from '@/lib/server-helpers';
+import type {
+  ShowcaseItemCategory,
+  ShowcaseMediaKind,
+  ShowcasePostFormat,
+  ShowcaseSourceKind,
+  ShowcaseVisibility,
+} from '@/lib/showcase';
+
+type OwnerPostRow = PostMediaRow & {
+  id: string;
+  user_id: string;
+  generation_id: string | null;
+  visibility: ShowcaseVisibility;
+  archived_at: string | null;
+  archived_by_user_id: string | null;
+  prompt: string | null;
+  title: string | null;
+  description: string | null;
+  body: string | null;
+  category: ShowcaseItemCategory;
+  post_format: ShowcasePostFormat;
+  source_kind: ShowcaseSourceKind;
+  source_tool: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type LegacyOwnerPostRow = Omit<OwnerPostRow, 'body' | 'post_format' | 'archived_at' | 'archived_by_user_id' | 'updated_at'>;
+
+type BundleSummaryRow = {
+  id: string;
+  post_id: string;
+  access_mode: 'free' | 'paid';
+  status: PostResourceBundleStatus;
+  price_usd_cents: number;
+  sales_count: number;
+  earnings_usd_cents: number;
+  prompt_text: string | null;
+  notes_markdown: string | null;
+  workflow_share_url: string | null;
+  workflow_snapshot: unknown;
+  attachments: unknown;
+  allow_remix: boolean;
+};
+
+export interface OwnerPostBundleSummary {
+  id: string;
+  accessMode: 'free' | 'paid';
+  status: PostResourceBundleStatus;
+  priceUsdCents: number;
+  salesCount: number;
+  earningsUsdCents: number;
+  resourceKinds: PostResourceKind[];
+}
+
+export interface OwnerPostListItem {
+  id: string;
+  generationId: string | null;
+  visibility: ShowcaseVisibility;
+  archivedAt: string | null;
+  mediaUrl: string | null;
+  mediaKind: ShowcaseMediaKind | null;
+  title: string;
+  description: string;
+  prompt: string;
+  body: string;
+  category: ShowcaseItemCategory;
+  postFormat: ShowcasePostFormat;
+  sourceKind: ShowcaseSourceKind;
+  sourceTool: string | null;
+  sourceLabel: string;
+  createdAt: string;
+  updatedAt: string;
+  publicPath: string | null;
+  ownerPath: string;
+  resourcePath: string | null;
+  canShare: boolean;
+  bundle: OwnerPostBundleSummary | null;
+}
+
+export interface OwnerPostDetail extends OwnerPostListItem {
+  resourceBundleInput: PostResourceBundleInput;
+  hasPaidOrders: boolean;
+}
+
+export type OwnerPostVisibilityFilter = ShowcaseVisibility | 'archived' | 'all';
+
+function getSourceLabel(sourceKind: ShowcaseSourceKind): string {
+  if (sourceKind === 'ugc_copy') {
+    return 'Created here';
+  }
+
+  if (sourceKind === 'external') {
+    return 'Uploaded';
+  }
+
+  return 'Note only';
+}
+
+function isShareablePost(row: { visibility: ShowcaseVisibility; archived_at: string | null }): boolean {
+  return row.archived_at === null && (row.visibility === 'public' || row.visibility === 'unlisted');
+}
+
+function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleResources {
+  return {
+    promptText: typeof row.prompt_text === 'string' && row.prompt_text.trim() ? row.prompt_text.trim() : null,
+    notesMarkdown: typeof row.notes_markdown === 'string' && row.notes_markdown.trim() ? row.notes_markdown.trim() : null,
+    workflowShareUrl:
+      typeof row.workflow_share_url === 'string' && row.workflow_share_url.trim()
+        ? row.workflow_share_url.trim()
+        : null,
+    workflowSnapshot: row.workflow_snapshot ? (row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot']) : null,
+    attachments: Array.isArray(row.attachments)
+      ? row.attachments.filter(
+          (item): item is { label: string; url: string } =>
+            Boolean(
+              item &&
+                typeof item === 'object' &&
+                typeof (item as { label?: unknown }).label === 'string' &&
+                typeof (item as { url?: unknown }).url === 'string'
+            )
+        )
+      : [],
+    allowRemix: Boolean(row.allow_remix),
+  };
+}
+
+async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Promise<OwnerPostRow[]> {
+  const adminSupabase = createServiceClient();
+  let query = adminSupabase
+    .from('posts')
+    .select(
+      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!includeArchived) {
+    query = query.is('archived_at', null);
+  }
+
+  const result = await query;
+
+  if (isMissingPostTextColumnsError(result.error)) {
+    let legacyQuery = adminSupabase
+      .from('posts')
+      .select(
+        'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, created_at'
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    const legacyResult = await legacyQuery;
+    if (legacyResult.error) {
+      throw legacyResult.error;
+    }
+
+    return ((legacyResult.data ?? []) as LegacyOwnerPostRow[]).map((row) => ({
+      ...row,
+      body: null,
+      post_format: normalizeLegacyPostFormat(row.category),
+      archived_at: null,
+      archived_by_user_id: null,
+      updated_at: row.created_at,
+    }));
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return (result.data ?? []) as OwnerPostRow[];
+}
+
+async function fetchOwnerPostRow(postId: string, userId: string): Promise<OwnerPostRow | null> {
+  const adminSupabase = createServiceClient();
+  let result = await adminSupabase
+    .from('posts')
+    .select(
+      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+    )
+    .eq('id', postId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (isMissingPostTextColumnsError(result.error)) {
+    const legacyResult = await adminSupabase
+      .from('posts')
+      .select(
+        'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, created_at'
+      )
+      .eq('id', postId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (legacyResult.error) {
+      throw legacyResult.error;
+    }
+
+    if (!legacyResult.data) {
+      return null;
+    }
+
+    const row = legacyResult.data as LegacyOwnerPostRow;
+    return {
+      ...row,
+      body: null,
+      post_format: normalizeLegacyPostFormat(row.category),
+      archived_at: null,
+      archived_by_user_id: null,
+      updated_at: row.created_at,
+    };
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return (result.data as OwnerPostRow | null) ?? null;
+}
+
+async function loadBundleMap(postIds: string[]) {
+  if (postIds.length === 0) {
+    return new Map<string, BundleSummaryRow>();
+  }
+
+  const adminSupabase = createServiceClient();
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundles')
+    .select(
+      'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix'
+    )
+    .in('post_id', postIds);
+
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error)) {
+      return new Map<string, BundleSummaryRow>();
+    }
+
+    throw error;
+  }
+
+  return new Map(
+    ((data ?? []) as BundleSummaryRow[]).map((row) => [row.post_id, row])
+  );
+}
+
+async function toOwnerPostListItem(row: OwnerPostRow, bundleMap: Map<string, BundleSummaryRow>) {
+  const adminSupabase = createServiceClient();
+  const mediaUrl = await resolvePostMediaUrl(adminSupabase, row);
+  const mediaKind = getPostMediaKind(row.category, row.post_format);
+  const canShare = isShareablePost(row);
+  const bundleRow = bundleMap.get(row.id) ?? null;
+  const normalizedBundleResources = bundleRow ? normalizeBundleResources(bundleRow) : null;
+
+  return {
+    id: row.id,
+    generationId: row.generation_id,
+    visibility: row.visibility,
+    archivedAt: row.archived_at,
+    mediaUrl,
+    mediaKind,
+    title:
+      row.title?.trim() ||
+      deriveTitleFromBody(row.body) ||
+      (row.post_format === 'text' ? 'Untitled note' : 'Untitled post'),
+    description: row.description?.trim() || '',
+    prompt: row.prompt?.trim() || '',
+    body: row.body?.trim() || '',
+    category: row.category,
+    postFormat: row.post_format,
+    sourceKind: row.source_kind,
+    sourceTool: row.source_tool,
+    sourceLabel: getSourceLabel(row.source_kind),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    publicPath: canShare ? `/showcase/${row.id}` : null,
+    ownerPath: `/post/${row.id}/edit`,
+    resourcePath: bundleRow ? (canShare ? `/showcase/${row.id}#resources` : `/post/${row.id}/edit#resources`) : null,
+    canShare,
+    bundle: bundleRow
+      ? {
+          id: bundleRow.id,
+          accessMode: bundleRow.access_mode,
+          status: bundleRow.status,
+          priceUsdCents: bundleRow.price_usd_cents,
+          salesCount: bundleRow.sales_count,
+          earningsUsdCents: bundleRow.earnings_usd_cents,
+          resourceKinds: getPostResourceKinds(normalizedBundleResources),
+        }
+      : null,
+  } satisfies OwnerPostListItem;
+}
+
+export async function getOwnerPostList(
+  userId: string,
+  options?: {
+    includeArchived?: boolean;
+    visibility?: OwnerPostVisibilityFilter;
+  }
+): Promise<OwnerPostListItem[]> {
+  const includeArchived = options?.includeArchived ?? false;
+  const visibility = options?.visibility ?? 'all';
+  const rows = await fetchOwnerPostRows(userId, includeArchived);
+  const bundleMap = await loadBundleMap(rows.map((row) => row.id));
+  const filteredRows = rows.filter((row) => {
+    if (visibility === 'archived') {
+      return Boolean(row.archived_at);
+    }
+
+    if (visibility === 'all') {
+      return true;
+    }
+
+    return row.archived_at === null && row.visibility === visibility;
+  });
+
+  return Promise.all(filteredRows.map((row) => toOwnerPostListItem(row, bundleMap)));
+}
+
+export async function getOwnerPostDetail(
+  postId: string,
+  userId: string,
+  options?: {
+    countryCode?: string | null;
+  }
+): Promise<OwnerPostDetail | null> {
+  const row = await fetchOwnerPostRow(postId, userId);
+  if (!row) {
+    return null;
+  }
+
+  const bundleMap = await loadBundleMap([row.id]);
+  const listItem = await toOwnerPostListItem(row, bundleMap);
+  const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
+    viewerUserId: userId,
+    countryCode: options?.countryCode ?? null,
+  });
+
+  return {
+    ...listItem,
+    resourceBundleInput: bundleDetail
+      ? {
+          accessMode: bundleDetail.accessMode,
+          summary: bundleDetail.summary,
+          previewText: bundleDetail.previewText,
+          priceUsdCents: bundleDetail.priceUsdCents,
+          resources: bundleDetail.resources,
+        }
+      : {
+          accessMode: 'none',
+        },
+    hasPaidOrders: Boolean(
+      bundleDetail &&
+        bundleDetail.accessMode === 'paid' &&
+        bundleDetail.salesCount > 0
+    ),
+  };
+}

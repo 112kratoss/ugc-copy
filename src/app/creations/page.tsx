@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Clock, Zap, Film, Loader2, Globe, CheckCircle2, X, Volume2, UserRound, Eye, Share2 } from 'lucide-react';
+import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, Loader2, Lock, PencilLine, RotateCcw, Share2, Trash2, UserRound, Volume2, Wand2, X, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
@@ -11,6 +11,7 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { isAudioModel, isImageModel } from '@/lib/models';
+import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { supabase } from '@/lib/supabase';
 
@@ -27,19 +28,85 @@ interface Generation {
     title?: string | null;
     description?: string | null;
     prompt?: string | null;
+    archived_at?: string | null;
+    linked_post_id?: string | null;
+    linked_post_title?: string | null;
+    linked_post_visibility?: 'public' | 'unlisted' | 'private' | null;
+    linked_post_archived_at?: string | null;
 }
 
 type FilterType = 'all' | 'images' | 'videos' | 'audio';
+type WorkspaceView = 'creations' | 'posts';
+type OwnerPostVisibilityFilter = 'all' | 'public' | 'unlisted' | 'private' | 'archived';
+
+interface OwnerPost {
+    id: string;
+    generationId: string | null;
+    visibility: 'public' | 'unlisted' | 'private';
+    archivedAt: string | null;
+    mediaUrl: string | null;
+    mediaKind: 'image' | 'video' | null;
+    title: string;
+    description: string;
+    prompt: string;
+    body: string;
+    category: 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
+    postFormat: 'text' | 'media' | 'mixed';
+    sourceKind: 'ugc_copy' | 'external' | 'manual';
+    sourceTool: string | null;
+    sourceLabel: string;
+    createdAt: string;
+    updatedAt: string;
+    publicPath: string | null;
+    ownerPath: string;
+    resourcePath: string | null;
+    canShare: boolean;
+    bundle: {
+        id: string;
+        accessMode: 'free' | 'paid';
+        status: 'draft' | 'published';
+        priceUsdCents: number;
+        salesCount: number;
+        earningsUsdCents: number;
+        resourceKinds: Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>;
+    } | null;
+}
 
 export default function CreationsPage() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const { session } = useAuth();
+    const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
+    const initialPostVisibility = (() => {
+        const value = searchParams.get('visibility');
+        if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
+            return value;
+        }
+        return 'all';
+    })();
     const [generations, setGenerations] = useState<Generation[]>([]);
+    const [posts, setPosts] = useState<OwnerPost[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [filter, setFilter] = useState<FilterType>('all');
+    const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
+    const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
+
+    useEffect(() => {
+        const nextView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
+        const nextVisibility = (() => {
+            const value = searchParams.get('visibility');
+            if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
+                return value;
+            }
+            return 'all';
+        })();
+
+        setActiveView(nextView);
+        setPostVisibilityFilter(nextVisibility);
+    }, [searchParams]);
 
     const fetchCreations = useCallback(async () => {
         const { data: { session } } = await supabase.auth.getSession();
@@ -49,13 +116,23 @@ export default function CreationsPage() {
         }
 
         try {
-            const generationsRes = await fetch('/api/generations', {
-                headers: { 'Authorization': `Bearer ${session.access_token}` },
-            });
+            const [generationsRes, postsRes] = await Promise.all([
+                fetch('/api/generations?includeArchived=true', {
+                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                }),
+                fetch('/api/posts?scope=owner&includeArchived=true', {
+                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                }),
+            ]);
 
             const generationsData = await generationsRes.json();
             if (generationsRes.ok) {
                 setGenerations(generationsData.generations || []);
+            }
+
+            const postsData = await postsRes.json();
+            if (postsRes.ok) {
+                setPosts(postsData.posts || []);
             }
         } catch (err) {
             console.error('Failed to fetch creations:', err);
@@ -126,6 +203,210 @@ export default function CreationsPage() {
             }
         } catch (err) {
             console.error(err);
+        }
+    };
+
+    const copyPostLink = async (postId: string) => {
+        try {
+            await navigator.clipboard.writeText(`${window.location.origin}/showcase/${postId}`);
+        } catch (error) {
+            console.error('Failed to copy post link:', error);
+        }
+    };
+
+    const handlePostArchive = async (postId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations?view=posts');
+            return;
+        }
+
+        const confirmed = window.confirm('Archive this post? It will disappear from public surfaces until you restore it.');
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/posts/${postId}/archive`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to archive post.');
+            }
+
+            await fetchCreations();
+            setActiveView('posts');
+            setPostVisibilityFilter('archived');
+        } catch (error) {
+            console.error('Failed to archive post:', error);
+        }
+    };
+
+    const handlePostRestore = async (postId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations?view=posts&visibility=archived');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/posts/${postId}/restore`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to restore post.');
+            }
+
+            await fetchCreations();
+            setActiveView('posts');
+            setPostVisibilityFilter('all');
+        } catch (error) {
+            console.error('Failed to restore post:', error);
+        }
+    };
+
+    const handlePostDelete = async (postId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations?view=posts');
+            return;
+        }
+
+        const confirmed = window.confirm(
+            'Delete this post permanently? If it has paid unlocks, you will get a second confirmation so you can still choose archive instead.'
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            let response = await fetch(`/api/posts/${postId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({ force: false }),
+            });
+            let data = await response.json();
+
+            if (response.status === 409 && data?.requiresForceDelete) {
+                const forceConfirmed = window.confirm(
+                    'This post already has paid unlocks. Archive is safer, but you can still force delete it. Do you want to continue?'
+                );
+
+                if (!forceConfirmed) {
+                    return;
+                }
+
+                response = await fetch(`/api/posts/${postId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                    body: JSON.stringify({ force: true }),
+                });
+                data = await response.json();
+            }
+
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to delete post.');
+            }
+
+            await fetchCreations();
+            setActiveView('posts');
+        } catch (error) {
+            console.error('Failed to delete post:', error);
+        }
+    };
+
+    const handleGenerationArchive = async (generationId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations');
+            return;
+        }
+
+        const confirmed = window.confirm('Archive this creation? It will leave the active workspace until you restore it.');
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/generations/${generationId}/archive`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to archive creation.');
+            }
+
+            await fetchCreations();
+        } catch (error) {
+            console.error('Failed to archive creation:', error);
+        }
+    };
+
+    const handleGenerationRestore = async (generationId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/generations/${generationId}/restore`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to restore creation.');
+            }
+
+            await fetchCreations();
+        } catch (error) {
+            console.error('Failed to restore creation:', error);
+        }
+    };
+
+    const handleGenerationDelete = async (generationId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations');
+            return;
+        }
+
+        const confirmed = window.confirm(
+            'Delete this raw creation from your workspace? Any linked post will stay intact, but generation-based remix linkage may stop working.'
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/generations/${generationId}`, {
+                method: 'DELETE',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to delete creation.');
+            }
+
+            await fetchCreations();
+        } catch (error) {
+            console.error('Failed to delete creation:', error);
         }
     };
 
@@ -257,9 +538,11 @@ export default function CreationsPage() {
         );
     };
 
-    const successfulGenerations = generations.filter(g => g.status === 'succeeded' && g.output_url);
-    const processingGenerations = generations.filter(g => g.status === 'processing' || g.status === 'waiting');
-    const failedGenerations = generations.filter(g => g.status === 'failed');
+    const archivedGenerations = generations.filter((generation) => Boolean(generation.archived_at));
+    const activeGenerations = generations.filter((generation) => !generation.archived_at);
+    const successfulGenerations = activeGenerations.filter(g => g.status === 'succeeded' && g.output_url);
+    const processingGenerations = activeGenerations.filter(g => g.status === 'processing' || g.status === 'waiting');
+    const failedGenerations = activeGenerations.filter(g => g.status === 'failed');
 
     const filteredSuccessful = successfulGenerations.filter(g => {
         const mediaKind = getMediaKind(g);
@@ -272,6 +555,17 @@ export default function CreationsPage() {
     const imageCount = successfulGenerations.filter(g => getMediaKind(g) === 'image').length;
     const videoCount = successfulGenerations.filter(g => getMediaKind(g) === 'video').length;
     const audioCount = successfulGenerations.filter(g => getMediaKind(g) === 'audio').length;
+    const visiblePosts = useMemo(() => {
+        if (postVisibilityFilter === 'archived') {
+            return posts.filter((post) => Boolean(post.archivedAt));
+        }
+
+        if (postVisibilityFilter === 'all') {
+            return posts.filter((post) => !post.archivedAt);
+        }
+
+        return posts.filter((post) => !post.archivedAt && post.visibility === postVisibilityFilter);
+    }, [postVisibilityFilter, posts]);
 
     return (
         <div className="min-h-screen bg-black text-white">
@@ -307,8 +601,33 @@ export default function CreationsPage() {
                     </Link>
                 </div>
 
+                <div className="mb-6 flex flex-wrap items-center gap-3">
+                    {([
+                        { key: 'creations', label: 'Creations', description: 'Raw generations and uploads' },
+                        { key: 'posts', label: 'Posts', description: 'Published, private, and archived posts' },
+                    ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
+                        <button
+                            key={tab.key}
+                            type="button"
+                            onClick={() => setActiveView(tab.key)}
+                            className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
+                                activeView === tab.key
+                                    ? 'border-white/20 bg-white/10 text-white'
+                                    : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
+                            }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                    <div className="text-sm text-zinc-500">
+                        {activeView === 'creations'
+                            ? 'Manage the raw generations you created here before or after publishing them.'
+                            : 'Manage the actual posts people can see, unlock, archive, or delete.'}
+                    </div>
+                </div>
+
                 {/* Filter Tabs */}
-                {!isLoading && successfulGenerations.length > 0 && (
+                {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
                     <div className="flex gap-2 mb-8">
                         {([
                             { key: 'all', label: `All (${successfulGenerations.length})` },
@@ -330,6 +649,31 @@ export default function CreationsPage() {
                     </div>
                 )}
 
+                {activeView === 'posts' && !isLoading && posts.length > 0 && (
+                    <div className="mb-8 flex flex-wrap gap-2">
+                        {([
+                            { key: 'all', label: `All (${posts.filter((post) => !post.archivedAt).length})` },
+                            { key: 'public', label: `Public (${posts.filter((post) => !post.archivedAt && post.visibility === 'public').length})` },
+                            { key: 'unlisted', label: `Unlisted (${posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length})` },
+                            { key: 'private', label: `Private (${posts.filter((post) => !post.archivedAt && post.visibility === 'private').length})` },
+                            { key: 'archived', label: `Archived (${posts.filter((post) => Boolean(post.archivedAt)).length})` },
+                        ] as Array<{ key: OwnerPostVisibilityFilter; label: string }>).map((tab) => (
+                            <button
+                                key={tab.key}
+                                type="button"
+                                onClick={() => setPostVisibilityFilter(tab.key)}
+                                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                                    postVisibilityFilter === tab.key
+                                        ? 'border-white/20 bg-white/10 text-white'
+                                        : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
+                                }`}
+                            >
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {/* Loading */}
                 {isLoading && (
                     <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6 mb-10 mt-8">
@@ -342,7 +686,7 @@ export default function CreationsPage() {
                 )}
 
                 {/* Empty State */}
-                {!isLoading && generations.length === 0 && (
+                {activeView === 'creations' && !isLoading && activeGenerations.length === 0 && archivedGenerations.length === 0 && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                         className="flex flex-col items-center justify-center py-32 gap-6">
                         <div className="p-6 rounded-full bg-zinc-900/50 border border-white/5">
@@ -370,7 +714,7 @@ export default function CreationsPage() {
                 )}
 
                 {/* Processing */}
-                {processingGenerations.length > 0 && (
+                {activeView === 'creations' && processingGenerations.length > 0 && (
                     <div className="mb-10">
                         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                             <div>
@@ -408,7 +752,7 @@ export default function CreationsPage() {
                 )}
 
                 {/* Successful Creations */}
-                {filteredSuccessful.length > 0 && (
+                {activeView === 'creations' && filteredSuccessful.length > 0 && (
                     <div className="mb-10">
                         {processingGenerations.length > 0 && (
                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Completed</h2>
@@ -499,6 +843,34 @@ export default function CreationsPage() {
                                                 )
                                             ) : null}
                                         </div>
+
+                                        <div className="px-4 pb-4 flex flex-wrap gap-2">
+                                            {gen.linked_post_id ? (
+                                                <Link
+                                                    href={gen.linked_post_visibility === 'private' || gen.linked_post_archived_at ? `/post/${gen.linked_post_id}/edit` : `/showcase/${gen.linked_post_id}`}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                                >
+                                                    <ExternalLink className="h-3.5 w-3.5" />
+                                                    {gen.linked_post_visibility === 'private' || gen.linked_post_archived_at ? 'Open linked post' : 'Open public post'}
+                                                </Link>
+                                            ) : null}
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleGenerationArchive(gen.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                            >
+                                                <Archive className="h-3.5 w-3.5" />
+                                                Archive
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleGenerationDelete(gen.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                                Delete
+                                            </button>
+                                        </div>
                                     </motion.div>
                                 );
                             })}
@@ -507,7 +879,7 @@ export default function CreationsPage() {
                 )}
 
                 {/* Failed */}
-                {failedGenerations.length > 0 && (
+                {activeView === 'creations' && failedGenerations.length > 0 && (
                     <div className="mb-10">
                         <h2 className="text-xs font-bold text-red-400/80 uppercase tracking-widest mb-4">Failed ({failedGenerations.length})</h2>
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
@@ -522,6 +894,228 @@ export default function CreationsPage() {
                                         {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
                                     </div>
                                 </motion.div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {activeView === 'creations' && archivedGenerations.length > 0 && (
+                    <div className="mb-10">
+                        <div className="mb-4">
+                            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-400">Archived creations ({archivedGenerations.length})</h2>
+                            <p className="mt-2 max-w-2xl text-sm text-zinc-500">
+                                Archived raw creations stay out of the active workspace until you restore them.
+                            </p>
+                        </div>
+                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                            {archivedGenerations.map((gen, i) => (
+                                <motion.div
+                                    key={gen.id}
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: i * 0.05 }}
+                                    className="break-inside-avoid mb-6 rounded-[1.5rem] border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-md"
+                                >
+                                    <div className="rounded-[1.25rem] border border-white/8 bg-black/60 p-4">
+                                        <div className="text-sm font-semibold text-white">{getPreviewTitle(gen)}</div>
+                                        <p className="mt-2 text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
+                                        <div className="mt-4 flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleGenerationRestore(gen.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                            >
+                                                <RotateCcw className="h-4 w-4" />
+                                                Restore
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleGenerationDelete(gen.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {activeView === 'posts' && !isLoading && visiblePosts.length === 0 && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex flex-col items-center justify-center gap-6 py-24"
+                    >
+                        <div className="rounded-full border border-white/8 bg-zinc-900/60 p-6">
+                            <Wand2 className="h-12 w-12 text-zinc-600" />
+                        </div>
+                        <div className="text-center">
+                            <h2 className="text-xl font-semibold text-zinc-300">No posts in this view yet</h2>
+                            <p className="mx-auto mt-2 max-w-md text-sm text-zinc-500">
+                                Publish a post from a generation or upload new proof in the post composer. Private and archived posts will show here once they exist.
+                            </p>
+                        </div>
+                        <Link
+                            href="/post/new"
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                        >
+                            Open post composer
+                            <ExternalLink className="h-4 w-4" />
+                        </Link>
+                    </motion.div>
+                )}
+
+                {activeView === 'posts' && visiblePosts.length > 0 && (
+                    <div className="mb-10">
+                        <div className="mb-4">
+                            <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-400">
+                                {postVisibilityFilter === 'archived' ? 'Archived posts' : 'Your posts'}
+                            </h2>
+                            <p className="mt-2 max-w-2xl text-sm text-zinc-500">
+                                This is the owner view for the actual posts people can visit, unlock, archive, or delete.
+                            </p>
+                        </div>
+                        <div className="grid gap-5 lg:grid-cols-2">
+                            {visiblePosts.map((post) => (
+                                <div
+                                    key={post.id}
+                                    className="rounded-[28px] border border-white/[0.08] bg-white/[0.02] p-5 backdrop-blur-md"
+                                >
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <div className="text-lg font-semibold text-white">{post.title}</div>
+                                            <p className="mt-2 text-sm text-zinc-400">
+                                                {post.sourceLabel} · {new Date(post.updatedAt).toLocaleString()}
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-wrap justify-end gap-2">
+                                            <div className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                                                post.archivedAt
+                                                    ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
+                                                    : 'border-white/10 bg-white/[0.04] text-zinc-200'
+                                            }`}>
+                                                {post.archivedAt ? 'Archived' : post.visibility}
+                                            </div>
+                                            {post.bundle ? (
+                                                <div className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                                                    post.bundle.status === 'published'
+                                                        ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                                        : 'border-amber-400/20 bg-amber-500/10 text-amber-100'
+                                                }`}>
+                                                    {post.bundle.status === 'published' ? 'Resources live' : 'Resources draft'}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    </div>
+
+                                    {post.mediaUrl ? (
+                                        <div className="mt-4 overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
+                                            {post.mediaKind === 'video' ? (
+                                                <video src={post.mediaUrl} controls playsInline className="max-h-[320px] w-full object-contain" />
+                                            ) : (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img src={post.mediaUrl} alt={post.title} className="max-h-[320px] w-full object-contain" />
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-4 rounded-[22px] border border-white/8 bg-black/50 p-4 text-sm leading-7 text-zinc-300">
+                                            {post.body || 'No post story yet.'}
+                                        </div>
+                                    )}
+
+                                    <div className="mt-4 flex flex-wrap gap-2">
+                                        {post.bundle ? (
+                                            <>
+                                                <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
+                                                    {post.bundle.accessMode === 'free'
+                                                        ? 'Free resources'
+                                                        : formatUsdCents(post.bundle.priceUsdCents)}
+                                                </div>
+                                                {post.bundle.resourceKinds.map((kind) => (
+                                                    <div
+                                                        key={`${post.id}-${kind}`}
+                                                        className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200"
+                                                    >
+                                                        {getPostResourceKindLabel(kind)}
+                                                    </div>
+                                                ))}
+                                            </>
+                                        ) : (
+                                            <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
+                                                No locked resources
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="mt-5 flex flex-wrap gap-2">
+                                        {post.publicPath ? (
+                                            <Link
+                                                href={post.publicPath}
+                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                            >
+                                                <ExternalLink className="h-4 w-4" />
+                                                Open public page
+                                            </Link>
+                                        ) : null}
+                                        <Link
+                                            href={post.ownerPath}
+                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                        >
+                                            <PencilLine className="h-4 w-4" />
+                                            Edit
+                                        </Link>
+                                        {post.resourcePath ? (
+                                            <Link
+                                                href={post.resourcePath}
+                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                            >
+                                                <Wand2 className="h-4 w-4" />
+                                                Manage resources
+                                            </Link>
+                                        ) : null}
+                                        {post.canShare ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => void copyPostLink(post.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                            >
+                                                <Copy className="h-4 w-4" />
+                                                Copy link
+                                            </button>
+                                        ) : null}
+                                        {post.archivedAt ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => void handlePostRestore(post.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                            >
+                                                <RotateCcw className="h-4 w-4" />
+                                                Restore
+                                            </button>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                onClick={() => void handlePostArchive(post.id)}
+                                                className="inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                            >
+                                                <Archive className="h-4 w-4" />
+                                                Archive
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => void handlePostDelete(post.id)}
+                                            className="inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
                             ))}
                         </div>
                     </div>
