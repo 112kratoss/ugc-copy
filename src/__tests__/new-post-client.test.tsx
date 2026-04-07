@@ -5,6 +5,7 @@ import NewPostClient from '@/app/post/new/NewPostClient';
 
 const mockPush = vi.fn();
 const fetchMock = vi.fn();
+const storageUploadMock = vi.hoisted(() => vi.fn());
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
@@ -22,10 +23,22 @@ vi.mock('@/app/components/AuthProvider', () => ({
   }),
 }));
 
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    storage: {
+      from: () => ({
+        upload: storageUploadMock,
+      }),
+    },
+  },
+}));
+
 describe('NewPostClient', () => {
   beforeEach(() => {
     mockPush.mockReset();
     fetchMock.mockReset();
+    storageUploadMock.mockReset();
+    storageUploadMock.mockResolvedValue({ error: null });
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -154,5 +167,40 @@ describe('NewPostClient', () => {
         ],
       },
     });
+  });
+
+  it('uploads media to Supabase before posting metadata to the API', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        postId: 'post-3',
+        showcasePath: '/showcase/post-3',
+        resourceBundlePath: null,
+        visibility: 'public',
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).not.toBeNull();
+
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /publish post/i }));
+
+    await waitFor(() => {
+      expect(storageUploadMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const request = fetchMock.mock.calls[0][1] as { body: FormData };
+
+    expect(String(request.body.get('mediaStoragePath'))).toMatch(/^uploads\/user-1\/.+\.png$/);
+    expect(String(request.body.get('mediaOriginalName'))).toBe('proof.png');
+    expect(String(request.body.get('mediaContentType'))).toBe('image/png');
+    expect(request.body.get('media')).toBeNull();
   });
 });

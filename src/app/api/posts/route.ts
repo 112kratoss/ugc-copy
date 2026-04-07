@@ -22,6 +22,7 @@ import {
 } from '@/lib/showcase';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const UPLOADS_BUCKET = 'uploads';
 const BODY_MAX_LENGTH = 2000;
 const MISSING_POSTS_SCHEMA_ERROR =
   'Posts are not enabled on the connected Supabase project yet. Apply the posts migrations and try again.';
@@ -49,6 +50,70 @@ function inferExtension(fileName: string, mimeType: string): string {
   }
 
   return 'bin';
+}
+
+function normalizeStoragePath(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim().replace(/^\/+/, '');
+  return trimmed || null;
+}
+
+function parseUploadedMediaLocation(params: {
+  storagePath: FormDataEntryValue | null;
+  userId: string;
+  originalName: FormDataEntryValue | null;
+  contentType: FormDataEntryValue | null;
+}): {
+  location: {
+    filePath: string;
+    originalName: string;
+    contentType: string;
+  } | null;
+  error: string | null;
+} {
+  const normalizedStoragePath = normalizeStoragePath(params.storagePath);
+  if (!normalizedStoragePath) {
+    return {
+      location: null,
+      error: null,
+    };
+  }
+
+  if (!normalizedStoragePath.startsWith(`${UPLOADS_BUCKET}/`)) {
+    return {
+      location: null,
+      error: 'Uploaded media must come from the uploads bucket.',
+    };
+  }
+
+  const filePath = normalizedStoragePath.slice(`${UPLOADS_BUCKET}/`.length);
+  if (!filePath.startsWith(`${params.userId}/`)) {
+    return {
+      location: null,
+      error: 'Uploaded media must belong to the authenticated user.',
+    };
+  }
+
+  const originalName =
+    typeof params.originalName === 'string' && params.originalName.trim()
+      ? params.originalName.trim()
+      : path.basename(filePath);
+  const contentType =
+    typeof params.contentType === 'string' && params.contentType.trim()
+      ? params.contentType.trim()
+      : '';
+
+  return {
+    location: {
+      filePath,
+      originalName,
+      contentType,
+    },
+    error: null,
+  };
 }
 
 function inferCategoryFromMimeType(mimeType: string): ShowcaseItemCategory | null {
@@ -194,12 +259,22 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const media = formData.get('media');
     const file = media instanceof File && media.size > 0 ? media : null;
+    const { location: uploadedMedia, error: uploadedMediaError } = parseUploadedMediaLocation({
+      storagePath: formData.get('mediaStoragePath'),
+      userId: user.id,
+      originalName: formData.get('mediaOriginalName'),
+      contentType: formData.get('mediaContentType'),
+    });
     const body = normalizeBody(formData.get('body'));
     const postFormat = normalizePostFormat(
       typeof formData.get('postFormat') === 'string' ? String(formData.get('postFormat')) : null
     );
 
-    if (!body && !file) {
+    if (uploadedMediaError) {
+      return NextResponse.json({ error: uploadedMediaError }, { status: 400 });
+    }
+
+    if (!body && !file && !uploadedMedia) {
       return NextResponse.json({ error: 'Add a note or upload media to publish a post.' }, { status: 400 });
     }
 
@@ -215,7 +290,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Media + note posts need both media and written context.' }, { status: 400 });
     }
 
-    if ((postFormat === 'media' || postFormat === 'mixed') && !file) {
+    if ((postFormat === 'media' || postFormat === 'mixed') && !file && !uploadedMedia) {
       return NextResponse.json({ error: 'Upload an image or video for this post type.' }, { status: 400 });
     }
 
@@ -223,12 +298,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Audio uploads are not supported in the community feed yet.' }, { status: 400 });
     }
 
+    if (uploadedMedia?.contentType.startsWith('audio/')) {
+      return NextResponse.json({ error: 'Audio uploads are not supported in the community feed yet.' }, { status: 400 });
+    }
+
+    const mediaMimeType = file?.type ?? uploadedMedia?.contentType ?? '';
+
     const category =
       postFormat === 'text'
         ? 'text'
         : resolveCategory(
             typeof formData.get('category') === 'string' ? String(formData.get('category')) : null,
-            file?.type ?? ''
+            mediaMimeType
           );
 
     if (!category) {
@@ -240,7 +321,7 @@ export async function POST(request: NextRequest) {
     );
     const title = resolveTitle(normalizeText(formData.get('title')), body, postFormat);
     const description = normalizeText(formData.get('description'));
-    const sourceTool = file ? normalizeText(formData.get('sourceTool')) : null;
+    const sourceTool = file || uploadedMedia ? normalizeText(formData.get('sourceTool')) : null;
     const sourceKind = postFormat === 'text' ? 'manual' : 'external';
     const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'));
 
@@ -270,6 +351,32 @@ export async function POST(request: NextRequest) {
       if (uploadError) {
         console.error('Failed to upload external post media:', uploadError);
         return NextResponse.json({ error: 'Failed to upload media.' }, { status: 500 });
+      }
+    } else if (uploadedMedia) {
+      const downloadedMedia = await adminSupabase.storage.from(UPLOADS_BUCKET).download(uploadedMedia.filePath);
+      if (downloadedMedia.error || !downloadedMedia.data) {
+        console.error('Failed to download uploaded post media:', downloadedMedia.error);
+        return NextResponse.json({ error: 'Failed to load uploaded media.' }, { status: 500 });
+      }
+
+      const extension = inferExtension(uploadedMedia.originalName, uploadedMedia.contentType);
+      storagePath = `posts/${postId}/${sanitizeFileStem(uploadedMedia.originalName)}.${extension}`;
+      const showcaseUpload = await adminSupabase.storage
+        .from(SHOWCASE_MEDIA_BUCKET)
+        .upload(storagePath, downloadedMedia.data, {
+          cacheControl: '3600',
+          contentType: downloadedMedia.data.type || uploadedMedia.contentType || undefined,
+          upsert: false,
+        });
+
+      if (showcaseUpload.error) {
+        console.error('Failed to copy uploaded post media into showcase storage:', showcaseUpload.error);
+        return NextResponse.json({ error: 'Failed to prepare uploaded media.' }, { status: 500 });
+      }
+
+      const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([uploadedMedia.filePath]);
+      if (cleanupUpload.error) {
+        console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
       }
     }
 

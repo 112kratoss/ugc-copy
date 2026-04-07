@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 const getUserMock = vi.fn();
 const uploadMock = vi.fn();
 const removeMock = vi.fn();
+const downloadMock = vi.fn();
 const insertPayloads: Array<Record<string, unknown>> = [];
 let bundleUpsertError: { code?: string; message?: string } | null = null;
 
@@ -84,6 +85,7 @@ vi.mock('@/lib/server-helpers', () => ({
       from: () => ({
         upload: uploadMock,
         remove: removeMock,
+        download: downloadMock,
       }),
     },
   }),
@@ -102,6 +104,11 @@ describe('/api/posts route', () => {
     uploadMock.mockResolvedValue({ error: null });
     removeMock.mockReset();
     removeMock.mockResolvedValue({ error: null });
+    downloadMock.mockReset();
+    downloadMock.mockResolvedValue({
+      data: new Blob(['video-bytes'], { type: 'video/mp4' }),
+      error: null,
+    });
     insertPayloads.length = 0;
     bundleUpsertError = null;
   });
@@ -158,6 +165,35 @@ describe('/api/posts route', () => {
       visibility: 'unlisted',
       body: 'This cutdown worked because the hook hits in under two seconds.',
       title: 'This cutdown worked because the hook hits in under two seconds.',
+    });
+  });
+
+  it('creates mixed posts from an uploaded storage reference without raw multipart media', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'mixed');
+    formData.set('body', 'Keep the product benefit visible before the hook resolves.');
+    formData.set('category', 'video');
+    formData.set('visibility', 'public');
+    formData.set('sourceTool', 'CapCut');
+    formData.set('mediaStoragePath', 'uploads/user-1/tmp-proof.mp4');
+    formData.set('mediaOriginalName', 'proof.mp4');
+    formData.set('mediaContentType', 'video/mp4');
+
+    const response = await POST(createRouteRequest(formData));
+
+    expect(response.status).toBe(200);
+    expect(downloadMock).toHaveBeenCalledWith('user-1/tmp-proof.mp4');
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(removeMock).toHaveBeenCalledWith(['user-1/tmp-proof.mp4']);
+    expect(insertPayloads[0]).toMatchObject({
+      category: 'video',
+      post_format: 'mixed',
+      source_kind: 'external',
+      source_tool: 'CapCut',
+      visibility: 'public',
+      body: 'Keep the product benefit visible before the hook resolves.',
+      title: 'Keep the product benefit visible before the hook resolves.',
     });
   });
 

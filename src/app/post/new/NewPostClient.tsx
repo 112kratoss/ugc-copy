@@ -28,6 +28,7 @@ import {
   type PostResourceBundleAccessMode,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { supabase } from '@/lib/supabase';
 import type { EditablePostDraft } from './post-editor-types';
 
 type PostCategory = 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
@@ -164,6 +165,40 @@ function inferCategory(file: File | null): Exclude<PostCategory, 'text'> | null 
   }
 
   return null;
+}
+
+function inferUploadExtension(file: File): string {
+  const extension = file.name.split('.').pop()?.trim().toLowerCase();
+  if (extension) {
+    return extension;
+  }
+
+  if (file.type.startsWith('image/')) {
+    return file.type.split('/')[1] || 'jpg';
+  }
+
+  if (file.type.startsWith('video/')) {
+    return file.type.split('/')[1] || 'mp4';
+  }
+
+  return 'bin';
+}
+
+async function uploadPostMediaToSupabase(file: File, ownerUserId: string): Promise<{ storagePath: string }> {
+  const fileName = `${ownerUserId}/${Math.random().toString(36).slice(2)}.${inferUploadExtension(file)}`;
+  const { error: uploadError } = await supabase.storage.from('uploads').upload(fileName, file, {
+    cacheControl: '3600',
+    contentType: file.type || undefined,
+    upsert: false,
+  });
+
+  if (uploadError) {
+    throw new Error(`Upload failed: ${uploadError.message}`);
+  }
+
+  return {
+    storagePath: `uploads/${fileName}`,
+  };
 }
 
 function acceptsCategory(file: File | null, category: Exclude<PostCategory, 'text'>): boolean {
@@ -634,7 +669,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       formData.set('resourceBundle', JSON.stringify(resourceBundle ?? { accessMode: 'none' }));
 
       if (hasMediaProof && file) {
-        formData.set('media', file);
+        const uploadedMedia = await uploadPostMediaToSupabase(file, session.user.id);
+        formData.set('mediaStoragePath', uploadedMedia.storagePath);
+        formData.set('mediaContentType', file.type);
+        formData.set('mediaOriginalName', file.name);
         formData.set('category', category);
       }
 
