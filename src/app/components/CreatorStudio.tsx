@@ -16,6 +16,7 @@ const ACCENT_STYLES: Record<
   {
     border: string;
     shadow: string;
+    focusRing: string;
     iconWrap: string;
     badge: string;
     button: string;
@@ -26,6 +27,7 @@ const ACCENT_STYLES: Record<
   blue: {
     border: 'hover:border-sky-300/20',
     shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(56,189,248,0.65)]',
+    focusRing: 'focus-visible:border-sky-300/35 focus-visible:ring-sky-300/35',
     iconWrap: 'border-sky-400/20 bg-sky-400/10 text-sky-200',
     badge: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
     button: 'bg-sky-300 text-slate-950 hover:bg-sky-200',
@@ -35,6 +37,7 @@ const ACCENT_STYLES: Record<
   rose: {
     border: 'hover:border-rose-300/20',
     shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(251,113,133,0.65)]',
+    focusRing: 'focus-visible:border-rose-300/35 focus-visible:ring-rose-300/35',
     iconWrap: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
     badge: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
     button: 'bg-rose-300 text-slate-950 hover:bg-rose-200',
@@ -44,6 +47,7 @@ const ACCENT_STYLES: Record<
   violet: {
     border: 'hover:border-violet-300/20',
     shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(167,139,250,0.68)]',
+    focusRing: 'focus-visible:border-violet-300/35 focus-visible:ring-violet-300/35',
     iconWrap: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
     badge: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
     button: 'bg-violet-300 text-slate-950 hover:bg-violet-200',
@@ -53,6 +57,7 @@ const ACCENT_STYLES: Record<
   emerald: {
     border: 'hover:border-emerald-300/20',
     shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(52,211,153,0.6)]',
+    focusRing: 'focus-visible:border-emerald-300/35 focus-visible:ring-emerald-300/35',
     iconWrap: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
     badge: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
     button: 'bg-emerald-300 text-slate-950 hover:bg-emerald-200',
@@ -145,20 +150,24 @@ export function CreatorToolCard({
   const theme = ACCENT_STYLES[tool.accent];
   const Icon = tool.icon;
   const isLaunchpad = variant === 'launchpad';
+  const prefetch = tool.id === 'workflow' || tool.id === 'video' ? false : undefined;
 
   return (
-    <article
+    <Link
+      href={tool.href}
+      prefetch={prefetch}
       className={clsx(
-        'group relative overflow-hidden border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(9,9,12,0.96))] transition duration-300',
+        'group relative block h-full cursor-pointer overflow-hidden border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(9,9,12,0.96))] transition duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black',
         theme.border,
         theme.shadow,
+        theme.focusRing,
         isLaunchpad
           ? 'h-full min-h-[318px] rounded-[30px] p-4 sm:p-5'
           : 'h-full min-h-[286px] rounded-[26px] p-3.5 sm:p-4'
       )}
     >
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-      <div className="flex h-full flex-col">
+      <article className="flex h-full flex-col">
         <div
           className={clsx(
             'relative overflow-hidden border border-white/8 bg-black/30',
@@ -181,17 +190,17 @@ export function CreatorToolCard({
               <div className="absolute inset-0 bg-[linear-gradient(145deg,transparent_0%,rgba(255,255,255,0.04)_52%,transparent_100%)] opacity-70" />
             </div>
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
           <div
             className={clsx(
-              'absolute left-4 top-4 flex items-center justify-center rounded-2xl border backdrop-blur-sm',
+              'pointer-events-none absolute left-4 top-4 flex items-center justify-center rounded-2xl border backdrop-blur-sm',
               theme.iconWrap,
               isLaunchpad ? 'h-12 w-12' : 'h-11 w-11'
             )}
           >
             <Icon className={clsx(isLaunchpad ? 'h-5 w-5' : 'h-4 w-4')} />
           </div>
-          <div className="absolute bottom-4 left-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/85">
+          <div className="pointer-events-none absolute bottom-4 left-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/85">
             {tool.shortLabel}
           </div>
         </div>
@@ -223,20 +232,18 @@ export function CreatorToolCard({
         <p className="mt-3 max-w-[28ch] text-sm leading-6 text-zinc-300">{tool.summary}</p>
 
         <div className="mt-auto pt-4">
-          <Link
-            href={tool.href}
-            prefetch={tool.id === 'workflow' || tool.id === 'video' ? false : undefined}
+          <div
             className={clsx(
               'inline-flex w-full items-center justify-between rounded-[18px] px-4 py-3 text-sm font-semibold transition',
               theme.button
             )}
           >
             {tool.launchLabel}
-            <ArrowRight className="h-4 w-4" />
-          </Link>
+            <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5" />
+          </div>
         </div>
-      </div>
-    </article>
+      </article>
+    </Link>
   );
 }
 

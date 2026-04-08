@@ -3,11 +3,12 @@ import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 
 import { AuthProvider } from '@/app/components/AuthProvider';
+import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
 import HomeShowcasePreviewGrid from '@/app/components/HomeShowcasePreviewGrid';
-import { HoverVideo } from '@/app/components/HoverVideo';
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
+import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import {
@@ -26,31 +27,6 @@ export const metadata: Metadata = createMetadata({
     'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with UGC copy.',
   path: '/',
 });
-
-function VisualPreview({
-  item,
-  alt,
-  className,
-}: {
-  item: { category: string; title: string; mediaUrl: string | null; mediaKind: string | null } | null | undefined;
-  alt: string;
-  className: string;
-}) {
-  if (!item || !item.mediaUrl) {
-    return (
-      <div
-        className={`h-full w-full bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] ${className}`}
-      />
-    );
-  }
-
-  if (item.mediaKind === 'video') {
-    return <HoverVideo src={item.mediaUrl} className={className} />;
-  }
-
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={item.mediaUrl} alt={alt || item.title} className={className} />;
-}
 
 const LATEST_MODELS = [
   {
@@ -89,17 +65,10 @@ export default async function Home() {
     viewerUserId: auth.session?.user?.id ?? null,
   });
   const mediaFeedItems = showcaseFeed.items.filter((item) => item.mediaUrl);
-
-  const imagePreview = mediaFeedItems.find((item) => item.category === 'image');
-  const videoPreview = mediaFeedItems.find((item) => item.category === 'video');
-  const motionPreview = mediaFeedItems.find((item) => item.category === 'motion');
-
-  const previewByTool = {
-    image: imagePreview,
-    video: videoPreview,
-    motion: motionPreview,
-    workflow: null,
-  } as const;
+  const previewByTool = await loadCreatorToolPreviewMap({
+    viewerUserId: auth.session?.user?.id ?? null,
+    seedItems: showcaseFeed.items,
+  });
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-black text-white font-[family-name:var(--font-geist-sans)]">
@@ -185,7 +154,7 @@ export default async function Home() {
                 variant="suite"
                 preview={
                   previewByTool[tool.id] ? (
-                    <VisualPreview
+                    <CreatorToolPreview
                       item={previewByTool[tool.id]}
                       alt={tool.label}
                       className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"

@@ -1,12 +1,14 @@
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 
+import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
 import {
   CREATOR_STARTER_RECIPES,
   CREATOR_TOOLS,
   getCreatorTool,
 } from '@/lib/creator-tools';
+import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
 
 const RECIPE_ACCENTS = {
   image: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
@@ -15,7 +17,9 @@ const RECIPE_ACCENTS = {
   workflow: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
 } as const;
 
-export default function CreateHubPage() {
+export default async function CreateHubPage() {
+  const previewByTool = await loadCreatorToolPreviewMap();
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-black pb-20 text-white font-[family-name:var(--font-geist-sans)]">
       <div className="pointer-events-none absolute inset-0">
@@ -56,7 +60,20 @@ export default function CreateHubPage() {
 
         <section className="mt-8 grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
           {CREATOR_TOOLS.map((tool) => (
-            <CreatorToolCard key={tool.id} tool={tool} variant="launchpad" />
+            <CreatorToolCard
+              key={tool.id}
+              tool={tool}
+              variant="launchpad"
+              preview={
+                previewByTool[tool.id] ? (
+                  <CreatorToolPreview
+                    item={previewByTool[tool.id]}
+                    alt={tool.label}
+                    className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"
+                  />
+                ) : undefined
+              }
+            />
           ))}
         </section>
 
