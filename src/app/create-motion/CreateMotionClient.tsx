@@ -41,6 +41,7 @@ import {
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
+import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
@@ -633,6 +634,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         && !videoError;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
+    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
     const canUseOriginalResultAsReferenceVideo =

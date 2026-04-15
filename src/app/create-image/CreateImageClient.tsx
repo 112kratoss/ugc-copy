@@ -56,6 +56,7 @@ import {
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
+import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 
 // ─── Model Registry ─────────────────────────────────────────────────────────
@@ -954,6 +955,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }[model.accentColor];
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
+    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
     const remixResultReferenceLabel = remixSourceBundle
