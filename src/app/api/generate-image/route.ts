@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { GenerationServiceError, startImageGeneration } from '@/lib/generation-services';
+import {
+    getGenerationKind,
+    normalizeMarketGenerationTiming,
+    normalizeStoredGenerationTiming,
+    toIsoTimestamp,
+} from '@/lib/generation-timing';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -127,6 +133,15 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({
                 status: 'succeeded',
                 output: await resolveStoredMediaUrl(adminSupabase, localGeneration.output_url),
+                timing: normalizeStoredGenerationTiming({
+                    kind: getGenerationKind({
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }),
+                    status: localGeneration.status,
+                    createdAt: localGeneration.created_at,
+                    completedAt: localGeneration.completed_at,
+                }),
             });
         }
 
@@ -141,12 +156,16 @@ export async function GET(request: NextRequest) {
             throw new Error(data.msg || 'Failed to check status');
         }
 
-        let status = data.data.state;
+        const timing = normalizeMarketGenerationTiming({
+            kind: 'image',
+            task: data.data,
+            fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+        });
+        let status = timing.appStatus;
         let output = null;
         let error = null;
 
-        if (status === 'success') {
-            status = 'succeeded';
+        if (status === 'succeeded') {
             try {
                 const result = JSON.parse(data.data.resultJson);
                 const tempUrl = result.resultUrls?.[0] || null;
@@ -181,7 +200,11 @@ export async function GET(request: NextRequest) {
 
                             await supabase
                                 .from('generations')
-                                .update({ status: 'succeeded', output_url: storagePath })
+                                .update({
+                                    status: 'succeeded',
+                                    output_url: storagePath,
+                                    completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                                })
                                 .eq('prediction_id', predictionId);
                         }
                     } catch (e) {
@@ -193,26 +216,32 @@ export async function GET(request: NextRequest) {
                     if (!output || output === tempUrl) {
                         await supabase
                             .from('generations')
-                            .update({ status: 'succeeded', output_url: output })
+                            .update({
+                                status: 'succeeded',
+                                output_url: output,
+                                completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                            })
                             .eq('prediction_id', predictionId);
                     }
                 }
             } catch (e) {
                 console.error('Error handling success status:', e);
             }
-        } else if (status === 'fail') {
-            status = 'failed';
+        } else if (status === 'failed') {
             error = data.data.failMsg || 'Unknown error';
             await supabase
                 .from('generations')
-                .update({ status: 'failed' })
+                .update({
+                    status: 'failed',
+                    completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                })
                 .eq('prediction_id', predictionId);
 
             // Refund credits for async failure (idempotent)
             await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
         }
 
-        return NextResponse.json({ status, output, error });
+        return NextResponse.json({ status, output, error, timing });
 
     } catch (error) {
         console.error('Error fetching image status:', error);

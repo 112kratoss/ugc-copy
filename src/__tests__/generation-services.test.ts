@@ -13,6 +13,8 @@ type GenerationRow = {
   prompt?: string;
   cost?: number;
   duration?: number;
+  created_at?: string;
+  completed_at?: string | null;
 };
 
 function createSupabaseMock(initialRows: GenerationRow[] = []) {
@@ -53,6 +55,8 @@ function createSupabaseMock(initialRows: GenerationRow[] = []) {
             prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
             cost: typeof record.cost === 'number' ? record.cost : undefined,
             duration: typeof record.duration === 'number' ? record.duration : undefined,
+            created_at: typeof record.created_at === 'string' ? record.created_at : new Date().toISOString(),
+            completed_at: typeof record.completed_at === 'string' ? record.completed_at : null,
           };
           generations.push(row);
 
@@ -375,10 +379,12 @@ describe('generation services', () => {
         ok: true,
         json: async () => ({
           code: 200,
-          data: {
-            state: 'success',
-            resultJson: JSON.stringify({ resultUrls: ['https://cdn.example.com/audio.mp3'] }),
-          },
+        data: {
+          state: 'success',
+          createTime: '2026-04-15T10:00:00.000Z',
+          completeTime: '2026-04-15T10:00:12.000Z',
+          resultJson: JSON.stringify({ resultUrls: ['https://cdn.example.com/audio.mp3'] }),
+        },
         }),
       } as Response)
       .mockResolvedValueOnce({
@@ -395,6 +401,7 @@ describe('generation services', () => {
       model: 'elevenlabs/text-to-speech-turbo-2-5',
       category: 'audio',
       workflow_settings: { model: 'text-to-speech-turbo-2-5' },
+      created_at: '2026-04-15T10:00:00.000Z',
     }]);
 
     await syncGenerationStatuses({
@@ -404,6 +411,7 @@ describe('generation services', () => {
 
     expect(generations[0].status).toBe('succeeded');
     expect(generations[0].output_url).toBe('generated_audio/user-1/generated_task-audio-1.mp3');
+    expect(generations[0].completed_at).toBe('2026-04-15T10:00:12.000Z');
     expect(uploads[0]).toEqual({
       bucket: 'generated_audio',
       filePath: 'user-1/generated_task-audio-1.mp3',
@@ -419,6 +427,7 @@ describe('generation services', () => {
         code: 200,
         data: {
           state: 'fail',
+          completeTime: '2026-04-15T10:01:00.000Z',
           failMsg: 'provider failure',
         },
       }),
@@ -433,6 +442,7 @@ describe('generation services', () => {
       model: 'elevenlabs/sound-effect-v2',
       category: 'audio',
       workflow_settings: { model: 'sound-effect-v2' },
+      created_at: '2026-04-15T10:00:00.000Z',
     }]);
 
     await syncGenerationStatuses({
@@ -441,6 +451,7 @@ describe('generation services', () => {
     });
 
     expect(generations[0].status).toBe('failed');
+    expect(generations[0].completed_at).toBe('2026-04-15T10:01:00.000Z');
     expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-audio-2')).toBe(true);
   });
 });

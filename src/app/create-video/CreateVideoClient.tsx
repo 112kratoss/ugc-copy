@@ -10,6 +10,7 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioRemixNotice,
     StudioRunPanel,
@@ -62,6 +63,13 @@ import {
     type SeedanceAssetKind,
     type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
+import {
+    createLocalGenerationTiming,
+    freezeGenerationTiming,
+    getGenerationTimingSummaryLabel,
+    type GenerationTiming,
+} from '@/lib/generation-timing';
+import { useTicker } from '@/lib/use-ticker';
 
 interface MultiShot {
     id: string;
@@ -75,6 +83,13 @@ interface UploadPreviewState {
     alt: string;
     title: string;
 }
+
+type GenerationStatusResponse = {
+    status: 'processing' | 'waiting' | 'succeeded' | 'failed';
+    output?: string | null;
+    error?: string | null;
+    timing?: GenerationTiming | null;
+};
 
 interface VideoWorkflowSettings {
     model?: VideoModelId;
@@ -289,7 +304,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [isDraggingStart, setIsDraggingStart] = useState(false);
     const [isDraggingEnd, setIsDraggingEnd] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
-    const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+    const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [latestIsPublic, setLatestIsPublic] = useState(false);
@@ -321,6 +336,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
+    const nowMs = useTicker(isGenerating);
 
     useEffect(() => {
         if (remixId) return;
@@ -1405,30 +1421,53 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
     };
 
-    const pollPrediction = async (predictionId: string, accessToken: string): Promise<string> => {
+    const handoffToBackgroundProcessing = (startedAtMs: number) => {
+        setError(BACKGROUND_PROCESSING_ERROR);
+        setGenerationTiming((current) => freezeGenerationTiming(
+            current ?? createLocalGenerationTiming({
+                kind: 'video',
+                phaseLabel: 'Generating video',
+                startedAtMs,
+            }),
+            Date.now()
+        ));
+    };
+
+    const pollPrediction = async (
+        predictionId: string,
+        accessToken: string,
+        startedAtMs: number
+    ): Promise<{ output: string; timing: GenerationTiming | null }> => {
         const maxAttempts = 120;
         let attempts = 0;
-        const startTime = Date.now();
 
         while (attempts < maxAttempts) {
             const response = await fetch(`/api/generate-video?id=${predictionId}`, {
                 headers: { Authorization: `Bearer ${accessToken}` },
             });
-            const data = await response.json();
+            const data = await response.json() as GenerationStatusResponse;
 
-            if (data.status === 'succeeded') return data.output;
-            if (data.status === 'failed') throw new Error(data.error || 'Video generation failed');
+            if (data.timing) {
+                setGenerationTiming(data.timing);
+            } else {
+                setGenerationTiming((current) => current ?? createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: 'Waiting for provider',
+                    startedAtMs,
+                }));
+            }
 
-            const elapsed = (Date.now() - startTime) / 1000;
-            const progress = Math.min((elapsed / 300) * 90, 95);
+            if (data.status === 'succeeded') {
+                return {
+                    output: data.output || '',
+                    timing: data.timing ?? null,
+                };
+            }
 
-            let statusMsg = 'Processing...';
-            if (progress < 10) statusMsg = 'Queuing request...';
-            else if (progress < 40) statusMsg = 'Warming up AI models...';
-            else if (progress < 80) statusMsg = 'Rendering video frames...';
-            else statusMsg = 'Finalizing export...';
+            if (data.status === 'failed') {
+                throw new Error(data.error || 'Video generation failed');
+            }
 
-            setGenerationStatus(`${statusMsg} (${Math.round(progress)}%)`);
             await new Promise((resolve) => setTimeout(resolve, 5000));
             attempts++;
         }
@@ -1512,6 +1551,60 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
     };
 
+    useEffect(() => {
+        const resumePendingGeneration = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
+
+            const { data, error: pendingError } = await supabase
+                .from('generations')
+                .select('id, prediction_id, status, created_at')
+                .eq('user_id', session.user.id)
+                .eq('category', 'video')
+                .in('status', ['processing', 'waiting'])
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (pendingError || !data?.prediction_id) {
+                return;
+            }
+
+            const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+
+            setIsGenerating(true);
+            setError(null);
+            setLatestGenerationId(data.id ?? null);
+            setLatestIsPublic(false);
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'video',
+                phaseLabel: 'Resuming active run',
+                startedAtMs,
+                appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+            }));
+
+            try {
+                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs);
+                setOutputVideo(result.output);
+                if (result.timing) {
+                    setGenerationTiming(result.timing);
+                }
+            } catch (generationError) {
+                const errorMessage = generationError instanceof Error ? generationError.message : 'Something went wrong';
+                if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
+                    handoffToBackgroundProcessing(startedAtMs);
+                } else {
+                    setError(errorMessage);
+                    setGenerationTiming(null);
+                }
+            } finally {
+                setIsGenerating(false);
+            }
+        };
+
+        void resumePendingGeneration();
+    }, []);
+
     const handleGenerate = async () => {
         if (isMultiShot) {
             if (multiPrompts.some((shot) => !shot.prompt.trim())) {
@@ -1564,7 +1657,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
-        setGenerationStatus('Preparing... (0%)');
+        const startedAtMs = Date.now();
+        setGenerationTiming(createLocalGenerationTiming({
+            kind: 'video',
+            phaseLabel: 'Preparing inputs',
+            startedAtMs,
+        }));
 
         try {
             let startUrl: string | null = activeReferenceMode === 'frames' ? startImageUrl : null;
@@ -1582,7 +1680,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             };
 
             if (!currentIsMultiShot && activeReferenceMode === 'elements' && elements.length > 0) {
-                setGenerationStatus(`Preparing ${elements.length} image references... (2%)`);
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: elements.length === 1 ? 'Uploading 1 image reference' : `Uploading ${elements.length} image references`,
+                    startedAtMs,
+                }));
 
                 const uploadedElements = await Promise.all(elements.map(async (element) => {
                     const preparedElement = await ensureUploadedElement(element);
@@ -1616,7 +1718,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
 
             if (isSeedance2Family && referenceVideos.length > 0) {
-                setGenerationStatus(`Preparing ${referenceVideos.length} reference videos... (3%)`);
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: referenceVideos.length === 1 ? 'Uploading 1 reference video' : `Uploading ${referenceVideos.length} reference videos`,
+                    startedAtMs,
+                }));
                 const uploadedReferences = await Promise.all(referenceVideos.map(async (reference) => {
                     const preparedReference = await ensureUploadedReference(reference, 'Video');
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
@@ -1641,7 +1747,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
 
             if (isSeedance2Family && referenceAudios.length > 0) {
-                setGenerationStatus(`Preparing ${referenceAudios.length} reference audio clips... (4%)`);
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: referenceAudios.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${referenceAudios.length} reference audio clips`,
+                    startedAtMs,
+                }));
                 const uploadedReferences = await Promise.all(referenceAudios.map(async (reference) => {
                     const preparedReference = await ensureUploadedReference(reference, 'Audio');
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
@@ -1666,7 +1776,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
 
             if (activeReferenceMode === 'frames' && startImageFile) {
-                setGenerationStatus('Uploading start image... (2%)');
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: 'Uploading start frame',
+                    startedAtMs,
+                }));
                 const upload = await uploadToSupabase(startImageFile);
                 startUrl = upload.signedUrl;
                 nextStartFrameDescriptor = {
@@ -1678,7 +1792,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
 
             if (activeReferenceMode === 'frames' && endImageFile && !isMultiShot) {
-                setGenerationStatus('Uploading end image... (4%)');
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: 'Uploading end frame',
+                    startedAtMs,
+                }));
                 const upload = await uploadToSupabase(endImageFile);
                 endUrl = upload.signedUrl;
                 nextEndFrameDescriptor = {
@@ -1689,7 +1807,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 };
             }
 
-            setGenerationStatus('Starting AI generation... (5%)');
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'video',
+                phaseLabel: 'Submitting video run',
+                startedAtMs,
+            }));
 
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) {
@@ -1735,28 +1857,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
-            const outputUrl = await pollPrediction(data.predictionId, session.access_token);
-            setOutputVideo(outputUrl);
-            setGenerationStatus('Video generated successfully! (100%)');
+            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs);
+            setOutputVideo(result.output);
+            if (result.timing) {
+                setGenerationTiming(result.timing);
+            }
             if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
         } catch (generationError) {
             const errorMessage = generationError instanceof Error ? generationError.message : 'Something went wrong';
             if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                setError(BACKGROUND_PROCESSING_ERROR);
-                setGenerationStatus(getBackgroundProcessingCopy('video').status);
+                handoffToBackgroundProcessing(startedAtMs);
             } else {
                 setError(errorMessage);
-                setGenerationStatus(null);
+                setGenerationTiming(null);
             }
         } finally {
             setIsGenerating(false);
         }
-    };
-
-    const getProgress = () => {
-        if (!generationStatus) return 0;
-        const match = generationStatus.match(/\((\d+)%\)/);
-        return match ? parseInt(match[1]) : 0;
     };
 
     if (isLoadingUser) {
@@ -1768,6 +1885,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('video');
+    const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
+    const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
 
     const workspaceTitle = outputVideo
         ? 'Latest video result'
@@ -2934,24 +3053,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             }
                             status={
                                 <>
-                                    {isGenerating && generationStatus ? (
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between text-sm text-zinc-300">
-                                                <span>{generationStatus}</span>
-                                                <span>{getProgress()}%</span>
-                                            </div>
-                                            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-                                                <motion.div
-                                                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
-                                                    initial={{ width: '0%' }}
-                                                    animate={{ width: `${getProgress()}%` }}
-                                                    transition={{ duration: 0.5 }}
-                                                />
-                                            </div>
-                                            <p className="text-xs text-zinc-500">Longer runs can take a few minutes.</p>
-                                        </div>
+                                    {isGenerating && generationTiming ? (
+                                        <StudioGenerationStatus
+                                            accent="rose"
+                                            timing={generationTiming}
+                                            nowMs={nowMs}
+                                        />
                                     ) : isBackgroundProcessing ? (
-                                        <StudioBackgroundProcessingNotice accent="rose" label="video" />
+                                        <StudioBackgroundProcessingNotice
+                                            accent="rose"
+                                            label="video"
+                                            phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                            timingLabel={backgroundTimingLabel}
+                                        />
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : (
@@ -3051,7 +3165,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                 </div>
                             ) : isBackgroundProcessing ? (
-                                <StudioBackgroundProcessingNotice accent="rose" label="video" variant="workspace" />
+                                <StudioBackgroundProcessingNotice
+                                    accent="rose"
+                                    label="video"
+                                    variant="workspace"
+                                    phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                    timingLabel={backgroundTimingLabel}
+                                />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-blue-500/30 to-purple-500/20">

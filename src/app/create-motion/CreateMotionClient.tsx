@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
     StudioBackgroundProcessingNotice,
+    StudioGenerationStatus,
     GeneratorPageHeader,
     MediaStudioShell,
     StudioControlCard,
@@ -34,6 +35,13 @@ import {
     setPersistedFile,
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
+import {
+    createLocalGenerationTiming,
+    freezeGenerationTiming,
+    getGenerationTimingSummaryLabel,
+    type GenerationTiming,
+} from '@/lib/generation-timing';
+import { useTicker } from '@/lib/use-ticker';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
 const MOTION_MODELS = {
@@ -82,6 +90,13 @@ interface UploadPreviewState {
     title: string;
 }
 
+type GenerationStatusResponse = {
+    status: 'processing' | 'waiting' | 'succeeded' | 'failed';
+    output?: string | null;
+    error?: string | null;
+    timing?: GenerationTiming | null;
+};
+
 export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
@@ -98,7 +113,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [referenceVideoFile, setReferenceVideoFile] = useState<File | null>(null);
     const [referenceVideoDescriptor, setReferenceVideoDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
-    const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+    const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
@@ -123,6 +138,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
+    const nowMs = useTicker(isGenerating);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -390,47 +406,100 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
             const { data } = await supabase
-                .from('generations').select('*')
+                .from('generations')
+                .select('id, prediction_id, status, created_at, duration')
                 .eq('user_id', session.user.id)
+                .eq('category', 'motion')
                 .in('status', ['processing', 'waiting'])
                 .order('created_at', { ascending: false })
-                .limit(1).single();
-            if (data) {
+                .limit(1)
+                .maybeSingle();
+
+            if (data?.prediction_id) {
+                const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
                 setIsGenerating(true);
-                setGenerationStatus('Resuming generation...');
-                const startTime = new Date(data.created_at).getTime();
-                const elapsedSeconds = (Date.now() - startTime) / 1000;
-                setDuration(data.duration);
-                pollPrediction(data.prediction_id, session.access_token, elapsedSeconds);
+                setError(null);
+                setLatestGenerationId(data.id ?? null);
+                setLatestIsPublic(false);
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'motion',
+                    phaseLabel: 'Resuming active run',
+                    startedAtMs,
+                    appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+                }));
+                if (typeof data.duration === 'number') {
+                    setDuration(data.duration);
+                }
+
+                try {
+                    const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs);
+                    setOutputVideo(result.output);
+                    if (result.timing) {
+                        setGenerationTiming(result.timing);
+                    }
+                } catch (err) {
+                    const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
+                    if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
+                        handoffToBackgroundProcessing(startedAtMs);
+                    } else {
+                        setError(errorMessage);
+                        setGenerationTiming(null);
+                    }
+                } finally {
+                    setIsGenerating(false);
+                }
             }
         };
-        checkPendingGenerations();
+        void checkPendingGenerations();
     }, []);
 
-    const pollPrediction = async (predictionId: string, accessToken: string, initialElapsedSeconds = 0): Promise<string> => {
+    const handoffToBackgroundProcessing = (startedAtMs: number) => {
+        setError(BACKGROUND_PROCESSING_ERROR);
+        setGenerationTiming((current) => freezeGenerationTiming(
+            current ?? createLocalGenerationTiming({
+                kind: 'motion',
+                phaseLabel: 'Generating motion render',
+                startedAtMs,
+            }),
+            Date.now()
+        ));
+    };
+
+    const pollPrediction = async (
+        predictionId: string,
+        accessToken: string,
+        startedAtMs: number
+    ): Promise<{ output: string; timing: GenerationTiming | null }> => {
         const maxAttempts = 240;
         let attempts = 0;
-        const startTime = Date.now() - (initialElapsedSeconds * 1000);
 
         while (attempts < maxAttempts) {
             const response = await fetch(`/api/generate?id=${predictionId}`, {
                 headers: { 'Authorization': `Bearer ${accessToken}` }
             });
-            const data = await response.json();
+            const data = await response.json() as GenerationStatusResponse;
 
-            if (data.status === 'succeeded') return data.output;
-            else if (data.status === 'failed') throw new Error(data.error || 'Generation failed');
+            if (data.timing) {
+                setGenerationTiming(data.timing);
+            } else {
+                setGenerationTiming((current) => current ?? createLocalGenerationTiming({
+                    kind: 'motion',
+                    phaseLabel: 'Waiting for provider',
+                    startedAtMs,
+                }));
+            }
 
-            const elapsed = (Date.now() - startTime) / 1000;
-            const progress = Math.min((elapsed / 300) * 95, 95);
+            if (data.status === 'succeeded') {
+                return {
+                    output: data.output || '',
+                    timing: data.timing ?? null,
+                };
+            }
 
-            let statusMessage = "Processing...";
-            if (progress < 10) statusMessage = "Uploading & Queuing...";
-            else if (progress < 30) statusMessage = "Analyzing Motion...";
-            else if (progress < 80) statusMessage = "Generating Frames...";
-            else statusMessage = "Finalizing Video...";
+            if (data.status === 'failed') {
+                throw new Error(data.error || 'Generation failed');
+            }
 
-            setGenerationStatus(`${statusMessage} (${Math.round(progress)}%)`);
             await new Promise(resolve => setTimeout(resolve, 5000));
             attempts++;
         }
@@ -446,15 +515,25 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
         setIsGenerating(true); setError(null); setOutputVideo(null);
         setLatestGenerationId(null); setLatestIsPublic(false); setPublishedMeta(null);
+        const startedAtMs = Date.now();
+        setGenerationTiming(createLocalGenerationTiming({
+            kind: 'motion',
+            phaseLabel: 'Preparing inputs',
+            startedAtMs,
+        }));
 
         try {
-            setGenerationStatus('Uploading files... (0%)');
             let imageUrl = characterImage;
             let videoUrl = referenceVideo;
             let nextCharacterImageDescriptor = characterImageDescriptor;
             let nextReferenceVideoDescriptor = referenceVideoDescriptor;
 
             if (characterImageFile) {
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'motion',
+                    phaseLabel: 'Uploading character image',
+                    startedAtMs,
+                }));
                 const upload = await uploadToSupabase(characterImageFile, 'uploads');
                 imageUrl = upload.signedUrl;
                 nextCharacterImageDescriptor = {
@@ -466,6 +545,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             }
 
             if (referenceVideoFile) {
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'motion',
+                    phaseLabel: 'Uploading reference video',
+                    startedAtMs,
+                }));
                 const upload = await uploadToSupabase(referenceVideoFile, 'uploads');
                 videoUrl = upload.signedUrl;
                 nextReferenceVideoDescriptor = {
@@ -476,7 +560,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 };
             }
 
-            setGenerationStatus('Starting AI generation... (5%)');
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'motion',
+                phaseLabel: 'Submitting motion run',
+                startedAtMs,
+            }));
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) { router.push('/login?returnUrl=/create-motion'); setIsGenerating(false); return; }
 
@@ -507,18 +595,19 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
-            const outputUrl = await pollPrediction(data.predictionId, session.access_token);
-            setOutputVideo(outputUrl);
-            setGenerationStatus('Video generated successfully! (100%)');
+            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs);
+            setOutputVideo(result.output);
+            if (result.timing) {
+                setGenerationTiming(result.timing);
+            }
 
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Something went wrong';
             if (msg === BACKGROUND_PROCESSING_ERROR) {
-                setGenerationStatus(getBackgroundProcessingCopy('motion').status);
-                setError(BACKGROUND_PROCESSING_ERROR);
+                handoffToBackgroundProcessing(startedAtMs);
             } else {
                 setError(msg);
-                setGenerationStatus(null);
+                setGenerationTiming(null);
             }
         } finally {
             setIsGenerating(false);
@@ -533,12 +622,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         );
     }
 
-    const getProgressPercentage = () => {
-        if (!generationStatus) return 0;
-        const match = generationStatus.match(/\((\d+)%\)/);
-        return match ? parseInt(match[1]) : 0;
-    };
-
     const creditsPerSecond = selectedModel === 'kling-3.0'
         ? (mode === '1080p' ? 20 : 12)
         : (mode === '1080p' ? 9 : 6);
@@ -550,6 +633,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         && !videoError;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
+    const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
+    const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
     const canUseOriginalResultAsReferenceVideo =
         remixSourceBundle?.result?.mediaType === 'video' && Boolean(remixSourceBundle.result.url);
     const isUsingOriginalResultAsReferenceVideo = Boolean(
@@ -977,24 +1062,19 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                             }
                             status={
                                 <>
-                                    {isGenerating && generationStatus ? (
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between text-sm text-zinc-300">
-                                                <span>{generationStatus}</span>
-                                                <span>{getProgressPercentage()}%</span>
-                                            </div>
-                                            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-                                                <motion.div
-                                                    className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500"
-                                                    initial={{ width: '0%' }}
-                                                    animate={{ width: `${getProgressPercentage()}%` }}
-                                                    transition={{ duration: 0.5 }}
-                                                />
-                                            </div>
-                                            <p className="text-xs text-zinc-500">Estimated time: about 3 to 5 minutes.</p>
-                                        </div>
+                                    {isGenerating && generationTiming ? (
+                                        <StudioGenerationStatus
+                                            accent="violet"
+                                            timing={generationTiming}
+                                            nowMs={nowMs}
+                                        />
                                     ) : isBackgroundProcessing ? (
-                                        <StudioBackgroundProcessingNotice accent="violet" label="motion render" />
+                                        <StudioBackgroundProcessingNotice
+                                            accent="violet"
+                                            label="motion render"
+                                            phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                            timingLabel={backgroundTimingLabel}
+                                        />
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
                                     ) : error ? (
@@ -1082,7 +1162,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 setLatestIsPublic(false);
                                                 setPublishedMeta(null);
                                                 setError(null);
-                                                setGenerationStatus(null);
+                                                setGenerationTiming(null);
                                             }}
                                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                                         >
@@ -1103,7 +1183,13 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     </div>
                                 </div>
                             ) : isBackgroundProcessing ? (
-                                <StudioBackgroundProcessingNotice accent="violet" label="motion render" variant="workspace" />
+                                <StudioBackgroundProcessingNotice
+                                    accent="violet"
+                                    label="motion render"
+                                    variant="workspace"
+                                    phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                    timingLabel={backgroundTimingLabel}
+                                />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-violet-500/30 to-fuchsia-500/20">

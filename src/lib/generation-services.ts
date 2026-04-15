@@ -35,6 +35,12 @@ import {
   isSeedance2VideoModelId,
   type SeedanceAssetCollections,
 } from '@/lib/seedance-assets';
+import {
+  getGenerationKind,
+  normalizeMarketGenerationTiming,
+  normalizeVeoGenerationTiming,
+  toIsoTimestamp,
+} from '@/lib/generation-timing';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -84,6 +90,8 @@ interface SyncableGenerationRecord {
   model: string;
   category: string | null;
   workflow_settings: Record<string, unknown> | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 function requireApiKey(): string {
@@ -317,7 +325,8 @@ function getStorageBucket(category: string | null, model: string): 'generated_im
 async function persistGeneratedOutput(
   supabase: SupabaseClient,
   generation: SyncableGenerationRecord,
-  tempUrl: string
+  tempUrl: string,
+  completedAt?: string | null
 ) {
   const bucket = getStorageBucket(generation.category, generation.model);
 
@@ -342,7 +351,11 @@ async function persistGeneratedOutput(
       console.error('Upload to Supabase Storage failed:', uploadError);
       await supabase
         .from('generations')
-        .update({ status: 'succeeded', output_url: tempUrl })
+        .update({
+          status: 'succeeded',
+          output_url: tempUrl,
+          completed_at: completedAt ?? new Date().toISOString(),
+        })
         .eq('id', generation.id);
       return;
     }
@@ -350,21 +363,33 @@ async function persistGeneratedOutput(
     const storagePath = `${bucket}/${fileName}`;
     await supabase
       .from('generations')
-      .update({ status: 'succeeded', output_url: storagePath })
+      .update({
+        status: 'succeeded',
+        output_url: storagePath,
+        completed_at: completedAt ?? new Date().toISOString(),
+      })
       .eq('id', generation.id);
   } catch (error) {
     console.error('Error persisting generated output:', error);
     await supabase
       .from('generations')
-      .update({ status: 'succeeded', output_url: tempUrl })
+      .update({
+        status: 'succeeded',
+        output_url: tempUrl,
+        completed_at: completedAt ?? new Date().toISOString(),
+      })
       .eq('id', generation.id);
   }
 }
 
-async function markGenerationFailed(supabase: SupabaseClient, generation: SyncableGenerationRecord) {
+async function markGenerationFailed(
+  supabase: SupabaseClient,
+  generation: SyncableGenerationRecord,
+  completedAt?: string | null
+) {
   await supabase
     .from('generations')
-    .update({ status: 'failed' })
+    .update({ status: 'failed', completed_at: completedAt ?? new Date().toISOString() })
     .eq('id', generation.id);
   await supabase.rpc('refund_generation', { p_prediction_id: generation.prediction_id });
 }
@@ -375,9 +400,17 @@ function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
 }
 
 async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: SyncableGenerationRecord) {
-  if (!generation.prediction_id || generation.status !== 'processing') {
+  if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
     return;
   }
+
+  const kind = getGenerationKind({
+    category: generation.category,
+    model: generation.model,
+  });
+  const fallbackStartedAtMs = Number.isNaN(Date.parse(generation.created_at))
+    ? null
+    : Date.parse(generation.created_at);
 
   if (isVeoGeneration(generation)) {
     const response = await fetch(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
@@ -391,18 +424,36 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
 
     const successFlag = data.data?.successFlag;
     const responseData = data.data?.response;
+    const timing = normalizeVeoGenerationTiming({
+      kind,
+      task: data.data,
+      fallbackStartedAtMs,
+    });
+
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        await persistGeneratedOutput(supabase, generation, tempUrl);
+        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       } else {
-        await supabase.from('generations').update({ status: 'succeeded' }).eq('id', generation.id);
+        await supabase
+          .from('generations')
+          .update({
+            status: 'succeeded',
+            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+          })
+          .eq('id', generation.id);
       }
       return;
     }
 
     if (successFlag === 2 || successFlag === 3) {
-      await markGenerationFailed(supabase, generation);
+      await markGenerationFailed(supabase, generation, toIsoTimestamp(timing.completedAtMs));
+      return;
+    }
+
+    const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
+    if (generation.status !== nextStatus) {
+      await supabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
     }
 
     return;
@@ -418,6 +469,12 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
   }
 
   const state = data.data?.state;
+  const timing = normalizeMarketGenerationTiming({
+    kind,
+    task: data.data,
+    fallbackStartedAtMs,
+  });
+
   if (state === 'success') {
     let tempUrl: string | null = null;
 
@@ -431,15 +488,27 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
     }
 
     if (tempUrl) {
-      await persistGeneratedOutput(supabase, generation, tempUrl);
+      await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
     } else {
-      await supabase.from('generations').update({ status: 'succeeded' }).eq('id', generation.id);
+      await supabase
+        .from('generations')
+        .update({
+          status: 'succeeded',
+          completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        })
+        .eq('id', generation.id);
     }
     return;
   }
 
   if (state === 'fail') {
-    await markGenerationFailed(supabase, generation);
+    await markGenerationFailed(supabase, generation, toIsoTimestamp(timing.completedAtMs));
+    return;
+  }
+
+  const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
+  if (generation.status !== nextStatus) {
+    await supabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
   }
 }
 
@@ -456,7 +525,7 @@ export async function syncGenerationStatuses(params: {
 
   const { data: generations } = await params.supabase
     .from('generations')
-    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings')
+    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
     .in('id', generationIds);
 
   for (const generation of (generations || []) as SyncableGenerationRecord[]) {

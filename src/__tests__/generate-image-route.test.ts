@@ -6,10 +6,26 @@ type SourceGenerationRow = {
   is_public: boolean;
 };
 
+type LocalGenerationRow = {
+  id: string;
+  prediction_id: string;
+  user_id: string;
+  status: string;
+  output_url: string | null;
+  created_at: string;
+  completed_at?: string | null;
+  model: string;
+  category: string | null;
+};
+
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 
-function createSupabaseMock(sourceGeneration: SourceGenerationRow | null) {
+function createSupabaseMock(
+  sourceGeneration: SourceGenerationRow | null,
+  localGeneration: LocalGenerationRow | null = null
+) {
   const inserts: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
   const rpc = vi.fn(async (fn: string) => {
     if (fn === 'deduct_credits') {
       return { data: 92, error: null };
@@ -24,6 +40,7 @@ function createSupabaseMock(sourceGeneration: SourceGenerationRow | null) {
 
   return {
     inserts,
+    updates,
     client: {
       auth: {
         getUser: vi.fn(async () => ({
@@ -43,19 +60,34 @@ function createSupabaseMock(sourceGeneration: SourceGenerationRow | null) {
           select() {
             return {
               eq(column: string, value: unknown) {
-                if (column !== 'id') {
-                  throw new Error(`Unexpected select column: ${column}`);
-                }
-
                 return {
                   async maybeSingle() {
-                    if (sourceGeneration && sourceGeneration.id === value) {
+                    if (column === 'id' && sourceGeneration && sourceGeneration.id === value) {
+                      return { data: sourceGeneration, error: null };
+                    }
+
+                    return { data: null, error: null };
+                  },
+                  async single() {
+                    if (column === 'prediction_id' && localGeneration && localGeneration.prediction_id === value) {
+                      return { data: localGeneration, error: null };
+                    }
+
+                    if (column === 'id' && sourceGeneration && sourceGeneration.id === value) {
                       return { data: sourceGeneration, error: null };
                     }
 
                     return { data: null, error: null };
                   },
                 };
+              },
+            };
+          },
+          update(record: Record<string, unknown>) {
+            updates.push(record);
+            return {
+              async eq() {
+                return { data: null, error: null };
               },
             };
           },
@@ -209,5 +241,54 @@ describe('/api/generate-image route', () => {
         },
       ],
     });
+  });
+
+  it('returns provider-backed timing for waiting image generations', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-image-1',
+      prediction_id: 'task-image-status-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'nano-banana-2',
+      category: 'image',
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          code: 200,
+          data: {
+            state: 'waiting',
+            createTime: '2026-04-15T10:00:00.000Z',
+            updateTime: '2026-04-15T10:00:05.000Z',
+          },
+        }),
+      }))
+    );
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=task-image-status-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('waiting');
+    expect(data.timing).toMatchObject({
+      appStatus: 'waiting',
+      providerState: 'waiting',
+      phaseLabel: 'Waiting for provider',
+      startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
+    });
+    expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 });

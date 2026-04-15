@@ -8,6 +8,7 @@ create table if not exists public.generations (
   prediction_id text,
   status text,
   output_url text,
+  completed_at timestamp with time zone,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

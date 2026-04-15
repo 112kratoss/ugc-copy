@@ -6,10 +6,26 @@ type SourceGenerationRow = {
   is_public: boolean;
 };
 
+type LocalGenerationRow = {
+  id: string;
+  prediction_id: string;
+  user_id: string;
+  status: string;
+  output_url: string | null;
+  created_at: string;
+  completed_at?: string | null;
+  model: string;
+  category: string | null;
+};
+
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 
-function createSupabaseMock(sourceGeneration: SourceGenerationRow | null = null) {
+function createSupabaseMock(
+  sourceGeneration: SourceGenerationRow | null = null,
+  localGeneration: LocalGenerationRow | null = null
+) {
   const inserts: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
   const rpc = vi.fn(async (fn: string) => {
     if (fn === 'deduct_credits') {
       return { data: 1576, error: null };
@@ -24,6 +40,7 @@ function createSupabaseMock(sourceGeneration: SourceGenerationRow | null = null)
 
   return {
     inserts,
+    updates,
     client: {
       auth: {
         getUser: vi.fn(async () => ({
@@ -43,19 +60,34 @@ function createSupabaseMock(sourceGeneration: SourceGenerationRow | null = null)
           select() {
             return {
               eq(column: string, value: unknown) {
-                if (column !== 'id') {
-                  throw new Error(`Unexpected select column: ${column}`);
-                }
-
                 return {
                   async maybeSingle() {
-                    if (sourceGeneration && sourceGeneration.id === value) {
+                    if (column === 'id' && sourceGeneration && sourceGeneration.id === value) {
+                      return { data: sourceGeneration, error: null };
+                    }
+
+                    return { data: null, error: null };
+                  },
+                  async single() {
+                    if (column === 'prediction_id' && localGeneration && localGeneration.prediction_id === value) {
+                      return { data: localGeneration, error: null };
+                    }
+
+                    if (column === 'id' && sourceGeneration && sourceGeneration.id === value) {
                       return { data: sourceGeneration, error: null };
                     }
 
                     return { data: null, error: null };
                   },
                 };
+              },
+            };
+          },
+          update(record: Record<string, unknown>) {
+            updates.push(record);
+            return {
+              async eq() {
+                return { data: null, error: null };
               },
             };
           },
@@ -341,5 +373,54 @@ describe('/api/generate-video route', () => {
         audios: [expect.objectContaining({ assetId: 'asset-audio-1' })],
       },
     });
+  });
+
+  it('returns provider-backed timing for waiting video generations', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-1',
+      prediction_id: 'task-video-status-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0-video',
+      category: 'video',
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          code: 200,
+          data: {
+            state: 'queuing',
+            createTime: '2026-04-15T10:00:00.000Z',
+            updateTime: '2026-04-15T10:00:08.000Z',
+          },
+        }),
+      }))
+    );
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-status-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('waiting');
+    expect(data.timing).toMatchObject({
+      appStatus: 'waiting',
+      providerState: 'queuing',
+      phaseLabel: 'Queued at provider',
+      startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
+    });
+    expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 });

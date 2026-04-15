@@ -10,6 +10,7 @@ import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/component
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
+import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
@@ -20,6 +21,7 @@ interface Generation {
     output_url: string | null;
     status: string;
     created_at: string;
+    completed_at?: string | null;
     duration: number | null;
     cost: number | null;
     model: string;
@@ -416,6 +418,31 @@ export default function CreationsPage() {
             hour: '2-digit', minute: '2-digit',
         });
 
+    const parseTimestampMs = (value?: string | null): number | null => {
+        if (!value) {
+            return null;
+        }
+
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? null : parsed;
+    };
+
+    const getStartedAgoLabel = (generation: Generation): string | null => {
+        const startedAtMs = parseTimestampMs(generation.created_at);
+        return startedAtMs === null ? null : `Started ${formatTimeAgoShort(startedAtMs)}`;
+    };
+
+    const getCompletedInLabel = (generation: Generation): string | null => {
+        const startedAtMs = parseTimestampMs(generation.created_at);
+        const completedAtMs = parseTimestampMs(generation.completed_at);
+
+        if (startedAtMs === null || completedAtMs === null) {
+            return null;
+        }
+
+        return `Completed in ${formatDurationShort(Math.max(0, completedAtMs - startedAtMs))}`;
+    };
+
     const getGenerationCategory = (generation: Generation): 'image' | 'video' | 'audio' | 'motion' | 'ugc-ad' => {
         if (generation.category === 'audio' || generation.category === 'image' || generation.category === 'motion' || generation.category === 'ugc-ad') {
             return generation.category;
@@ -722,7 +749,7 @@ export default function CreationsPage() {
                                     <Loader2 className="h-4 w-4 animate-spin" /> Processing ({processingGenerations.length})
                                 </h2>
                                 <p className="mt-2 max-w-2xl text-sm text-zinc-500">
-                                    Longer provider queues keep running in the background. This page refreshes automatically, so finished runs will move into Completed as soon as they land.
+                                    Longer provider queues keep running in the background. Each card shows when the run started, and finished outputs move into Completed automatically.
                                 </p>
                             </div>
                             <button
@@ -741,10 +768,13 @@ export default function CreationsPage() {
                                     <div className="aspect-video bg-black/60 flex items-center justify-center">
                                         <div className="flex flex-col items-center gap-3">
                                             <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
-                                            <span className="text-xs text-zinc-500">Still processing in background...</span>
+                                            <span className="text-xs text-zinc-400">{getStartedAgoLabel(gen) ?? 'Still processing in background...'}</span>
                                         </div>
                                     </div>
-                                    <div className="p-4"><p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p></div>
+                                    <div className="p-4 flex items-center justify-between gap-3">
+                                        <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
+                                        <span className="text-xs text-zinc-500">{getStartedAgoLabel(gen) ?? 'Processing'}</span>
+                                    </div>
                                 </motion.div>
                             ))}
                         </div>
@@ -762,6 +792,7 @@ export default function CreationsPage() {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
+                                const completedInLabel = getCompletedInLabel(gen);
                                 const badgeClass = isImage
                                     ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                                     : isAudio
@@ -804,6 +835,12 @@ export default function CreationsPage() {
                                         <div className="p-4 flex items-center justify-between">
                                             <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
                                             <div className="flex items-center gap-3">
+                                                {completedInLabel ? (
+                                                    <span className="flex items-center gap-1 text-xs text-zinc-500">
+                                                        <CheckCircle2 className="w-3 h-3" />
+                                                        {completedInLabel}
+                                                    </span>
+                                                ) : null}
                                                 {gen.duration && <span className="flex items-center gap-1 text-xs text-zinc-500"><Clock className="w-3 h-3" />{Math.round(gen.duration)}s</span>}
                                                 {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
                                             </div>

@@ -20,6 +20,8 @@ const POLL_INTERVAL_MS = 30000;
 interface GenerationRecord {
   id: string;
   status: string;
+  created_at?: string | null;
+  completed_at?: string | null;
   category?: string | null;
   model?: string | null;
 }
@@ -72,6 +74,17 @@ function clearStatusCache() {
   } catch {
     // Ignore storage failures.
   }
+}
+
+function getCompletionDurationMs(generation: GenerationRecord): number | null {
+  const startedAtMs = generation.created_at ? Date.parse(generation.created_at) : Number.NaN;
+  const completedAtMs = generation.completed_at ? Date.parse(generation.completed_at) : Number.NaN;
+
+  if (Number.isNaN(startedAtMs) || Number.isNaN(completedAtMs)) {
+    return null;
+  }
+
+  return Math.max(0, completedAtMs - startedAtMs);
 }
 
 export default function GenerationNotifications() {
@@ -149,7 +162,7 @@ export default function GenerationNotifications() {
       }
 
       const kind = getGenerationKind(generation);
-      const copy = getGenerationNotificationCopy(kind, status);
+      const copy = getGenerationNotificationCopy(kind, status, getCompletionDurationMs(generation));
       const nextNotification: NotificationItem = {
         id: existingId,
         status,

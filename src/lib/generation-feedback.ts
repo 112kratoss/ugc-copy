@@ -1,4 +1,5 @@
 import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
+import { formatDurationShort } from '@/lib/generation-timing';
 
 export const BACKGROUND_PROCESSING_ERROR = '__BACKGROUND_PROCESSING__';
 
@@ -61,21 +62,23 @@ export function getBackgroundProcessingCopy(kind: Exclude<GenerationKind, 'audio
       'This run is taking longer than usual, but it is still active in the background. You can keep working and check My Creations any time.',
     status:
       kind === 'image'
-        ? 'Still processing in background... (100%)'
-        : 'Still rendering in background... (100%)',
+        ? 'Still processing in background'
+        : 'Still rendering in background',
   };
 }
 
 export function getGenerationNotificationCopy(
   kind: GenerationKind,
-  status: 'succeeded' | 'failed'
+  status: 'succeeded' | 'failed',
+  completedInMs?: number | null
 ) {
   const label = getGenerationLabel(kind);
 
   if (status === 'succeeded') {
+    const completionSuffix = completedInMs ? ` in ${formatDurationShort(completedInMs)}` : '';
     return {
       title: `${label.charAt(0).toUpperCase()}${label.slice(1)} ready`,
-      description: `Your latest ${label} finished in the background and is ready in My Creations.`,
+      description: `Your latest ${label} finished${completionSuffix} and is ready in My Creations.`,
     };
   }
 

@@ -10,6 +10,7 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioRemixNotice,
     StudioRunPanel,
@@ -49,6 +50,13 @@ import {
     type PersistedImageElementDraft,
 } from '@/lib/image-elements';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
+import {
+    createLocalGenerationTiming,
+    freezeGenerationTiming,
+    getGenerationTimingSummaryLabel,
+    type GenerationTiming,
+} from '@/lib/generation-timing';
+import { useTicker } from '@/lib/use-ticker';
 
 // ─── Model Registry ─────────────────────────────────────────────────────────
 const IMAGE_MODELS = {
@@ -167,6 +175,13 @@ export interface CreateImagePrefill {
     aspectRatio?: string | null;
 }
 
+type GenerationStatusResponse = {
+    status: 'processing' | 'waiting' | 'succeeded' | 'failed';
+    output?: string | null;
+    error?: string | null;
+    timing?: GenerationTiming | null;
+};
+
 export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
@@ -178,7 +193,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [googleSearch, setGoogleSearch] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
-    const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+    const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [outputImage, setOutputImage] = useState<string | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [latestIsPublic, setLatestIsPublic] = useState(false);
@@ -209,6 +224,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
+    const nowMs = useTicker(isGenerating);
 
 
     useEffect(() => {
@@ -664,29 +680,53 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         };
     };
 
-    const pollPrediction = async (predictionId: string, accessToken: string): Promise<string> => {
+    const handoffToBackgroundProcessing = (startedAtMs: number) => {
+        setError(BACKGROUND_PROCESSING_ERROR);
+        setGenerationTiming((current) => freezeGenerationTiming(
+            current ?? createLocalGenerationTiming({
+                kind: 'image',
+                phaseLabel: 'Generating image',
+                startedAtMs,
+            }),
+            Date.now()
+        ));
+    };
+
+    const pollPrediction = async (
+        predictionId: string,
+        accessToken: string,
+        startedAtMs: number
+    ): Promise<{ output: string; timing: GenerationTiming | null }> => {
         const maxAttempts = 60; // 5 minutes max (5s intervals)
         let attempts = 0;
-        const startTime = Date.now();
 
         while (attempts < maxAttempts) {
             const response = await fetch(`/api/generate-image?id=${predictionId}`, {
                 headers: { 'Authorization': `Bearer ${accessToken}` }
             });
-            const data = await response.json();
+            const data = await response.json() as GenerationStatusResponse;
 
-            if (data.status === 'succeeded') return data.output;
-            if (data.status === 'failed') throw new Error(data.error || 'Image generation failed');
+            if (data.timing) {
+                setGenerationTiming(data.timing);
+            } else {
+                setGenerationTiming((current) => current ?? createLocalGenerationTiming({
+                    kind: 'image',
+                    phaseLabel: 'Waiting for provider',
+                    startedAtMs,
+                }));
+            }
 
-            const elapsed = (Date.now() - startTime) / 1000;
-            const progress = Math.min((elapsed / 60) * 90, 90);
+            if (data.status === 'succeeded') {
+                return {
+                    output: data.output || '',
+                    timing: data.timing ?? null,
+                };
+            }
 
-            let statusMsg = 'Processing...';
-            if (progress < 20) statusMsg = 'Queuing request...';
-            else if (progress < 60) statusMsg = 'Generating image...';
-            else statusMsg = 'Finalizing...';
+            if (data.status === 'failed') {
+                throw new Error(data.error || 'Image generation failed');
+            }
 
-            setGenerationStatus(`${statusMsg} (${Math.round(progress)}%)`);
             await new Promise(resolve => setTimeout(resolve, 5000));
             attempts++;
         }
@@ -722,6 +762,60 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         })
         : [];
 
+    useEffect(() => {
+        const resumePendingGeneration = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
+
+            const { data, error: pendingError } = await supabase
+                .from('generations')
+                .select('id, prediction_id, status, created_at')
+                .eq('user_id', session.user.id)
+                .eq('category', 'image')
+                .in('status', ['processing', 'waiting'])
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (pendingError || !data?.prediction_id) {
+                return;
+            }
+
+            const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+
+            setIsGenerating(true);
+            setError(null);
+            setLatestGenerationId(data.id ?? null);
+            setLatestIsPublic(false);
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'image',
+                phaseLabel: 'Resuming active run',
+                startedAtMs,
+                appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+            }));
+
+            try {
+                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs);
+                setOutputImage(result.output);
+                if (result.timing) {
+                    setGenerationTiming(result.timing);
+                }
+            } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
+                if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
+                    handoffToBackgroundProcessing(startedAtMs);
+                } else {
+                    setError(errorMessage);
+                    setGenerationTiming(null);
+                }
+            } finally {
+                setIsGenerating(false);
+            }
+        };
+
+        void resumePendingGeneration();
+    }, []);
+
     const handleGenerate = async () => {
         if (!prompt.trim()) { setError('Please enter a prompt'); return; }
         if (staleElementMentions.length > 0) {
@@ -736,14 +830,23 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
-        setGenerationStatus('Preparing... (0%)');
+        const startedAtMs = Date.now();
+        setGenerationTiming(createLocalGenerationTiming({
+            kind: 'image',
+            phaseLabel: 'Preparing inputs',
+            startedAtMs,
+        }));
 
         try {
             let imageUrls: string[] = [];
             const requestElements: ImageElementDescriptor[] = [];
 
             if (elements.length > 0) {
-                setGenerationStatus(`Preparing ${elements.length} elements... (2%)`);
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'image',
+                    phaseLabel: elements.length === 1 ? 'Uploading 1 reference' : `Uploading ${elements.length} references`,
+                    startedAtMs,
+                }));
 
                 const uploadedElements = await Promise.all(elements.map(async (element) => {
                     if (element.file) {
@@ -780,7 +883,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 imageUrls = uploadedElements.map((item) => item.imageUrl);
             }
 
-            setGenerationStatus('Starting AI generation... (5%)');
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'image',
+                phaseLabel: 'Submitting image run',
+                startedAtMs,
+            }));
 
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) { router.push('/login?returnUrl=/create-image'); return; }
@@ -809,29 +916,24 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
-            const outputUrl = await pollPrediction(data.predictionId, session.access_token);
-            setOutputImage(outputUrl);
-            setGenerationStatus('Image generated successfully! (100%)');
+            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs);
+            setOutputImage(result.output);
+            if (result.timing) {
+                setGenerationTiming(result.timing);
+            }
             if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
 
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
             if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                setError(BACKGROUND_PROCESSING_ERROR);
-                setGenerationStatus(getBackgroundProcessingCopy('image').status);
+                handoffToBackgroundProcessing(startedAtMs);
             } else {
                 setError(errorMessage);
-                setGenerationStatus(null);
+                setGenerationTiming(null);
             }
         } finally {
             setIsGenerating(false);
         }
-    };
-
-    const getProgress = () => {
-        if (!generationStatus) return 0;
-        const match = generationStatus.match(/\((\d+)%\)/);
-        return match ? parseInt(match[1]) : 0;
     };
 
     const accentStyles = {
@@ -852,6 +954,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }[model.accentColor];
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
+    const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
+    const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
     const remixResultReferenceLabel = remixSourceBundle
         ? getRemixResultReferenceLabel(remixSourceBundle.generation.title)
         : null;
@@ -1426,24 +1530,19 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             }
                             status={
                                 <>
-                                    {isGenerating && generationStatus ? (
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between text-sm text-zinc-300">
-                                                <span>{generationStatus}</span>
-                                                <span>{getProgress()}%</span>
-                                            </div>
-                                            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-                                                <motion.div
-                                                    className={`h-full bg-gradient-to-r ${accentStyles.progress}`}
-                                                    initial={{ width: '0%' }}
-                                                    animate={{ width: `${getProgress()}%` }}
-                                                    transition={{ duration: 0.5 }}
-                                                />
-                                            </div>
-                                            <p className="text-xs text-zinc-500">Usually takes 30–90 seconds.</p>
-                                        </div>
+                                    {isGenerating && generationTiming ? (
+                                        <StudioGenerationStatus
+                                            accent={model.accentColor}
+                                            timing={generationTiming}
+                                            nowMs={nowMs}
+                                        />
                                     ) : isBackgroundProcessing ? (
-                                        <StudioBackgroundProcessingNotice accent={model.accentColor} label="image" />
+                                        <StudioBackgroundProcessingNotice
+                                            accent={model.accentColor}
+                                            label="image"
+                                            phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                            timingLabel={backgroundTimingLabel}
+                                        />
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : staleElementMentions.length > 0 ? (
@@ -1553,7 +1652,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </div>
                                 </div>
                             ) : isBackgroundProcessing ? (
-                                <StudioBackgroundProcessingNotice accent={model.accentColor} label="image" variant="workspace" />
+                                <StudioBackgroundProcessingNotice
+                                    accent={model.accentColor}
+                                    label="image"
+                                    variant="workspace"
+                                    phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                    timingLabel={backgroundTimingLabel}
+                                />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${model.accentColor === 'violet' ? 'from-violet-500/30 to-purple-500/10' : 'from-blue-500/30 to-cyan-500/10'}`}>

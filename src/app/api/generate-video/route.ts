@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import {
+    getGenerationKind,
+    normalizeMarketGenerationTiming,
+    normalizeStoredGenerationTiming,
+    normalizeVeoGenerationTiming,
+    toIsoTimestamp,
+} from '@/lib/generation-timing';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
@@ -71,7 +78,8 @@ async function persistVideoOutput(
     supabase: SupabaseClient,
     predictionId: string,
     userId: string | undefined,
-    tempUrl: string
+    tempUrl: string,
+    completedAt?: string | null
 ): Promise<string> {
     try {
         const videoRes = await fetch(tempUrl);
@@ -93,7 +101,11 @@ async function persistVideoOutput(
             console.error('Upload to Supabase Storage failed:', uploadError);
             await supabase
                 .from('generations')
-                .update({ status: 'succeeded', output_url: tempUrl })
+                .update({
+                    status: 'succeeded',
+                    output_url: tempUrl,
+                    completed_at: completedAt ?? new Date().toISOString(),
+                })
                 .eq('prediction_id', predictionId);
             return tempUrl;
         }
@@ -105,7 +117,11 @@ async function persistVideoOutput(
 
         await supabase
             .from('generations')
-            .update({ status: 'succeeded', output_url: storagePath })
+            .update({
+                status: 'succeeded',
+                output_url: storagePath,
+                completed_at: completedAt ?? new Date().toISOString(),
+            })
             .eq('prediction_id', predictionId);
 
         return signedData?.signedUrl || tempUrl;
@@ -113,7 +129,11 @@ async function persistVideoOutput(
         console.error('Error persisting video to storage:', error);
         await supabase
             .from('generations')
-            .update({ status: 'succeeded', output_url: tempUrl })
+            .update({
+                status: 'succeeded',
+                output_url: tempUrl,
+                completed_at: completedAt ?? new Date().toISOString(),
+            })
             .eq('prediction_id', predictionId);
         return tempUrl;
     }
@@ -260,13 +280,31 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({
                 status: 'succeeded',
                 output: await resolveStoredMediaUrl(adminSupabase, localGeneration.output_url),
+                timing: normalizeStoredGenerationTiming({
+                    kind: getGenerationKind({
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }),
+                    status: localGeneration.status,
+                    createdAt: localGeneration.created_at,
+                    completedAt: localGeneration.completed_at,
+                }),
             });
         }
 
         const selectedModel = getWorkflowModelId(localGeneration);
-        let status = 'processing';
+        let status: 'processing' | 'waiting' | 'succeeded' | 'failed' = 'processing';
         let output: string | null = null;
         let error: string | null = null;
+        let timing = normalizeStoredGenerationTiming({
+            kind: getGenerationKind({
+                category: localGeneration?.category,
+                model: localGeneration?.model,
+            }),
+            status: localGeneration?.status,
+            createdAt: localGeneration?.created_at,
+            completedAt: localGeneration?.completed_at,
+        });
 
         if (selectedModel === 'veo-3.1') {
             const response = await fetch(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
@@ -281,9 +319,14 @@ export async function GET(request: NextRequest) {
 
             const successFlag = data.data?.successFlag;
             const responseData = data.data?.response;
+            timing = normalizeVeoGenerationTiming({
+                kind: 'video',
+                task: data.data,
+                fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+            });
+            status = timing.appStatus;
 
             if (successFlag === 1) {
-                status = 'succeeded';
                 const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
 
                 if (tempUrl) {
@@ -291,15 +334,18 @@ export async function GET(request: NextRequest) {
                         supabase,
                         predictionId,
                         user?.id || localGeneration?.user_id,
-                        tempUrl
+                        tempUrl,
+                        toIsoTimestamp(timing.completedAtMs)
                     );
                 }
             } else if (successFlag === 2 || successFlag === 3) {
-                status = 'failed';
                 error = data.data?.errorMessage || data.msg || 'Unknown error';
                 await supabase
                     .from('generations')
-                    .update({ status: 'failed' })
+                    .update({
+                        status: 'failed',
+                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                    })
                     .eq('prediction_id', predictionId);
                 await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
             }
@@ -314,11 +360,14 @@ export async function GET(request: NextRequest) {
                 throw new Error(data.msg || 'Failed to check status');
             }
 
-            status = data.data.state;
+            timing = normalizeMarketGenerationTiming({
+                kind: 'video',
+                task: data.data,
+                fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+            });
+            status = timing.appStatus;
 
-            if (status === 'success') {
-                status = 'succeeded';
-
+            if (status === 'succeeded') {
                 try {
                     const result = JSON.parse(data.data.resultJson);
                     const tempUrl = getFirstResultUrl(result.resultUrls);
@@ -328,24 +377,27 @@ export async function GET(request: NextRequest) {
                             supabase,
                             predictionId,
                             user?.id || localGeneration?.user_id,
-                            tempUrl
+                            tempUrl,
+                            toIsoTimestamp(timing.completedAtMs)
                         );
                     }
                 } catch (parseError) {
                     console.error('Error handling success status:', parseError);
                 }
-            } else if (status === 'fail') {
-                status = 'failed';
+            } else if (status === 'failed') {
                 error = data.data.failMsg || 'Unknown error';
                 await supabase
                     .from('generations')
-                    .update({ status: 'failed' })
+                    .update({
+                        status: 'failed',
+                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                    })
                     .eq('prediction_id', predictionId);
                 await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
             }
         }
 
-        return NextResponse.json({ status, output, error });
+        return NextResponse.json({ status, output, error, timing });
     } catch (error) {
         console.error('Error fetching video status:', error);
         return NextResponse.json({ error: 'Failed to fetch generation status' }, { status: 500 });

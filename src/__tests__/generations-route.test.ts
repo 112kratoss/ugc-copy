@@ -6,6 +6,7 @@ type GenerationRow = {
   output_url: string | null;
   status: string;
   created_at: string;
+  completed_at?: string | null;
   duration: number | null;
   cost: number | null;
   model: string;
@@ -158,6 +159,7 @@ describe('/api/generations route', () => {
         output_url: 'generated_images/user-1/output.jpg',
         status: 'processing',
         created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: null,
         duration: null,
         cost: 8,
         model: 'nano-banana-2',
@@ -204,6 +206,7 @@ describe('/api/generations route', () => {
     expect(data.generations[0].title).toBe('Launch still');
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
+    expect(data.generations[0].completed_at).toBeNull();
   });
 
   it('returns data even when syncing processing generations fails', async () => {
@@ -229,5 +232,6 @@ describe('/api/generations route', () => {
     expect(data.generations[0].title).toBe('Launch still');
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
+    expect(data.generations[0].completed_at).toBeNull();
   });
 });

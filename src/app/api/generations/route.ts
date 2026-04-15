@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
         const fetchGenerations = async () => {
             let query = supabase
                 .from('generations')
-                .select('id, output_url, showcase_asset_path, status, created_at, duration, cost, model, category, is_public, title, description, prompt, archived_at')
+                .select('id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, archived_at')
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false });
 

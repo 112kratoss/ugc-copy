@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, Clock3, Expand, RefreshCw, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -10,6 +10,7 @@ import {
   type CreatorToolId,
   getCreatorTool,
 } from '@/lib/creator-tools';
+import { getGenerationTimingSummaryLabel, type GenerationTiming } from '@/lib/generation-timing';
 
 const ACCENT_STYLES: Record<
   CreatorToolAccent,
@@ -553,6 +554,44 @@ export function StudioRunPanel({
   );
 }
 
+export function StudioGenerationStatus({
+  accent,
+  timing,
+  nowMs,
+}: {
+  accent: CreatorToolAccent;
+  timing: GenerationTiming;
+  nowMs?: number;
+}) {
+  const progressClass = {
+    blue: 'from-sky-500 to-cyan-400',
+    rose: 'from-rose-500 to-fuchsia-400',
+    violet: 'from-violet-500 to-fuchsia-500',
+    emerald: 'from-emerald-500 to-teal-400',
+  }[accent];
+  const isComplete = timing.completedInMs !== null;
+  const summaryLabel = getGenerationTimingSummaryLabel(timing, nowMs);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3 text-sm text-zinc-300">
+        <span className="flex items-center gap-2 text-zinc-100">
+          {isComplete ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-300" />
+          ) : (
+            <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+          )}
+          {timing.phaseLabel}
+        </span>
+        {summaryLabel ? <span className="text-zinc-400">{summaryLabel}</span> : null}
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+        <div className={clsx('h-full rounded-full bg-gradient-to-r opacity-80', progressClass, isComplete ? '' : 'animate-pulse')} />
+      </div>
+    </div>
+  );
+}
+
 export function StudioWorkspacePanel({
   title,
   description,
@@ -585,10 +624,14 @@ export function StudioBackgroundProcessingNotice({
   accent,
   label,
   variant = 'summary',
+  phaseLabel,
+  timingLabel,
 }: {
   accent: CreatorToolAccent;
   label: string;
   variant?: 'summary' | 'workspace';
+  phaseLabel?: string | null;
+  timingLabel?: string | null;
 }) {
   const theme = ACCENT_STYLES[accent];
   const isWorkspace = variant === 'workspace';
@@ -621,6 +664,12 @@ export function StudioBackgroundProcessingNotice({
           </Link>
           .
         </p>
+        {phaseLabel || timingLabel ? (
+          <div className={clsx('mt-3 rounded-2xl border border-white/8 bg-black/30 px-4 py-3 text-left', isWorkspace ? 'mx-auto max-w-sm' : '')}>
+            {phaseLabel ? <div className="text-sm font-medium text-zinc-200">{phaseLabel}</div> : null}
+            {timingLabel ? <div className="mt-1 text-xs uppercase tracking-[0.18em] text-zinc-500">{timingLabel}</div> : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
