@@ -1,5 +1,10 @@
 export type MediaBucket = 'generated_images' | 'generated_videos' | 'generated_audio';
 
+type MediaProxyOptions = {
+  download?: boolean;
+  filename?: string;
+};
+
 export function isMediaBucket(bucket: string): bucket is MediaBucket {
   return bucket === 'generated_images' || bucket === 'generated_videos' || bucket === 'generated_audio';
 }
@@ -52,11 +57,19 @@ export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket
   }
 }
 
-export function buildMediaProxyUrl(bucket: MediaBucket, filePath: string): string {
+export function buildMediaProxyUrl(bucket: MediaBucket, filePath: string, options?: MediaProxyOptions): string {
   const params = new URLSearchParams({
     bucket,
     path: filePath,
   });
+
+  if (options?.download) {
+    params.set('download', '1');
+  }
+
+  if (options?.filename) {
+    params.set('filename', options.filename);
+  }
 
   return `/api/media?${params.toString()}`;
 }

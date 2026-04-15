@@ -33,6 +33,8 @@ async function createMediaSupabaseClient(request: NextRequest) {
 export async function GET(request: NextRequest) {
     const bucket = request.nextUrl.searchParams.get('bucket');
     const filePath = request.nextUrl.searchParams.get('path');
+    const shouldDownload = request.nextUrl.searchParams.get('download') === '1';
+    const requestedFilename = request.nextUrl.searchParams.get('filename');
 
     if (!bucket || !isMediaBucket(bucket) || !filePath) {
         return NextResponse.json({ error: 'Invalid media path' }, { status: 400 });
@@ -63,6 +65,12 @@ export async function GET(request: NextRequest) {
         );
         headers.set('Content-Length', String(data.size));
         headers.set('Cache-Control', 'private, max-age=60');
+
+        if (shouldDownload) {
+            const fallbackFileName = filePath.split('/').pop() || 'download';
+            const fileName = (requestedFilename?.trim() || fallbackFileName).replace(/[/\\"]/g, '-');
+            headers.set('Content-Disposition', `attachment; filename="${fileName}"`);
+        }
 
         return new NextResponse(data.stream(), {
             status: 200,

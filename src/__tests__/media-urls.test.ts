@@ -22,6 +22,17 @@ describe('media url helpers', () => {
     );
   });
 
+  it('builds download proxy urls with attachment params', () => {
+    expect(
+      buildMediaProxyUrl('generated_images', 'user/file.jpg', {
+        download: true,
+        filename: 'generated-image.jpg',
+      })
+    ).toBe(
+      '/api/media?bucket=generated_images&path=user%2Ffile.jpg&download=1&filename=generated-image.jpg'
+    );
+  });
+
   it('keeps external urls unchanged', () => {
     expect(getDisplayMediaUrl('https://cdn.example.com/file.jpg')).toBe('https://cdn.example.com/file.jpg');
   });

@@ -56,6 +56,7 @@ import {
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
+import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 
@@ -972,6 +973,21 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 element.sourceGenerationId === remixSourceBundle.generation.id
         )
     );
+    const outputImageDownloadUrl = (() => {
+        if (!outputImage) {
+            return null;
+        }
+
+        const location = getStoredMediaLocation(outputImage);
+        if (!location) {
+            return outputImage;
+        }
+
+        return buildMediaProxyUrl(location.bucket, location.filePath, {
+            download: true,
+            filename: 'generated-image.jpg',
+        });
+    })();
 
     if (isLoadingUser) {
         return (
@@ -1588,10 +1604,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </div>
                                     <div className="flex flex-wrap gap-3">
                                         <a
-                                            href={outputImage}
+                                            href={outputImageDownloadUrl ?? outputImage}
                                             download="generated-image.jpg"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
                                             className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
                                         >
                                             <Download className="h-4 w-4" />
