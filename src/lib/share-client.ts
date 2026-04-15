@@ -56,12 +56,19 @@ export async function sharePublicGeneration({
   }
 
   const url = buildShowcaseDetailUrl(generationId, window.location.origin);
-  const shareText = description?.trim() || `View this creation on UGC copy: ${buildShowcaseDetailPath(generationId)}`;
+  const normalizedTitle = title.trim();
+  const normalizedDescription = description?.trim() || null;
+  const shareText =
+    normalizedTitle
+      ? `Look what I created on UGC Copy: ${normalizedTitle}`
+      : normalizedDescription && normalizedDescription.length <= 80
+        ? normalizedDescription
+        : `Look what I created on UGC Copy: ${buildShowcaseDetailPath(generationId)}`;
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
       await navigator.share({
-        title,
+        title: normalizedTitle || 'UGC Copy creation',
         text: shareText,
         url,
       });

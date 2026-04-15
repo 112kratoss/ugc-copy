@@ -53,7 +53,7 @@ describe('PublicShareButton', () => {
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith({
         title: 'Public creation',
-        text: 'A polished creator prompt',
+        text: 'Look what I created on UGC Copy: Public creation',
         url: shareUrl,
       });
     });
@@ -69,6 +69,32 @@ describe('PublicShareButton', () => {
       generationId: 'gen-1',
       sourceSurface: 'showcase',
       channel: 'native-share',
+    });
+  });
+
+  it('does not leak long prompt text into the native share sheet', async () => {
+    shareMock.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: shareMock,
+    });
+
+    render(
+      <PublicShareButton
+        generationId="gen-3"
+        title="Hero still"
+        description="This is a deliberately long prompt-like description that should never be sent through the share sheet as the body text."
+        sourceSurface="showcase"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+
+    await waitFor(() => {
+      expect(shareMock).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Hero still',
+        text: 'Look what I created on UGC Copy: Hero still',
+      }));
     });
   });
 
