@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { syncGenerationStatuses } from '@/lib/generation-services';
+import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/server-helpers';
 
 type LinkedPostRow = {
@@ -10,6 +11,12 @@ type LinkedPostRow = {
     visibility: 'public' | 'unlisted' | 'private';
     archived_at: string | null;
 };
+
+function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(value: T): Omit<T, 'workflow_settings'> {
+    const nextValue = { ...value };
+    delete nextValue.workflow_settings;
+    return nextValue;
+}
 
 export async function GET(request: NextRequest) {
     try {
@@ -34,7 +41,7 @@ export async function GET(request: NextRequest) {
         const fetchGenerations = async () => {
             let query = supabase
                 .from('generations')
-                .select('id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, archived_at')
+                .select('id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at')
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false });
 
@@ -95,9 +102,21 @@ export async function GET(request: NextRequest) {
         }
 
         const generationsWithUrls = generations.map((generation) => {
+            const paywallPrefill = buildGenerationPaywallPrefill({
+                category: generation.category,
+                model: generation.model,
+                prompt: generation.prompt,
+                workflowSettings:
+                    generation.workflow_settings && typeof generation.workflow_settings === 'object'
+                        ? (generation.workflow_settings as Record<string, unknown>)
+                        : null,
+            });
+
             if (!generation.output_url) {
+                const rest = withoutWorkflowSettings(generation);
                 return {
-                    ...generation,
+                    ...rest,
+                    paywallPrefill,
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
                     linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,
@@ -107,8 +126,10 @@ export async function GET(request: NextRequest) {
 
             const storedLocation = getStoredMediaLocation(generation.output_url);
             if (!storedLocation) {
+                const rest = withoutWorkflowSettings(generation);
                 return {
-                    ...generation,
+                    ...rest,
+                    paywallPrefill,
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
                     linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,
@@ -116,9 +137,11 @@ export async function GET(request: NextRequest) {
                 };
             }
 
+            const rest = withoutWorkflowSettings(generation);
             return {
-                ...generation,
+                ...rest,
                 output_url: buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath),
+                paywallPrefill,
                 linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                 linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
                 linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,

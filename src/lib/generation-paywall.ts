@@ -1,0 +1,319 @@
+import { normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
+import {
+  IMAGE_MODELS,
+  MOTION_MODELS,
+  VIDEO_MODELS,
+  type ImageModelId,
+  type MotionModelId,
+  type VideoModelId,
+} from '@/lib/models';
+import {
+  getPostResourceKinds,
+  type PostResourceKind,
+} from '@/lib/post-resource-bundles';
+import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
+
+export interface GenerationPaywallPrefill {
+  resourceKinds: PostResourceKind[];
+  promptText: string | null;
+  notesMarkdown: string | null;
+  allowRemix: boolean;
+}
+
+export interface GenerationPaywallPrefillSource {
+  category: string | null | undefined;
+  model: string | null | undefined;
+  prompt: string | null | undefined;
+  workflowSettings: Record<string, unknown> | null | undefined;
+}
+
+function trimText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function formatBooleanLabel(value: boolean): string {
+  return value ? 'On' : 'Off';
+}
+
+function formatListCount(value: number, singular: string, plural: string): string | null {
+  if (value <= 0) {
+    return null;
+  }
+
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function formatModeLabel(modelId: string | null, mode: string | null): string | null {
+  if (!modelId || !mode || !(modelId in VIDEO_MODELS)) {
+    return mode;
+  }
+
+  const option = VIDEO_MODELS[modelId as VideoModelId].modeOptions.find((candidate) => candidate.value === mode);
+  return option?.label ?? mode;
+}
+
+function getModelDisplayName(category: string | null | undefined, workflowSettings: Record<string, unknown>, model: string | null | undefined): string | null {
+  const workflowModel = typeof workflowSettings.model === 'string' ? workflowSettings.model : null;
+
+  if (workflowModel) {
+    if (workflowModel in IMAGE_MODELS) {
+      return IMAGE_MODELS[workflowModel as ImageModelId].displayName;
+    }
+    if (workflowModel in VIDEO_MODELS) {
+      return VIDEO_MODELS[workflowModel as VideoModelId].displayName;
+    }
+    if (workflowModel in MOTION_MODELS) {
+      return MOTION_MODELS[workflowModel as MotionModelId].displayName;
+    }
+    return workflowModel;
+  }
+
+  if (!model) {
+    return null;
+  }
+
+  if (category === 'image') {
+    const imageModel = Object.values(IMAGE_MODELS).find((candidate) => candidate.id === model);
+    if (imageModel) {
+      return imageModel.displayName;
+    }
+  }
+
+  if (category === 'video' || category === 'ugc-ad') {
+    const videoModel = Object.values(VIDEO_MODELS).find(
+      (candidate) => candidate.id === model || candidate.apiModelId === model
+    );
+    if (videoModel) {
+      return videoModel.displayName;
+    }
+  }
+
+  if (category === 'motion') {
+    const motionModel = Object.values(MOTION_MODELS).find(
+      (candidate) => candidate.id === model || candidate.apiModelId === model
+    );
+    if (motionModel) {
+      return motionModel.displayName;
+    }
+  }
+
+  return model;
+}
+
+function hasRecoverableDescriptor(value: unknown, expectedKind: 'image' | 'video'): boolean {
+  const descriptor = normalizeRemixMediaAssetDescriptor(value, expectedKind);
+  return Boolean(descriptor?.storagePath || descriptor?.sourceGenerationId);
+}
+
+function countRecoverableDescriptors(value: unknown): number {
+  return normalizeSubmittedElementDescriptors(value).filter((element) => element.storagePath || element.sourceGenerationId).length;
+}
+
+export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPrefillSource): boolean {
+  const workflowSettings =
+    source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
+
+  if (source.category === 'image') {
+    return countRecoverableDescriptors(workflowSettings.elements) > 0;
+  }
+
+  if (source.category === 'video' || source.category === 'ugc-ad') {
+    return (
+      countRecoverableDescriptors(workflowSettings.elements) > 0 ||
+      hasRecoverableDescriptor(workflowSettings.startFrame, 'image') ||
+      hasRecoverableDescriptor(workflowSettings.endFrame, 'image')
+    );
+  }
+
+  if (source.category === 'motion') {
+    return (
+      hasRecoverableDescriptor(workflowSettings.characterImage, 'image') &&
+      hasRecoverableDescriptor(workflowSettings.referenceVideo, 'video')
+    );
+  }
+
+  return false;
+}
+
+function buildImageNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
+  const details: string[] = [];
+  const referenceCount = countRecoverableDescriptors(workflowSettings.elements);
+
+  if (modelLabel) {
+    details.push(`Model: ${modelLabel}`);
+  }
+
+  if (typeof workflowSettings.aspectRatio === 'string') {
+    details.push(`Aspect ratio: ${workflowSettings.aspectRatio}`);
+  }
+
+  if (typeof workflowSettings.resolution === 'string') {
+    details.push(`Resolution: ${workflowSettings.resolution}`);
+  }
+
+  if (typeof workflowSettings.outputFormat === 'string') {
+    details.push(`Output format: ${workflowSettings.outputFormat.toUpperCase()}`);
+  }
+
+  if (typeof workflowSettings.googleSearch === 'boolean') {
+    details.push(`Google Search grounding: ${formatBooleanLabel(workflowSettings.googleSearch)}`);
+  }
+
+  const referencesLabel = formatListCount(referenceCount, 'saved reference', 'saved references');
+  if (referencesLabel) {
+    details.push(`Inputs: ${referencesLabel}`);
+  }
+
+  return details;
+}
+
+function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
+  const details: string[] = [];
+  const frameCount = Number(hasRecoverableDescriptor(workflowSettings.startFrame, 'image')) +
+    Number(hasRecoverableDescriptor(workflowSettings.endFrame, 'image'));
+  const namedReferenceCount = countRecoverableDescriptors(workflowSettings.elements);
+  const referenceVideoCount = Array.isArray(workflowSettings.referenceVideoUrls)
+    ? workflowSettings.referenceVideoUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
+    : 0;
+  const referenceAudioCount = Array.isArray(workflowSettings.referenceAudioUrls)
+    ? workflowSettings.referenceAudioUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
+    : 0;
+
+  if (modelLabel) {
+    details.push(`Model: ${modelLabel}`);
+  }
+
+  if (typeof workflowSettings.aspectRatio === 'string') {
+    details.push(`Aspect ratio: ${workflowSettings.aspectRatio}`);
+  }
+
+  if (typeof workflowSettings.duration === 'number' && Number.isFinite(workflowSettings.duration)) {
+    details.push(`Duration: ${workflowSettings.duration}s`);
+  }
+
+  if (typeof workflowSettings.resolution === 'string') {
+    details.push(`Resolution: ${workflowSettings.resolution}`);
+  } else if (typeof workflowSettings.mode === 'string') {
+    const workflowModel = typeof workflowSettings.model === 'string' ? workflowSettings.model : null;
+    const modeLabel = formatModeLabel(workflowModel, workflowSettings.mode);
+    if (modeLabel) {
+      details.push(`Mode: ${modeLabel}`);
+    }
+  }
+
+  if (typeof workflowSettings.referenceMode === 'string') {
+    details.push(
+      `Reference mode: ${
+        workflowSettings.referenceMode === 'elements' ? 'Named references' : 'Frames'
+      }`
+    );
+  }
+
+  if (typeof workflowSettings.sound === 'boolean') {
+    details.push(`Sound: ${formatBooleanLabel(workflowSettings.sound)}`);
+  }
+
+  if (typeof workflowSettings.fixedLens === 'boolean' && workflowSettings.fixedLens) {
+    details.push('Camera: Fixed lens');
+  }
+
+  if (Array.isArray(workflowSettings.multiPrompts) && workflowSettings.multiPrompts.length > 0) {
+    details.push(`Shot prompts: ${workflowSettings.multiPrompts.length}`);
+  }
+
+  const inputLabels = [
+    formatListCount(frameCount, 'saved frame', 'saved frames'),
+    formatListCount(namedReferenceCount, 'named reference', 'named references'),
+    formatListCount(referenceVideoCount, 'video reference', 'video references'),
+    formatListCount(referenceAudioCount, 'audio reference', 'audio references'),
+  ].filter((value): value is string => Boolean(value));
+
+  if (inputLabels.length > 0) {
+    details.push(`Inputs: ${inputLabels.join(', ')}`);
+  }
+
+  return details;
+}
+
+function buildMotionNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
+  const details: string[] = [];
+  const hasCharacterImage = hasRecoverableDescriptor(workflowSettings.characterImage, 'image');
+  const hasReferenceVideo = hasRecoverableDescriptor(workflowSettings.referenceVideo, 'video');
+  const inputs: string[] = [];
+
+  if (modelLabel) {
+    details.push(`Model: ${modelLabel}`);
+  }
+
+  if (typeof workflowSettings.duration === 'number' && Number.isFinite(workflowSettings.duration)) {
+    details.push(`Duration: ${workflowSettings.duration}s`);
+  }
+
+  if (typeof workflowSettings.mode === 'string') {
+    details.push(`Render mode: ${workflowSettings.mode}`);
+  }
+
+  if (typeof workflowSettings.characterOrientation === 'string') {
+    details.push(`Character orientation: ${workflowSettings.characterOrientation}`);
+  }
+
+  if (hasCharacterImage) {
+    inputs.push('character image');
+  }
+
+  if (hasReferenceVideo) {
+    inputs.push('reference video');
+  }
+
+  if (inputs.length > 0) {
+    details.push(`Inputs: ${inputs.join(' + ')}`);
+  }
+
+  return details;
+}
+
+export function buildGenerationPaywallNotes(source: GenerationPaywallPrefillSource): string | null {
+  const workflowSettings =
+    source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
+  const modelLabel = getModelDisplayName(source.category, workflowSettings, source.model);
+
+  const details =
+    source.category === 'image'
+      ? buildImageNotes(modelLabel, workflowSettings)
+      : source.category === 'video' || source.category === 'ugc-ad'
+        ? buildVideoNotes(modelLabel, workflowSettings)
+        : source.category === 'motion'
+          ? buildMotionNotes(modelLabel, workflowSettings)
+          : [];
+
+  if (details.length === 0) {
+    return null;
+  }
+
+  return ['Saved generation setup', ...details].join('\n');
+}
+
+export function buildGenerationPaywallPrefill(
+  source: GenerationPaywallPrefillSource
+): GenerationPaywallPrefill | null {
+  const promptText = trimText(source.prompt);
+  const notesMarkdown = buildGenerationPaywallNotes(source);
+  const allowRemix = hasRecoverableGenerationRemixInputs(source);
+  const resourceKinds = getPostResourceKinds({
+    promptText,
+    notesMarkdown,
+    allowRemix,
+  });
+
+  if (!promptText && !notesMarkdown && !allowRemix) {
+    return null;
+  }
+
+  return {
+    resourceKinds,
+    promptText,
+    notesMarkdown,
+    allowRemix,
+  };
+}

@@ -3,13 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, Loader2, Lock, PencilLine, RotateCcw, Share2, Trash2, UserRound, Volume2, Wand2, X, Zap } from 'lucide-react';
+import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, Loader2, PencilLine, RotateCcw, Share2, Trash2, UserRound, Volume2, Wand2, X, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
+import {
+    resolveCreationWorkspaceCardState,
+    type CreationWorkspaceCardState,
+    type CreationWorkspaceMonetizationKind,
+    type CreationWorkspacePublishBadge,
+} from '@/lib/creation-workspace';
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
@@ -95,6 +101,7 @@ export default function CreationsPage() {
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
+    const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
 
     useEffect(() => {
         const nextView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
@@ -159,29 +166,20 @@ export default function CreationsPage() {
         };
     }, [fetchCreations]);
 
-    const openPublishModal = (generation: Generation, options?: { shareAfterPublish?: boolean }) => {
+    const openPublishModal = (generation: Generation, options?: { shareAfterPublish?: boolean; showPaidShortcut?: boolean }) => {
         setPublishTarget(generation);
         setShareAfterPublish(Boolean(options?.shareAfterPublish));
+        setShowPaidShortcutInPublishModal(options?.showPaidShortcut ?? true);
     };
 
     const closePublishModal = () => {
         setPublishTarget(null);
         setShareAfterPublish(false);
+        setShowPaidShortcutInPublishModal(true);
     };
 
-    const handlePublished = (generationId: string, payload: { title: string; description: string }) => {
-        setGenerations((previous) =>
-            previous.map((generation) =>
-                generation.id === generationId
-                    ? {
-                        ...generation,
-                        is_public: true,
-                        title: payload.title || generation.title,
-                        description: payload.description || generation.description,
-                    }
-                    : generation
-            )
-        );
+    const handlePublished = () => {
+        void fetchCreations();
     };
 
     const handleUnpublish = async (generationId: string) => {
@@ -201,16 +199,16 @@ export default function CreationsPage() {
 
             const data = await res.json();
             if (data.success) {
-                setGenerations(prev => prev.map(g => g.id === generationId ? { ...g, is_public: false } : g));
+                await fetchCreations();
             }
         } catch (err) {
             console.error(err);
         }
     };
 
-    const copyPostLink = async (postId: string) => {
+    const copyPostLink = async (path: string) => {
         try {
-            await navigator.clipboard.writeText(`${window.location.origin}/showcase/${postId}`);
+            await navigator.clipboard.writeText(`${window.location.origin}${path}`);
         } catch (error) {
             console.error('Failed to copy post link:', error);
         }
@@ -594,6 +592,50 @@ export default function CreationsPage() {
         return posts.filter((post) => !post.archivedAt && post.visibility === postVisibilityFilter);
     }, [postVisibilityFilter, posts]);
 
+    const successfulCreationCards = useMemo(
+        () =>
+            filteredSuccessful.map((generation) => ({
+                generation,
+                workspaceState: resolveCreationWorkspaceCardState(generation, posts),
+            })),
+        [filteredSuccessful, posts]
+    );
+
+    const getPublishBadgeClass = (badge: CreationWorkspacePublishBadge): string => {
+        switch (badge) {
+            case 'Public':
+                return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
+            case 'Unlisted':
+                return 'border-indigo-400/20 bg-indigo-500/10 text-indigo-100';
+            case 'Private':
+                return 'border-violet-400/20 bg-violet-500/10 text-violet-100';
+            case 'Archived':
+                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+            case 'Not published':
+            default:
+                return 'border-white/10 bg-white/[0.04] text-zinc-200';
+        }
+    };
+
+    const getMonetizationBadgeClass = (kind: CreationWorkspaceMonetizationKind): string => {
+        switch (kind) {
+            case 'free':
+                return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
+            case 'paid':
+                return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100';
+            case 'draft':
+                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+            case 'none':
+            default:
+                return 'border-white/10 bg-white/[0.04] text-zinc-200';
+        }
+    };
+
+    const getMonetizationBadgeLabel = (workspaceState: CreationWorkspaceCardState): string =>
+        workspaceState.monetizationKind === 'paid' && workspaceState.monetizationPriceUsdCents !== null
+            ? `${formatUsdCents(workspaceState.monetizationPriceUsdCents)} unlock`
+            : workspaceState.monetizationLabel;
+
     return (
         <div className="min-h-screen bg-black text-white">
             {/* Background effects */}
@@ -630,8 +672,8 @@ export default function CreationsPage() {
 
                 <div className="mb-6 flex flex-wrap items-center gap-3">
                     {([
-                        { key: 'creations', label: 'Creations', description: 'Raw generations and uploads' },
-                        { key: 'posts', label: 'Posts', description: 'Published, private, and archived posts' },
+                        { key: 'creations', label: 'Creations', description: 'Outputs, publishing, and monetization' },
+                        { key: 'posts', label: 'Post Library', description: 'Advanced owner view for post management' },
                     ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
                         <button
                             key={tab.key}
@@ -648,8 +690,8 @@ export default function CreationsPage() {
                     ))}
                     <div className="text-sm text-zinc-500">
                         {activeView === 'creations'
-                            ? 'Manage the raw generations you created here before or after publishing them.'
-                            : 'Manage the actual posts people can see, unlock, archive, or delete.'}
+                            ? 'Manage outputs, publishing, and monetization without leaving the workspace.'
+                            : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
                     </div>
                 </div>
 
@@ -788,10 +830,11 @@ export default function CreationsPage() {
                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Completed</h2>
                         )}
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                            {filteredSuccessful.map((gen, i) => {
+                            {successfulCreationCards.map(({ generation: gen, workspaceState }, i) => {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
+                                const canManageFromCreation = !isAudio && isShareSupported(gen);
                                 const completedInLabel = getCompletedInLabel(gen);
                                 const badgeClass = isImage
                                     ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
@@ -799,6 +842,16 @@ export default function CreationsPage() {
                                         ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                         : 'bg-purple-500/20 text-purple-300 border border-purple-500/30';
                                 const badgeLabel = isImage ? '🖼 Image' : isAudio ? '🔊 Audio' : '🎬 Video';
+                                const publishBadgeLabel = workspaceState.publishBadge;
+                                const monetizationBadgeLabel = getMonetizationBadgeLabel(workspaceState);
+                                const linkedPostPublicPath = workspaceState.linkedPost?.publicPath ?? null;
+                                const canCopyLinkedPost =
+                                    Boolean(workspaceState.linkedPost?.canShare) &&
+                                    Boolean(linkedPostPublicPath);
+                                const canUnpublish =
+                                    Boolean(workspaceState.linkedPost) &&
+                                    !workspaceState.linkedPost?.archivedAt &&
+                                    workspaceState.linkedPost?.visibility !== 'private';
                                 return (
                                     <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
                                         className="group bg-white/[0.02] rounded-[1.5rem] border border-white/[0.04] overflow-hidden backdrop-blur-md hover:border-purple-500/30 hover:shadow-[0_8px_30px_rgba(0,0,0,0.5)] transition-all duration-300 break-inside-avoid mb-6">
@@ -846,67 +899,109 @@ export default function CreationsPage() {
                                             </div>
                                         </div>
                                         
-                                        <div className="p-4 pt-0 flex gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => setPreviewGen(gen)}
-                                                className="flex-1 flex items-center justify-center gap-2 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 hover:border-white/20 rounded-xl text-sm text-zinc-200 hover:text-white font-medium transition-all"
-                                            >
-                                                <Eye className="w-4 h-4" />
-                                                View details
-                                            </button>
+                                        <div className="px-4 pb-4">
+                                            <div className="flex flex-wrap gap-2">
+                                                <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getPublishBadgeClass(publishBadgeLabel)}`}>
+                                                    {publishBadgeLabel}
+                                                </div>
+                                                <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getMonetizationBadgeClass(workspaceState.monetizationKind)}`}>
+                                                    {monetizationBadgeLabel}
+                                                </div>
+                                            </div>
 
-                                            {renderShareAction(gen)}
-
-                                            {!isAudio ? (
-                                                gen.is_public ? (
-                                                    <button 
-                                                        onClick={() => handleUnpublish(gen.id)}
-                                                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-green-500/10 text-green-400 hover:bg-red-500/10 hover:text-red-400 border border-green-500/20 hover:border-red-500/20 rounded-xl text-sm font-medium transition-all group/pub"
-                                                    >
-                                                        <CheckCircle2 className="w-4 h-4 group-hover/pub:hidden" />
-                                                        <X className="w-4 h-4 hidden group-hover/pub:block" />
-                                                        <span className="group-hover/pub:hidden">Published</span>
-                                                        <span className="hidden group-hover/pub:inline">Unpublish</span>
-                                                    </button>
-                                                ) : (
-                                                    <button 
-                                                        onClick={() => openPublishModal(gen)}
-                                                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-zinc-800/50 hover:bg-purple-600 border border-white/5 hover:border-purple-500 rounded-xl text-sm text-zinc-300 hover:text-white font-medium transition-all"
-                                                    >
-                                                        <Globe className="w-4 h-4" />
-                                                        Publish only
-                                                    </button>
-                                                )
+                                            {workspaceState.linkedPost ? (
+                                                <div className="mt-3 rounded-[22px] border border-white/8 bg-black/25 p-3">
+                                                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Linked post</div>
+                                                    <div className="mt-2 text-sm font-semibold text-white">{workspaceState.linkedPost.title}</div>
+                                                    <p className="mt-1 text-xs leading-5 text-zinc-400">
+                                                        {workspaceState.linkedPost.archivedAt
+                                                            ? 'This creation is already connected to an archived owner post.'
+                                                            : workspaceState.linkedPost.visibility === 'private'
+                                                                ? 'This creation is already connected to a private owner post.'
+                                                                : 'This creation is already connected to a post you can manage directly from here.'}
+                                                    </p>
+                                                </div>
                                             ) : null}
-                                        </div>
 
-                                        <div className="px-4 pb-4 flex flex-wrap gap-2">
-                                            {gen.linked_post_id ? (
-                                                <Link
-                                                    href={gen.linked_post_visibility === 'private' || gen.linked_post_archived_at ? `/post/${gen.linked_post_id}/edit` : `/showcase/${gen.linked_post_id}`}
+                                            {canManageFromCreation && (workspaceState.primaryAction.type !== 'none' || workspaceState.secondaryAction.type !== 'none') ? (
+                                                <div className="mt-4 flex gap-2">
+                                                    {workspaceState.primaryAction.type === 'publish' ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openPublishModal(gen, { showPaidShortcut: false })}
+                                                            className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                        >
+                                                            <Globe className="h-4 w-4" />
+                                                            {workspaceState.primaryAction.label}
+                                                        </button>
+                                                    ) : workspaceState.primaryAction.href ? (
+                                                        <Link
+                                                            href={workspaceState.primaryAction.href}
+                                                            className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                        >
+                                                            <Wand2 className="h-4 w-4" />
+                                                            {workspaceState.primaryAction.label}
+                                                        </Link>
+                                                    ) : null}
+
+                                                    {workspaceState.secondaryAction.href ? (
+                                                        <Link
+                                                            href={workspaceState.secondaryAction.href}
+                                                            className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                        >
+                                                            <ExternalLink className="h-4 w-4" />
+                                                            {workspaceState.secondaryAction.label}
+                                                        </Link>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
+
+                                            <div className="mt-4 flex flex-wrap gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setPreviewGen(gen)}
                                                     className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                                                 >
-                                                    <ExternalLink className="h-3.5 w-3.5" />
-                                                    {gen.linked_post_visibility === 'private' || gen.linked_post_archived_at ? 'Open linked post' : 'Open public post'}
-                                                </Link>
-                                            ) : null}
-                                            <button
-                                                type="button"
-                                                onClick={() => void handleGenerationArchive(gen.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
-                                            >
-                                                <Archive className="h-3.5 w-3.5" />
-                                                Archive
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => void handleGenerationDelete(gen.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
-                                            >
-                                                <Trash2 className="h-3.5 w-3.5" />
-                                                Delete
-                                            </button>
+                                                    <Eye className="h-3.5 w-3.5" />
+                                                    View details
+                                                </button>
+                                                {canCopyLinkedPost && workspaceState.linkedPost?.publicPath ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => linkedPostPublicPath && void copyPostLink(linkedPostPublicPath)}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                                    >
+                                                        <Copy className="h-3.5 w-3.5" />
+                                                        Share link
+                                                    </button>
+                                                ) : null}
+                                                {canUnpublish ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleUnpublish(gen.id)}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                    >
+                                                        <X className="h-3.5 w-3.5" />
+                                                        Unpublish
+                                                    </button>
+                                                ) : null}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleGenerationArchive(gen.id)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                >
+                                                    <Archive className="h-3.5 w-3.5" />
+                                                    Archive
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleGenerationDelete(gen.id)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                                >
+                                                    <Trash2 className="h-3.5 w-3.5" />
+                                                    Delete
+                                                </button>
+                                            </div>
                                         </div>
                                     </motion.div>
                                 );
@@ -1013,7 +1108,7 @@ export default function CreationsPage() {
                                 {postVisibilityFilter === 'archived' ? 'Archived posts' : 'Your posts'}
                             </h2>
                             <p className="mt-2 max-w-2xl text-sm text-zinc-500">
-                                This is the owner view for the actual posts people can visit, unlock, archive, or delete.
+                                Post Library is the advanced owner view for the actual posts people can visit, unlock, archive, or clean up.
                             </p>
                         </div>
                         <div className="grid gap-5 lg:grid-cols-2">
@@ -1117,7 +1212,7 @@ export default function CreationsPage() {
                                         {post.canShare ? (
                                             <button
                                                 type="button"
-                                                onClick={() => void copyPostLink(post.id)}
+                                                onClick={() => void copyPostLink(post.publicPath ?? `/showcase/${post.id}`)}
                                                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                                             >
                                                 <Copy className="h-4 w-4" />
@@ -1172,10 +1267,16 @@ export default function CreationsPage() {
                         {renderShareAction(previewGen, true)}
                         {previewGen.is_public ? (
                             <Link
-                                href={buildShowcaseDetailPath(previewGen.id)}
+                                href={
+                                    previewGen.linked_post_id
+                                        ? previewGen.linked_post_visibility === 'private' || previewGen.linked_post_archived_at
+                                            ? `/post/${previewGen.linked_post_id}/edit`
+                                            : `/showcase/${previewGen.linked_post_id}`
+                                        : buildShowcaseDetailPath(previewGen.id)
+                                }
                                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
                             >
-                                Open public page
+                                {previewGen.linked_post_id ? 'Open post' : 'Open public page'}
                             </Link>
                         ) : null}
                     </>
@@ -1188,17 +1289,18 @@ export default function CreationsPage() {
                 generationId={publishTarget?.id ?? null}
                 defaultTitle={publishTarget?.title ?? ''}
                 defaultDescription={publishTarget?.description ?? ''}
+                showPaidShortcut={showPaidShortcutInPublishModal}
                 shareAfterPublish={shareAfterPublish ? {
                     title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',
                     description: publishTarget?.description ?? publishTarget?.prompt ?? null,
                     sourceSurface: 'my-creations',
                 } : undefined}
-                onPublished={(payload) => {
+                onPublished={() => {
                     if (!publishTarget) {
                         return;
                     }
 
-                    handlePublished(publishTarget.id, payload);
+                    handlePublished();
                     closePublishModal();
                 }}
             />

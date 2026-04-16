@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
@@ -20,9 +20,11 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
+import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   formatUsdCents,
   getPostResourceKindLabel,
+  normalizePostResourceBundleAccessMode,
   type PostResourceAttachment,
   type PostResourceBundleInput,
   type PostResourceBundleAccessMode,
@@ -59,6 +61,7 @@ interface GenerationDraft {
   outputUrl: string | null;
   category: Exclude<PostCategory, 'text'>;
   model: string;
+  paywallPrefill: GenerationPaywallPrefill | null;
 }
 
 const BODY_MAX_LENGTH = 2000;
@@ -289,6 +292,32 @@ function getInitialProofMode(initialPost: EditablePostDraft | null | undefined):
   return initialPost.postFormat === 'text' && !initialPost.mediaUrl ? 'text' : 'media';
 }
 
+function isGenerationPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const typedValue = value as Partial<GenerationPaywallPrefill>;
+  if (!Array.isArray(typedValue.resourceKinds)) {
+    return false;
+  }
+
+  const validKinds = new Set<PostResourceKind>(RESOURCE_KIND_OPTIONS.map((option) => option.value));
+  if (!typedValue.resourceKinds.every((kind) => validKinds.has(kind))) {
+    return false;
+  }
+
+  return (
+    (typeof typedValue.promptText === 'string' || typedValue.promptText === null || typedValue.promptText === undefined) &&
+    (typeof typedValue.notesMarkdown === 'string' || typedValue.notesMarkdown === null || typedValue.notesMarkdown === undefined) &&
+    typeof typedValue.allowRemix === 'boolean'
+  );
+}
+
+function hasUsableGenerationPaywallPrefill(prefill: GenerationPaywallPrefill | null | undefined): boolean {
+  return Boolean(prefill && prefill.resourceKinds.length > 0);
+}
+
 interface NewPostClientProps {
   initialPost?: EditablePostDraft | null;
 }
@@ -299,12 +328,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const { session } = useAuth();
   const generationId = initialPost?.generationId ?? searchParams.get('generationId');
   const isEditMode = Boolean(initialPost);
+  const publishIntent = searchParams.get('publishIntent');
+  const requestedResourceMode = searchParams.get('resourceMode');
+  const requestedFocusTarget = searchParams.get('focus');
+  const entrySurface = searchParams.get('from');
+  const isGeneratedPaywallIntent = publishIntent === 'paid-generation' && Boolean(generationId);
+  const isCreationPaywallManagementIntent =
+    isEditMode && entrySurface === 'creations' && requestedFocusTarget === 'price';
   const initialBundle = initialPost?.resourceBundle ?? { accessMode: 'none' as const };
   const initialResourceSelections = getInitialResourceSelections(initialBundle);
   const initialCategory =
     initialPost?.category && initialPost.category !== 'text'
       ? initialPost.category
       : 'image';
+  const initialResourceAccessMode = normalizePostResourceBundleAccessMode(requestedResourceMode ?? initialBundle.accessMode);
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
   const [file, setFile] = useState<File | null>(null);
@@ -315,7 +352,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
   const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>(initialCategory);
   const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost));
-  const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialBundle.accessMode ?? 'none');
+  const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(
     Object.values(initialResourceSelections).some(Boolean)
       ? initialResourceSelections
@@ -326,6 +363,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState(initialBundle.resources?.workflowShareUrl ?? '');
   const [resourceAttachmentRows, setResourceAttachmentRows] = useState<AttachmentRow[]>(() => getInitialAttachmentRows(initialBundle));
   const [resourcePriceUsd, setResourcePriceUsd] = useState(() => getInitialPriceUsd(initialBundle));
+  const [resourceSelectionsTouched, setResourceSelectionsTouched] = useState(false);
+  const [resourcePromptTouched, setResourcePromptTouched] = useState(false);
+  const [resourceNotesTouched, setResourceNotesTouched] = useState(false);
+  const [didApplyGenerationPaywallPrefill, setDidApplyGenerationPaywallPrefill] = useState(false);
+  const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
@@ -339,11 +381,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           outputUrl: initialPost.mediaUrl,
           category: initialCategory,
           model: 'UGC copy',
+          paywallPrefill: null,
         }
       : null
   );
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const priceInputRef = useRef<HTMLInputElement | null>(null);
 
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   const inferredCategory = useMemo(() => inferCategory(file), [file]);
@@ -359,6 +403,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   const effectiveVisibility = resourceAccessMode === 'none' ? visibility : 'public';
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
+  const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
+  const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
+  const shouldFocusPriceInput =
+    requestedFocusTarget === 'price' && (isGeneratedPaywallIntent || isCreationPaywallManagementIntent);
   const hasResourceContent = Boolean(
     (resourceSelections.prompt && resourcePromptText.trim()) ||
     (resourceSelections.notes && resourceNotes.trim()) ||
@@ -385,6 +433,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   }, [category, file, inferredCategory]);
 
   useEffect(() => {
+    setDidApplyGenerationPaywallPrefill(false);
+    setDidFocusPriceInput(false);
+  }, [generationId, isCreationPaywallManagementIntent, isGeneratedPaywallIntent]);
+
+  useEffect(() => {
     if (resourceAccessMode === 'none') {
       return;
     }
@@ -408,6 +461,73 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       setResourceAttachmentRows([createAttachmentRow()]);
     }
   }, [resourceAttachmentRows.length, resourceSelections.files]);
+
+  useEffect(() => {
+    if (!isGeneratedPaywallIntent || didApplyGenerationPaywallPrefill || !prefilledGeneration) {
+      return;
+    }
+
+    const paywallPrefill = prefilledGeneration.paywallPrefill;
+    if (!hasUsableGenerationPaywallPrefill(paywallPrefill)) {
+      setDidApplyGenerationPaywallPrefill(true);
+      return;
+    }
+
+    if (!resourceSelectionsTouched) {
+      setResourceSelections((current) => {
+        const nextSelections = { ...current };
+        for (const kind of paywallPrefill.resourceKinds) {
+          nextSelections[kind] = true;
+        }
+        return nextSelections;
+      });
+    }
+
+    if (!resourcePromptTouched && !resourcePromptText.trim() && paywallPrefill.promptText) {
+      setResourcePromptText(paywallPrefill.promptText);
+    }
+
+    if (!resourceNotesTouched && !resourceNotes.trim() && paywallPrefill.notesMarkdown) {
+      setResourceNotes(paywallPrefill.notesMarkdown);
+    }
+
+    setDidApplyGenerationPaywallPrefill(true);
+  }, [
+    didApplyGenerationPaywallPrefill,
+    isGeneratedPaywallIntent,
+    prefilledGeneration,
+    resourceNotes,
+    resourceNotesTouched,
+    resourcePromptText,
+    resourcePromptTouched,
+    resourceSelectionsTouched,
+  ]);
+
+  useEffect(() => {
+    if (
+      !shouldFocusPriceInput ||
+      didFocusPriceInput ||
+      isLoadingGeneration ||
+      resourceAccessMode !== 'paid'
+    ) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      priceInputRef.current?.focus();
+      priceInputRef.current?.select();
+      setDidFocusPriceInput(true);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    didFocusPriceInput,
+    isLoadingGeneration,
+    resourceAccessMode,
+    shouldFocusPriceInput,
+  ]);
 
   useEffect(() => {
     if (!generationId || !session?.access_token) {
@@ -454,6 +574,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           outputUrl: typeof generation.output_url === 'string' ? generation.output_url : null,
           category: formatGeneratedCategory(generation.category),
           model: typeof generation.model === 'string' ? generation.model : 'UGC copy',
+          paywallPrefill: isGenerationPaywallPrefill(generation.paywallPrefill)
+            ? generation.paywallPrefill
+            : null,
         };
 
         setPrefilledGeneration(nextGeneration);
@@ -486,6 +609,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const updateResourceSelection = (kind: PostResourceKind) => {
+    setResourceSelectionsTouched(true);
     setResourceSelections((current) => ({
       ...current,
       [kind]: !current[kind],
@@ -708,6 +832,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const selectedVisibilityOption = VISIBILITY_OPTIONS.find((option) => option.value === effectiveVisibility) ?? VISIBILITY_OPTIONS[0];
   const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
   const primaryPostLabel = createdPost?.showcasePath ? 'View post' : 'Open editor';
+  const backHref = isEditMode || entrySurface === 'creations' ? '/creations' : '/showcase';
+  const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to workspace' : 'Back to feed';
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -718,11 +844,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
       <div className="studio-shell relative z-10 py-12 sm:py-16">
         <Link
-          href={isEditMode ? '/creations' : '/showcase'}
+          href={backHref}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
-          {isEditMode ? 'Back to workspace' : 'Back to feed'}
+          {backLabel}
         </Link>
 
         <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_420px]">
@@ -732,16 +858,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Post composer</div>
                   <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                    {isEditMode ? 'Update the post and its unlockable resources' : 'Publish the proof and decide what unlocks with it'}
+                    {isCreationPaywallManagementIntent
+                      ? 'Manage the paywall for this post'
+                      : isEditMode
+                      ? 'Update the post and its unlockable resources'
+                      : isGeneratedPaywallIntent
+                        ? 'Set the price for this creation'
+                        : 'Publish the proof and decide what unlocks with it'}
                   </h1>
                   <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300">
-                    {isEditMode
+                    {isCreationPaywallManagementIntent
+                      ? 'You came from My Creations. The proof stays attached while you adjust the unlock, update the price, or remove the paywall here.'
+                      : isEditMode
                       ? 'Edit the public story, adjust visibility, and keep the proof and attached resources aligned in one place.'
-                      : 'One flow, one post, one optional unlock. Start with the proof, add the story, and only attach resources if the post needs them.'}
+                      : isGeneratedPaywallIntent
+                        ? 'The proof is already attached. We will preload the saved prompt, reusable setup notes, and remix access when available so you can price the unlock and publish.'
+                        : 'One flow, one post, one optional unlock. Start with the proof, add the story, and only attach resources if the post needs them.'}
                   </p>
                 </div>
                 <div className="hidden rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100 sm:inline-flex">
-                  {isEditMode ? 'Owner editor' : 'Creator-first publishing'}
+                  {isCreationPaywallManagementIntent ? 'From My Creations' : isEditMode ? 'Owner editor' : 'Creator-first publishing'}
                 </div>
               </div>
 
@@ -1144,7 +1280,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 )}
               </div>
 
-              <div className="rounded-[28px] border border-emerald-500/15 bg-emerald-500/5 p-5">
+              <div id="resources" className="rounded-[28px] border border-emerald-500/15 bg-emerald-500/5 p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Step 3</div>
@@ -1157,6 +1293,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     {resourceAccessMode === 'none' ? 'Post only' : resourceAccessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
                   </div>
                 </div>
+
+                {isGeneratedPaywallIntent ? (
+                  <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
+                    {isLoadingGeneration
+                      ? 'Preparing the saved prompt and generation setup for this paid unlock.'
+                      : hasGenerationPaywallPrefill
+                        ? 'Saved prompt, reusable setup notes, and remix access are ready where this creation supports them. Set the price first, then publish or edit anything below.'
+                        : 'This creation does not have enough saved inputs to auto-fill a paid bundle yet. The proof is still attached, and you can add the prompt, notes, or remix access manually below.'}
+                  </div>
+                ) : isCreationPaywallManagementIntent ? (
+                  <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
+                    You came from My Creations to manage this post&apos;s unlock. The resource mode is ready here, and the price field is focused so you can adjust the paywall quickly.
+                  </div>
+                ) : null}
 
                 <div className="mt-5 grid gap-3 sm:grid-cols-3">
                   {RESOURCE_ACCESS_OPTIONS.map((option) => {
@@ -1218,6 +1368,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <textarea
                           value={resourcePromptText}
                           onChange={(event) => {
+                            setResourcePromptTouched(true);
                             setResourcePromptText(event.target.value);
                             resetFeedback();
                           }}
@@ -1234,6 +1385,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <textarea
                           value={resourceNotes}
                           onChange={(event) => {
+                            setResourceNotesTouched(true);
                             setResourceNotes(event.target.value);
                             resetFeedback();
                           }}
@@ -1320,6 +1472,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       <label className="block">
                         <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
                         <input
+                          ref={priceInputRef}
                           value={resourcePriceUsd}
                           onChange={(event) => {
                             setResourcePriceUsd(event.target.value);
@@ -1511,7 +1664,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 {[
                   'Start with the proof: upload media, keep the generated proof, or publish a note-only post.',
                   'Write only the public story people should see before they decide to unlock anything.',
-                  'If this post has reusable value, choose free or paid resources and reveal only the sections you actually need.',
+                  isGeneratedPaywallIntent
+                    ? 'When the proof came from UGC copy, we preload the saved prompt and reusable setup so you can price the unlock first.'
+                    : 'If this post has reusable value, choose free or paid resources and reveal only the sections you actually need.',
                 ].map((step, index) => (
                   <div key={step} className="flex items-start gap-3">
                     <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-sm font-semibold text-white">

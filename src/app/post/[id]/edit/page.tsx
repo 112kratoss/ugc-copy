@@ -8,6 +8,7 @@ import NewPostClient from '@/app/post/new/NewPostClient';
 
 type EditPostPageProps = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwnerPostDetail>>>): EditablePostDraft {
@@ -31,12 +32,24 @@ function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwne
   };
 }
 
-export default async function EditPostPage({ params }: EditPostPageProps) {
+export default async function EditPostPage({ params, searchParams }: EditPostPageProps) {
   const { id } = await params;
+  const resolvedSearchParams = await searchParams;
   const auth = await getServerAuthState();
+  const returnUrlSearchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(resolvedSearchParams)) {
+    if (typeof value === 'string' && value) {
+      returnUrlSearchParams.set(key, value);
+    }
+  }
+
+  const returnUrl = returnUrlSearchParams.size > 0
+    ? `/post/${id}/edit?${returnUrlSearchParams.toString()}`
+    : `/post/${id}/edit`;
 
   if (!auth.session?.user) {
-    redirect(`/login?returnUrl=/post/${id}/edit`);
+    redirect(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
   }
 
   const headerStore = await headers();

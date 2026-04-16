@@ -15,6 +15,7 @@ type GenerationRow = {
   title: string | null;
   description: string | null;
   prompt: string | null;
+  workflow_settings?: Record<string, unknown> | null;
   archived_at?: string | null;
 };
 
@@ -168,6 +169,19 @@ describe('/api/generations route', () => {
         title: 'Launch still',
         description: 'A polished creator-style launch image.',
         prompt: 'A creator-style product image with warm natural light.',
+        workflow_settings: {
+          model: 'nano-banana-2',
+          aspectRatio: '4:5',
+          resolution: '1K',
+          elements: [
+            {
+              id: 'element-1',
+              displayName: 'Bottle',
+              handle: '@bottle',
+              storagePath: 'uploads/user-1/bottle.png',
+            },
+          ],
+        },
       },
     ];
     linkedPostsState = [];
@@ -207,6 +221,13 @@ describe('/api/generations route', () => {
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
     expect(data.generations[0].completed_at).toBeNull();
+    expect(data.generations[0].workflow_settings).toBeUndefined();
+    expect(data.generations[0].paywallPrefill).toMatchObject({
+      promptText: 'A creator-style product image with warm natural light.',
+      allowRemix: true,
+      resourceKinds: ['prompt', 'notes', 'remix'],
+    });
+    expect(String(data.generations[0].paywallPrefill.notesMarkdown)).toContain('Model: Nano Banana 2.0');
   });
 
   it('returns data even when syncing processing generations fails', async () => {
@@ -233,5 +254,10 @@ describe('/api/generations route', () => {
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
     expect(data.generations[0].completed_at).toBeNull();
+    expect(data.generations[0].workflow_settings).toBeUndefined();
+    expect(data.generations[0].paywallPrefill).toMatchObject({
+      allowRemix: true,
+      resourceKinds: ['prompt', 'notes', 'remix'],
+    });
   });
 });

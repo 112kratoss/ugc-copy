@@ -6,12 +6,15 @@ import NewPostClient from '@/app/post/new/NewPostClient';
 const mockPush = vi.fn();
 const fetchMock = vi.fn();
 const storageUploadMock = vi.hoisted(() => vi.fn());
+const searchParamsState = vi.hoisted(() => ({
+  value: new URLSearchParams(),
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: mockPush,
   }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParamsState.value,
 }));
 
 vi.mock('@/app/components/AuthProvider', () => ({
@@ -39,6 +42,7 @@ describe('NewPostClient', () => {
     fetchMock.mockReset();
     storageUploadMock.mockReset();
     storageUploadMock.mockResolvedValue({ error: null });
+    searchParamsState.value = new URLSearchParams();
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -202,5 +206,157 @@ describe('NewPostClient', () => {
     expect(String(request.body.get('mediaOriginalName'))).toBe('proof.png');
     expect(String(request.body.get('mediaContentType'))).toBe('image/png');
     expect(request.body.get('media')).toBeNull();
+  });
+
+  it('prefills generated paid unlocks and focuses the price field', async () => {
+    searchParamsState.value = new URLSearchParams({
+      generationId: 'gen-paid-1',
+      publishIntent: 'paid-generation',
+      resourceMode: 'paid',
+      focus: 'price',
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          generations: [
+            {
+              id: 'gen-paid-1',
+              output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+              category: 'image',
+              model: 'nano-banana-2',
+              title: 'Launch still',
+              description: 'A polished creator-style launch image.',
+              prompt: 'A creator-style product image with warm natural light.',
+              paywallPrefill: {
+                resourceKinds: ['prompt', 'notes', 'remix'],
+                promptText: 'A creator-style product image with warm natural light.',
+                notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0',
+                allowRemix: true,
+              },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-paywall-1',
+          showcasePath: '/showcase/post-paywall-1',
+          resourceBundlePath: '/showcase/post-paywall-1#resources',
+          visibility: 'public',
+        }),
+      });
+
+    render(<NewPostClient />);
+
+    expect(await screen.findByDisplayValue('A creator-style product image with warm natural light.')).toBeInTheDocument();
+    expect(await screen.findByDisplayValue(/saved generation setup/i)).toBeInTheDocument();
+    expect(screen.getByText(/saved prompt, reusable setup notes, and remix access are ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/remix access is included in this unlock/i)).toBeInTheDocument();
+
+    const priceInput = screen.getByRole('textbox', { name: /price/i });
+    await waitFor(() => {
+      expect(priceInput).toHaveFocus();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /publish post/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: string };
+    const payload = JSON.parse(request.body);
+
+    expect(payload).toMatchObject({
+      generationId: 'gen-paid-1',
+      visibility: 'public',
+      resourceBundle: {
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        resources: {
+          promptText: 'A creator-style product image with warm natural light.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0',
+          allowRemix: true,
+        },
+      },
+    });
+  });
+
+  it('falls back to the manual paid composer when a generation has no usable prefill', async () => {
+    searchParamsState.value = new URLSearchParams({
+      generationId: 'gen-paid-empty',
+      publishIntent: 'paid-generation',
+      resourceMode: 'paid',
+    });
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        generations: [
+          {
+            id: 'gen-paid-empty',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'Launch still',
+            description: 'A polished creator-style launch image.',
+            prompt: 'A polished creator-style launch image.',
+            paywallPrefill: null,
+          },
+        ],
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    expect(await screen.findByText(/does not have enough saved inputs to auto-fill a paid bundle yet/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toHaveValue('');
+  });
+
+  it('opens the edit flow from creations in resource mode and focuses the price field', async () => {
+    searchParamsState.value = new URLSearchParams({
+      resourceMode: 'paid',
+      focus: 'price',
+      from: 'creations',
+    });
+
+    render(
+      <NewPostClient
+        initialPost={{
+          id: 'post-edit-1',
+          generationId: null,
+          title: 'Private proof',
+          description: '',
+          prompt: '',
+          body: 'A private proof post.',
+          visibility: 'private',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          mediaUrl: null,
+          mediaKind: null,
+          archivedAt: null,
+          resourceBundle: {
+            accessMode: 'none',
+          },
+          hasPaidOrders: false,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: /manage the paywall for this post/i })).toBeInTheDocument();
+    expect(screen.getByText(/you came from my creations to manage this post's unlock/i)).toBeInTheDocument();
+    expect(screen.getByText(/public post required/i)).toBeInTheDocument();
+
+    const priceInput = screen.getByRole('textbox', { name: /price/i });
+    await waitFor(() => {
+      expect(priceInput).toHaveFocus();
+    });
+    expect(priceInput).not.toBeDisabled();
   });
 });

@@ -15,6 +15,7 @@ interface PublishToShowcaseModalProps {
   generationId: string | null;
   defaultTitle?: string;
   defaultDescription?: string;
+  showPaidShortcut?: boolean;
   shareAfterPublish?: {
     title: string;
     description?: string | null;
@@ -29,6 +30,7 @@ export default function PublishToShowcaseModal({
   generationId,
   defaultTitle = '',
   defaultDescription = '',
+  showPaidShortcut = true,
   shareAfterPublish,
   onPublished,
 }: PublishToShowcaseModalProps) {
@@ -120,7 +122,9 @@ export default function PublishToShowcaseModal({
 
   const handleRouteToComposer = () => {
     onClose();
-    router.push(`/post/new?generationId=${encodeURIComponent(generationId)}`);
+    router.push(
+      `/post/new?generationId=${encodeURIComponent(generationId)}&publishIntent=paid-generation&resourceMode=paid&focus=price`
+    );
   };
 
   return (
@@ -154,7 +158,9 @@ export default function PublishToShowcaseModal({
           </div>
 
           <p className="text-sm leading-7 text-zinc-400">
-            Keep this step lightweight. Publish the proof right away, or jump into the full post composer if you want to attach free or paid resources.
+            {showPaidShortcut
+              ? 'Keep this step lightweight. Publish the proof right away, or jump into the composer with the saved prompt attached and the price field ready if you want to sell this creation.'
+              : 'Keep this step lightweight. Publish the proof now and fine-tune anything else later from your workspace.'}
           </p>
 
           <form onSubmit={handleQuickPublish} className="mt-6 space-y-4">
@@ -182,20 +188,22 @@ export default function PublishToShowcaseModal({
               />
             </div>
 
-            <div className="rounded-[24px] border border-white/10 bg-black/35 p-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Add resources later</div>
-              <p className="mt-2 text-sm leading-6 text-zinc-300">
-                If you want to unlock the prompt, workflow, files, notes, or remix access, continue in the full post composer. The generation will already be attached there.
-              </p>
-              <button
-                type="button"
-                onClick={handleRouteToComposer}
-                className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
-              >
-                Add free or paid resources
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </div>
+            {showPaidShortcut ? (
+              <div className="rounded-[24px] border border-white/10 bg-black/35 p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Price the saved unlock</div>
+                <p className="mt-2 text-sm leading-6 text-zinc-300">
+                  Open the composer with this generation already attached, paid mode selected, and the price field focused. You can still edit the unlock or switch it to free once you land there.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleRouteToComposer}
+                  className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+                >
+                  Set price and continue
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            ) : null}
 
             {formError ? (
               <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
