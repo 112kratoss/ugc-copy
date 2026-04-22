@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check, Share2 } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -224,6 +224,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+    const [isResultPreviewOpen, setIsResultPreviewOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
     const nowMs = useTicker(isGenerating);
@@ -829,6 +830,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setIsGenerating(true);
         setError(null);
         setOutputImage(null);
+        setIsResultPreviewOpen(false);
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
@@ -1598,11 +1600,29 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         >
                             {outputImage ? (
                                 <div className="space-y-5">
-                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/50">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsResultPreviewOpen(true)}
+                                        className="group relative block w-full overflow-hidden rounded-[26px] border border-white/8 bg-black/50 text-left transition hover:border-blue-300/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/35"
+                                        aria-label="Preview generated image"
+                                    >
                                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img src={outputImage} alt="Generated image" className="block h-auto w-full object-cover" />
-                                    </div>
+                                        <img src={outputImage} alt="Generated image" className="block h-auto w-full object-cover transition duration-300 group-hover:scale-[1.01]" />
+                                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/65 via-black/5 to-transparent opacity-80 transition group-hover:opacity-100" />
+                                        <div className="pointer-events-none absolute bottom-4 left-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/65 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-md">
+                                            <Expand className="h-3.5 w-3.5" />
+                                            Preview image
+                                        </div>
+                                    </button>
                                     <div className="flex flex-wrap gap-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsResultPreviewOpen(true)}
+                                            className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:border-blue-300/35 hover:bg-blue-500/15"
+                                        >
+                                            <Expand className="h-4 w-4" />
+                                            Preview image
+                                        </button>
                                         <a
                                             href={outputImageDownloadUrl ?? outputImage}
                                             download="generated-image.jpg"
@@ -1645,6 +1665,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <button
                                             onClick={() => {
                                                 setOutputImage(null);
+                                                setIsResultPreviewOpen(false);
                                                 setLatestGenerationId(null);
                                                 setLatestIsPublic(false);
                                                 setPublishedMeta(null);
@@ -1700,6 +1721,23 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Reference image'}
                 title={uploadPreview?.title ?? 'Reference Preview'}
+            />
+
+            <StudioMediaPreviewModal
+                isOpen={isResultPreviewOpen}
+                onClose={() => setIsResultPreviewOpen(false)}
+                mediaType="image"
+                src={outputImage}
+                alt="Generated image preview"
+                title="Generated Image Preview"
+                footer={
+                    <div className="flex flex-col gap-2">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
+                        <p className="max-h-32 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-relaxed text-zinc-300 [overflow-wrap:anywhere] custom-scrollbar">
+                            {prompt || 'No prompt available'}
+                        </p>
+                    </div>
+                }
             />
 
             <PublishToShowcaseModal
