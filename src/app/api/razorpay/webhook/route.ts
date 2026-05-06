@@ -109,6 +109,62 @@ export async function POST(req: Request) {
             return { handled: true, shouldRetry: false };
         }
 
+        async function handlePostResourceBundleOrder(orderId: string, paymentId: string) {
+            const { data: bundleOrder, error: bundleOrderError } = await supabaseAdmin
+                .from('post_resource_bundle_orders')
+                .select('id, status, buyer_user_id')
+                .eq('razorpay_order_id', orderId)
+                .maybeSingle();
+
+            if (bundleOrderError) {
+                console.error('Webhook: Failed to load post resource bundle order for order', orderId, bundleOrderError);
+                return { handled: true, shouldRetry: true };
+            }
+
+            if (!bundleOrder) {
+                return { handled: false, shouldRetry: false };
+            }
+
+            if (bundleOrder.status === 'paid') {
+                console.log('Webhook: Post resource bundle order already processed', orderId);
+                return { handled: true, shouldRetry: false };
+            }
+
+            const { data: completionResult, error: rpcError } = await supabaseAdmin.rpc('complete_post_resource_bundle_purchase', {
+                p_razorpay_order_id: orderId,
+                p_razorpay_payment_id: paymentId,
+            });
+
+            if (rpcError) {
+                console.error('Webhook: complete_post_resource_bundle_purchase RPC failed', rpcError);
+                return { handled: true, shouldRetry: true };
+            }
+
+            if (!completionResult) {
+                const { data: refreshedOrder, error: refreshedOrderError } = await supabaseAdmin
+                    .from('post_resource_bundle_orders')
+                    .select('status')
+                    .eq('razorpay_order_id', orderId)
+                    .maybeSingle();
+
+                if (refreshedOrderError) {
+                    console.error('Webhook: Failed to reload post resource bundle order after completion attempt', orderId, refreshedOrderError);
+                    return { handled: true, shouldRetry: true };
+                }
+
+                if (refreshedOrder?.status === 'paid') {
+                    console.log('Webhook: Post resource bundle order completed during concurrent verification', orderId);
+                    return { handled: true, shouldRetry: false };
+                }
+
+                console.error('Webhook: Post resource bundle order remained unresolved after completion attempt', orderId);
+                return { handled: true, shouldRetry: true };
+            }
+
+            console.log(`Webhook: Post resource bundle purchase completed — buyer=${bundleOrder.buyer_user_id}, order=${orderId}`);
+            return { handled: true, shouldRetry: false };
+        }
+
         // Handle payment.captured event
         if (event.event === 'payment.captured') {
             const payment = event.payload?.payment?.entity;
@@ -142,7 +198,15 @@ export async function POST(req: Request) {
                 return new Response('OK', { status: 200 });
             }
 
-            console.log('Webhook: No matching transaction or marketplace order for order', orderId);
+            const bundleOrderResult = await handlePostResourceBundleOrder(orderId, paymentId);
+            if (bundleOrderResult.shouldRetry) {
+                return new Response('Failed to finalize post resource bundle purchase', { status: 500 });
+            }
+            if (bundleOrderResult.handled) {
+                return new Response('OK', { status: 200 });
+            }
+
+            console.log('Webhook: No matching transaction, marketplace order, or post resource bundle order for order', orderId);
         }
 
         // Always return 200 for events we don't handle (to prevent Razorpay retries)

@@ -52,50 +52,31 @@ import {
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import {
     createLocalGenerationTiming,
+    estimateGenerationDurationMs,
     freezeGenerationTiming,
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
+import {
+    getImageCost,
+    getImageResolutionOptions,
+    IMAGE_MODELS,
+    supportsImageResolutionControl,
+    type ImageModelId,
+    type ImageQualityMode,
+    type ImageResolution,
+} from '@/lib/models';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 
-// ─── Model Registry ─────────────────────────────────────────────────────────
-const IMAGE_MODELS = {
-    'nano-banana-2': {
-        id: 'nano-banana-2',
-        displayName: 'Nano Banana 2.0',
-        description: 'Versatile image gen with Google Search grounding',
-        badge: 'Recommended',
-        badgeColor: 'from-blue-500 to-cyan-500',
-        accentColor: 'blue',
-        maxImages: 14,
-        supportsGoogleSearch: true,
-        aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'],
-        resolutions: ['1K', '2K', '4K'],
-        outputFormats: ['jpg', 'png'],
-    },
-    'nano-banana-pro': {
-        id: 'nano-banana-pro',
-        displayName: 'Nano Banana Pro',
-        description: 'High-fidelity generation with multi-image reference',
-        badge: 'Pro',
-        badgeColor: 'from-violet-500 to-purple-500',
-        accentColor: 'violet',
-        maxImages: 8,
-        supportsGoogleSearch: false,
-        aspectRatios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', 'auto'],
-        resolutions: ['1K', '2K', '4K'],
-        outputFormats: ['jpg', 'png'],
-    },
-} as const;
-
-type ModelId = keyof typeof IMAGE_MODELS;
+type ModelId = ImageModelId;
 
 interface ImageWorkflowSettings {
     model?: ModelId;
     aspectRatio?: string;
     resolution?: string;
+    qualityMode?: ImageQualityMode;
     googleSearch?: boolean;
     elements?: ImageElementDescriptor[];
     promptMode?: 'element-mentions-v1';
@@ -120,7 +101,7 @@ type ImageElementDraft = ImageElementDescriptor & {
 type ImageElementSeed = {
     id?: string;
     displayName?: string;
-    file: File | null;
+    file?: File | null;
     previewUrl: string;
     providerUrl?: string | null;
     storagePath?: string | null;
@@ -132,7 +113,7 @@ function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
     const baseElements = seeds.map((seed, index) => ({
         id: seed.id ?? createElementId(),
         displayName: normalizeElementDisplayName(seed.displayName, index + 1),
-        file: seed.file,
+        file: seed.file ?? null,
         previewUrl: seed.previewUrl,
         providerUrl: seed.providerUrl ?? null,
         storagePath: seed.storagePath ?? null,
@@ -180,6 +161,7 @@ export interface CreateImagePrefill {
 type GenerationStatusResponse = {
     status: 'processing' | 'waiting' | 'succeeded' | 'failed';
     output?: string | null;
+    outputs?: string[] | null;
     error?: string | null;
     timing?: GenerationTiming | null;
 };
@@ -191,12 +173,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [prompt, setPrompt] = useState('');
     const [elements, setElements] = useState<ImageElementDraft[]>([]);
     const [aspectRatio, setAspectRatio] = useState('auto');
-    const [resolution, setResolution] = useState('1K');
+    const [resolution, setResolution] = useState<ImageResolution>('1K');
+    const [qualityMode, setQualityMode] = useState<ImageQualityMode>('standard');
     const [googleSearch, setGoogleSearch] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [outputImage, setOutputImage] = useState<string | null>(null);
+    const [outputImages, setOutputImages] = useState<string[]>([]);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [latestIsPublic, setLatestIsPublic] = useState(false);
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
@@ -227,6 +211,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [isResultPreviewOpen, setIsResultPreviewOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
+    const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
     const nowMs = useTicker(isGenerating);
 
 
@@ -283,7 +268,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setActiveMentionQuery(getMentionQueryAtCaret(nextPrompt, fallbackCaret));
     };
 
-    // When model changes, clamp images and aspect ratio
+    // When model or aspect changes, clamp model-specific controls.
     useEffect(() => {
         if (elements.length > model.maxImages) {
             const nextElements = hydrateImageElements(elements.slice(0, model.maxImages));
@@ -292,13 +277,21 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             void persistUploadedImageElements(nextElements);
         }
 
-        if (!(model.aspectRatios as readonly string[]).includes(aspectRatio)) {
-            setAspectRatio(model.aspectRatios[0]);
+        const nextAspectRatio = (model.aspectRatios as readonly string[]).includes(aspectRatio)
+            ? aspectRatio
+            : model.aspectRatios[0];
+        if (nextAspectRatio !== aspectRatio) {
+            setAspectRatio(nextAspectRatio);
+        }
+
+        const nextResolutionOptions = getImageResolutionOptions(selectedModel, nextAspectRatio);
+        if (!nextResolutionOptions.includes(resolution)) {
+            setResolution(nextResolutionOptions[0]);
         }
         if (!model.supportsGoogleSearch) {
             setGoogleSearch(false);
         }
-    }, [selectedModel]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selectedModel, aspectRatio, resolution]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -350,7 +343,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     setSelectedModel(settings.model);
                 }
                 if (settings?.aspectRatio) setAspectRatio(settings.aspectRatio);
-                if (settings?.resolution) setResolution(settings.resolution);
+                if (
+                    settings?.resolution &&
+                    getImageResolutionOptions(nextModelId, settings.aspectRatio).includes(settings.resolution as ImageResolution)
+                ) {
+                    setResolution(settings.resolution as ImageResolution);
+                }
+                if (settings?.qualityMode === 'quality' || settings?.qualityMode === 'standard') {
+                    setQualityMode(settings.qualityMode);
+                }
                 if (settings?.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
 
                 const restoredSeeds = createRemixElementSeeds(
@@ -690,6 +691,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 kind: 'image',
                 phaseLabel: 'Generating image',
                 startedAtMs,
+                estimatedTotalMs: estimateGenerationDurationMs({
+                    kind: 'image',
+                    model: selectedModel,
+                    resolution,
+                    referenceCount: elements.length,
+                }),
             }),
             Date.now()
         ));
@@ -698,8 +705,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const pollPrediction = async (
         predictionId: string,
         accessToken: string,
-        startedAtMs: number
-    ): Promise<{ output: string; timing: GenerationTiming | null }> => {
+        startedAtMs: number,
+        estimatedTotalMs: number | null
+    ): Promise<{ output: string; outputs: string[]; timing: GenerationTiming | null }> => {
         const maxAttempts = 60; // 5 minutes max (5s intervals)
         let attempts = 0;
 
@@ -710,18 +718,27 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             const data = await response.json() as GenerationStatusResponse;
 
             if (data.timing) {
-                setGenerationTiming(data.timing);
+                setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
+                    ...data.timing,
+                    estimatedTotalMs,
+                });
             } else {
                 setGenerationTiming((current) => current ?? createLocalGenerationTiming({
                     kind: 'image',
                     phaseLabel: 'Waiting for provider',
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
             }
 
             if (data.status === 'succeeded') {
+                const outputs = Array.isArray(data.outputs) && data.outputs.length > 0
+                    ? data.outputs.filter((url): url is string => typeof url === 'string' && url.length > 0)
+                    : (data.output ? [data.output] : []);
+
                 return {
-                    output: data.output || '',
+                    output: data.output || outputs[0] || '',
+                    outputs,
                     timing: data.timing ?? null,
                 };
             }
@@ -737,17 +754,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     };
 
     const calculateCost = () => {
-        if (selectedModel === 'nano-banana-pro') {
-            if (resolution === '4K') return 24;
-            return 18; // 1K and 2K are both 18 credits
-        } else {
-            // nano-banana-2
-            if (resolution === '2K') return 12;
-            if (resolution === '4K') return 18;
-            return 8;
-        }
+        return getImageCost(selectedModel, resolution, {
+            qualityMode,
+            referenceCount: elements.length,
+        });
     };
     const currentCost = calculateCost();
+    const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
+    const showResolutionControl = supportsImageResolutionControl(selectedModel);
+    const isGrokImageModel = selectedModel === 'grok-imagine-image';
     const insufficientCredits = userCredits !== null && userCredits < currentCost;
     const elementHandles = elements.map((element) => element.handle);
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
@@ -798,8 +813,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             }));
 
             try {
-                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs);
+                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs, null);
                 setOutputImage(result.output);
+                setOutputImages(result.outputs);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
                 }
@@ -830,15 +846,24 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setIsGenerating(true);
         setError(null);
         setOutputImage(null);
+        setOutputImages([]);
+        setResultPreviewImage(null);
         setIsResultPreviewOpen(false);
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
         const startedAtMs = Date.now();
+        const estimatedTotalMs = estimateGenerationDurationMs({
+            kind: 'image',
+            model: selectedModel,
+            resolution,
+            referenceCount: elements.length,
+        });
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'image',
             phaseLabel: 'Preparing inputs',
             startedAtMs,
+            estimatedTotalMs,
         }));
 
         try {
@@ -850,6 +875,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     kind: 'image',
                     phaseLabel: elements.length === 1 ? 'Uploading 1 reference' : `Uploading ${elements.length} references`,
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
 
                 const uploadedElements = await Promise.all(elements.map(async (element) => {
@@ -891,6 +917,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 kind: 'image',
                 phaseLabel: 'Submitting image run',
                 startedAtMs,
+                estimatedTotalMs,
             }));
 
             const { data: { session } } = await supabase.auth.getSession();
@@ -909,6 +936,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     elements: requestElements,
                     aspectRatio,
                     resolution,
+                    qualityMode,
                     googleSearch: model.supportsGoogleSearch ? googleSearch : false,
                     outputFormat: 'jpg',
                     sourceGenerationId: remixId || undefined,
@@ -920,8 +948,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
-            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs);
+            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
             setOutputImage(result.output);
+            setOutputImages(result.outputs);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
@@ -955,6 +984,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             generate: 'from-violet-600 to-purple-600 shadow-[0_0_30px_-8px_rgba(139,92,246,0.4)]',
             progress: 'from-violet-500 to-purple-500',
         },
+        amber: {
+            ring: 'focus:border-amber-500/50 focus:ring-amber-500/10',
+            button: 'bg-amber-500/20 text-amber-200 border-amber-500/50 shadow-[0_0_12px_-3px_rgba(245,158,11,0.4)]',
+            toggle: 'bg-amber-500',
+            generate: 'from-amber-500 to-orange-600 shadow-[0_0_30px_-8px_rgba(245,158,11,0.4)]',
+            progress: 'from-amber-500 to-orange-500',
+        },
     }[model.accentColor];
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
@@ -975,21 +1011,22 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 element.sourceGenerationId === remixSourceBundle.generation.id
         )
     );
-    const outputImageDownloadUrl = (() => {
-        if (!outputImage) {
+    const getOutputImageDownloadUrl = (imageUrl: string | null, index = 0) => {
+        if (!imageUrl) {
             return null;
         }
 
-        const location = getStoredMediaLocation(outputImage);
+        const location = getStoredMediaLocation(imageUrl);
         if (!location) {
-            return outputImage;
+            return imageUrl;
         }
 
         return buildMediaProxyUrl(location.bucket, location.filePath, {
             download: true,
-            filename: 'generated-image.jpg',
+            filename: outputImages.length > 1 ? `generated-image-${index + 1}.jpg` : 'generated-image.jpg',
         });
-    })();
+    };
+    const outputImageDownloadUrl = getOutputImageDownloadUrl(outputImage, 0);
 
     if (isLoadingUser) {
         return (
@@ -1000,7 +1037,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }
 
     const workspaceTitle = outputImage
-        ? 'Latest image result'
+        ? outputImages.length > 1 ? 'Latest image results' : 'Latest image result'
         : isGenerating
             ? 'Creating your image'
             : isBackgroundProcessing
@@ -1008,7 +1045,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 : 'Ready for your next still';
 
     const workspaceDescription = outputImage
-        ? 'Your newest image stays here until you start another run.'
+        ? outputImages.length > 1
+            ? 'Grok returned multiple options. The first image stays primary for sharing and publishing.'
+            : 'Your newest image stays here until you start another run.'
         : isGenerating
             ? 'Watch the current run here while the model handles generation.'
             : isBackgroundProcessing
@@ -1017,6 +1056,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const shareTitle = publishedMeta?.title || prompt.trim() || `${model.displayName} image`;
     const shareDescription = publishedMeta?.description || prompt.trim() || null;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
+    const displayedOutputImages = outputImages.length > 0
+        ? outputImages
+        : (outputImage ? [outputImage] : []);
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -1027,6 +1069,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         <motion.div key="glow-nb2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
                             <div className="absolute top-[-20%] right-[-10%] w-[40%] h-[40%] bg-blue-900/15 blur-[120px] rounded-full mix-blend-screen" />
                             <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyan-900/10 blur-[120px] rounded-full mix-blend-screen" />
+                        </motion.div>
+                    ) : selectedModel === 'gpt-image-2' || selectedModel === 'grok-imagine-image' ? (
+                        <motion.div key={`glow-${selectedModel}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
+                            <div className="absolute top-[-20%] right-[-10%] h-[40%] w-[40%] rounded-full bg-amber-900/15 blur-[120px] mix-blend-screen" />
+                            <div className="absolute bottom-[-10%] left-[-10%] h-[40%] w-[40%] rounded-full bg-orange-900/10 blur-[120px] mix-blend-screen" />
                         </motion.div>
                     ) : (
                         <motion.div key="glow-nbp" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
@@ -1435,29 +1482,57 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 </div>
                             </motion.div>
 
-                            <motion.div
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: 0.08 }}
-                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                            >
-                                <h2 className="text-sm font-semibold text-white mb-1">Resolution</h2>
-                                <p className="text-sm text-zinc-400 mb-4">Higher detail costs more credits.</p>
-                                <div className="flex gap-3">
-                                    {model.resolutions.map(res => (
-                                        <button
-                                            key={res}
-                                            onClick={() => setResolution(res)}
-                                            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${resolution === res
-                                                ? accentStyles.button + ' border'
-                                                : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                                }`}
-                                        >
-                                            {res}
-                                        </button>
-                                    ))}
-                                </div>
-                            </motion.div>
+                            {showResolutionControl ? (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.08 }}
+                                    className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                                >
+                                    <h2 className="text-sm font-semibold text-white mb-1">Resolution</h2>
+                                    <p className="text-sm text-zinc-400 mb-4">Higher detail costs more credits.</p>
+                                    <div className="flex gap-3">
+                                        {availableResolutions.map(res => (
+                                            <button
+                                                key={res}
+                                                onClick={() => setResolution(res)}
+                                                className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${resolution === res
+                                                    ? accentStyles.button + ' border'
+                                                    : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
+                                                    }`}
+                                            >
+                                                {res}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </motion.div>
+                            ) : (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.08 }}
+                                    className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                                >
+                                    <h2 className="text-sm font-semibold text-white mb-1">Grok quality</h2>
+                                    <p className="text-sm text-zinc-400 mb-4">
+                                        Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.
+                                    </p>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {(['standard', 'quality'] as const).map((mode) => (
+                                            <button
+                                                key={mode}
+                                                onClick={() => setQualityMode(mode)}
+                                                className={`rounded-xl px-4 py-3 text-sm font-semibold capitalize transition-all duration-200 ${qualityMode === mode
+                                                    ? accentStyles.button + ' border'
+                                                    : 'border border-white/5 bg-black/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                                                    }`}
+                                            >
+                                                {mode}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </motion.div>
+                            )}
                         </div>
 
                         <AnimatePresence>
@@ -1507,8 +1582,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <div className="mt-1 text-zinc-200">{aspectRatio}</div>
                                     </div>
                                     <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Resolution</div>
-                                        <div className="mt-1 text-zinc-200">{resolution}</div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                            {showResolutionControl ? 'Resolution' : 'Quality'}
+                                        </div>
+                                        <div className="mt-1 text-zinc-200">
+                                            {showResolutionControl ? resolution : `${qualityMode}${isGrokImageModel && elements.length > 0 ? ' edit' : ''}`}
+                                        </div>
                                     </div>
                                     <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Elements</div>
@@ -1600,28 +1679,50 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         >
                             {outputImage ? (
                                 <div className="space-y-5">
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsResultPreviewOpen(true)}
-                                        className="group relative block w-full overflow-hidden rounded-[26px] border border-white/8 bg-black/50 text-left transition hover:border-blue-300/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/35"
-                                        aria-label="Preview generated image"
-                                    >
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img src={outputImage} alt="Generated image" className="block h-auto w-full object-cover transition duration-300 group-hover:scale-[1.01]" />
-                                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/65 via-black/5 to-transparent opacity-80 transition group-hover:opacity-100" />
-                                        <div className="pointer-events-none absolute bottom-4 left-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/65 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-md">
-                                            <Expand className="h-3.5 w-3.5" />
-                                            Preview image
-                                        </div>
-                                    </button>
+                                    <div className={displayedOutputImages.length > 1 ? 'grid gap-3 sm:grid-cols-2' : ''}>
+                                        {displayedOutputImages.map((imageUrl, index) => (
+                                            <div key={`${imageUrl}-${index}`} className="space-y-3">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setResultPreviewImage(imageUrl);
+                                                        setIsResultPreviewOpen(true);
+                                                    }}
+                                                    className="group relative block w-full overflow-hidden rounded-[26px] border border-white/8 bg-black/50 text-left transition hover:border-blue-300/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/35"
+                                                    aria-label={`Preview generated image ${index + 1}`}
+                                                >
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img src={imageUrl} alt={`Generated image ${index + 1}`} className="block h-auto w-full object-cover transition duration-300 group-hover:scale-[1.01]" />
+                                                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/65 via-black/5 to-transparent opacity-80 transition group-hover:opacity-100" />
+                                                    <div className="pointer-events-none absolute bottom-4 left-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/65 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-md">
+                                                        <Expand className="h-3.5 w-3.5" />
+                                                        {index === 0 ? 'Primary result' : `Result ${index + 1}`}
+                                                    </div>
+                                                </button>
+                                                {displayedOutputImages.length > 1 ? (
+                                                    <a
+                                                        href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
+                                                        download={`generated-image-${index + 1}.jpg`}
+                                                        className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-400/40 hover:bg-emerald-500/15"
+                                                    >
+                                                        <Download className="h-3.5 w-3.5" />
+                                                        Download result {index + 1}
+                                                    </a>
+                                                ) : null}
+                                            </div>
+                                        ))}
+                                    </div>
                                     <div className="flex flex-wrap gap-3">
                                         <button
                                             type="button"
-                                            onClick={() => setIsResultPreviewOpen(true)}
+                                            onClick={() => {
+                                                setResultPreviewImage(outputImage);
+                                                setIsResultPreviewOpen(true);
+                                            }}
                                             className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:border-blue-300/35 hover:bg-blue-500/15"
                                         >
                                             <Expand className="h-4 w-4" />
-                                            Preview image
+                                            Preview primary
                                         </button>
                                         <a
                                             href={outputImageDownloadUrl ?? outputImage}
@@ -1665,6 +1766,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <button
                                             onClick={() => {
                                                 setOutputImage(null);
+                                                setOutputImages([]);
+                                                setResultPreviewImage(null);
                                                 setIsResultPreviewOpen(false);
                                                 setLatestGenerationId(null);
                                                 setLatestIsPublic(false);
@@ -1698,7 +1801,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${model.accentColor === 'violet' ? 'from-violet-500/30 to-purple-500/10' : 'from-blue-500/30 to-cyan-500/10'}`}>
+                                    <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${
+                                        model.accentColor === 'violet'
+                                            ? 'from-violet-500/30 to-purple-500/10'
+                                            : model.accentColor === 'amber'
+                                                ? 'from-amber-500/30 to-orange-500/10'
+                                                : 'from-blue-500/30 to-cyan-500/10'
+                                    }`}>
                                         <ImageIcon className="h-7 w-7 text-white" />
                                     </div>
                                     <div>
@@ -1727,7 +1836,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 isOpen={isResultPreviewOpen}
                 onClose={() => setIsResultPreviewOpen(false)}
                 mediaType="image"
-                src={outputImage}
+                src={resultPreviewImage ?? outputImage}
                 alt="Generated image preview"
                 title="Generated Image Preview"
                 footer={

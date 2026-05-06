@@ -36,6 +36,7 @@ import {
 
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/models';
+import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant';
 import type {
   AudioInputNodeData,
   ImageGenerateNodeData,
@@ -49,6 +50,7 @@ import type {
   VideoInputNodeData,
   VoiceoverGenerateNodeData,
   WorkflowCanvasEdge,
+  WorkflowCanvasNode,
   WorkflowNodeCapabilityValidation,
   WorkflowNodeData,
   WorkflowNodeKind,
@@ -109,6 +111,8 @@ const HANDLE_RING = '0 0 0 4px rgba(9, 9, 11, 0.92)';
 const EDGE_DELETE_HIDE_DELAY_MS = 90;
 
 export interface WorkflowNodeRuntimeData {
+  assistantManaged?: boolean;
+  assistantPreviewState?: WorkflowAssistantPreviewState | null;
   capabilityValidation?: WorkflowNodeCapabilityValidation;
   isRunControlDisabled?: boolean;
   isRunMenuOpen?: boolean;
@@ -186,7 +190,7 @@ export function decorateWorkflowNode(
     data: {
       ...(node.data as Record<string, unknown>),
       __runtime: runtimeData,
-    } as WorkflowNodeData,
+    } as unknown as WorkflowNodeData,
   };
 }
 
@@ -283,11 +287,42 @@ function NodeShell({
   children?: ReactNode;
 }) {
   const [isHovered, setIsHovered] = useState(false);
-  const showActionRail = Boolean(runtime && (isHovered || runtime.isRunMenuOpen));
+  const showActionRail = Boolean(
+    runtime &&
+    (runtime.showPlayControl || runtime.onDeleteNode) &&
+    (isHovered || runtime.isRunMenuOpen)
+  );
+  const assistantPreviewState = runtime?.assistantPreviewState ?? null;
+  const assistantManaged = Boolean(runtime?.assistantManaged);
+  const assistantBadgeLabel = assistantPreviewState
+    ? assistantPreviewState === 'added'
+      ? 'Added'
+      : assistantPreviewState === 'changed'
+        ? 'Changed'
+        : 'Removed'
+    : assistantManaged
+      ? 'AI'
+      : null;
+  const assistantBadgeClassName = assistantPreviewState === 'added'
+    ? 'border border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+    : assistantPreviewState === 'changed'
+      ? 'border border-sky-500/35 bg-sky-500/10 text-sky-200'
+      : assistantPreviewState === 'removed'
+        ? 'border border-rose-500/35 bg-rose-500/10 text-rose-200'
+        : 'border border-violet-500/30 bg-violet-500/10 text-violet-200';
+  const shellToneClassName = assistantPreviewState === 'added'
+    ? 'border-emerald-400/45 bg-emerald-500/[0.05] ring-emerald-400/10'
+    : assistantPreviewState === 'changed'
+      ? 'border-sky-400/45 bg-sky-500/[0.05] ring-sky-400/10'
+      : assistantPreviewState === 'removed'
+        ? 'border-rose-400/45 bg-rose-500/[0.05] ring-rose-400/10 opacity-75'
+        : assistantManaged
+          ? 'border-violet-500/20 ring-violet-500/[0.06]'
+          : 'border-white/10 ring-white/[0.03]';
 
   return (
     <div
-      className={`workflow-canvas-node-shell group relative min-w-[230px] max-w-[260px] overflow-visible rounded-2xl border border-white/10 bg-[#090909] p-3 ring-1 ring-white/[0.03] ${dragging ? 'shadow-[0_10px_30px_rgba(0,0,0,0.32)]' : 'shadow-[0_18px_48px_rgba(0,0,0,0.42)]'}`}
+      className={`workflow-canvas-node-shell group relative min-w-[230px] max-w-[260px] overflow-visible rounded-2xl border bg-[#090909] p-3 ring-1 ${shellToneClassName} ${dragging ? 'shadow-[0_10px_30px_rgba(0,0,0,0.32)]' : 'shadow-[0_18px_48px_rgba(0,0,0,0.42)]'}`}
       style={{
         minHeight,
         backfaceVisibility: 'hidden',
@@ -415,19 +450,26 @@ function NodeShell({
             <div className="text-[11px] text-zinc-500">{subtitle}</div>
           </div>
         </div>
-        <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-[0.16em] ${
-          status === 'succeeded'
-            ? 'bg-emerald-500/10 text-emerald-300'
-            : status === 'queued'
-              ? 'bg-sky-500/10 text-sky-300'
-              : status === 'processing'
-                ? 'bg-amber-500/10 text-amber-300'
-                : status === 'failed' || status === 'blocked'
-                  ? 'bg-rose-500/10 text-rose-300'
-                  : 'bg-white/5 text-zinc-400'
-        }`}>
-          {status}
-        </span>
+        <div className="flex items-center gap-2">
+          {assistantBadgeLabel ? (
+            <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-[0.16em] ${assistantBadgeClassName}`}>
+              {assistantBadgeLabel}
+            </span>
+          ) : null}
+          <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-[0.16em] ${
+            status === 'succeeded'
+              ? 'bg-emerald-500/10 text-emerald-300'
+              : status === 'queued'
+                ? 'bg-sky-500/10 text-sky-300'
+                : status === 'processing'
+                  ? 'bg-amber-500/10 text-amber-300'
+                  : status === 'failed' || status === 'blocked'
+                    ? 'bg-rose-500/10 text-rose-300'
+                    : 'bg-white/5 text-zinc-400'
+          }`}>
+            {status}
+          </span>
+        </div>
       </div>
       {preview}
       {children}
@@ -491,10 +533,15 @@ function AudioPreview({ url, dragging }: { url: string; dragging?: boolean }) {
 }
 
 export function getImageGenerateNodeSummary(data: ImageGenerateNodeData): string[] {
-  const details = [data.resolution, data.outputFormat.toUpperCase()];
+  const model = IMAGE_MODELS[data.model];
+  const details = data.model === 'grok-imagine-image'
+    ? ['Multi-output']
+    : model.supportsOutputFormat
+    ? [data.resolution, data.outputFormat.toUpperCase()]
+    : [data.resolution];
   const handledReferenceCount = data.referenceBindings.filter((binding) => Boolean(binding.handle)).length;
 
-  if (IMAGE_MODELS[data.model].supportsGoogleSearch && data.googleSearch) {
+  if (model.supportsGoogleSearch && data.googleSearch) {
     details.push('Google Search');
   }
 

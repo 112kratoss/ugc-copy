@@ -9,7 +9,8 @@ import {
     isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient, getStoredMediaLocation } from '@/lib/server-helpers';
-import type { ShowcaseItemCategory } from '@/lib/showcase';
+import { normalizeSourceToolInput } from '@/lib/source-tools';
+import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showcase';
 import type { PostResourceBundleInput, PostResourceBundleAccessMode } from '@/lib/post-resource-bundles';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
@@ -67,6 +68,7 @@ async function upsertPublishedPost(params: {
     title?: unknown;
     description?: unknown;
     prompt?: unknown;
+    hidePrompt?: boolean;
     body?: unknown;
 }) {
     const {
@@ -78,6 +80,7 @@ async function upsertPublishedPost(params: {
         title,
         description,
         prompt,
+        hidePrompt = false,
         body,
     } = params;
 
@@ -94,11 +97,12 @@ async function upsertPublishedPost(params: {
         category,
         title: resolvedTitle,
         description: normalizeTextValue(description) ?? generation.description?.trim() ?? null,
-        prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null,
+        prompt: hidePrompt ? null : normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null,
         body: normalizedBody,
         post_format: normalizedBody ? 'mixed' as const : 'media' as const,
-        source_kind: 'ugc_copy' as const,
-        source_tool: null,
+        source_kind: MAGICBOOKLET_SOURCE_KIND,
+        source_tool: 'magicbooklet',
+        source_tool_slug: normalizeSourceToolInput({ slug: 'magicbooklet' }).slug,
         generation_id: generation.id,
         showcase_asset_path: showcaseAssetPath,
         output_url: generation.output_url,
@@ -243,6 +247,7 @@ export async function POST(request: NextRequest) {
             body?: string;
             category?: string;
             workflowSettings?: unknown;
+            exposePromptPublic?: boolean;
             resourceBundle?: PostResourceBundleInput | null;
         };
         const { generationId, isPublic, title, description, prompt, body, category, workflowSettings } = requestBody;
@@ -282,6 +287,8 @@ export async function POST(request: NextRequest) {
         }
 
         const resourceAccessMode = requestBody.resourceBundle?.accessMode as PostResourceBundleAccessMode | undefined;
+        const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
+        const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !hasResourceBundlePayload;
         const shouldForcePublic = resourceAccessMode === 'free' || resourceAccessMode === 'paid';
         const requestedVisibility = normalizeRequestedVisibility(requestBody.visibility, isPublic);
         const effectiveVisibility = shouldForcePublic ? 'public' : requestedVisibility;
@@ -350,7 +357,8 @@ export async function POST(request: NextRequest) {
                 title,
                 description,
                 body,
-                prompt: Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle') ? null : prompt,
+                prompt,
+                hidePrompt: !shouldExposePromptPublic,
             });
         } catch (postError) {
             if (isMissingPostsSchemaError(postError)) {
@@ -379,7 +387,7 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        if (postId && Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle')) {
+        if (postId && hasResourceBundlePayload) {
             try {
                 await savePostResourceBundle({
                     supabase,
@@ -394,7 +402,7 @@ export async function POST(request: NextRequest) {
                 if (isMissingPostResourceBundlesSchemaError(bundleError)) {
                     return NextResponse.json({ error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR }, { status: 500 });
                 }
-                return NextResponse.json({ error: 'Failed to save attached resources' }, { status: 500 });
+                return NextResponse.json({ error: 'Failed to save attached unlock' }, { status: 500 });
             }
         }
 

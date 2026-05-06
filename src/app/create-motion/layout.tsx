@@ -5,7 +5,7 @@ import { RequireAuth } from '@/app/components/RouteAuthBoundary';
 
 export const metadata: Metadata = createNoIndexMetadata(
     'Motion Transfer Studio',
-    'Run motion-transfer generations inside UGC copy using a character image and a reference performance clip.'
+    'Run motion-transfer generations inside magicbooklet using a character image and a reference performance clip.'
 );
 
 export default async function CreateMotionLayout({ children }: { children: React.ReactNode }) {

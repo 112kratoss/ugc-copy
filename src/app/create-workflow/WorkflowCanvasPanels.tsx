@@ -28,6 +28,8 @@ import type { WorkflowCommandAction } from './workflowCanvasUiTypes';
 
 declare global {
   interface Window {
+    __magicbookletWorkflowListCollapsed?: boolean;
+    __emptybookletWorkflowListCollapsed?: boolean;
     __ugcWorkflowListCollapsed?: boolean;
   }
 }
@@ -47,7 +49,12 @@ function getRememberedWorkflowListCollapsed() {
     return false;
   }
 
-  return window.__ugcWorkflowListCollapsed ?? false;
+  return (
+    window.__magicbookletWorkflowListCollapsed
+    ?? window.__emptybookletWorkflowListCollapsed
+    ?? window.__ugcWorkflowListCollapsed
+    ?? false
+  );
 }
 
 function rememberWorkflowListCollapsed(isCollapsed: boolean) {
@@ -55,7 +62,7 @@ function rememberWorkflowListCollapsed(isCollapsed: boolean) {
     return;
   }
 
-  window.__ugcWorkflowListCollapsed = isCollapsed;
+  window.__magicbookletWorkflowListCollapsed = isCollapsed;
 }
 
 interface PendingWorkflowDelete {

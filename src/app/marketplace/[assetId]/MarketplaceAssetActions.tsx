@@ -115,7 +115,7 @@ export default function MarketplaceAssetActions({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'UGC copy marketplace',
+        name: 'magicbooklet marketplace',
         description: orderData.listingTitle || title,
         order_id: orderData.orderId,
         handler: async (response: {

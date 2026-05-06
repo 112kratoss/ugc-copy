@@ -1,9 +1,18 @@
 export const SHOWCASE_PAGE_SIZE = 12;
 
 export type ShowcaseCategory = 'all' | 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
-export type ShowcaseSort = 'recent' | 'top-saves' | 'top-remixes';
+export type ShowcaseSort = 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
+export type ShowcaseUnlockFilter = 'all' | 'with-unlock' | 'free' | 'paid';
+export type ShowcaseResourceFilter = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all'>;
-export type ShowcaseSourceKind = 'ugc_copy' | 'external' | 'manual';
+export const MAGICBOOKLET_SOURCE_KIND = 'magicbooklet' as const;
+export const LEGACY_EMPTYBOOKLET_SOURCE_KIND = 'emptybooklet' as const;
+export const LEGACY_UGC_COPY_SOURCE_KIND = 'ugc_copy' as const;
+export type ShowcaseSourceKind = typeof MAGICBOOKLET_SOURCE_KIND | 'external' | 'manual';
+export type RawShowcaseSourceKind =
+    ShowcaseSourceKind
+    | typeof LEGACY_EMPTYBOOKLET_SOURCE_KIND
+    | typeof LEGACY_UGC_COPY_SOURCE_KIND;
 export type ShowcaseVisibility = 'public' | 'unlisted' | 'private';
 export type ShowcasePostFormat = 'text' | 'media' | 'mixed';
 export type ShowcaseMediaKind = 'image' | 'video';
@@ -25,6 +34,8 @@ export interface ShowcaseAssetSummary {
     priceUsdCents: number;
     previewText: string;
     allowRemix: boolean;
+    salesCount?: number;
+    resourceKinds?: string[];
 }
 
 export interface ShowcaseFeedItem {
@@ -44,6 +55,7 @@ export interface ShowcaseFeedItem {
     isSaved?: boolean;
     sourceKind: ShowcaseSourceKind;
     sourceTool: string | null;
+    sourceToolSlug?: string | null;
     generationId: string | null;
     asset: ShowcaseAssetSummary | null;
     canRemix: boolean;
@@ -59,6 +71,7 @@ export interface ShowcaseFeedPageInfo {
 export interface ShowcaseFeedPage {
     items: ShowcaseFeedItem[];
     pageInfo: ShowcaseFeedPageInfo;
+    availableTools?: Array<{ slug: string; label: string; count: number }>;
 }
 
 export function normalizeShowcaseCategory(value: string | null | undefined): ShowcaseCategory {
@@ -67,6 +80,22 @@ export function normalizeShowcaseCategory(value: string | null | undefined): Sho
     }
 
     return 'all';
+}
+
+export function normalizeShowcaseSourceKind(value: string | null | undefined): ShowcaseSourceKind {
+    if (
+        value === MAGICBOOKLET_SOURCE_KIND
+        || value === LEGACY_EMPTYBOOKLET_SOURCE_KIND
+        || value === LEGACY_UGC_COPY_SOURCE_KIND
+    ) {
+        return MAGICBOOKLET_SOURCE_KIND;
+    }
+
+    if (value === 'external' || value === 'manual') {
+        return value;
+    }
+
+    return 'external';
 }
 
 export function isShowcaseItemCategory(value: string | null | undefined): value is ShowcaseItemCategory {
@@ -89,11 +118,27 @@ export function getShowcaseMediaKind(
 }
 
 export function normalizeShowcaseSort(value: string | null | undefined): ShowcaseSort {
-    if (value === 'top-saves' || value === 'top-remixes') {
+    if (value === 'top-saves' || value === 'top-remixes' || value === 'top-sales') {
         return value;
     }
 
     return 'recent';
+}
+
+export function normalizeShowcaseUnlockFilter(value: string | null | undefined): ShowcaseUnlockFilter {
+    if (value === 'with-unlock' || value === 'free' || value === 'paid') {
+        return value;
+    }
+
+    return 'all';
+}
+
+export function normalizeShowcaseResourceFilter(value: string | null | undefined): ShowcaseResourceFilter {
+    if (value === 'prompt' || value === 'workflow' || value === 'files' || value === 'notes' || value === 'remix') {
+        return value;
+    }
+
+    return 'all';
 }
 
 export function parsePositiveInt(value: string | null | undefined, fallback: number): number {

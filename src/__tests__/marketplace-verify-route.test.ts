@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let orderStatus: 'created' | 'paid' = 'created';
-const rpcMock = vi.fn(async () => {
+const rpcMock = vi.fn(async (_payload: unknown) => {
+  void _payload;
   orderStatus = 'paid';
   return { data: true, error: null };
 });

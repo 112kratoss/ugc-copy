@@ -12,8 +12,11 @@ import {
   VIDEO_MODELS,
   clampVideoDuration,
   getDefaultVideoDuration,
+  getImageResolutionOptions,
   getVideoElementSupport,
+  type ImageOutputFormat,
   type ImageModelId,
+  type ImageResolution,
   type MotionModelId,
   type SoundEffectModelId,
   type VideoModelId,
@@ -64,6 +67,10 @@ export interface WorkflowNodeRunState {
 interface BaseWorkflowNodeData extends Record<string, unknown> {
   title: string;
   subtitle?: string;
+  managed?: boolean;
+  regionId?: string | null;
+  roleKey?: string | null;
+  slotKey?: string | null;
   runState: WorkflowNodeRunState;
 }
 
@@ -147,8 +154,8 @@ export interface WorkflowMultiPrompt {
 export interface ImageGenerateNodeData extends BaseWorkflowNodeData {
   model: ImageModelId;
   aspectRatio: string;
-  resolution: '1K' | '2K' | '4K';
-  outputFormat: 'jpg' | 'png';
+  resolution: ImageResolution;
+  outputFormat: ImageOutputFormat;
   googleSearch: boolean;
   referenceHandle: string | null;
   referenceBindings: WorkflowReferenceBinding[];
@@ -787,15 +794,17 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
   const subtitle = typeof metadata?.subtitle === 'string' && metadata.subtitle.trim()
     ? metadata.subtitle
     : base.subtitle;
+  const assistantMetadata = normalizeAssistantNodeMetadata(metadata);
 
   switch (type) {
     case 'text-input':
-      return { ...(base as TextInputNodeData), title, subtitle, text: typeof (data as TextInputNodeData | undefined)?.text === 'string' ? (data as TextInputNodeData).text : (base as TextInputNodeData).text, runState };
+      return { ...(base as TextInputNodeData), ...assistantMetadata, title, subtitle, text: typeof (data as TextInputNodeData | undefined)?.text === 'string' ? (data as TextInputNodeData).text : (base as TextInputNodeData).text, runState };
     case 'note':
-      return { ...(base as NoteNodeData), title, subtitle, text: typeof (data as NoteNodeData | undefined)?.text === 'string' ? (data as NoteNodeData).text : (base as NoteNodeData).text, runState };
+      return { ...(base as NoteNodeData), ...assistantMetadata, title, subtitle, text: typeof (data as NoteNodeData | undefined)?.text === 'string' ? (data as NoteNodeData).text : (base as NoteNodeData).text, runState };
     case 'image-input':
       return {
         ...(base as ImageInputNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null,
@@ -813,6 +822,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'video-input':
       return {
         ...(base as VideoInputNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         videoUrl: typeof (data as VideoInputNodeData | undefined)?.videoUrl === 'string' ? (data as VideoInputNodeData).videoUrl : null,
@@ -832,6 +842,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'audio-input':
       return {
         ...(base as AudioInputNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         audioUrl: typeof (data as AudioInputNodeData | undefined)?.audioUrl === 'string' ? (data as AudioInputNodeData).audioUrl : null,
@@ -849,6 +860,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
       return normalizeImageGenerateNodeData({
         base: base as ImageGenerateNodeData,
         data: data as ImageGenerateNodeData | undefined,
+        assistantMetadata,
         title,
         subtitle,
         runState,
@@ -857,6 +869,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
       return normalizeVideoGenerateNodeData({
         base: base as VideoGenerateNodeData,
         data: data as VideoGenerateNodeData | undefined,
+        assistantMetadata,
         title,
         subtitle,
         runState,
@@ -864,6 +877,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'motion-generate':
       return {
         ...(base as MotionGenerateNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         model: isMotionModel((data as MotionGenerateNodeData | undefined)?.model)
@@ -876,6 +890,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'voiceover-generate':
       return {
         ...(base as VoiceoverGenerateNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         model: normalizeVoiceoverModel((data as VoiceoverGenerateNodeData | undefined)?.model),
@@ -892,6 +907,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'music-generate':
       return {
         ...(base as MusicGenerateNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         model: 'music-v1',
@@ -902,6 +918,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
     case 'sound-effects-generate':
       return {
         ...(base as SoundEffectsGenerateNodeData),
+        ...assistantMetadata,
         title,
         subtitle,
         model: normalizeSoundEffectModel((data as SoundEffectsGenerateNodeData | undefined)?.model),
@@ -912,18 +929,19 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         runState,
       };
     case 'group':
-      return { ...(base as GroupNodeData), title, subtitle, color: typeof (data as GroupNodeData | undefined)?.color === 'string' ? (data as GroupNodeData).color : (base as GroupNodeData).color, runState };
+      return { ...(base as GroupNodeData), ...assistantMetadata, title, subtitle, color: typeof (data as GroupNodeData | undefined)?.color === 'string' ? (data as GroupNodeData).color : (base as GroupNodeData).color, runState };
   }
 }
 
 function normalizeImageGenerateNodeData(params: {
   base: ImageGenerateNodeData;
   data: ImageGenerateNodeData | undefined;
+  assistantMetadata: ReturnType<typeof normalizeAssistantNodeMetadata>;
   title: string;
   subtitle?: string;
   runState: WorkflowNodeRunState;
 }): ImageGenerateNodeData {
-  const { base, data, title, subtitle, runState } = params;
+  const { base, data, assistantMetadata, title, subtitle, runState } = params;
   const model = isImageModel(data?.model) ? data.model : DEFAULT_IMAGE_GENERATE_MODEL;
   const modelConfig = IMAGE_MODELS[model];
   const aspectRatio = normalizeStringOption(
@@ -931,10 +949,11 @@ function normalizeImageGenerateNodeData(params: {
     modelConfig.aspectRatios,
     getPreferredOption(modelConfig.aspectRatios, base.aspectRatio, DEFAULT_IMAGE_ASPECT_RATIO)
   );
+  const resolutionOptions = getImageResolutionOptions(model, aspectRatio);
   const resolution = normalizeStringOption(
     data?.resolution,
-    modelConfig.resolutions,
-    getPreferredOption(modelConfig.resolutions, base.resolution, DEFAULT_IMAGE_RESOLUTION)
+    resolutionOptions,
+    getPreferredOption(resolutionOptions, base.resolution, DEFAULT_IMAGE_RESOLUTION)
   ) as ImageGenerateNodeData['resolution'];
   const outputFormat = normalizeStringOption(
     data?.outputFormat,
@@ -944,6 +963,7 @@ function normalizeImageGenerateNodeData(params: {
 
   return {
     ...base,
+    ...assistantMetadata,
     title,
     subtitle,
     model,
@@ -963,16 +983,18 @@ function normalizeImageGenerateNodeData(params: {
 function normalizeVideoGenerateNodeData(params: {
   base: VideoGenerateNodeData;
   data: VideoGenerateNodeData | undefined;
+  assistantMetadata: ReturnType<typeof normalizeAssistantNodeMetadata>;
   title: string;
   subtitle?: string;
   runState: WorkflowNodeRunState;
 }): VideoGenerateNodeData {
-  const { base, data, title, subtitle, runState } = params;
+  const { base, data, assistantMetadata, title, subtitle, runState } = params;
   const model = isVideoModel(data?.model) ? data.model : DEFAULT_VIDEO_GENERATE_MODEL;
   const modelConfig = VIDEO_MODELS[model];
 
   return {
     ...base,
+    ...assistantMetadata,
     title,
     subtitle,
     model,
@@ -1010,6 +1032,17 @@ function normalizeVideoGenerateNodeData(params: {
     isMultiShot: Boolean(data?.isMultiShot),
     multiPrompts: normalizeWorkflowMultiPrompts(data?.multiPrompts),
     runState,
+  };
+}
+
+function normalizeAssistantNodeMetadata(
+  data: Partial<BaseWorkflowNodeData> | undefined
+) {
+  return {
+    managed: data?.managed === true,
+    regionId: typeof data?.regionId === 'string' && data.regionId.trim() ? data.regionId.trim() : null,
+    roleKey: typeof data?.roleKey === 'string' && data.roleKey.trim() ? data.roleKey.trim() : null,
+    slotKey: typeof data?.slotKey === 'string' && data.slotKey.trim() ? data.slotKey.trim() : null,
   };
 }
 
@@ -1101,7 +1134,7 @@ function normalizeWorkflowReferenceElements(value: unknown): WorkflowReferenceEl
   const usedHandles = new Set<string>();
 
   return value
-    .map((element, index) => {
+    .map((element, index): WorkflowReferenceElement | null => {
       if (!element || typeof element !== 'object') {
         return null;
       }
@@ -1132,7 +1165,7 @@ function normalizeWorkflowReferenceElements(value: unknown): WorkflowReferenceEl
         url: typeof typedElement.url === 'string' ? typedElement.url : null,
       } satisfies WorkflowReferenceElement;
     })
-    .filter((element): element is WorkflowReferenceElement => Boolean(element));
+    .filter((element): element is WorkflowReferenceElement => element !== null);
 }
 
 function normalizeWorkflowMultiPrompts(value: unknown): WorkflowMultiPrompt[] {
@@ -1894,6 +1927,7 @@ export function inspectWorkflowNodeCapabilities(
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const model = VIDEO_MODELS[data.model];
     const isSeedance2Family = isSeedance2VideoModel(data.model);
+    const isGrokVideoModel = data.model === 'grok-imagine-video';
     const videoElementSupport = getVideoElementSupport(data.model, {
       mode: data.mode,
       isMultiShot: data.isMultiShot,
@@ -1954,6 +1988,13 @@ export function inspectWorkflowNodeCapabilities(
       issues.push({
         code: 'too-many-end-frames',
         message: 'Workflow video nodes support only 1 end frame. Remove extra end-frame image connections to continue.',
+      });
+    }
+
+    if (isGrokVideoModel && endFrameCount > 0) {
+      issues.push({
+        code: 'end-frame-not-supported',
+        message: 'Grok Imagine Video supports one image reference only. Remove the end-frame connection or use the Start frame input.',
       });
     }
 
@@ -2268,6 +2309,13 @@ export function validateWorkflowConnectionForGraph(params: {
         return {
           valid: false,
           message: 'Seedance 2 workflows use reference images, video clips, and audio clips instead of End frame.',
+        };
+      }
+
+      if (data.model === 'grok-imagine-video') {
+        return {
+          valid: false,
+          message: 'Grok Imagine Video supports one image reference only. Use Start frame for image-to-video.',
         };
       }
 

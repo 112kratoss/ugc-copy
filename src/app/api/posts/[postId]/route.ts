@@ -5,6 +5,7 @@ import {
   getPostResourceKinds,
   isPostResourceBundleAccessMode,
   type PostResourceBundleInput,
+  type PostResourceBundleResources,
 } from '@/lib/post-resource-bundles';
 import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
 import {
@@ -12,7 +13,13 @@ import {
   isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-import { isShowcaseItemCategory, type ShowcaseVisibility } from '@/lib/showcase';
+import { normalizeSourceToolInput } from '@/lib/source-tools';
+import {
+  isShowcaseItemCategory,
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
+  type ShowcaseVisibility,
+} from '@/lib/showcase';
 
 type RouteContext = {
   params: Promise<{ postId: string }>;
@@ -29,7 +36,8 @@ type MutablePostRow = {
   category: string;
   post_format: 'text' | 'media' | 'mixed';
   source_tool: string | null;
-  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_tool_slug: string | null;
+  source_kind: RawShowcaseSourceKind;
   archived_at: string | null;
   showcase_asset_path: string | null;
 };
@@ -78,7 +86,7 @@ function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | n
   if (typeof value !== 'object') {
     return {
       bundle: null,
-      error: 'Invalid resource bundle payload.',
+      error: 'Invalid unlock payload.',
     };
   }
 
@@ -86,7 +94,7 @@ function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | n
   if (!isPostResourceBundleAccessMode(bundle.accessMode)) {
     return {
       bundle: null,
-      error: 'Choose whether the attached resources should be free or paid.',
+      error: 'Choose whether the unlock should be free or paid.',
     };
   }
 
@@ -98,7 +106,7 @@ function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | n
     if (priceUsdCents < 100) {
       return {
         bundle: null,
-        error: 'Paid resources must be priced at $1.00 or above.',
+        error: 'Paid unlocks must be priced at $1.00 or above.',
       };
     }
   }
@@ -154,7 +162,7 @@ async function loadOwnedPost(postId: string, userId: string): Promise<MutablePos
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, title, description, body, category, post_format, source_tool, source_kind, archived_at, showcase_asset_path'
+      'id, user_id, generation_id, visibility, title, description, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path'
     )
     .eq('id', postId)
     .eq('user_id', userId)
@@ -223,6 +231,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       visibility?: unknown;
       category?: unknown;
       sourceTool?: unknown;
+      sourceToolSlug?: unknown;
       resourceBundle?: unknown;
     };
 
@@ -232,7 +241,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
 
-    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool'].some((key) =>
+    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool', 'sourceToolSlug'].some((key) =>
       Object.prototype.hasOwnProperty.call(body, key)
     );
 
@@ -275,8 +284,16 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       updatePayload.body = nextBody;
       updatePayload.post_format = nextBody ? (post.post_format === 'media' ? 'mixed' : post.post_format) : post.post_format;
     }
-    if (Object.prototype.hasOwnProperty.call(body, 'sourceTool')) {
-      updatePayload.source_tool = normalizeText(body.sourceTool);
+    if (
+      Object.prototype.hasOwnProperty.call(body, 'sourceTool') ||
+      Object.prototype.hasOwnProperty.call(body, 'sourceToolSlug')
+    ) {
+      const normalizedSourceTool = normalizeSourceToolInput({
+        label: Object.prototype.hasOwnProperty.call(body, 'sourceTool') ? normalizeText(body.sourceTool) : post.source_tool,
+        slug: normalizeText(body.sourceToolSlug),
+      });
+      updatePayload.source_tool = normalizedSourceTool.label;
+      updatePayload.source_tool_slug = normalizedSourceTool.slug;
     }
 
     const adminSupabase = createServiceClient();
@@ -384,12 +401,12 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       );
     }
 
-    const bundleResources = bundle
+    const bundleResources: Partial<PostResourceBundleResources> | null = bundle
       ? {
           promptText: bundle.prompt_text,
           notesMarkdown: bundle.notes_markdown,
           workflowShareUrl: bundle.workflow_share_url,
-          workflowSnapshot: bundle.workflow_snapshot,
+          workflowSnapshot: bundle.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
           attachments: Array.isArray(bundle.attachments) ? bundle.attachments : [],
           allowRemix: bundle.allow_remix,
         }
@@ -401,7 +418,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       generation_id: post.generation_id,
       title: normalizeText(post.title) ?? 'Deleted post',
       visibility: post.visibility,
-      source_kind: post.source_kind,
+      source_kind: normalizeShowcaseSourceKind(post.source_kind),
       bundle_access_mode: bundle?.access_mode ?? null,
       bundle_status: bundle?.status ?? null,
       bundle_price_usd_cents: bundle?.price_usd_cents ?? null,

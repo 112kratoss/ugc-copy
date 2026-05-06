@@ -716,7 +716,7 @@ describe('CreateWorkflowPage', () => {
     expect(screen.getByRole('button', { name: /new workflow/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
 
-    expect(screen.queryByRole('button', { name: /ai builder/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /ai builder/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /history/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /publish/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /command/i })).not.toBeInTheDocument();

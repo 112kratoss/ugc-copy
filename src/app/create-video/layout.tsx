@@ -5,7 +5,7 @@ import { RequireAuth } from '@/app/components/RouteAuthBoundary';
 
 export const metadata: Metadata = createNoIndexMetadata(
     'Create Video',
-    'Generate AI videos inside the UGC copy app with multi-shot prompts, reference images, and export controls.'
+    'Generate AI videos inside the magicbooklet app with multi-shot prompts, reference images, and export controls.'
 );
 
 export default async function CreateVideoLayout({ children }: { children: React.ReactNode }) {

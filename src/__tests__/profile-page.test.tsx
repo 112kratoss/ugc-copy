@@ -89,7 +89,7 @@ describe('ProfilePage', () => {
     vi.restoreAllMocks();
   });
 
-  it('redirects to the public profile when a persisted username exists', async () => {
+  it('keeps persisted profiles editable and links to the public profile', async () => {
     profileState = {
       id: 'user-1',
       username: 'persisted-name',
@@ -105,8 +105,14 @@ describe('ProfilePage', () => {
       credits: 10,
     };
 
-    await expect(ProfilePage()).rejects.toThrow('NEXT_REDIRECT:/creators/persisted-name');
-    expect(mockRedirect).toHaveBeenCalledWith('/creators/persisted-name');
+    render(await ProfilePage());
+
+    expect(screen.getByTestId('creator-profile-card')).toHaveTextContent('persisted-name');
+    expect(screen.getByRole('link', { name: /view public profile/i })).toHaveAttribute(
+      'href',
+      '/creators/persisted-name'
+    );
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 
   it('keeps first-time users on /profile and prefills the suggested username', async () => {
@@ -128,6 +134,16 @@ describe('ProfilePage', () => {
     render(await ProfilePage());
 
     expect(await screen.findByText('creator-user1')).toBeInTheDocument();
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it('renders a starter profile if the profile row is missing', async () => {
+    profileState = null;
+
+    render(await ProfilePage());
+
+    expect(await screen.findByText('creator-user1')).toBeInTheDocument();
+    expect(screen.queryByText(/profile not found/i)).not.toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
   });
 });

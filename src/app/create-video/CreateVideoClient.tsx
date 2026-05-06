@@ -65,17 +65,44 @@ import {
 } from '@/lib/seedance-assets';
 import {
     createLocalGenerationTiming,
+    estimateGenerationDurationMs,
     freezeGenerationTiming,
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
+import {
+    inspectPromptQuality,
+    type PromptEnhancementWarning,
+} from '@/lib/prompt-quality';
 
 interface MultiShot {
     id: string;
     prompt: string;
     duration: number;
+}
+
+function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
+    if (warnings.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="mb-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">Prompt quality</p>
+            <div className="mt-2 space-y-2">
+                {warnings.slice(0, 4).map((warning) => (
+                    <div key={warning.code} className="text-sm text-amber-100">
+                        <p>{warning.message}</p>
+                        {warning.fixHint ? (
+                            <p className="mt-0.5 text-xs text-amber-200/70">{warning.fixHint}</p>
+                        ) : null}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
 }
 
 interface UploadPreviewState {
@@ -312,6 +339,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
     const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [promptQualityWarnings, setPromptQualityWarnings] = useState<PromptEnhancementWarning[]>([]);
+    const [multiPromptQualityWarnings, setMultiPromptQualityWarnings] = useState<Record<string, PromptEnhancementWarning[]>>({});
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const startImageInputRef = useRef<HTMLInputElement>(null);
@@ -459,6 +488,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const currentSound = videoModel.supportsSound ? sound : false;
     const currentFixedLens = videoModel.supportsFixedLens ? fixedLens : false;
     const currentIsMultiShot = videoModel.supportsMultiShot ? isMultiShot : false;
+    const isGrokVideoModel = selectedModel === 'grok-imagine-video';
     const videoElementSupport = getVideoElementSupport(selectedModel, {
         mode: currentMode,
         isMultiShot: currentIsMultiShot,
@@ -473,6 +503,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         sound: currentSound,
         durationSeconds: totalDuration,
         resolution: currentResolution,
+        hasReferenceVideo: referenceVideos.length > 0,
+    });
+    const estimatedReferenceCount =
+        activeReferenceMode === 'elements'
+            ? elements.length + referenceVideos.length + referenceAudios.length
+            : Number(Boolean(startImageUrl || startImageFile)) + (isGrokVideoModel ? 0 : Number(Boolean(endImageUrl || endImageFile)));
+    const estimatedGenerationTotalMs = estimateGenerationDurationMs({
+        kind: 'video',
+        model: selectedModel,
+        mode: currentMode,
+        resolution: currentResolution,
+        durationSeconds: totalDuration,
+        isMultiShot: currentIsMultiShot,
+        shotCount: multiPrompts.length,
+        referenceCount: estimatedReferenceCount,
+        hasSound: currentSound,
         hasReferenceVideo: referenceVideos.length > 0,
     });
     const insufficientCredits = userCredits !== null && userCredits < estimatedCost;
@@ -500,6 +546,40 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         : 0;
     const showSavedElementNotice = !isSeedance2Family && !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
     const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || hasKnownElementMentions);
+    const buildSinglePromptQualityContext = () => ({
+        modelId: selectedModel,
+        mode: currentMode,
+        aspectRatio: currentAspectRatio,
+        duration: totalDuration,
+        sound: currentSound,
+        fixedLens: currentFixedLens,
+        resolution: currentResolution,
+        isMultiShot: currentIsMultiShot,
+        shotCount: multiPrompts.length,
+        hasStartImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(startImageFile || startImageUrl),
+        hasEndImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(endImageFile || endImageUrl),
+        referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
+        hasReferenceVideo: referenceVideos.length > 0,
+        elementReferences: activeReferenceMode === 'elements'
+            ? elements.map((element) => ({
+                handle: element.handle,
+                displayName: element.displayName,
+            }))
+            : undefined,
+    });
+    const buildShotPromptQualityContext = (shot: MultiShot, index: number) => ({
+        modelId: selectedModel,
+        mode: currentMode,
+        aspectRatio: currentAspectRatio,
+        duration: shot.duration,
+        sound: currentSound,
+        fixedLens: currentFixedLens,
+        shotIndex: index,
+        isMultiShot: currentIsMultiShot,
+        shotCount: multiPrompts.length,
+        hasStartImage: Boolean(startImageFile || startImageUrl),
+        hasEndImage: Boolean(endImageFile || endImageUrl),
+    });
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -841,16 +921,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const addShot = () => {
         setMultiPrompts([...multiPrompts, { id: Math.random().toString(), prompt: '', duration: 5 }]);
+        setMultiPromptQualityWarnings({});
     };
 
     const removeShot = (id: string) => {
         if (multiPrompts.length > 1) {
             setMultiPrompts(multiPrompts.filter((shot) => shot.id !== id));
+            setMultiPromptQualityWarnings((current) => {
+                const next = { ...current };
+                delete next[id];
+                return next;
+            });
         }
     };
 
     const updateShot = (id: string, field: 'prompt' | 'duration', value: string | number) => {
         setMultiPrompts(multiPrompts.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot));
+        setMultiPromptQualityWarnings((current) => {
+            const next = { ...current };
+            delete next[id];
+            return next;
+        });
     };
 
     const setReferenceModeWithPersistence = async (nextMode: 'frames' | 'elements') => {
@@ -1121,6 +1212,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const handlePromptChange = (value: string, caretIndex?: number) => {
         setPrompt(value);
+        setPromptQualityWarnings([]);
         updateMentionState(value, caretIndex);
     };
 
@@ -1429,6 +1521,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 kind: 'video',
                 phaseLabel: 'Generating video',
                 startedAtMs,
+                estimatedTotalMs: estimatedGenerationTotalMs,
             }),
             Date.now()
         ));
@@ -1437,7 +1530,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const pollPrediction = async (
         predictionId: string,
         accessToken: string,
-        startedAtMs: number
+        startedAtMs: number,
+        estimatedTotalMs: number | null
     ): Promise<{ output: string; timing: GenerationTiming | null }> => {
         const maxAttempts = 120;
         let attempts = 0;
@@ -1449,12 +1543,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             const data = await response.json() as GenerationStatusResponse;
 
             if (data.timing) {
-                setGenerationTiming(data.timing);
+                setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
+                    ...data.timing,
+                    estimatedTotalMs,
+                });
             } else {
                 setGenerationTiming((current) => current ?? createLocalGenerationTiming({
                     kind: 'video',
                     phaseLabel: 'Waiting for provider',
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
             }
 
@@ -1539,9 +1637,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setResolution(nextModel.resolutions[0] || '');
         setSound(false);
         setFixedLens(false);
+        setPromptQualityWarnings([]);
+        setMultiPromptQualityWarnings({});
 
         if (!nextModel.supportsMultiShot) {
             setIsMultiShot(false);
+        }
+
+        if (modelId === 'grok-imagine-video' && endImageUrl) {
+            void clearImage('end');
         }
 
         if (isSeedance2VideoModelId(modelId)) {
@@ -1585,7 +1689,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }));
 
             try {
-                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs);
+                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs, null);
                 setOutputVideo(result.output);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
@@ -1647,6 +1751,42 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
         }
 
+        if (currentIsMultiShot) {
+            const nextWarnings = multiPrompts.reduce<Record<string, PromptEnhancementWarning[]>>((acc, shot, index) => {
+                const inspection = inspectPromptQuality({
+                    medium: 'video',
+                    selectedModel: videoModel.enhancerModelId,
+                    prompt: shot.prompt,
+                    context: buildShotPromptQualityContext(shot, index),
+                });
+                acc[shot.id] = inspection.warnings;
+                return acc;
+            }, {});
+            setMultiPromptQualityWarnings(nextWarnings);
+
+            const blockingWarning = Object.values(nextWarnings)
+                .flat()
+                .find((warning) => warning.severity === 'blocking');
+            if (blockingWarning) {
+                setError(blockingWarning.message);
+                return;
+            }
+        } else {
+            const inspection = inspectPromptQuality({
+                medium: 'video',
+                selectedModel: videoModel.enhancerModelId,
+                prompt,
+                context: buildSinglePromptQualityContext(),
+            });
+            setPromptQualityWarnings(inspection.warnings);
+
+            const blockingWarning = inspection.warnings.find((warning) => warning.severity === 'blocking');
+            if (blockingWarning) {
+                setError(blockingWarning.message);
+                return;
+            }
+        }
+
         if (insufficientCredits) {
             setError(`Insufficient credits. This costs ${estimatedCost} credits.`);
             return;
@@ -1659,10 +1799,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setLatestIsPublic(false);
         setPublishedMeta(null);
         const startedAtMs = Date.now();
+        const estimatedTotalMs = estimatedGenerationTotalMs;
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'video',
             phaseLabel: 'Preparing inputs',
             startedAtMs,
+            estimatedTotalMs,
         }));
 
         try {
@@ -1685,6 +1827,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     kind: 'video',
                     phaseLabel: elements.length === 1 ? 'Uploading 1 image reference' : `Uploading ${elements.length} image references`,
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
 
                 const uploadedElements = await Promise.all(elements.map(async (element) => {
@@ -1723,6 +1866,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     kind: 'video',
                     phaseLabel: referenceVideos.length === 1 ? 'Uploading 1 reference video' : `Uploading ${referenceVideos.length} reference videos`,
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
                 const uploadedReferences = await Promise.all(referenceVideos.map(async (reference) => {
                     const preparedReference = await ensureUploadedReference(reference, 'Video');
@@ -1752,6 +1896,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     kind: 'video',
                     phaseLabel: referenceAudios.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${referenceAudios.length} reference audio clips`,
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
                 const uploadedReferences = await Promise.all(referenceAudios.map(async (reference) => {
                     const preparedReference = await ensureUploadedReference(reference, 'Audio');
@@ -1781,6 +1926,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     kind: 'video',
                     phaseLabel: 'Uploading start frame',
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
                 const upload = await uploadToSupabase(startImageFile);
                 startUrl = upload.signedUrl;
@@ -1797,6 +1943,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     kind: 'video',
                     phaseLabel: 'Uploading end frame',
                     startedAtMs,
+                    estimatedTotalMs,
                 }));
                 const upload = await uploadToSupabase(endImageFile);
                 endUrl = upload.signedUrl;
@@ -1812,6 +1959,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 kind: 'video',
                 phaseLabel: 'Submitting video run',
                 startedAtMs,
+                estimatedTotalMs,
             }));
 
             const { data: { session } } = await supabase.auth.getSession();
@@ -1858,7 +2006,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
-            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs);
+            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);
             if (result.timing) {
                 setGenerationTiming(result.timing);
@@ -1877,6 +2025,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
     };
 
+    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
+    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
+
     if (isLoadingUser) {
         return (
             <div className="min-h-screen bg-black text-white flex items-center justify-center">
@@ -1884,9 +2035,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             </div>
         );
     }
-    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('video');
-    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
 
@@ -2071,8 +2220,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Prompt</h2>
                                     <EnhancePromptButton
                                         prompt={prompt}
-                                        onEnhanced={(text) => {
+                                        onEnhanced={(text, result) => {
                                             setPrompt(text);
+                                            setPromptQualityWarnings(result?.warnings ?? []);
                                             setActiveMentionQuery(null);
                                             requestAnimationFrame(() => updateMentionState(text));
                                         }}
@@ -2084,29 +2234,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 ? 'Named elements keep their @handles. This enhances the scene while preserving those references.'
                                                 : undefined
                                         }
-                                        context={{
-                                            modelId: selectedModel,
-                                            mode: currentMode,
-                                            aspectRatio: currentAspectRatio,
-                                            duration: totalDuration,
-                                            sound: currentSound,
-                                            fixedLens: currentFixedLens,
-                                            resolution: currentResolution,
-                                            isMultiShot: currentIsMultiShot,
-                                            shotCount: multiPrompts.length,
-                                            hasStartImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(startImageFile || startImageUrl),
-                                            hasEndImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(endImageFile || endImageUrl),
-                                            referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
-                                            hasReferenceVideo: referenceVideos.length > 0,
-                                            elementReferences: activeReferenceMode === 'elements'
-                                                ? elements.map((element) => ({
-                                                    handle: element.handle,
-                                                    displayName: element.displayName,
-                                                }))
-                                                : undefined,
-                                        }}
+                                        context={buildSinglePromptQualityContext()}
                                         disabled={isGenerating}
+                                        showWarnings={false}
                                     />
+                                    <PromptQualityWarnings warnings={promptQualityWarnings} />
                                     {(canUseVideoElements || elements.length > 0) && (
                                         <div className="mb-4 mt-4 space-y-3">
                                             <div className="flex items-center justify-between gap-3">
@@ -2265,25 +2397,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 </div>
                                                 <EnhancePromptButton
                                                     prompt={shot.prompt}
-                                                    onEnhanced={(text) => updateShot(shot.id, 'prompt', text)}
+                                                    onEnhanced={(text, result) => {
+                                                        updateShot(shot.id, 'prompt', text);
+                                                        setMultiPromptQualityWarnings((current) => ({
+                                                            ...current,
+                                                            [shot.id]: result?.warnings ?? [],
+                                                        }));
+                                                    }}
                                                     onCreditsUpdate={updateCredits}
                                                     medium="video"
                                                     selectedModel={videoModel.enhancerModelId}
-                                                    context={{
-                                                        modelId: selectedModel,
-                                                        mode: currentMode,
-                                                        aspectRatio: currentAspectRatio,
-                                                        duration: shot.duration,
-                                                        sound: currentSound,
-                                                        fixedLens: currentFixedLens,
-                                                        shotIndex: index,
-                                                        isMultiShot: currentIsMultiShot,
-                                                        shotCount: multiPrompts.length,
-                                                        hasStartImage: Boolean(startImageFile || startImageUrl),
-                                                        hasEndImage: Boolean(endImageFile || endImageUrl),
-                                                    }}
+                                                    context={buildShotPromptQualityContext(shot, index)}
                                                     disabled={isGenerating}
+                                                    showWarnings={false}
                                                 />
+                                                <PromptQualityWarnings warnings={multiPromptQualityWarnings[shot.id] ?? []} />
                                                 <textarea
                                                     value={shot.prompt}
                                                     onChange={(event) => updateShot(shot.id, 'prompt', event.target.value)}
@@ -2342,7 +2470,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     >
                                         <div className="text-sm font-semibold">Frames</div>
                                         <div className="mt-1 text-xs leading-5 text-inherit/80">
-                                            Start from a single frame or define a clear start and end transition.
+                                            {isGrokVideoModel
+                                                ? 'Attach one image to animate it, or leave empty for text-to-video.'
+                                                : 'Start from a single frame or define a clear start and end transition.'}
                                         </div>
                                     </button>
                                     <button
@@ -2458,7 +2588,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         />
                                     </div>
 
-                                    {!currentIsMultiShot && (
+                                    {!currentIsMultiShot && !isGrokVideoModel && (
                                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
                                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
                                                 End Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
@@ -2503,6 +2633,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         </motion.div>
                                     )}
                                 </div>
+                                {isGrokVideoModel ? (
+                                    <div className="rounded-[22px] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                                        Grok image-to-video accepts one image reference. If Spicy is selected with an uploaded image, we submit Normal to match the provider&apos;s external-image rules.
+                                    </div>
+                                ) : null}
                                 {hiddenElementDraftCount > 0 && !currentIsMultiShot ? (
                                     <div className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
                                         {hiddenElementDraftCount} saved element{hiddenElementDraftCount === 1 ? '' : 's'} will be ready if you switch the reference mode back to Elements.
@@ -3232,7 +3367,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 footer={
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
-                        <p className="max-h-32 overflow-y-auto pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
+                        <p className="max-h-32 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-relaxed text-zinc-300 [overflow-wrap:anywhere] custom-scrollbar">
                             {isMultiShot ? multiPrompts.map((shot) => shot.prompt).join(' | ') : prompt || 'No prompt available'}
                         </p>
                     </div>

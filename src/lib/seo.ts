@@ -36,11 +36,14 @@ type ArticleSchemaOptions = {
     image?: string;
 };
 
-const fallbackSiteUrl = 'https://ugccopy.com';
-const defaultGoogleSiteVerification = 'tC1WEUzj0-AR5oQjDoTP2d6Y6Gu4Nr61EnfWEE9HWxI';
+const fallbackSiteUrl = 'https://magicbooklet.com';
 const legacySiteHosts = new Set([
+    'emptybooklet.com',
+    'www.emptybooklet.com',
     'ugccreator.com',
     'www.ugccreator.com',
+    'ugccopy.com',
+    'www.ugccopy.com',
     'ugc-app.vercel.app',
 ]);
 
@@ -63,16 +66,17 @@ function resolveSiteUrl() {
 }
 
 export const siteConfig = {
-    name: 'UGC copy',
-    title: 'UGC copy',
-    defaultTitle: 'UGC copy: AI UGC Ad Generator & Motion Transfer',
+    name: 'magicbooklet',
+    title: 'magicbooklet',
+    defaultTitle: 'magicbooklet: AI UGC Ad Generator & Motion Transfer',
     description:
         'Create AI images, videos, motion-transfer UGC ads, and reusable content workflows in one production-ready studio.',
     siteUrl: resolveSiteUrl(),
     ogImage: '/opengraph-image.png',
-    supportEmail: 'support@ugccopy.com',
-    googleSiteVerification:
-        process.env.GOOGLE_SITE_VERIFICATION || defaultGoogleSiteVerification,
+    supportEmail: 'support@magicbooklet.com',
+    helloEmail: 'hello@magicbooklet.com',
+    privacyEmail: 'privacy@magicbooklet.com',
+    googleSiteVerification: process.env.GOOGLE_SITE_VERIFICATION || undefined,
 };
 
 export function absoluteUrl(path = '/') {

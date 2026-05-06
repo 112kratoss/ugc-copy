@@ -18,12 +18,15 @@ import {
   type PostReferenceRow,
 } from '@/lib/posts-server';
 import { createServiceClient } from '@/lib/server-helpers';
-import type {
-  ShowcaseCreator,
-  ShowcaseItemCategory,
-  ShowcaseMediaKind,
-  ShowcasePostFormat,
-  ShowcaseSourceKind,
+import {
+  MAGICBOOKLET_SOURCE_KIND,
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
+  type ShowcaseCreator,
+  type ShowcaseItemCategory,
+  type ShowcaseMediaKind,
+  type ShowcasePostFormat,
+  type ShowcaseSourceKind,
 } from '@/lib/showcase';
 
 type PublicPostRow = {
@@ -42,8 +45,9 @@ type PublicPostRow = {
   remix_count: number | null;
   share_count: number | null;
   share_visit_count: number | null;
-  source_kind: ShowcaseSourceKind;
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
+  review_status?: string | null;
   created_at: string;
   post_format: ShowcasePostFormat;
 };
@@ -85,15 +89,15 @@ async function fetchPublicPostRow(
 ): Promise<PublicPostRow | null> {
   const adminSupabase = createServiceClient();
 
-  let result = await adminSupabase
+  const result = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, created_at, post_format')
+    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, review_status, created_at, post_format')
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error)) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.includes('review_status'))) {
     const legacyResult = await adminSupabase
       .from('posts')
       .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, created_at')
@@ -124,7 +128,8 @@ async function fetchPublicPostRow(
     throw result.error;
   }
 
-  return (result.data as PublicPostRow | null) ?? null;
+  const row = (result.data as PublicPostRow | null) ?? null;
+  return row?.review_status === 'hidden' ? null : row;
 }
 
 export async function getPostReferenceForShowcaseId(
@@ -175,7 +180,7 @@ export async function getPostReferenceForShowcaseId(
       visibility: 'public',
       category: generation.category,
       prompt: generation.prompt,
-      source_kind: 'ugc_copy',
+      source_kind: MAGICBOOKLET_SOURCE_KIND,
     };
   }
 }
@@ -222,7 +227,7 @@ export async function getPublicPostDetail(
       shareCount: generation.shareCount,
       shareVisitCount: generation.shareVisitCount,
       createdAt: generation.createdAt,
-      sourceKind: 'ugc_copy',
+      sourceKind: MAGICBOOKLET_SOURCE_KIND,
       sourceTool: null,
       creator: generation.creator,
       resourceBundle: null,
@@ -275,7 +280,7 @@ export async function getPublicPostDetail(
     countryCode,
   });
   let model =
-    row.source_kind === 'manual'
+    normalizeShowcaseSourceKind(row.source_kind) === 'manual'
       ? 'manual'
       : row.source_tool ?? 'external';
 
@@ -319,7 +324,7 @@ export async function getPublicPostDetail(
     shareCount: row.share_count ?? 0,
     shareVisitCount: row.share_visit_count ?? 0,
     createdAt: row.created_at,
-    sourceKind: row.source_kind,
+    sourceKind: normalizeShowcaseSourceKind(row.source_kind),
     sourceTool: row.source_tool,
     creator,
     resourceBundle,
@@ -334,6 +339,6 @@ export function getPublicPostMetaDescription(detail: PublicPostDetail): string {
     detail.resourceBundle?.summary ||
     detail.resourceBundle?.previewText ||
     detail.prompt ||
-    `Explore ${detail.title} on UGC copy.`
+    `Explore ${detail.title} on magicbooklet.`
   );
 }

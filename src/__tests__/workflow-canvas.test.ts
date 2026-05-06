@@ -18,9 +18,10 @@ import {
   serializeWorkflowGraph,
   validateWorkflowConnectionForGraph,
   validateWorkflowConnection,
+  type ImageInputNodeData,
 } from '@/lib/workflow-canvas';
 
-function createImageReferenceGraph(count: number, model: 'nano-banana-2' | 'nano-banana-pro' = 'nano-banana-2') {
+function createImageReferenceGraph(count: number, model: 'nano-banana-2' | 'nano-banana-pro' | 'gpt-image-2' = 'nano-banana-2') {
   const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
   const imageInputs = Array.from({ length: count }, (_, index) => createWorkflowNode('image-input', { x: 0, y: index * 80 }));
 
@@ -497,7 +498,7 @@ describe('workflow canvas helpers', () => {
             ...imageNode.data,
             imageUrl: 'https://example.com/reference.jpg',
             seedanceAsset: {
-              ...imageNode.data.seedanceAsset,
+              ...(imageNode.data as ImageInputNodeData).seedanceAsset,
               assetId: 'asset-image',
               status: 'active',
               sourceUrl: 'https://example.com/reference.jpg',
@@ -581,6 +582,32 @@ describe('workflow canvas helpers', () => {
     expect(image.googleSearch).toBe(false);
   });
 
+  it('normalizes GPT Image 2 resolution constraints against aspect ratio', () => {
+    const autoImage = normalizeNodeData('image-generate', {
+      model: 'gpt-image-2',
+      aspectRatio: 'auto',
+      resolution: '4K',
+      outputFormat: 'png',
+      googleSearch: true,
+    } as never);
+    const squareImage = normalizeNodeData('image-generate', {
+      model: 'gpt-image-2',
+      aspectRatio: '1:1',
+      resolution: '4K',
+    } as never);
+    const portraitImage = normalizeNodeData('image-generate', {
+      model: 'gpt-image-2',
+      aspectRatio: '4:5',
+      resolution: '4K',
+    } as never);
+
+    expect(autoImage.resolution).toBe('1K');
+    expect(autoImage.outputFormat).toBe('jpg');
+    expect(autoImage.googleSearch).toBe(false);
+    expect(squareImage.resolution).toBe('1K');
+    expect(portraitImage.resolution).toBe('4K');
+  });
+
   it('enforces Nano Banana 2 image-reference limits and blocks extra connections', () => {
     const graph = createImageReferenceGraph(14, 'nano-banana-2');
     const imageNode = graph.nodes.find((node) => node.type === 'image-generate');
@@ -607,6 +634,33 @@ describe('workflow canvas helpers', () => {
 
     expect(validation.valid).toBe(false);
     expect(validation.message).toMatch(/up to 14 total image references/i);
+  });
+
+  it('enforces GPT Image 2 image-reference limits', () => {
+    const graph = createImageReferenceGraph(16, 'gpt-image-2');
+    const imageNode = graph.nodes.find((node) => node.type === 'image-generate');
+    const extraInput = createWorkflowNode('image-input', { x: 0, y: 1360 });
+    const graphWithExtraInput = normalizeWorkflowGraph({
+      nodes: [...graph.nodes, extraInput],
+      edges: graph.edges,
+    });
+
+    expect(imageNode).toBeDefined();
+    expect(inspectWorkflowNodeCapabilities(graph, imageNode!)).toMatchObject({
+      isValid: true,
+      referenceImageCount: 16,
+      referenceImageLimit: 16,
+    });
+
+    const validation = validateWorkflowConnectionForGraph({
+      graph: graphWithExtraInput,
+      sourceNodeId: extraInput.id,
+      sourceHandle: 'image',
+      targetNodeId: imageNode!.id,
+      targetHandle: 'image-reference',
+    });
+    expect(validation.valid).toBe(false);
+    expect(validation.message).toMatch(/up to 16 total image references/i);
   });
 
   it('creates default graph-sourced element bindings and resolves connected element inputs', () => {
@@ -1312,7 +1366,7 @@ describe('workflow canvas helpers', () => {
       edges: [],
     });
 
-    const mergedGraph = normalizeWorkflowGraph(mergeWorkflowCanvasGraph(existingGraph, incomingGraph));
+    const mergedGraph = normalizeWorkflowGraph(mergeWorkflowCanvasGraph(existingGraph, incomingGraph) as never);
     const preservedNode = mergedGraph.nodes.find((node) => node.id === existingOutput.id);
     const insertedNode = mergedGraph.nodes.find((node) => node.id === newNode.id);
 

@@ -7,7 +7,9 @@ import {
     SHOWCASE_PAGE_SIZE,
     normalizeShowcaseCategory,
     normalizeShowcaseOffset,
+    normalizeShowcaseResourceFilter,
     normalizeShowcaseSort,
+    normalizeShowcaseUnlockFilter,
 } from '@/lib/showcase';
 import { createMetadata } from '@/lib/seo';
 
@@ -15,7 +17,7 @@ type ShowcasePageProps = {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-const SHOWCASE_PARAM_KEYS = new Set(['category', 'sort', 'offset', 'page']);
+const SHOWCASE_PARAM_KEYS = new Set(['category', 'sort', 'offset', 'page', 'tool', 'unlock', 'resource']);
 
 function getFirstValue(value: string | string[] | undefined): string | undefined {
     return Array.isArray(value) ? value[0] : value;
@@ -27,6 +29,9 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
     const rawSort = getFirstValue(resolvedSearchParams.sort);
     const rawOffset = getFirstValue(resolvedSearchParams.offset);
     const rawPage = getFirstValue(resolvedSearchParams.page);
+    const rawTool = getFirstValue(resolvedSearchParams.tool);
+    const rawUnlock = getFirstValue(resolvedSearchParams.unlock);
+    const rawResource = getFirstValue(resolvedSearchParams.resource);
 
     const category = normalizeShowcaseCategory(rawCategory);
     const sort = normalizeShowcaseSort(rawSort);
@@ -36,12 +41,15 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
         hasUnknownQuery ||
         (typeof rawCategory === 'string' && category !== 'all') ||
         (typeof rawSort === 'string' && sort !== 'recent') ||
+        typeof rawTool === 'string' ||
+        (typeof rawUnlock === 'string' && normalizeShowcaseUnlockFilter(rawUnlock) !== 'all') ||
+        (typeof rawResource === 'string' && normalizeShowcaseResourceFilter(rawResource) !== 'all') ||
         offset > 0;
 
     return createMetadata({
         title: 'Showcase',
         description:
-            'Browse public UGC copy creations, creator notes, and production-ready examples of AI images, videos, motion-transfer ads, and reusable workflows.',
+            'Browse public magicbooklet creations, creator notes, and production-ready examples of AI images, videos, motion-transfer ads, and reusable workflows.',
         path: '/showcase',
         keywords: ['AI showcase', 'UGC ad examples', 'AI image examples', 'AI video examples', 'creator tips'],
         noIndex: hasNonDefaultVariant,
@@ -53,6 +61,9 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
     const auth = await getServerAuthState();
     const category = normalizeShowcaseCategory(getFirstValue(resolvedSearchParams.category));
     const sort = normalizeShowcaseSort(getFirstValue(resolvedSearchParams.sort));
+    const tool = getFirstValue(resolvedSearchParams.tool) ?? null;
+    const unlock = normalizeShowcaseUnlockFilter(getFirstValue(resolvedSearchParams.unlock));
+    const resource = normalizeShowcaseResourceFilter(getFirstValue(resolvedSearchParams.resource));
     const offset = normalizeShowcaseOffset(
         getFirstValue(resolvedSearchParams.offset),
         getFirstValue(resolvedSearchParams.page),
@@ -65,6 +76,9 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         offset,
         limit: SHOWCASE_PAGE_SIZE,
         viewerUserId: auth.session?.user?.id ?? null,
+        tool,
+        unlock,
+        resource,
     });
 
     return (
@@ -72,6 +86,9 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
             initialFeed={initialFeed}
             initialCategory={category}
             initialSort={sort}
+            initialTool={tool}
+            initialUnlock={unlock}
+            initialResource={resource}
         />
     );
 }

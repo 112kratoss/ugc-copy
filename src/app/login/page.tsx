@@ -4,7 +4,7 @@ import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 
 export default function LoginPage() {
     return (
@@ -28,11 +28,13 @@ function LoginContent() {
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         setError(null);
+        setSuccessMessage(null);
 
         try {
             if (isLogin) {
@@ -49,7 +51,7 @@ function LoginContent() {
                 });
                 if (error) throw error;
                 // Check if email confirmation is required based on project settings
-                setError('Check your email for the confirmation link, then log in.');
+                setSuccessMessage('Check your email for the confirmation link, then log in.');
                 setIsLogin(true); // Switch to login mode
                 setLoading(false); // Stop loading since we're just showing a message
                 return;
@@ -64,6 +66,8 @@ function LoginContent() {
 
     const handleGoogleLogin = async () => {
         setLoading(true);
+        setError(null);
+        setSuccessMessage(null);
         try {
             const { error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
@@ -158,6 +162,13 @@ function LoginContent() {
                                 </div>
                             )}
 
+                            {successMessage && (
+                                <div className="flex items-start gap-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
+                                    <p>{successMessage}</p>
+                                </div>
+                            )}
+
                             <button
                                 type="submit"
                                 disabled={loading}
@@ -215,6 +226,7 @@ function LoginContent() {
                                 onClick={() => {
                                     setIsLogin(!isLogin);
                                     setError(null);
+                                    setSuccessMessage(null);
                                 }}
                                 className="text-white hover:underline font-medium"
                             >

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
+import { createPortal } from 'react-dom';
 
 import {
   CREATOR_TOOLS,
@@ -10,7 +11,12 @@ import {
   type CreatorToolId,
   getCreatorTool,
 } from '@/lib/creator-tools';
-import { getGenerationTimingSummaryLabel, type GenerationTiming } from '@/lib/generation-timing';
+import {
+  getGenerationTimingCountdownLabel,
+  getGenerationTimingProgressPercent,
+  getGenerationTimingSummaryLabel,
+  type GenerationTiming,
+} from '@/lib/generation-timing';
 
 const ACCENT_STYLES: Record<
   CreatorToolAccent,
@@ -64,6 +70,16 @@ const ACCENT_STYLES: Record<
     button: 'bg-emerald-300 text-slate-950 hover:bg-emerald-200',
     surface: 'from-emerald-500/20 via-teal-400/10 to-transparent',
     accentText: 'text-emerald-300',
+  },
+  amber: {
+    border: 'hover:border-amber-300/20',
+    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(245,158,11,0.62)]',
+    focusRing: 'focus-visible:border-amber-300/35 focus-visible:ring-amber-300/35',
+    iconWrap: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
+    badge: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
+    button: 'bg-amber-300 text-slate-950 hover:bg-amber-200',
+    surface: 'from-amber-500/20 via-orange-400/10 to-transparent',
+    accentText: 'text-amber-300',
   },
 };
 
@@ -568,9 +584,12 @@ export function StudioGenerationStatus({
     rose: 'from-rose-500 to-fuchsia-400',
     violet: 'from-violet-500 to-fuchsia-500',
     emerald: 'from-emerald-500 to-teal-400',
+    amber: 'from-amber-500 to-orange-400',
   }[accent];
   const isComplete = timing.completedInMs !== null;
   const summaryLabel = getGenerationTimingSummaryLabel(timing, nowMs);
+  const countdownLabel = getGenerationTimingCountdownLabel(timing, nowMs);
+  const progressPercent = getGenerationTimingProgressPercent(timing, nowMs);
 
   return (
     <div className="space-y-3">
@@ -583,10 +602,22 @@ export function StudioGenerationStatus({
           )}
           {timing.phaseLabel}
         </span>
-        {summaryLabel ? <span className="text-zinc-400">{summaryLabel}</span> : null}
+        {countdownLabel || summaryLabel ? (
+          <span className="text-right text-zinc-400">
+            <span className={countdownLabel ? 'text-zinc-100' : undefined}>
+              {countdownLabel ?? summaryLabel}
+            </span>
+            {countdownLabel && summaryLabel ? (
+              <span className="mt-0.5 block text-xs text-zinc-500">{summaryLabel}</span>
+            ) : null}
+          </span>
+        ) : null}
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-        <div className={clsx('h-full rounded-full bg-gradient-to-r opacity-80', progressClass, isComplete ? '' : 'animate-pulse')} />
+        <div
+          className={clsx('h-full rounded-full bg-gradient-to-r opacity-80', progressClass, isComplete ? '' : 'animate-pulse')}
+          style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}
+        />
       </div>
     </div>
   );
@@ -779,41 +810,42 @@ export function StudioMediaPreviewModal({
   title: string;
   footer?: ReactNode;
 }) {
-  if (!isOpen || !src) return null;
+  if (!isOpen || !src || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      className="preview-modal-overlay fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
         onClick={(event) => event.stopPropagation()}
-        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col gap-6 rounded-[30px] border border-white/10 bg-zinc-900 p-6 shadow-2xl"
+        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-[28px] border border-white/10 bg-zinc-900 p-4 shadow-2xl sm:max-h-[90dvh] sm:gap-6 sm:rounded-[30px] sm:p-6"
       >
         <button
           type="button"
           onClick={onClose}
-          className="absolute right-4 top-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-zinc-400 transition hover:bg-zinc-800 hover:text-white sm:h-10 sm:w-10"
           aria-label="Close preview"
         >
           <X className="h-5 w-5" />
         </button>
 
-        <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
+        <h2 className="pr-10 text-lg font-bold tracking-tight text-white sm:pr-12 sm:text-xl">{title}</h2>
 
-        <div className="flex min-h-[320px] flex-1 items-center justify-center overflow-hidden rounded-[24px] border border-white/5 bg-black/50">
+        <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1 sm:rounded-[24px]">
           {mediaType === 'image' ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={alt} className="max-h-[68vh] w-full object-contain" />
+            <img src={src} alt={alt} className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
           ) : (
-            <video src={src} controls autoPlay loop className="max-h-[68vh] w-full object-contain" />
+            <video src={src} controls autoPlay loop className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
           )}
         </div>
 
         {footer ? (
-          <div className="rounded-[22px] border border-white/5 bg-black/40 p-4">{footer}</div>
+          <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">{footer}</div>
         ) : null}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

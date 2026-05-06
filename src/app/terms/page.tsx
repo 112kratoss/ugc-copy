@@ -1,11 +1,11 @@
 import { Metadata } from "next";
 
-import { createMetadata } from "@/lib/seo";
+import { createMetadata, siteConfig } from "@/lib/seo";
 
 export const metadata: Metadata = createMetadata({
     title: "Terms of Service",
     description:
-        "Read the legal terms for using UGC copy to generate AI images, AI videos, motion-transfer content, and reusable production workflows.",
+        `Read the legal terms for using ${siteConfig.name} to generate AI images, AI videos, motion-transfer content, and reusable production workflows.`,
     path: '/terms',
 });
 
@@ -21,7 +21,7 @@ export default function TermsOfService() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">1. Acceptance of Terms</h2>
                         <p>
-                            By accessing and using UGC copy (&ldquo;the Service&rdquo;), you accept and agree to be bound by
+                            By accessing and using {siteConfig.name} (&ldquo;the Service&rdquo;), you accept and agree to be bound by
                             these Terms of Service. If you do not agree to these terms, please do not use our Service.
                         </p>
                     </section>
@@ -29,7 +29,7 @@ export default function TermsOfService() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">2. Description of Service</h2>
                         <p>
-                            UGC copy is an AI-powered platform that enables users to create video content by
+                            {siteConfig.name} is an AI-powered platform that enables users to create video content by
                             animating static images using reference videos. The Service uses generative AI technology
                             to transfer motion from reference videos to user-provided images.
                         </p>
@@ -124,15 +124,15 @@ export default function TermsOfService() {
                         <h2 className="text-2xl font-semibold text-white mb-4">11. Contact Us</h2>
                         <p>
                             If you have any questions about these Terms, please contact us at{" "}
-                            <a href="mailto:support@ugccopy.com" className="text-purple-400 hover:text-purple-300">
-                                support@ugccopy.com
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-purple-400 hover:text-purple-300">
+                                {siteConfig.supportEmail}
                             </a>
                         </p>
                     </section>
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC copy. All rights reserved.</p>
+                    <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                 </div>
             </div>
         </div>

@@ -18,6 +18,35 @@ function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(valu
     return nextValue;
 }
 
+function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function getPersistedOutputUrls(workflowSettings: Record<string, unknown> | null): string[] {
+    const outputs = workflowSettings?.outputs;
+    if (!Array.isArray(outputs)) {
+        return [];
+    }
+
+    return outputs
+        .map((output) => {
+            if (!output || typeof output !== 'object') {
+                return null;
+            }
+
+            const storagePath = (output as Record<string, unknown>).storagePath;
+            if (typeof storagePath !== 'string' || !storagePath) {
+                return null;
+            }
+
+            const storedLocation = getStoredMediaLocation(storagePath);
+            return storedLocation
+                ? buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath)
+                : storagePath;
+        })
+        .filter((url): url is string => Boolean(url));
+}
+
 export async function GET(request: NextRequest) {
     try {
         const supabase = createClient(
@@ -102,20 +131,20 @@ export async function GET(request: NextRequest) {
         }
 
         const generationsWithUrls = generations.map((generation) => {
+            const workflowSettings = getWorkflowSettings(generation.workflow_settings);
+            const outputUrls = getPersistedOutputUrls(workflowSettings);
             const paywallPrefill = buildGenerationPaywallPrefill({
                 category: generation.category,
                 model: generation.model,
                 prompt: generation.prompt,
-                workflowSettings:
-                    generation.workflow_settings && typeof generation.workflow_settings === 'object'
-                        ? (generation.workflow_settings as Record<string, unknown>)
-                        : null,
+                workflowSettings,
             });
 
             if (!generation.output_url) {
                 const rest = withoutWorkflowSettings(generation);
                 return {
                     ...rest,
+                    ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                     paywallPrefill,
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
@@ -129,6 +158,7 @@ export async function GET(request: NextRequest) {
                 const rest = withoutWorkflowSettings(generation);
                 return {
                     ...rest,
+                    ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                     paywallPrefill,
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
@@ -141,6 +171,7 @@ export async function GET(request: NextRequest) {
             return {
                 ...rest,
                 output_url: buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath),
+                ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                 paywallPrefill,
                 linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                 linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,

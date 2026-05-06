@@ -1,3 +1,8 @@
+import {
+  inspectPromptQuality,
+  type PromptEnhancementWarning,
+} from '@/lib/prompt-quality';
+
 export type Medium = 'image' | 'video' | 'motion';
 
 export type CreativeIntent = 'general' | 'ugc-ad' | 'product-video' | 'social-campaign';
@@ -81,10 +86,28 @@ export interface VideoScenePlan {
 
 export interface PromptEnhancementArtifacts {
   playbookId: string;
+  agentId: string;
   plannerMode: PromptPlannerMode;
   scenario: PromptScenario;
   plannerOutput: ImagePromptSpec | VideoScenePlan | string;
   compiledPrompt: string;
+  warnings: PromptEnhancementWarning[];
+  qualityScore: number;
+  appliedSafeguards: AppliedPromptEnhancementSafeguard[];
+}
+
+export interface AppliedPromptEnhancementSafeguard {
+  code: string;
+  message: string;
+}
+
+export interface PromptEnhancementAgent {
+  id: string;
+  label: string;
+  modelIds: string[];
+  providerModel: string;
+  strategyRules: string[];
+  defaultSafeguards: AppliedPromptEnhancementSafeguard[];
 }
 
 interface PromptStrategyOptions {
@@ -268,6 +291,12 @@ const TEXT_RENDERING_RULES: Record<string, string[]> = {
   'nano-banana-pro': [
     'If the user requests readable text, keep the exact words in quotes and make the text treatment explicit but brief.',
   ],
+  'gpt-image-2': [
+    'If the user requests readable text, keep the exact words in quotes and describe the placement and hierarchy plainly.',
+  ],
+  'grok-imagine-image': [
+    'If the user requests readable text, keep the exact words in quotes and keep the layout instruction direct.',
+  ],
 };
 
 const GOOGLE_SEARCH_RULES = [
@@ -323,6 +352,46 @@ const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
     plannerNotes: [
       'Use the plan to structure premium layouts, poster-style compositions, and reference-led product work.',
       'The compiled prompt can be denser here, but it should still stay readable and directly usable.',
+    ],
+  },
+  'gpt-image-2': {
+    modelId: 'gpt-image-2',
+    label: 'GPT Image 2',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat GPT Image 2 like a high-instruction-following ChatGPT image model for polished stills and reference-led edits.',
+      'Use clear natural language with specific subject, composition, lighting, and commercial intent.',
+      'When references are attached, state what should be preserved and what should change instead of over-describing unrelated details.',
+      'When readable text matters, include the exact copy plus placement and visual hierarchy.',
+    ],
+    workflowRules: [
+      'If stillImageModel is gpt-image-2, write a clear ChatGPT-style image prompt with precise composition, reference preservation, and commercial polish.',
+      'If stillImageModel is gpt-image-2 and text matters, include the exact copy plus placement and hierarchy so the result stays legible.',
+    ],
+    plannerNotes: [
+      'Use the plan to capture the intended edit or generated still in direct, natural language.',
+      'Favor concrete instructions over long modifier chains.',
+    ],
+  },
+  'grok-imagine-image': {
+    modelId: 'grok-imagine-image',
+    label: 'Grok Imagine',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat Grok Imagine like a fast, multi-output image model: keep the core idea clear and visually decisive.',
+      'For prompt-only runs, emphasize subject, frame, style, and one strong commercial hook.',
+      'For edits, preserve the supplied reference identity and state the intended change plainly.',
+      'When readable text matters, include the exact copy and simple placement guidance.',
+    ],
+    workflowRules: [
+      'If stillImageModel is grok-imagine-image, write a direct image prompt with one strong visual idea and clear reference preservation.',
+      'If stillImageModel is grok-imagine-image and text matters, include the exact copy plus simple placement guidance.',
+    ],
+    plannerNotes: [
+      'Use the plan to keep the prompt vivid without overloading it.',
+      'Prefer concrete scene direction over dense modifier stacks.',
     ],
   },
   'kling-3.0/video': {
@@ -425,6 +494,26 @@ const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       'For image-to-video, emphasize motion between frames, not static frame redescription.',
     ],
   },
+  'grok-imagine-video': {
+    modelId: 'grok-imagine-video',
+    label: 'Grok Imagine Video',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    strategyRules: [
+      'Treat Grok Imagine Video like a concise single-clip model with fun, normal, and spicy modes.',
+      'Use one clean action beat, clear subject continuity, camera movement, and atmosphere.',
+      'For image-to-video, let the image define appearance and focus on motion, expression, camera path, and environmental life.',
+      'Avoid multi-shot structure because Grok video runs as one clip.',
+    ],
+    workflowRules: [
+      'If primaryModel is grok-imagine-video, write one concise video prompt with subject, action, camera, mood, and continuity.',
+      'If primaryModel is grok-imagine-video with an image reference, focus on how the still should animate instead of re-describing the whole image.',
+    ],
+    plannerNotes: [
+      'Use the plan to keep motion achievable for the selected 6-30 second duration.',
+      'Prefer one memorable beat over layered scene changes.',
+    ],
+  },
   'kling-2.6': {
     modelId: 'kling-2.6',
     label: 'Kling 2.6 Motion Control',
@@ -455,8 +544,150 @@ const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
   },
 };
 
+const DEFAULT_PROMPT_ENHANCEMENT_AGENT: PromptEnhancementAgent = {
+  id: 'generic-media-enhancer',
+  label: 'Generic media enhancer',
+  modelIds: [],
+  providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+  strategyRules: [
+    'Rewrite only what improves clarity for the selected medium and model.',
+    'Prefer positive, concrete direction over long negative prompt lists.',
+    'Keep the final prompt editable and directly usable in the generation UI.',
+  ],
+  defaultSafeguards: [
+    {
+      code: 'preserve_user_intent',
+      message: 'Preserve the user intent and exact required wording.',
+    },
+  ],
+};
+
+const PROMPT_ENHANCEMENT_AGENTS: Record<string, PromptEnhancementAgent> = {
+  'kling-3.0/video': {
+    id: 'kling-video-director',
+    label: 'Kling video director',
+    modelIds: ['kling-3.0/video', 'kling-3.0-video'],
+    providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+    strategyRules: [
+      'Build prompts as filmable shot directions: subject, precise motion, scene, camera/framing, lighting/atmosphere, and audio when sound is enabled.',
+      'For image-to-video, let the frame carry appearance and focus the prompt on movement, camera path, and environmental motion.',
+      'For multi-shot, keep each shot self-contained, duration-aware, and continuity-safe; avoid overloading short shots with multiple story beats.',
+      'When sound is enabled, include speaker labels, tone, ambience, or effects only when they materially support the scene.',
+    ],
+    defaultSafeguards: [
+      {
+        code: 'duration_aware_motion',
+        message: 'Keep Kling motion simple enough for the selected duration.',
+      },
+      {
+        code: 'shot_continuity',
+        message: 'Preserve recurring subject and scene anchors across Kling shots.',
+      },
+    ],
+  },
+  'seedance-1.5-pro': {
+    id: 'seedance-15-layered-director',
+    label: 'Seedance 1.5 layered director',
+    modelIds: ['seedance-1.5-pro'],
+    providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+    strategyRules: [
+      'Layer action, environment, camera intent, pacing, and optional audio explicitly.',
+      'If fixed lens is enabled, compile camera language as static or locked rather than drifting or handheld.',
+      'For image-to-video, describe how the attached frame evolves instead of restating every visible trait.',
+      'Use concise audio cues only when sound is enabled.',
+    ],
+    defaultSafeguards: [
+      {
+        code: 'fixed_lens_respected',
+        message: 'Respect fixed-lens mode when it is enabled.',
+      },
+    ],
+  },
+  'seedance-2': {
+    id: 'seedance-2-reference-director',
+    label: 'Seedance 2 reference director',
+    modelIds: ['seedance-2'],
+    providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+    strategyRules: [
+      'Treat attached image, video, and audio references as first-class generation controls.',
+      'State how references should guide identity, product details, camera continuity, motion timing, or audio style.',
+      'Avoid inventing unrelated visual details when references already establish the scene.',
+      'Keep the final action beat easy to follow across 4 to 15 seconds.',
+    ],
+    defaultSafeguards: [
+      {
+        code: 'reference_grounding',
+        message: 'Ground Seedance 2 prompts in the attached reference assets.',
+      },
+    ],
+  },
+  'seedance-2-fast': {
+    id: 'seedance-2-fast-reference-director',
+    label: 'Seedance 2 Fast reference director',
+    modelIds: ['seedance-2-fast'],
+    providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+    strategyRules: [
+      'Keep prompts compact, concrete, and anchored to the attached references.',
+      'Favor one clean action beat over dense camera language or layered story events.',
+      'Preserve reference motion and timing when a reference video is attached.',
+      'Use short functional audio cues when sound is enabled.',
+    ],
+    defaultSafeguards: [
+      {
+        code: 'compact_reference_prompt',
+        message: 'Keep Seedance 2 Fast prompts compact and reference-aware.',
+      },
+    ],
+  },
+  'veo-3.1': {
+    id: 'veo-31-director',
+    label: 'Veo 3.1 director',
+    modelIds: ['veo-3.1'],
+    providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+    strategyRules: [
+      'Use a director-style structure: cinematography, subject, action, context, style/ambience, and audio.',
+      'Keep every short clip focused on one moment; split complex sequences instead of chaining many events.',
+      'For first/last frames, describe the transition mechanics, continuity, and camera path between frames.',
+      'Write dialogue as speaker-attributed lines without quotation marks to reduce accidental rendered text.',
+    ],
+    defaultSafeguards: [
+      {
+        code: 'one_scene_per_clip',
+        message: 'Keep Veo prompts focused on one clear scene or transition.',
+      },
+      {
+        code: 'dialogue_without_quotes',
+        message: 'Avoid quoted dialogue in Veo prompts.',
+      },
+    ],
+  },
+  'grok-imagine-video': {
+    id: 'grok-imagine-video-director',
+    label: 'Grok Imagine video director',
+    modelIds: ['grok-imagine-video'],
+    providerModel: PROMPT_ENHANCER_PROVIDER_MODEL,
+    strategyRules: [
+      'Build prompts as one clear clip direction: subject, action, camera/framing, mood, and continuity.',
+      'For image-to-video, let the attached image carry appearance and focus on motion, expression, camera path, and environmental movement.',
+      'Keep the action achievable within the selected duration and avoid multi-shot sequencing.',
+      'Respect the selected mode tone without adding unsafe or unrelated content.',
+    ],
+    defaultSafeguards: [
+      {
+        code: 'single_clip_focus',
+        message: 'Keep Grok video prompts focused on one filmable clip.',
+      },
+    ],
+  },
+};
+
 function normalizeModelId(selectedModel: string): string {
   return MODEL_ALIASES[selectedModel] ?? selectedModel;
+}
+
+export function resolvePromptEnhancementAgent(selectedModel: string): PromptEnhancementAgent {
+  return PROMPT_ENHANCEMENT_AGENTS[normalizeModelId(selectedModel)]
+    ?? DEFAULT_PROMPT_ENHANCEMENT_AGENT;
 }
 
 function getEnhancerPlaybook(selectedModel: string): EnhancerPlaybook | null {
@@ -481,6 +712,10 @@ function getPlaybookWorkflowRules(selectedModel: string): string[] {
 
 function getPlaybookPlannerMode(selectedModel: string): PromptPlannerMode {
   return getEnhancerPlaybook(selectedModel)?.plannerMode ?? 'legacy-text';
+}
+
+function getAgentStrategyRules(selectedModel: string): string[] {
+  return resolvePromptEnhancementAgent(selectedModel).strategyRules;
 }
 
 function buildRuleBlock(title: string, rules: string[]): string | null {
@@ -607,6 +842,7 @@ export function resolvePromptScenario(
 export function buildPromptStrategyGuidance(options: PromptStrategyOptions): string {
   const scenario = options.scenario ?? resolvePromptScenario(options.medium, options.selectedModel, options.context);
   const intent = getCreativeIntent(options.context);
+  const agent = resolvePromptEnhancementAgent(options.selectedModel);
   const textRules =
     options.medium === 'image' && needsTextRenderingGuidance(options.userPrompt)
       ? TEXT_RENDERING_RULES[normalizeModelId(options.selectedModel)] ?? []
@@ -615,12 +851,14 @@ export function buildPromptStrategyGuidance(options: PromptStrategyOptions): str
     options.medium === 'image' && options.context?.googleSearch ? GOOGLE_SEARCH_RULES : [];
   const sections = [
     `Target model: ${getModelLabel(options.selectedModel)}`,
+    `Enhancement agent: ${agent.label} (${agent.id})`,
     `Prompt scenario: ${scenario}`,
     `Planner mode: ${formatPlannerMode(getPlaybookPlannerMode(options.selectedModel))}`,
     buildRuleBlock('Core strategy:', BASE_STRATEGY_RULES),
     buildRuleBlock('Medium guidance:', MEDIUM_RULES[options.medium]),
     buildRuleBlock('Scenario guidance:', SCENARIO_RULES[scenario]),
     buildRuleBlock('Model playbook guidance:', getPlaybookStrategyRules(options.selectedModel)),
+    buildRuleBlock('Agent guidance:', getAgentStrategyRules(options.selectedModel)),
     buildRuleBlock('Text rendering guidance:', textRules),
     buildRuleBlock('Google Search guidance:', googleSearchRules),
     buildRuleBlock('Intent guidance:', INTENT_RULES[intent]),
@@ -758,15 +996,36 @@ export function applyPromptEnhancementSafeguards(
   enhancedPrompt: string,
   context?: EnhancerContext
 ): string {
+  return applyPromptEnhancementSafeguardsWithMetadata(
+    originalPrompt,
+    enhancedPrompt,
+    context
+  ).enhancedPrompt;
+}
+
+export function applyPromptEnhancementSafeguardsWithMetadata(
+  originalPrompt: string,
+  enhancedPrompt: string,
+  context?: EnhancerContext
+): { enhancedPrompt: string; appliedSafeguards: AppliedPromptEnhancementSafeguard[] } {
   const trimmedOriginal = originalPrompt.trim();
   const trimmedEnhanced = enhancedPrompt.trim();
 
   if (!trimmedOriginal) {
-    return trimmedEnhanced;
+    return { enhancedPrompt: trimmedEnhanced, appliedSafeguards: [] };
   }
 
   if (context?.elementEnhancementMode !== 'append-only') {
-    return preserveNamedHandles(originalPrompt, enhancedPrompt, context);
+    const preservedPrompt = preserveNamedHandles(originalPrompt, enhancedPrompt, context);
+    return {
+      enhancedPrompt: preservedPrompt,
+      appliedSafeguards: preservedPrompt === enhancedPrompt
+        ? []
+        : [{
+          code: 'restored_named_handles',
+          message: 'Restored missing named reference handles after enhancement.',
+        }],
+    };
   }
 
   const declaredHandles = new Set(
@@ -778,17 +1037,29 @@ export function applyPromptEnhancementSafeguards(
   const enhancedHandles = new Set(extractPromptHandles(trimmedEnhanced));
 
   if (originalHandles.some((handle) => !enhancedHandles.has(handle))) {
-    return trimmedOriginal;
+    return {
+      enhancedPrompt: trimmedOriginal,
+      appliedSafeguards: [{
+        code: 'append_only_handle_preserved',
+        message: 'Reverted enhancement because it removed a locked named reference handle.',
+      }],
+    };
   }
 
   const normalizedOriginal = normalizeWhitespace(trimmedOriginal);
   const normalizedEnhanced = normalizeWhitespace(trimmedEnhanced);
 
   if (!normalizedEnhanced.startsWith(normalizedOriginal)) {
-    return trimmedOriginal;
+    return {
+      enhancedPrompt: trimmedOriginal,
+      appliedSafeguards: [{
+        code: 'append_only_opening_preserved',
+        message: 'Reverted enhancement because it changed the locked prompt opening.',
+      }],
+    };
   }
 
-  return trimmedEnhanced;
+  return { enhancedPrompt: trimmedEnhanced, appliedSafeguards: [] };
 }
 
 function preserveNamedHandles(
@@ -1260,6 +1531,28 @@ function compileKlingPrompt(plan: VideoScenePlan, context?: EnhancerContext): st
   ]);
 }
 
+function buildPromptEnhancementMetadata(
+  medium: Medium,
+  selectedModel: string,
+  compiledPrompt: string,
+  context?: EnhancerContext
+): Pick<PromptEnhancementArtifacts, 'agentId' | 'warnings' | 'qualityScore' | 'appliedSafeguards'> {
+  const agent = resolvePromptEnhancementAgent(selectedModel);
+  const inspection = inspectPromptQuality({
+    medium,
+    selectedModel,
+    prompt: compiledPrompt,
+    context,
+  });
+
+  return {
+    agentId: agent.id,
+    warnings: inspection.warnings,
+    qualityScore: inspection.qualityScore,
+    appliedSafeguards: agent.defaultSafeguards,
+  };
+}
+
 export function buildPromptEnhancementArtifacts(
   medium: Medium,
   selectedModel: string,
@@ -1278,6 +1571,7 @@ export function buildPromptEnhancementArtifacts(
       scenario,
       plannerOutput: trimmedOutput,
       compiledPrompt: trimmedOutput,
+      ...buildPromptEnhancementMetadata(medium, selectedModel, trimmedOutput, context),
     };
   }
 
@@ -1289,14 +1583,15 @@ export function buildPromptEnhancementArtifacts(
       scenario,
       plannerOutput: trimmedOutput,
       compiledPrompt: trimmedOutput,
+      ...buildPromptEnhancementMetadata(medium, selectedModel, trimmedOutput, context),
     };
   }
 
   if (playbook.plannerMode === 'structured-image') {
     const spec = normalizeImagePromptSpec(parsedOutput, userPrompt);
-    const compiledPrompt = playbook.modelId === 'nano-banana-pro'
-      ? compileNanoBananaProPrompt(spec)
-      : compileNanoBanana2Prompt(spec);
+    const compiledPrompt = playbook.modelId === 'nano-banana-2'
+      ? compileNanoBanana2Prompt(spec)
+      : compileNanoBananaProPrompt(spec);
 
     return {
       playbookId: playbook.modelId,
@@ -1304,6 +1599,12 @@ export function buildPromptEnhancementArtifacts(
       scenario,
       plannerOutput: spec,
       compiledPrompt: compiledPrompt || normalizeWhitespace(userPrompt),
+      ...buildPromptEnhancementMetadata(
+        medium,
+        selectedModel,
+        compiledPrompt || normalizeWhitespace(userPrompt),
+        context
+      ),
     };
   }
 
@@ -1324,11 +1625,18 @@ export function buildPromptEnhancementArtifacts(
     scenario,
     plannerOutput: plan,
     compiledPrompt: compiledPrompt || normalizeWhitespace(userPrompt),
+    ...buildPromptEnhancementMetadata(
+      medium,
+      selectedModel,
+      compiledPrompt || normalizeWhitespace(userPrompt),
+      context
+    ),
   };
 }
 
 export const SUPPORTED_ENHANCEMENT_MODELS = new Set([
   ...Object.keys(ENHANCER_PLAYBOOKS),
+  ...Object.keys(PROMPT_ENHANCEMENT_AGENTS),
   ...Object.keys(MODEL_ALIASES),
 ]);
 

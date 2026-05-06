@@ -19,13 +19,15 @@ import {
   type PostMediaRow,
 } from '@/lib/posts-server';
 import { getCreatorDisplayName } from '@/lib/profile';
-import type {
-  ShowcaseAssetType,
-  ShowcaseItemCategory,
-  ShowcaseMediaKind,
-  ShowcasePostFormat,
-  ShowcaseSourceKind,
-  ShowcaseVisibility,
+import {
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
+  type ShowcaseAssetType,
+  type ShowcaseItemCategory,
+  type ShowcaseMediaKind,
+  type ShowcasePostFormat,
+  type ShowcaseSourceKind,
+  type ShowcaseVisibility,
 } from '@/lib/showcase';
 import {
   normalizeWorkflowGraph,
@@ -67,7 +69,7 @@ interface MarketplacePostRow extends PostMediaRow {
   category: ShowcaseItemCategory;
   post_format: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
-  source_kind: ShowcaseSourceKind;
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
 }
 
@@ -369,7 +371,7 @@ async function loadPostMap(
       body: row.body?.trim() || '',
       postFormat: row.post_format,
       visibility: row.visibility,
-      sourceKind: row.source_kind,
+      sourceKind: normalizeShowcaseSourceKind(row.source_kind),
       sourceTool: row.source_tool,
       mediaUrl: await resolvePostMediaUrl(adminSupabase, row),
       mediaKind: getPostMediaKind(row.category, row.post_format),

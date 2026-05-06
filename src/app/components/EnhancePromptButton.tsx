@@ -5,34 +5,40 @@ import { Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import {
     PromptEnhancementError,
+    type PromptEnhancementResult,
     requestPromptEnhancement,
 } from '@/app/components/enhancePromptClient';
 
 interface EnhancePromptButtonProps {
     prompt: string;
-    onEnhanced: (enhancedPrompt: string) => void;
+    onEnhanced: (enhancedPrompt: string, result?: PromptEnhancementResult) => void;
     onCreditsUpdate: (remainingCredits: number) => void;
+    onResult?: (result: PromptEnhancementResult) => void;
     medium: 'image' | 'video' | 'motion';
     selectedModel: string;
     context?: EnhancerContext;
     disabled?: boolean;
     label?: string;
     helperText?: string;
+    showWarnings?: boolean;
 }
 
 export default function EnhancePromptButton({
     prompt,
     onEnhanced,
     onCreditsUpdate,
+    onResult,
     medium,
     selectedModel,
     context,
     disabled = false,
     label = 'Enhance',
     helperText,
+    showWarnings = true,
 }: EnhancePromptButtonProps) {
     const [isEnhancing, setIsEnhancing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [warnings, setWarnings] = useState<PromptEnhancementResult['warnings']>(undefined);
     const loadingLabel = label === 'Polish' ? 'Polishing...' : 'Enhancing...';
 
     const canEnhance = prompt.trim().length > 0 && !isEnhancing && !disabled;
@@ -42,6 +48,7 @@ export default function EnhancePromptButton({
 
         setIsEnhancing(true);
         setError(null);
+        setWarnings(undefined);
 
         try {
             const result = await requestPromptEnhancement({
@@ -51,7 +58,9 @@ export default function EnhancePromptButton({
                 context,
             });
 
-            onEnhanced(result.enhancedPrompt);
+            onEnhanced(result.enhancedPrompt, result);
+            onResult?.(result);
+            setWarnings(result.warnings?.filter((warning) => warning.severity !== 'blocking'));
             if (result.remainingCredits !== undefined) {
                 onCreditsUpdate(result.remainingCredits);
             }
@@ -107,6 +116,17 @@ export default function EnhancePromptButton({
 
             {!error && helperText && (
                 <p className="px-1 text-xs text-zinc-500">{helperText}</p>
+            )}
+
+            {showWarnings && !error && warnings && warnings.length > 0 && (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    <p className="font-semibold">Prompt quality notes</p>
+                    <ul className="mt-1 space-y-1">
+                        {warnings.slice(0, 3).map((warning) => (
+                            <li key={warning.code}>{warning.message}</li>
+                        ))}
+                    </ul>
+                </div>
             )}
 
             {error && (

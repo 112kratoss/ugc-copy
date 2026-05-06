@@ -18,13 +18,19 @@ import {
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
 import {
+  MAGICBOOKLET_SOURCE_KIND,
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
   type ShowcaseCategory,
   type ShowcaseFeedItem,
   type ShowcaseFeedPage,
+  type ShowcaseResourceFilter,
   type ShowcaseItemCategory,
   type ShowcasePostFormat,
   type ShowcaseSort,
+  type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
+import { getSourceToolLabel, slugifySourceTool } from '@/lib/source-tools';
 
 interface ProfileSummary {
   id: string;
@@ -46,8 +52,10 @@ interface PostRow {
   remix_count: number | null;
   created_at: string;
   user_id: string | null;
-  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
+  source_tool_slug: string | null;
+  review_status?: string | null;
   generation_id: string | null;
 }
 
@@ -62,8 +70,9 @@ interface LegacyPostRow {
   remix_count: number | null;
   created_at: string;
   user_id: string | null;
-  source_kind: 'ugc_copy' | 'external';
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
+  source_tool_slug?: string | null;
   generation_id: string | null;
 }
 
@@ -81,6 +90,8 @@ interface LegacyGenerationRow {
   user_id: string | null;
 }
 
+const FILTERED_FEED_BATCH_SIZE = 48;
+
 function resolveItemCategory(category: ShowcaseItemCategory | null): ShowcaseItemCategory {
   if (category === 'video' || category === 'motion' || category === 'ugc-ad' || category === 'text') {
     return category;
@@ -89,33 +100,17 @@ function resolveItemCategory(category: ShowcaseItemCategory | null): ShowcaseIte
   return 'image';
 }
 
-function applyPostSort<T extends { created_at: string; id: string; save_count?: number | null; remix_count?: number | null }>(
-  rows: T[],
-  sort: ShowcaseSort
-) {
-  return [...rows].sort((left, right) => {
-    if (sort === 'top-saves') {
-      return (right.save_count ?? 0) - (left.save_count ?? 0) || right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id);
-    }
-
-    if (sort === 'top-remixes') {
-      return (right.remix_count ?? 0) - (left.remix_count ?? 0) || right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id);
-    }
-
-    return right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id);
-  });
-}
-
 async function fetchPostRows(
   category: ShowcaseCategory,
   sort: ShowcaseSort,
   offset: number,
-  limit: number
+  limit: number,
+  toolSlug: string | null
 ): Promise<PostRow[] | null> {
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -123,6 +118,10 @@ async function fetchPostRows(
     query = query.or('category.eq.text,post_format.eq.mixed');
   } else if (category !== 'all') {
     query = query.eq('category', category);
+  }
+
+  if (toolSlug) {
+    query = query.eq('source_tool_slug', toolSlug);
   }
 
   if (sort === 'top-saves') {
@@ -141,9 +140,9 @@ async function fetchPostRows(
       .order('id', { ascending: false });
   }
 
-  let result = await query.range(offset, offset + limit);
+  const result = await query.range(offset, offset + limit - 1);
 
-  if (isMissingPostTextColumnsError(result.error)) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status/))) {
     if (category === 'text') {
       return [];
     }
@@ -174,7 +173,7 @@ async function fetchPostRows(
         .order('id', { ascending: false });
     }
 
-    const legacyResult = await legacyQuery.range(offset, offset + limit);
+    const legacyResult = await legacyQuery.range(offset, offset + limit - 1);
     if (legacyResult.error) {
       console.error('Error fetching showcase feed:', legacyResult.error);
       throw legacyResult.error;
@@ -184,6 +183,7 @@ async function fetchPostRows(
       ...row,
       body: null,
       post_format: normalizeLegacyPostFormat(row.category),
+      source_tool_slug: slugifySourceTool(row.source_tool),
     }));
   }
 
@@ -199,20 +199,55 @@ async function fetchPostRows(
   return (result.data ?? []) as PostRow[];
 }
 
-async function getShowcaseFeedPageBase(
-  category: ShowcaseCategory,
-  sort: ShowcaseSort,
-  offset: number,
-  limit: number
-): Promise<ShowcaseFeedPage> {
-  const adminSupabase = createServiceClient();
-  const posts = await fetchPostRows(category, sort, offset, limit);
-  if (posts === null) {
-    return getLegacyShowcaseFeedPageBase(category, sort, offset, limit);
+function itemMatchesFeedFilters(
+  item: ShowcaseFeedItem,
+  unlockFilter: ShowcaseUnlockFilter,
+  resourceFilter: ShowcaseResourceFilter
+): boolean {
+  if (unlockFilter === 'with-unlock' && !item.asset) {
+    return false;
   }
 
-  const hasMore = posts.length > limit;
-  const visibleRows = hasMore ? posts.slice(0, limit) : posts;
+  if ((unlockFilter === 'free' || unlockFilter === 'paid') && item.asset?.accessMode !== unlockFilter) {
+    return false;
+  }
+
+  if (resourceFilter !== 'all') {
+    const resourceKinds = item.asset?.resourceKinds ?? (item.asset?.allowRemix ? ['remix'] : []);
+    if (!resourceKinds.includes(resourceFilter)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function compareByTopSales(left: ShowcaseFeedItem, right: ShowcaseFeedItem) {
+  return (right.asset?.salesCount ?? 0) - (left.asset?.salesCount ?? 0)
+    || right.createdAt.localeCompare(left.createdAt)
+    || right.id.localeCompare(left.id);
+}
+
+function buildAvailableTools(items: ShowcaseFeedItem[]) {
+  const availableToolCounts = new Map<string, number>();
+  for (const item of items) {
+    if (item.sourceToolSlug) {
+      availableToolCounts.set(item.sourceToolSlug, (availableToolCounts.get(item.sourceToolSlug) ?? 0) + 1);
+    }
+  }
+
+  return Array.from(availableToolCounts.entries()).map(([slug, count]) => ({
+    slug,
+    label: getSourceToolLabel(slug) ?? items.find((item) => item.sourceToolSlug === slug)?.sourceTool ?? slug,
+    count,
+  }));
+}
+
+async function resolvePostRowsToFeedItems(
+  rows: PostRow[],
+  adminSupabase: ReturnType<typeof createServiceClient>
+): Promise<ShowcaseFeedItem[]> {
+  const visibleRows = rows.filter((row) => row.review_status !== 'hidden');
   const userIds = Array.from(new Set(visibleRows.map((row) => row.user_id).filter(Boolean))) as string[];
   const generationIds = Array.from(new Set(visibleRows.map((row) => row.generation_id).filter(Boolean))) as string[];
 
@@ -266,7 +301,7 @@ async function getShowcaseFeedPageBase(
       const asset = assetMap.get(post.id) ?? null;
       const body = post.body?.trim() || '';
       const model = post.generation_id
-        ? generationModelMap.get(post.generation_id) ?? 'ugc_copy'
+        ? generationModelMap.get(post.generation_id) ?? MAGICBOOKLET_SOURCE_KIND
         : post.source_kind === 'manual'
           ? 'manual'
           : post.source_tool ?? 'external';
@@ -293,8 +328,9 @@ async function getShowcaseFeedPageBase(
           }),
           avatar: profile?.avatar_url ?? null,
         },
-        sourceKind: post.source_kind,
+        sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         sourceTool: post.source_tool,
+        sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
         generationId: post.generation_id,
         asset,
         canRemix: canRemixPost(post.generation_id) && !asset?.allowRemix,
@@ -302,10 +338,116 @@ async function getShowcaseFeedPageBase(
     })
   );
 
-  const items = resolvedItems.filter((item): item is ShowcaseFeedItem => item !== null);
+  return resolvedItems.filter((item): item is ShowcaseFeedItem => item !== null);
+}
+
+async function collectFilteredFeedItems(params: {
+  category: ShowcaseCategory;
+  sort: ShowcaseSort;
+  offset: number;
+  limit: number;
+  toolSlug: string | null;
+  unlockFilter: ShowcaseUnlockFilter;
+  resourceFilter: ShowcaseResourceFilter;
+  adminSupabase: ReturnType<typeof createServiceClient>;
+}): Promise<ShowcaseFeedPage | null> {
+  const {
+    category,
+    sort,
+    offset,
+    limit,
+    toolSlug,
+    unlockFilter,
+    resourceFilter,
+    adminSupabase,
+  } = params;
+  const matchingItems: ShowcaseFeedItem[] = [];
+  const batchSize = Math.max(FILTERED_FEED_BATCH_SIZE, limit * 4);
+  const targetMatchCount = offset + limit + 1;
+  const mustScanAllCandidates = sort === 'top-sales';
+  let scanOffset = 0;
+  let exhausted = false;
+
+  while (!exhausted && (mustScanAllCandidates || matchingItems.length < targetMatchCount)) {
+    const rows = await fetchPostRows(category, sort, scanOffset, batchSize, toolSlug);
+    if (rows === null) {
+      return null;
+    }
+
+    exhausted = rows.length < batchSize;
+    scanOffset += rows.length;
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+    matchingItems.push(
+      ...items.filter((item) => itemMatchesFeedFilters(item, unlockFilter, resourceFilter))
+    );
+  }
+
+  if (sort === 'top-sales') {
+    matchingItems.sort(compareByTopSales);
+  }
+
+  const items = matchingItems.slice(offset, offset + limit);
+  const hasMore = matchingItems.length > offset + limit;
 
   return {
     items,
+    availableTools: buildAvailableTools(matchingItems),
+    pageInfo: {
+      hasMore,
+      nextOffset: hasMore ? offset + limit : null,
+      limit,
+      offset,
+    },
+  };
+}
+
+async function getShowcaseFeedPageBase(
+  category: ShowcaseCategory,
+  sort: ShowcaseSort,
+  offset: number,
+  limit: number,
+  toolSlug: string | null,
+  unlockFilter: ShowcaseUnlockFilter,
+  resourceFilter: ShowcaseResourceFilter
+): Promise<ShowcaseFeedPage> {
+  const adminSupabase = createServiceClient();
+  const needsFilteredScan = sort === 'top-sales' || unlockFilter !== 'all' || resourceFilter !== 'all';
+
+  if (needsFilteredScan) {
+    const filteredPage = await collectFilteredFeedItems({
+      category,
+      sort,
+      offset,
+      limit,
+      toolSlug,
+      unlockFilter,
+      resourceFilter,
+      adminSupabase,
+    });
+
+    if (filteredPage === null) {
+      return getLegacyShowcaseFeedPageBase(category, sort, offset, limit);
+    }
+
+    return filteredPage;
+  }
+
+  const posts = await fetchPostRows(category, sort, offset, limit + 1, toolSlug);
+  if (posts === null) {
+    return getLegacyShowcaseFeedPageBase(category, sort, offset, limit);
+  }
+
+  const hasMore = posts.length > limit;
+  const items = await resolvePostRowsToFeedItems(posts.slice(0, limit), adminSupabase);
+
+  return {
+    items,
+    availableTools: buildAvailableTools(items),
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + limit : null,
@@ -438,8 +580,9 @@ async function getLegacyShowcaseFeedPageBase(
             }),
             avatar: profile?.avatar_url ?? null,
           },
-          sourceKind: 'ugc_copy',
+          sourceKind: MAGICBOOKLET_SOURCE_KIND,
           sourceTool: null,
+          sourceToolSlug: 'magicbooklet',
           generationId: generation.id,
           asset: null,
           canRemix: true,
@@ -474,13 +617,16 @@ async function loadShowcaseFeedPageBase(
   category: ShowcaseCategory,
   sort: ShowcaseSort,
   offset: number,
-  limit: number
+  limit: number,
+  toolSlug: string | null,
+  unlockFilter: ShowcaseUnlockFilter,
+  resourceFilter: ShowcaseResourceFilter
 ): Promise<ShowcaseFeedPage> {
   try {
-    return await getCachedShowcaseFeedPageBase(category, sort, offset, limit);
+    return await getCachedShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
   } catch (error) {
     if (isMissingIncrementalCacheError(error)) {
-      return getShowcaseFeedPageBase(category, sort, offset, limit);
+      return getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
     }
 
     throw error;
@@ -493,11 +639,17 @@ export async function getShowcaseFeedPage(options: {
   offset: number;
   limit: number;
   viewerUserId?: string | null;
+  tool?: string | null;
+  unlock?: ShowcaseUnlockFilter;
+  resource?: ShowcaseResourceFilter;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
   const adminSupabase = createServiceClient();
   const viewerUserId = options.viewerUserId ?? null;
-  const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit);
+  const toolSlug = slugifySourceTool(options.tool);
+  const unlockFilter = options.unlock ?? 'all';
+  const resourceFilter = options.resource ?? 'all';
+  const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
 
   if (!viewerUserId || baseFeed.items.length === 0) {
     return baseFeed;
@@ -533,12 +685,46 @@ export async function getShowcaseFeedPage(options: {
   const savedIdSet = new Set(
     (savedItems ?? []).map((row) => row.post_id ?? row.generation_id).filter(Boolean)
   );
+  const remixEligibleBundleIds = Array.from(
+    new Set(
+      baseFeed.items
+        .filter((item) => item.asset?.allowRemix)
+        .map((item) => item.asset?.id)
+        .filter((bundleId): bundleId is string => Boolean(bundleId))
+    )
+  );
+  let purchasedBundleIdSet = new Set<string>();
+
+  if (remixEligibleBundleIds.length > 0) {
+    const { data: purchaseRows, error: purchaseError } = await adminSupabase
+      .from('post_resource_bundle_purchases')
+      .select('bundle_id')
+      .eq('buyer_user_id', viewerUserId)
+      .in('bundle_id', remixEligibleBundleIds);
+
+    if (purchaseError) {
+      console.error('Error fetching post resource bundle purchase state for feed page:', purchaseError);
+    } else {
+      purchasedBundleIdSet = new Set(
+        ((purchaseRows ?? []) as Array<{ bundle_id?: string | null }>)
+          .map((row) => row.bundle_id)
+          .filter((bundleId): bundleId is string => Boolean(bundleId))
+      );
+    }
+  }
 
   return {
     ...baseFeed,
     items: baseFeed.items.map((item) => ({
       ...item,
       isSaved: savedIdSet.has(item.id) || (item.generationId ? savedIdSet.has(item.generationId) : false),
+      canRemix: item.canRemix || Boolean(
+        item.asset?.allowRemix
+        && (
+          item.creator.id === viewerUserId
+          || purchasedBundleIdSet.has(item.asset.id)
+        )
+      ),
     })),
   };
 }

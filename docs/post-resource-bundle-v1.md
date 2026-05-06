@@ -1,9 +1,9 @@
 # Post + Resource Bundle V1
 
-UGC copy is centered on one primary object: a post.
+magicbooklet is centered on one primary object: a post.
 
 Creators can:
-- create media inside UGC copy and publish it as a post
+- create media inside magicbooklet and publish it as a post
 - upload media made elsewhere and publish it as a post
 - attach one optional resource bundle to that same post
 

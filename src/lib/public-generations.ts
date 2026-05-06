@@ -86,7 +86,16 @@ async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow
   const selectWithoutShareColumns = 'id, output_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
   const selectWithoutShareAndAsset = 'id, output_url, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
 
-  const attempt = async (selectClause: string, includeAsset: boolean, includeShareCounts: boolean) => {
+  type PublicGenerationAttempt = {
+    data: PublicGenerationRow | null;
+    error: { code?: string } | null;
+  };
+
+  const attempt = async (
+    selectClause: string,
+    includeAsset: boolean,
+    includeShareCounts: boolean
+  ): Promise<PublicGenerationAttempt> => {
     const result = await adminSupabase
       .from('generations')
       .select(selectClause)
@@ -98,17 +107,19 @@ async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow
 
     if (!result.data || result.error) {
       return {
-        data: result.data,
+        data: null,
         error: result.error,
       };
     }
 
+    const row = result.data as Partial<PublicGenerationRow>;
+
     return {
       data: {
-        ...result.data,
-        showcase_asset_path: includeAsset ? result.data.showcase_asset_path : null,
-        share_count: includeShareCounts ? result.data.share_count : 0,
-        share_visit_count: includeShareCounts ? result.data.share_visit_count : 0,
+        ...row,
+        showcase_asset_path: includeAsset ? row.showcase_asset_path ?? null : null,
+        share_count: includeShareCounts ? row.share_count ?? 0 : 0,
+        share_visit_count: includeShareCounts ? row.share_visit_count ?? 0 : 0,
       } as PublicGenerationRow,
       error: null,
     };
@@ -175,7 +186,7 @@ export async function getPublicGenerationDetail(id: string): Promise<PublicGener
 
   const title = generation.title?.trim() || 'Untitled Creation';
   const prompt = generation.prompt?.trim() || '';
-  const description = generation.description?.trim() || prompt || `Explore ${title} on UGC copy.`;
+  const description = generation.description?.trim() || prompt || `Explore ${title} on magicbooklet.`;
 
   return {
     id: generation.id,

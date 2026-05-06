@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
+    estimateGenerationDurationMs,
     getGenerationKind,
     normalizeMarketGenerationTiming,
     normalizeStoredGenerationTiming,
     toIsoTimestamp,
+    withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
@@ -318,7 +320,21 @@ export async function GET(request: NextRequest) {
             task: data.data,
             fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
         });
-        let status = timing.appStatus;
+        const workflowSettings =
+            localGeneration?.workflow_settings && typeof localGeneration.workflow_settings === 'object'
+                ? localGeneration.workflow_settings as Record<string, unknown>
+                : null;
+        const estimatedTotalMs = estimateGenerationDurationMs({
+            kind: 'motion',
+            model: typeof workflowSettings?.model === 'string' ? workflowSettings.model : null,
+            resolution: typeof workflowSettings?.mode === 'string' ? workflowSettings.mode : null,
+            durationSeconds: typeof localGeneration?.duration === 'number'
+                ? localGeneration.duration
+                : typeof workflowSettings?.duration === 'number'
+                    ? workflowSettings.duration
+                    : null,
+        });
+        const status = timing.appStatus;
         let output = null;
         let error = null;
 
@@ -400,7 +416,12 @@ export async function GET(request: NextRequest) {
             await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
         }
 
-        return NextResponse.json({ status, output, error, timing });
+        return NextResponse.json({
+            status,
+            output,
+            error,
+            timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
+        });
 
     } catch (error) {
         console.error('Error fetching prediction:', error);

@@ -392,10 +392,10 @@ export default function CreatorProfileCard({
                         <ImagePlus className="h-8 w-8" />
                       </div>
                     )}
-                    <label className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/60 opacity-0 transition-opacity group-hover:opacity-100 backdrop-blur-sm">
-                      <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/50 px-4 py-2 text-sm font-medium text-white hover:bg-white/10 transition-colors">
+                    <label className="absolute bottom-3 right-3 flex cursor-pointer items-center justify-center">
+                      <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-md transition-colors hover:bg-white/10">
                         <Camera className="h-4 w-4 text-pink-400" />
-                        <span>Change Cover</span>
+                        <span>{coverPreview || form.coverUrl ? 'Change cover' : 'Upload cover'}</span>
                       </div>
                       <input
                         type="file"

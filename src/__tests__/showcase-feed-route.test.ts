@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const getShowcaseFeedPageMock = vi.fn(async (_options?: unknown) => ({
-  items: [],
-  pageInfo: {
-    hasMore: false,
-    nextOffset: null,
-    limit: 12,
-    offset: 0,
-  },
-}));
+const getShowcaseFeedPageMock = vi.fn(async (_options?: unknown) => {
+  void _options;
+  return {
+    items: [],
+    pageInfo: {
+      hasMore: false,
+      nextOffset: null,
+      limit: 12,
+      offset: 0,
+    },
+  };
+});
 
 const getUserMock = vi.fn(async () => ({
   data: {
@@ -66,6 +69,9 @@ describe('/api/showcase/feed route', () => {
       offset: 0,
       limit: 12,
       viewerUserId: null,
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
     });
   });
 
@@ -88,6 +94,9 @@ describe('/api/showcase/feed route', () => {
       offset: 0,
       limit: 12,
       viewerUserId: 'user-1',
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
     });
   });
 });

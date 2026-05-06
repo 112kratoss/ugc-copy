@@ -27,7 +27,7 @@ let linkedPostsState: Array<{
   visibility: 'public' | 'unlisted' | 'private';
   archived_at: string | null;
 }> = [];
-const syncGenerationStatusesMock = vi.fn(async () => undefined);
+const syncGenerationStatusesMock = vi.fn(async (_params?: { generationIds: string[] }) => undefined);
 
 function createSupabaseClientMock() {
   return {
@@ -228,6 +228,52 @@ describe('/api/generations route', () => {
       resourceKinds: ['prompt', 'notes', 'remix'],
     });
     expect(String(data.generations[0].paywallPrefill.notesMarkdown)).toContain('Model: Nano Banana 2.0');
+  });
+
+  it('projects Grok multi-output image URLs without exposing workflow settings', async () => {
+    generationsState = [
+      {
+        id: 'gen-grok-1',
+        user_id: 'user-1',
+        output_url: 'generated_images/user-1/grok-0.jpg',
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        duration: null,
+        cost: 4,
+        model: 'grok-imagine-image',
+        category: 'image',
+        is_public: false,
+        title: 'Grok set',
+        description: null,
+        prompt: 'A product poster.',
+        workflow_settings: {
+          outputs: [
+            { index: 0, storagePath: 'generated_images/user-1/grok-0.jpg' },
+            { index: 1, storagePath: 'generated_images/user-1/grok-1.jpg' },
+          ],
+        },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].output_url).toBe('https://proxy.example.com/generated_images/user-1/grok-0.jpg');
+    expect(data.generations[0].output_urls).toEqual([
+      'https://proxy.example.com/generated_images/user-1/grok-0.jpg',
+      'https://proxy.example.com/generated_images/user-1/grok-1.jpg',
+    ]);
+    expect(data.generations[0].workflow_settings).toBeUndefined();
   });
 
   it('returns data even when syncing processing generations fails', async () => {

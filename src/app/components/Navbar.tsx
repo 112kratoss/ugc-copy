@@ -10,7 +10,7 @@ export default function Navbar() {
             href="/"
             className="text-xl font-bold tracking-tight text-white drop-shadow-sm transition-opacity hover:opacity-90"
           >
-            UGC copy
+            magicbooklet
           </Link>
         </div>
 

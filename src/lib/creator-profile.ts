@@ -8,6 +8,7 @@ import {
   getMarketplaceAssetSummaryMap,
   getPostMediaKind,
   isMissingPostTextColumnsError,
+  isMissingPostSourceToolSlugColumnError,
   isMissingPostsSchemaError,
   normalizeLegacyPostFormat,
   resolvePostMediaUrl,
@@ -17,7 +18,15 @@ import {
   createServiceClient,
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
-import type { ShowcaseFeedItem, ShowcaseItemCategory, ShowcasePostFormat } from '@/lib/showcase';
+import {
+  MAGICBOOKLET_SOURCE_KIND,
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
+  type ShowcaseFeedItem,
+  type ShowcaseItemCategory,
+  type ShowcasePostFormat,
+} from '@/lib/showcase';
+import { slugifySourceTool } from '@/lib/source-tools';
 
 interface CreatorPostRow {
   id: string;
@@ -32,8 +41,9 @@ interface CreatorPostRow {
   remix_count: number | null;
   created_at: string;
   generation_id: string | null;
-  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
+  source_tool_slug?: string | null;
 }
 
 interface LegacyCreatorPostRow {
@@ -47,8 +57,9 @@ interface LegacyCreatorPostRow {
   remix_count: number | null;
   created_at: string;
   generation_id: string | null;
-  source_kind: 'ugc_copy' | 'external';
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
+  source_tool_slug?: string | null;
 }
 
 interface LegacyCreatorGenerationRow {
@@ -82,6 +93,9 @@ export interface CreatorProfilePageData {
     publicCreations: number;
     totalSaves: number;
     totalRemixes: number;
+    unlocks: number;
+    totalUnlockSales: number;
+    toolsUsed: Array<{ slug: string; label: string; count: number }>;
   };
   items: ShowcaseFeedItem[];
 }
@@ -120,16 +134,58 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
   let legacyItems: ShowcaseFeedItem[] | null = null;
 
   try {
-    let result = await adminSupabase
+    const result = await adminSupabase
       .from('posts')
-      .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, generation_id, source_kind, source_tool')
+      .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, generation_id, source_kind, source_tool, source_tool_slug')
       .eq('user_id', profile.id)
       .eq('visibility', 'public')
       .is('archived_at', null)
       .order('created_at', { ascending: false })
       .limit(24);
 
-    if (isMissingPostTextColumnsError(result.error)) {
+    if (isMissingPostSourceToolSlugColumnError(result.error)) {
+      const withoutSourceToolSlugResult = await adminSupabase
+        .from('posts')
+        .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, generation_id, source_kind, source_tool')
+        .eq('user_id', profile.id)
+        .eq('visibility', 'public')
+        .is('archived_at', null)
+        .order('created_at', { ascending: false })
+        .limit(24);
+
+      if (isMissingPostTextColumnsError(withoutSourceToolSlugResult.error)) {
+        const legacyResult = await adminSupabase
+          .from('posts')
+          .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, generation_id, source_kind, source_tool')
+          .eq('user_id', profile.id)
+          .eq('visibility', 'public')
+          .is('archived_at', null)
+          .order('created_at', { ascending: false })
+          .limit(24);
+
+        if (legacyResult.error) {
+          console.error('Failed to fetch creator posts:', legacyResult.error);
+          throw legacyResult.error;
+        }
+
+        visibleRows = ((legacyResult.data ?? []) as LegacyCreatorPostRow[]).map((row) => ({
+          ...row,
+          body: null,
+          post_format: normalizeLegacyPostFormat(row.category),
+          source_tool_slug: null,
+        }));
+      } else {
+        if (withoutSourceToolSlugResult.error) {
+          console.error('Failed to fetch creator posts:', withoutSourceToolSlugResult.error);
+          throw withoutSourceToolSlugResult.error;
+        }
+
+        visibleRows = ((withoutSourceToolSlugResult.data ?? []) as Array<Omit<CreatorPostRow, 'source_tool_slug'>>).map((row) => ({
+          ...row,
+          source_tool_slug: null,
+        }));
+      }
+    } else if (isMissingPostTextColumnsError(result.error)) {
       const legacyResult = await adminSupabase
         .from('posts')
         .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, generation_id, source_kind, source_tool')
@@ -226,8 +282,9 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
             }),
             avatar: profile.avatar_url,
           },
-          sourceKind: 'ugc_copy',
+          sourceKind: MAGICBOOKLET_SOURCE_KIND,
           sourceTool: null,
+          sourceToolSlug: 'magicbooklet',
           generationId: generation.id,
           asset: null,
           canRemix: true,
@@ -259,6 +316,9 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
         publicCreations: legacyItems.length,
         totalSaves: legacyItems.reduce((sum, item) => sum + item.saveCount, 0),
         totalRemixes: legacyItems.reduce((sum, item) => sum + item.remixCount, 0),
+        unlocks: 0,
+        totalUnlockSales: 0,
+        toolsUsed: [],
       },
       items: legacyItems,
     };
@@ -298,7 +358,7 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
       const asset = assetMap.get(post.id) ?? null;
       const body = post.body?.trim() || '';
       const model = post.generation_id
-        ? modelMap.get(post.generation_id) ?? 'ugc_copy'
+        ? modelMap.get(post.generation_id) ?? MAGICBOOKLET_SOURCE_KIND
         : post.source_kind === 'manual'
           ? 'manual'
           : post.source_tool ?? 'external';
@@ -325,8 +385,9 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
           }),
           avatar: profile.avatar_url,
         },
-        sourceKind: post.source_kind,
+        sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         sourceTool: post.source_tool,
+        sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
         generationId: post.generation_id,
         asset,
         canRemix: canRemixPost(post.generation_id) && !asset?.allowRemix,
@@ -335,6 +396,18 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
   );
 
   const items = resolvedItems.filter((item): item is ShowcaseFeedItem => item !== null);
+  const toolCounts = new Map<string, { label: string; count: number }>();
+  for (const item of items) {
+    if (!item.sourceToolSlug) {
+      continue;
+    }
+
+    const existing = toolCounts.get(item.sourceToolSlug);
+    toolCounts.set(item.sourceToolSlug, {
+      label: existing?.label ?? item.sourceTool ?? item.sourceToolSlug,
+      count: (existing?.count ?? 0) + 1,
+    });
+  }
 
   return {
     profile: {
@@ -357,6 +430,9 @@ export const getCreatorProfilePageData = cache(async (rawUsername: string): Prom
       publicCreations: items.length,
       totalSaves: items.reduce((sum, item) => sum + item.saveCount, 0),
       totalRemixes: items.reduce((sum, item) => sum + item.remixCount, 0),
+      unlocks: items.filter((item) => item.asset).length,
+      totalUnlockSales: items.reduce((sum, item) => sum + (item.asset?.salesCount ?? 0), 0),
+      toolsUsed: Array.from(toolCounts.entries()).map(([slug, value]) => ({ slug, ...value })),
     },
     items,
   };

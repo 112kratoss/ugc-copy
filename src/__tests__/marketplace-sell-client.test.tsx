@@ -16,7 +16,7 @@ const dashboard = {
       priceUsdCents: 1900,
       salesCount: 4,
       earningsUsdCents: 7600,
-      resourceKinds: ['prompt', 'notes'] as const,
+      resourceKinds: ['prompt', 'notes'] as Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>,
       createdAt: '2026-04-06T00:00:00.000Z',
       post: {
         id: 'post-public',
@@ -33,17 +33,17 @@ const dashboard = {
 };
 
 describe('MarketplaceSellClient', () => {
-  it('shows a manage-only resource dashboard', () => {
+  it('shows a seller unlock dashboard', () => {
     render(
       <MarketplaceSellClient
         initialDashboard={dashboard}
       />
     );
 
-    expect(screen.getByText(/resource dashboard/i)).toBeInTheDocument();
-    expect(screen.getByText(/live and draft resources/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /open post composer/i })).toHaveAttribute('href', '/post/new');
-    expect(screen.getByRole('button', { name: /copy post link/i })).toBeInTheDocument();
+    expect(screen.getByText(/seller dashboard/i)).toBeInTheDocument();
+    expect(screen.getByText(/live and draft unlocks/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /share a post/i })).toHaveAttribute('href', '/post/new');
+    expect(screen.getByRole('button', { name: /copy unlock link/i })).toBeInTheDocument();
   });
 
   it('shows the empty-state guidance when no bundles exist', () => {
@@ -59,7 +59,7 @@ describe('MarketplaceSellClient', () => {
       />
     );
 
-    expect(screen.getByText(/no attached resources yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no unlocks yet/i)).toBeInTheDocument();
     expect(screen.getByText(/start in the post flow/i)).toBeInTheDocument();
   });
 });

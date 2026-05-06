@@ -31,7 +31,7 @@ describe('MediaDetailsPreviewModal', () => {
   it('renders an image preview with prompt text and copy feedback', async () => {
     writeTextMock.mockResolvedValue(undefined);
 
-    render(
+    const { container } = render(
       <MediaDetailsPreviewModal
         isOpen
         onClose={() => undefined}
@@ -43,9 +43,12 @@ describe('MediaDetailsPreviewModal', () => {
       />
     );
 
-    expect(screen.getByRole('dialog', { name: /prompted still/i })).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: /prompted still/i });
+
+    expect(container).not.toContainElement(dialog);
+    expect(dialog).toHaveClass('overflow-y-auto');
     expect(screen.getByAltText('Preview image')).toBeInTheDocument();
-    expect(screen.getByText('Detailed creator prompt')).toBeInTheDocument();
+    expect(screen.getByText('Detailed creator prompt')).toHaveClass('whitespace-pre-wrap');
 
     fireEvent.click(screen.getByRole('button', { name: /copy prompt/i }));
 
@@ -55,7 +58,7 @@ describe('MediaDetailsPreviewModal', () => {
     expect(screen.getByRole('button', { name: /copied/i })).toBeInTheDocument();
   });
 
-  it('renders video and audio media types', () => {
+  it('renders video and audio media types', async () => {
     const { container, rerender } = render(
       <MediaDetailsPreviewModal
         isOpen
@@ -68,7 +71,8 @@ describe('MediaDetailsPreviewModal', () => {
       />
     );
 
-    expect(container.querySelector('video')).toBeInTheDocument();
+    await screen.findByRole('dialog', { name: /video preview/i });
+    expect(document.querySelector('video')).toBeInTheDocument();
 
     rerender(
       <MediaDetailsPreviewModal
@@ -82,11 +86,12 @@ describe('MediaDetailsPreviewModal', () => {
       />
     );
 
-    expect(container.querySelector('audio')).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: /audio preview/i })).toBeInTheDocument();
+    expect(container.querySelector('audio')).toBeNull();
+    expect(await screen.findByRole('dialog', { name: /audio preview/i })).toBeInTheDocument();
+    expect(document.querySelector('audio')).toBeInTheDocument();
   });
 
-  it('hides the copy button when no prompt is available', () => {
+  it('hides the copy button when no prompt is available', async () => {
     render(
       <MediaDetailsPreviewModal
         isOpen
@@ -99,7 +104,7 @@ describe('MediaDetailsPreviewModal', () => {
       />
     );
 
-    expect(screen.getByText('No prompt available')).toBeInTheDocument();
+    expect(await screen.findByText('No prompt available')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /copy prompt/i })).toBeNull();
   });
 });

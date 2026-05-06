@@ -14,6 +14,7 @@ import {
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { normalizeSourceToolInput } from '@/lib/source-tools';
 import {
   isShowcaseItemCategory,
   type ShowcaseItemCategory,
@@ -214,7 +215,7 @@ function parseResourceBundle(
     if (!isPostResourceBundleAccessMode(accessMode)) {
       return {
         bundle: null,
-        error: 'Choose whether the attached resources should be free or paid.',
+        error: 'Choose whether the unlock should be free or paid.',
       };
     }
 
@@ -226,7 +227,7 @@ function parseResourceBundle(
       if (priceUsdCents < 100) {
         return {
           bundle: null,
-          error: 'Paid resources must be priced at $1.00 or above.',
+          error: 'Paid unlocks must be priced at $1.00 or above.',
         };
       }
     }
@@ -238,7 +239,7 @@ function parseResourceBundle(
   } catch {
     return {
       bundle: null,
-      error: 'The attached resource bundle could not be parsed.',
+      error: 'The attached unlock could not be parsed.',
     };
   }
 }
@@ -322,6 +323,11 @@ export async function POST(request: NextRequest) {
     const title = resolveTitle(normalizeText(formData.get('title')), body, postFormat);
     const description = normalizeText(formData.get('description'));
     const sourceTool = file || uploadedMedia ? normalizeText(formData.get('sourceTool')) : null;
+    const sourceToolSlugRaw = normalizeText(formData.get('sourceToolSlug'));
+    const normalizedSourceTool = normalizeSourceToolInput({
+      label: sourceTool,
+      slug: sourceToolSlugRaw,
+    });
     const sourceKind = postFormat === 'text' ? 'manual' : 'external';
     const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'));
 
@@ -335,6 +341,7 @@ export async function POST(request: NextRequest) {
 
     const postId = randomUUID();
     let storagePath: string | null = null;
+    let temporaryUploadPathToCleanup: string | null = null;
 
     if (file) {
       const extension = inferExtension(file.name, file.type);
@@ -374,10 +381,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Failed to prepare uploaded media.' }, { status: 500 });
       }
 
-      const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([uploadedMedia.filePath]);
-      if (cleanupUpload.error) {
-        console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
-      }
+      temporaryUploadPathToCleanup = uploadedMedia.filePath;
     }
 
     const { data: post, error: insertError } = await supabase
@@ -393,7 +397,8 @@ export async function POST(request: NextRequest) {
         body,
         post_format: postFormat,
         source_kind: sourceKind,
-        source_tool: sourceTool,
+        source_tool: normalizedSourceTool.label,
+        source_tool_slug: normalizedSourceTool.slug,
         showcase_asset_path: storagePath,
         output_url: null,
       })
@@ -422,10 +427,23 @@ export async function POST(request: NextRequest) {
       });
     } catch (bundleError) {
       console.error('Failed to save post resource bundle:', bundleError);
+      if (temporaryUploadPathToCleanup) {
+        const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([temporaryUploadPathToCleanup]);
+        if (cleanupUpload.error) {
+          console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
+        }
+      }
       if (isMissingPostResourceBundlesSchemaError(bundleError)) {
         return NextResponse.json({ error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR }, { status: 500 });
       }
-      return NextResponse.json({ error: 'Post was created, but the attached resources could not be saved.' }, { status: 500 });
+      return NextResponse.json({ error: 'Post was created, but the attached unlock could not be saved.' }, { status: 500 });
+    }
+
+    if (temporaryUploadPathToCleanup) {
+      const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([temporaryUploadPathToCleanup]);
+      if (cleanupUpload.error) {
+        console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
+      }
     }
 
     return NextResponse.json({

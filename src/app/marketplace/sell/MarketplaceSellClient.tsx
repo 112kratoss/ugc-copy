@@ -9,6 +9,7 @@ import {
   getBundleAccessLabel,
   getPostResourceKindLabel,
 } from '@/lib/post-resource-bundles';
+import { buildShowcaseDetailPath } from '@/lib/share';
 
 interface SellerBundle {
   id: string;
@@ -73,15 +74,16 @@ export default function MarketplaceSellClient({
   const hasBundles = initialDashboard.bundles.length > 0;
   const deletedSnapshots = initialDashboard.deletedSnapshots ?? [];
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const sellerReturnPath = '/marketplace/sell';
 
   const copyPostLink = async (postId: string) => {
     try {
       const origin = window.location.origin;
       await navigator.clipboard.writeText(`${origin}/showcase/${postId}#resources`);
-      setCopyFeedback('Post link copied.');
+      setCopyFeedback('Unlock link copied.');
       window.setTimeout(() => setCopyFeedback(null), 2200);
     } catch {
-      setCopyFeedback('Could not copy the post link.');
+      setCopyFeedback('Could not copy the unlock link.');
       window.setTimeout(() => setCopyFeedback(null), 2200);
     }
   };
@@ -99,13 +101,13 @@ export default function MarketplaceSellClient({
             <div className="max-w-3xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
                 <Wallet className="h-3.5 w-3.5" />
-                Resource dashboard
+                Seller Dashboard
               </div>
               <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                Manage the resources attached to your posts
+                Manage the unlocks attached to your community posts
               </h1>
               <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
-                Creation happens in the post flow. This screen is for checking what is live, copying the public post link, and keeping an eye on what is turning proof into revenue.
+                The post is the source of truth. Use this screen to see which prompts, workflows, notes, files, and remix gates are live, then track which public posts are turning into unlocks.
               </p>
             </div>
 
@@ -114,14 +116,14 @@ export default function MarketplaceSellClient({
                 href="/post/new"
                 className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
-                Open post composer
+                Share a post
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
                 href="/marketplace"
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
-                Explore marketplace
+                Explore unlocks
               </Link>
             </div>
           </div>
@@ -129,7 +131,7 @@ export default function MarketplaceSellClient({
 
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Bundles</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Unlocks</div>
             <div className="mt-3 text-3xl font-semibold text-white">{initialDashboard.bundles.length}</div>
           </div>
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
@@ -145,16 +147,16 @@ export default function MarketplaceSellClient({
         {!hasBundles ? (
           <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <Layers3 className="mx-auto h-10 w-10 text-zinc-500" />
-            <h2 className="mt-4 text-2xl font-semibold text-white">No attached resources yet</h2>
+            <h2 className="mt-4 text-2xl font-semibold text-white">No unlocks yet</h2>
             <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">
-              Start in the post flow: publish the proof, attach the prompt or workflow notes, choose free or paid access, and let buyers unlock it directly on the post.
+              Start in the post flow: publish the public post, attach the prompt, workflow, notes, files, or remix access, then choose whether the unlock is free or paid.
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
               <Link
                 href="/post/new"
                 className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
-                Open post composer
+                Share a post
               </Link>
             </div>
           </div>
@@ -163,14 +165,14 @@ export default function MarketplaceSellClient({
             <section className="rounded-[32px] border border-white/8 bg-zinc-950/70 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.4)] backdrop-blur-sm">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Your bundles</div>
-                  <h2 className="mt-3 text-2xl font-semibold text-white">Live and draft resources</h2>
+                  <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Live unlocks</div>
+                  <h2 className="mt-3 text-2xl font-semibold text-white">Live and draft unlocks</h2>
                 </div>
                 <Link
                   href="/post/new"
                   className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
-                  New post
+                  Share post
                 </Link>
               </div>
 
@@ -198,7 +200,7 @@ export default function MarketplaceSellClient({
                       </div>
                     </div>
                     <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">
-                      {bundle.summary || bundle.previewText || 'Attached resources for this post.'}
+                      {bundle.summary || bundle.previewText || 'Reusable value attached to this post.'}
                     </p>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
@@ -231,18 +233,25 @@ export default function MarketplaceSellClient({
                       {bundle.post && !bundle.post.archivedAt && (bundle.post.visibility === 'public' || bundle.post.visibility === 'unlisted') ? (
                         <>
                           <Link
-                            href={`/showcase/${bundle.postId}`}
+                            href={buildShowcaseDetailPath(bundle.postId, {
+                              from: 'seller',
+                              returnTo: sellerReturnPath,
+                            })}
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                           >
                             <ExternalLink className="h-4 w-4" />
                             View public post
                           </Link>
                           <Link
-                            href={`/showcase/${bundle.postId}#resources`}
+                            href={buildShowcaseDetailPath(bundle.postId, {
+                              from: 'seller',
+                              returnTo: sellerReturnPath,
+                              section: 'resources',
+                            })}
                             className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
                           >
                             <ArrowRight className="h-4 w-4" />
-                            Open resources
+                            Open unlock
                           </Link>
                           <button
                             type="button"
@@ -250,7 +259,7 @@ export default function MarketplaceSellClient({
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                           >
                             <Copy className="h-4 w-4" />
-                            Copy post link
+                            Copy unlock link
                           </button>
                         </>
                       ) : (
@@ -267,7 +276,7 @@ export default function MarketplaceSellClient({
                             className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
                           >
                             <ArrowRight className="h-4 w-4" />
-                            Edit resources
+                            Edit unlock
                           </Link>
                         </>
                       )}
@@ -282,7 +291,7 @@ export default function MarketplaceSellClient({
               <div className="mt-5 space-y-3">
                 {initialDashboard.sales.length === 0 ? (
                   <p className="text-sm leading-7 text-zinc-400">
-                    Sales will show up here once buyers unlock the resources attached to your posts.
+                    Sales will show up here once buyers open paid unlocks attached to your posts.
                   </p>
                 ) : (
                   initialDashboard.sales.slice(0, 8).map((sale) => (
@@ -323,7 +332,7 @@ export default function MarketplaceSellClient({
                     {snapshot.bundleAccessMode ? (
                       <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
                         {snapshot.bundleAccessMode === 'free'
-                          ? 'Free resources'
+                          ? 'Free unlock'
                           : formatUsdCents(snapshot.bundlePriceUsdCents ?? 0)}
                       </div>
                     ) : null}

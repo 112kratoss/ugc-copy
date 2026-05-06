@@ -1,16 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
-import { GenerationServiceError, startImageGeneration } from '@/lib/generation-services';
 import {
+    GenerationServiceError,
+    getGenerationResultUrls,
+    persistGeneratedOutputList,
+    startImageGeneration,
+} from '@/lib/generation-services';
+import {
+    estimateGenerationDurationMs,
     getGenerationKind,
     normalizeMarketGenerationTiming,
     normalizeStoredGenerationTiming,
     toIsoTimestamp,
+    withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+
+function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function getPersistedOutputPaths(workflowSettings: Record<string, unknown> | null): string[] {
+    const outputs = workflowSettings?.outputs;
+    if (!Array.isArray(outputs)) {
+        return [];
+    }
+
+    return outputs
+        .map((output) => {
+            if (!output || typeof output !== 'object') {
+                return null;
+            }
+
+            const storagePath = (output as Record<string, unknown>).storagePath;
+            return typeof storagePath === 'string' && storagePath ? storagePath : null;
+        })
+        .filter((storagePath): storagePath is string => Boolean(storagePath));
+}
+
+async function resolveOutputPaths(adminSupabase: ReturnType<typeof createServiceClient>, outputPaths: string[]): Promise<string[]> {
+    return Promise.all(outputPaths.map((outputPath) => resolveStoredMediaUrl(adminSupabase, outputPath)));
+}
 
 export async function POST(request: NextRequest) {
     try {
@@ -21,6 +54,7 @@ export async function POST(request: NextRequest) {
             elements = [],
             aspectRatio = 'auto',
             resolution = '1K',
+            qualityMode = 'standard',
             outputFormat = 'jpg',
             googleSearch = false,
             sourceGenerationId = null,
@@ -71,6 +105,7 @@ export async function POST(request: NextRequest) {
             elements,
             aspectRatio,
             resolution,
+            qualityMode,
             outputFormat,
             googleSearch,
             sourceGenerationId: validatedSourceGenerationId,
@@ -130,9 +165,16 @@ export async function GET(request: NextRequest) {
             .single();
 
         if (localGeneration?.status === 'succeeded' && localGeneration?.output_url) {
+            const workflowSettings = getWorkflowSettings(localGeneration.workflow_settings);
+            const outputPaths = getPersistedOutputPaths(workflowSettings);
+            const outputs = outputPaths.length > 0
+                ? await resolveOutputPaths(adminSupabase, outputPaths)
+                : [];
+
             return NextResponse.json({
                 status: 'succeeded',
                 output: await resolveStoredMediaUrl(adminSupabase, localGeneration.output_url),
+                ...(outputs.length > 0 ? { outputs } : {}),
                 timing: normalizeStoredGenerationTiming({
                     kind: getGenerationKind({
                         category: localGeneration.category,
@@ -161,68 +203,56 @@ export async function GET(request: NextRequest) {
             task: data.data,
             fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
         });
-        let status = timing.appStatus;
+        const workflowSettings = getWorkflowSettings(localGeneration?.workflow_settings);
+        const estimatedTotalMs = estimateGenerationDurationMs({
+            kind: 'image',
+            model: typeof localGeneration?.model === 'string' ? localGeneration.model : null,
+            resolution: typeof workflowSettings?.resolution === 'string' ? workflowSettings.resolution : null,
+            referenceCount: Array.isArray(workflowSettings?.elements) ? workflowSettings.elements.length : 0,
+        });
+        const timingWithEstimate = withGenerationTimingEstimate(timing, estimatedTotalMs);
+        const status = timing.appStatus;
         let output = null;
         let error = null;
 
         if (status === 'succeeded') {
             try {
                 const result = JSON.parse(data.data.resultJson);
-                const tempUrl = result.resultUrls?.[0] || null;
+                const resultUrls = getGenerationResultUrls(result);
+                const tempUrl = resultUrls[0] || null;
 
                 if (tempUrl) {
-                    // Persist image to Supabase Storage
                     const userId = user?.id || localGeneration?.user_id;
-                    try {
-                        const imgRes = await fetch(tempUrl);
-                        if (!imgRes.ok) throw new Error('Failed to download image from Kie');
-                        const imgBlob = await imgRes.blob();
-                        const ext = imgBlob.type.includes('png') ? 'png' : 'jpg';
-                        const fileName = `${userId}/generated_${predictionId}.${ext}`;
-
-                        const { error: uploadError } = await supabase.storage
-                            .from('generated_images')
-                            .upload(fileName, imgBlob, {
-                                contentType: imgBlob.type,
-                                upsert: true
-                            });
-
-                        if (uploadError) {
-                            console.error('Upload to Supabase Storage failed:', uploadError);
-                            output = tempUrl;
-                        } else {
-                            // Store the storage path, not a public URL
-                            const storagePath = `generated_images/${fileName}`;
-                            const { data: signedData } = await supabase.storage
-                                .from('generated_images')
-                                .createSignedUrl(fileName, 3600);
-                            output = signedData?.signedUrl || tempUrl;
-
-                            await supabase
-                                .from('generations')
-                                .update({
-                                    status: 'succeeded',
-                                    output_url: storagePath,
-                                    completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                                })
-                                .eq('prediction_id', predictionId);
-                        }
-                    } catch (e) {
-                        console.error('Error persisting image to storage:', e);
-                        output = tempUrl;
+                    if (!localGeneration?.id || !userId) {
+                        throw new Error('Missing local generation record for completed image run');
                     }
 
-                    // Update DB if we fell back to tempUrl
-                    if (!output || output === tempUrl) {
-                        await supabase
-                            .from('generations')
-                            .update({
-                                status: 'succeeded',
-                                output_url: output,
-                                completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                            })
-                            .eq('prediction_id', predictionId);
-                    }
+                    const persistedOutputs = await persistGeneratedOutputList(
+                        supabase,
+                        {
+                            id: localGeneration.id,
+                            user_id: userId,
+                            prediction_id: predictionId,
+                            category: 'image',
+                            model: localGeneration?.model || 'nano-banana-2',
+                            workflow_settings: workflowSettings,
+                        },
+                        localGeneration?.model === 'grok-imagine-image' ? resultUrls : [tempUrl],
+                        toIsoTimestamp(timing.completedAtMs)
+                    );
+
+                    const resolvedOutputs = await resolveOutputPaths(
+                        adminSupabase,
+                        persistedOutputs.map((persistedOutput) => persistedOutput.storagePath)
+                    );
+                    output = resolvedOutputs[0] || tempUrl;
+                    return NextResponse.json({
+                        status,
+                        output,
+                        ...(resolvedOutputs.length > 1 ? { outputs: resolvedOutputs } : {}),
+                        error,
+                        timing: timingWithEstimate,
+                    });
                 }
             } catch (e) {
                 console.error('Error handling success status:', e);
@@ -241,7 +271,7 @@ export async function GET(request: NextRequest) {
             await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
         }
 
-        return NextResponse.json({ status, output, error, timing });
+        return NextResponse.json({ status, output, error, timing: timingWithEstimate });
 
     } catch (error) {
         console.error('Error fetching image status:', error);

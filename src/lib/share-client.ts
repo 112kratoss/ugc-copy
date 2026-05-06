@@ -4,6 +4,7 @@ import {
   type GenerationShareChannel,
   type GenerationShareSourceSurface,
 } from '@/lib/share';
+import { buildCreatorProfileUrl } from '@/lib/profile';
 
 async function postShareClick({
   generationId,
@@ -60,15 +61,15 @@ export async function sharePublicGeneration({
   const normalizedDescription = description?.trim() || null;
   const shareText =
     normalizedTitle
-      ? `Look what I created on UGC Copy: ${normalizedTitle}`
+      ? `Look what I created on magicbooklet: ${normalizedTitle}`
       : normalizedDescription && normalizedDescription.length <= 80
         ? normalizedDescription
-        : `Look what I created on UGC Copy: ${buildShowcaseDetailPath(generationId)}`;
+        : `Look what I created on magicbooklet: ${buildShowcaseDetailPath(generationId)}`;
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
       await navigator.share({
-        title: normalizedTitle || 'UGC Copy creation',
+        title: normalizedTitle || 'magicbooklet creation',
         text: shareText,
         url,
       });
@@ -97,5 +98,47 @@ export async function sharePublicGeneration({
     channel: 'copy-link',
     accessToken,
   });
+  return 'copy-link';
+}
+
+export async function shareCreatorProfile({
+  username,
+  displayName,
+}: {
+  username: string;
+  displayName: string;
+}): Promise<GenerationShareChannel | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const url = buildCreatorProfileUrl(username, window.location.origin);
+  const normalizedDisplayName = displayName.trim() || username.trim();
+  const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase();
+  const title = `${normalizedDisplayName} on magicbooklet`;
+  const text = normalizedUsername
+    ? `Browse ${normalizedDisplayName}'s creator profile on magicbooklet.`
+    : 'Browse this creator profile on magicbooklet.';
+
+  if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+    try {
+      await navigator.share({
+        title,
+        text,
+        url,
+      });
+      return 'native-share';
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return null;
+      }
+    }
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    throw new Error('Clipboard sharing is not supported in this browser');
+  }
+
+  await navigator.clipboard.writeText(url);
   return 'copy-link';
 }

@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 
-import { createMetadata } from "@/lib/seo";
+import { createMetadata, siteConfig } from "@/lib/seo";
 
 export const metadata: Metadata = createMetadata({
     title: "Cancellation & Refund Policy",
     description:
-        "Read UGC copy's cancellation and refund policy for digital credit purchases and AI generation services.",
+        `Read ${siteConfig.name}'s cancellation and refund policy for digital credit purchases and AI generation services.`,
     path: "/cancellation",
 });
 
@@ -21,7 +21,7 @@ export default function CancellationAndRefundPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">1. Overview</h2>
                         <p>
                             This policy explains when you can request a cancellation or refund for purchases made on
-                            UGC copy (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;). If local law requires a refund in
+                            {siteConfig.name} (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;). If local law requires a refund in
                             a particular situation, we will follow the applicable legal requirements.
                         </p>
                     </section>
@@ -29,7 +29,7 @@ export default function CancellationAndRefundPolicy() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">2. Digital Credits and Services</h2>
                         <p>
-                            UGC copy sells digital credits and provides AI-powered generation services (for example,
+                            {siteConfig.name} sells digital credits and provides AI-powered generation services (for example,
                             AI image generation, AI video generation, and motion transfer). Credits are typically
                             delivered immediately to your account after payment is confirmed.
                         </p>
@@ -73,13 +73,13 @@ export default function CancellationAndRefundPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">6. How to Request a Refund</h2>
                         <p className="mb-4">
                             Email us at{" "}
-                            <a href="mailto:support@ugccopy.com" className="text-purple-400 hover:text-purple-300">
-                                support@ugccopy.com
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-purple-400 hover:text-purple-300">
+                                {siteConfig.supportEmail}
                             </a>{" "}
                             with:
                         </p>
                         <ul className="list-disc list-inside space-y-2 ml-4">
-                            <li>The email address used on your UGC copy account</li>
+                            <li>The email address used on your {siteConfig.name} account</li>
                             <li>Order/payment reference (if available)</li>
                             <li>A short description of the issue</li>
                         </ul>
@@ -105,8 +105,8 @@ export default function CancellationAndRefundPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">9. Contact</h2>
                         <p>
                             Questions about this policy? Email{" "}
-                            <a href="mailto:support@ugccopy.com" className="text-purple-400 hover:text-purple-300">
-                                support@ugccopy.com
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-purple-400 hover:text-purple-300">
+                                {siteConfig.supportEmail}
                             </a>
                             .
                         </p>
@@ -114,10 +114,9 @@ export default function CancellationAndRefundPolicy() {
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC copy. All rights reserved.</p>
+                    <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                 </div>
             </div>
         </div>
     );
 }
-

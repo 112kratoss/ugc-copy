@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   getPostResourceKinds,
+  normalizePostResourceAttachments,
   type PostResourceBundleInput,
   type PostResourceBundleResources,
   type PostResourceBundleStatus,
@@ -12,18 +13,21 @@ import {
   deriveTitleFromBody,
   getPostMediaKind,
   isMissingPostResourceBundlesSchemaError,
+  isMissingPostSourceToolSlugColumnError,
   isMissingPostTextColumnsError,
   normalizeLegacyPostFormat,
   resolvePostMediaUrl,
   type PostMediaRow,
 } from '@/lib/posts-server';
 import { createServiceClient } from '@/lib/server-helpers';
-import type {
-  ShowcaseItemCategory,
-  ShowcaseMediaKind,
-  ShowcasePostFormat,
-  ShowcaseSourceKind,
-  ShowcaseVisibility,
+import {
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
+  type ShowcaseItemCategory,
+  type ShowcaseMediaKind,
+  type ShowcasePostFormat,
+  type ShowcaseSourceKind,
+  type ShowcaseVisibility,
 } from '@/lib/showcase';
 
 type OwnerPostRow = PostMediaRow & {
@@ -39,8 +43,9 @@ type OwnerPostRow = PostMediaRow & {
   body: string | null;
   category: ShowcaseItemCategory;
   post_format: ShowcasePostFormat;
-  source_kind: ShowcaseSourceKind;
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
+  source_tool_slug: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -88,6 +93,7 @@ export interface OwnerPostListItem {
   postFormat: ShowcasePostFormat;
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
+  sourceToolSlug: string | null;
   sourceLabel: string;
   createdAt: string;
   updatedAt: string;
@@ -106,7 +112,7 @@ export interface OwnerPostDetail extends OwnerPostListItem {
 export type OwnerPostVisibilityFilter = ShowcaseVisibility | 'archived' | 'all';
 
 function getSourceLabel(sourceKind: ShowcaseSourceKind): string {
-  if (sourceKind === 'ugc_copy') {
+  if (sourceKind === 'magicbooklet') {
     return 'Created here';
   }
 
@@ -130,17 +136,7 @@ function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleReso
         ? row.workflow_share_url.trim()
         : null,
     workflowSnapshot: row.workflow_snapshot ? (row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot']) : null,
-    attachments: Array.isArray(row.attachments)
-      ? row.attachments.filter(
-          (item): item is { label: string; url: string } =>
-            Boolean(
-              item &&
-                typeof item === 'object' &&
-                typeof (item as { label?: unknown }).label === 'string' &&
-                typeof (item as { url?: unknown }).url === 'string'
-            )
-        )
-      : [],
+    attachments: normalizePostResourceAttachments(row.attachments),
     allowRemix: Boolean(row.allow_remix),
   };
 }
@@ -150,7 +146,7 @@ async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Pro
   let query = adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, created_at, updated_at'
     )
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
@@ -161,8 +157,31 @@ async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Pro
 
   const result = await query;
 
+  if (isMissingPostSourceToolSlugColumnError(result.error)) {
+    const withoutSourceToolSlugQuery = adminSupabase
+      .from('posts')
+      .select(
+        'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    const withoutSourceToolSlugResult = includeArchived
+      ? await withoutSourceToolSlugQuery
+      : await withoutSourceToolSlugQuery.is('archived_at', null);
+
+    if (withoutSourceToolSlugResult.error) {
+      throw withoutSourceToolSlugResult.error;
+    }
+
+    return ((withoutSourceToolSlugResult.data ?? []) as Array<Omit<OwnerPostRow, 'source_tool_slug'>>).map((row) => ({
+      ...row,
+      source_tool_slug: null,
+    }));
+  }
+
   if (isMissingPostTextColumnsError(result.error)) {
-    let legacyQuery = adminSupabase
+    const legacyQuery = adminSupabase
       .from('posts')
       .select(
         'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, created_at'
@@ -179,6 +198,7 @@ async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Pro
       ...row,
       body: null,
       post_format: normalizeLegacyPostFormat(row.category),
+      source_tool_slug: null,
       archived_at: null,
       archived_by_user_id: null,
       updated_at: row.created_at,
@@ -194,14 +214,36 @@ async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Pro
 
 async function fetchOwnerPostRow(postId: string, userId: string): Promise<OwnerPostRow | null> {
   const adminSupabase = createServiceClient();
-  let result = await adminSupabase
+  const result = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, created_at, updated_at'
     )
     .eq('id', postId)
     .eq('user_id', userId)
     .maybeSingle();
+
+  if (isMissingPostSourceToolSlugColumnError(result.error)) {
+    const withoutSourceToolSlugResult = await adminSupabase
+      .from('posts')
+      .select(
+        'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+      )
+      .eq('id', postId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (withoutSourceToolSlugResult.error) {
+      throw withoutSourceToolSlugResult.error;
+    }
+
+    return withoutSourceToolSlugResult.data
+      ? {
+          ...(withoutSourceToolSlugResult.data as Omit<OwnerPostRow, 'source_tool_slug'>),
+          source_tool_slug: null,
+        }
+      : null;
+  }
 
   if (isMissingPostTextColumnsError(result.error)) {
     const legacyResult = await adminSupabase
@@ -226,6 +268,7 @@ async function fetchOwnerPostRow(postId: string, userId: string): Promise<OwnerP
       ...row,
       body: null,
       post_format: normalizeLegacyPostFormat(row.category),
+      source_tool_slug: null,
       archived_at: null,
       archived_by_user_id: null,
       updated_at: row.created_at,
@@ -269,6 +312,7 @@ async function toOwnerPostListItem(row: OwnerPostRow, bundleMap: Map<string, Bun
   const adminSupabase = createServiceClient();
   const mediaUrl = await resolvePostMediaUrl(adminSupabase, row);
   const mediaKind = getPostMediaKind(row.category, row.post_format);
+  const sourceKind = normalizeShowcaseSourceKind(row.source_kind);
   const canShare = isShareablePost(row);
   const bundleRow = bundleMap.get(row.id) ?? null;
   const normalizedBundleResources = bundleRow ? normalizeBundleResources(bundleRow) : null;
@@ -289,9 +333,10 @@ async function toOwnerPostListItem(row: OwnerPostRow, bundleMap: Map<string, Bun
     body: row.body?.trim() || '',
     category: row.category,
     postFormat: row.post_format,
-    sourceKind: row.source_kind,
+    sourceKind,
     sourceTool: row.source_tool,
-    sourceLabel: getSourceLabel(row.source_kind),
+    sourceToolSlug: row.source_tool_slug,
+    sourceLabel: getSourceLabel(sourceKind),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publicPath: canShare ? `/showcase/${row.id}` : null,

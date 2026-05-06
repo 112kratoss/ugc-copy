@@ -51,6 +51,7 @@ interface WorkflowCanvasSurfaceProps {
   contextMenu: CanvasContextMenuState | null;
   edges: WorkflowCanvasEdge[];
   error: string | null;
+  isReadOnly?: boolean;
   nodeActionRuntimeById: Record<string, WorkflowNodeRuntimeData | undefined>;
   nodeRunStateById: Record<string, {
     canRunBranch: boolean;
@@ -107,6 +108,7 @@ export function WorkflowCanvasSurface({
   contextMenu,
   edges,
   error,
+  isReadOnly = false,
   nodeActionRuntimeById,
   nodeRunStateById,
   onAddNote,
@@ -187,12 +189,18 @@ export function WorkflowCanvasSurface({
   }, [edges]);
 
   const handleNodesChange = useCallback((changes: NodeChange<WorkflowCanvasNode>[]) => {
+    if (isReadOnly) {
+      return;
+    }
     setFlowNodes((current) => applyNodeChanges(changes, current));
-  }, []);
+  }, [isReadOnly]);
 
   const handleEdgesChange = useCallback((changes: EdgeChange<WorkflowCanvasEdge>[]) => {
+    if (isReadOnly) {
+      return;
+    }
     setFlowEdges((current) => applyEdgeChanges(changes, current));
-  }, []);
+  }, [isReadOnly]);
 
   const handleDeleteEdge = useCallback((edgeId: string) => {
     setFlowEdges((current) => current.filter((edge) => edge.id !== edgeId));
@@ -240,25 +248,25 @@ export function WorkflowCanvasSurface({
           edges={renderedEdges as never}
           onNodesChange={handleNodesChange as never}
           onEdgesChange={handleEdgesChange as never}
-          onConnect={onConnect as never}
+          onConnect={isReadOnly ? undefined : onConnect as never}
           onPaneClick={onPaneClick}
           onPaneContextMenu={onPaneContextMenu as never}
-          onEdgeClick={onEdgeClick as never}
-          onNodeClick={onNodeClick as never}
-          onNodeDoubleClick={onNodeDoubleClick as never}
-          onNodeContextMenu={onNodeContextMenu as never}
-          onNodeDragStart={() => {
+          onEdgeClick={isReadOnly ? undefined : onEdgeClick as never}
+          onNodeClick={isReadOnly ? undefined : onNodeClick as never}
+          onNodeDoubleClick={isReadOnly ? undefined : onNodeDoubleClick as never}
+          onNodeContextMenu={isReadOnly ? undefined : onNodeContextMenu as never}
+          onNodeDragStart={isReadOnly ? undefined : () => {
             isDraggingRef.current = true;
             onNodeDragStart();
           }}
-          onNodeDragStop={(_, __, draggedNodes: WorkflowCanvasNode[]) => {
+          onNodeDragStop={isReadOnly ? undefined : (_, __, draggedNodes: WorkflowCanvasNode[]) => {
             commitDraggedNodes(draggedNodes.map((draggedNode) => draggedNode.id));
           }}
-          onSelectionDragStop={(_, draggedNodes: WorkflowCanvasNode[]) => {
+          onSelectionDragStop={isReadOnly ? undefined : (_, draggedNodes: WorkflowCanvasNode[]) => {
             commitDraggedNodes(draggedNodes.map((draggedNode) => draggedNode.id));
           }}
-          onEdgeContextMenu={onEdgeContextMenu as never}
-          onSelectionChange={({ nodes: nextNodes, edges: nextEdges }: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => {
+          onEdgeContextMenu={isReadOnly ? undefined : onEdgeContextMenu as never}
+          onSelectionChange={isReadOnly ? undefined : ({ nodes: nextNodes, edges: nextEdges }: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => {
             onSelectionChange({
               nodeIds: nextNodes.map((node) => node.id),
               edgeIds: nextEdges.map((edge) => edge.id),
@@ -277,7 +285,7 @@ export function WorkflowCanvasSurface({
           className="dark bg-[#070707]"
           colorMode="dark"
           deleteKeyCode={null}
-          selectionOnDrag
+          selectionOnDrag={!isReadOnly}
           selectionMode={SelectionMode.Partial}
           selectionKeyCode={['Shift']}
           multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
@@ -288,6 +296,9 @@ export function WorkflowCanvasSurface({
           zoomOnPinch
           preventScrolling
           zoomOnDoubleClick={false}
+          elementsSelectable={!isReadOnly}
+          nodesConnectable={!isReadOnly}
+          nodesDraggable={!isReadOnly}
           defaultEdgeOptions={defaultEdgeOptions}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#27272a" />

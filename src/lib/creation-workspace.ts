@@ -1,3 +1,5 @@
+import { buildShowcaseDetailPath } from '@/lib/share';
+
 export type CreationWorkspaceState =
   | 'unpublished'
   | 'published_no_bundle'
@@ -112,7 +114,10 @@ export function buildCreationOpenPostPath(post: CreationWorkspaceResolvedPost): 
     return post.ownerPath;
   }
 
-  return post.publicPath ?? `/showcase/${post.id}`;
+  return buildShowcaseDetailPath(post.id, {
+    from: 'studio',
+    returnTo: '/creations',
+  });
 }
 
 function resolveLinkedPost(
@@ -184,7 +189,7 @@ function getMonetizationState(linkedPost: CreationWorkspaceResolvedPost | null):
   if (!linkedPost?.bundle) {
     return {
       kind: 'none',
-      label: 'No paywall',
+      label: 'No unlock',
       priceUsdCents: null,
     };
   }
@@ -192,7 +197,7 @@ function getMonetizationState(linkedPost: CreationWorkspaceResolvedPost | null):
   if (linkedPost.bundle.status === 'draft') {
     return {
       kind: 'draft',
-      label: 'Resources draft',
+      label: 'Unlock draft',
       priceUsdCents: linkedPost.bundle.priceUsdCents,
     };
   }
@@ -222,7 +227,7 @@ export function resolveCreationWorkspaceCardState(
       linkedPost: null,
       publishBadge: 'Archived',
       monetizationKind: 'none',
-      monetizationLabel: 'No paywall',
+      monetizationLabel: 'No unlock',
       monetizationPriceUsdCents: null,
       primaryAction: {
         type: 'none',
@@ -245,7 +250,7 @@ export function resolveCreationWorkspaceCardState(
       linkedPost: null,
       publishBadge: 'Not published',
       monetizationKind: 'none',
-      monetizationLabel: 'No paywall',
+      monetizationLabel: 'No unlock',
       monetizationPriceUsdCents: null,
       primaryAction: {
         type: 'publish',
@@ -254,7 +259,7 @@ export function resolveCreationWorkspaceCardState(
       },
       secondaryAction: {
         type: 'set-paywall',
-        label: 'Set paywall',
+        label: 'Add paid unlock',
         href: buildGeneratedPaywallComposerPath(generation.id),
       },
     };
@@ -279,7 +284,7 @@ export function resolveCreationWorkspaceCardState(
     monetizationPriceUsdCents: monetization.priceUsdCents,
     primaryAction: {
       type: state === 'published_no_bundle' ? 'add-paywall' : 'manage-paywall',
-      label: state === 'published_no_bundle' ? 'Add paywall' : 'Manage paywall',
+      label: state === 'published_no_bundle' ? 'Add unlock' : 'Manage unlock',
       href: buildCreationPaywallManagementPath(linkedPost),
     },
     secondaryAction: {

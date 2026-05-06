@@ -24,16 +24,28 @@ export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
   absoluteTitle: siteConfig.defaultTitle,
   description:
-    'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with UGC copy.',
+    'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with magicbooklet.',
   path: '/',
 });
 
 const LATEST_MODELS = [
   {
-    name: IMAGE_MODELS['nano-banana-2'].displayName,
-    description: 'Fast image generation',
-    href: '/create-image?model=nano-banana-2',
-    accent: 'from-sky-500/20 to-cyan-400/10',
+    name: IMAGE_MODELS['grok-imagine-image'].displayName,
+    description: 'xAI multi-output image runs',
+    href: '/create-image?model=grok-imagine-image',
+    accent: 'from-amber-500/20 to-orange-400/10',
+  },
+  {
+    name: VIDEO_MODELS['grok-imagine-video'].displayName,
+    description: 'xAI prompt and image-to-video',
+    href: '/create-video?model=grok-imagine-video',
+    accent: 'from-rose-500/20 to-amber-400/10',
+  },
+  {
+    name: IMAGE_MODELS['gpt-image-2'].displayName,
+    description: 'ChatGPT image generation',
+    href: '/create-image?model=gpt-image-2',
+    accent: 'from-amber-500/20 to-orange-400/10',
   },
   {
     name: IMAGE_MODELS['nano-banana-pro'].displayName,
@@ -78,7 +90,7 @@ export default async function Home() {
           name: siteConfig.name,
           path: '/',
           description:
-            'UGC copy helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
+            'magicbooklet helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
           featureList: ['AI images', 'AI videos', 'Motion transfer', 'Workflows'],
           offers: [
             {
@@ -132,7 +144,7 @@ export default async function Home() {
         <section className="mt-10 w-full">
           <div className="mb-5 flex flex-col items-center text-center">
             <div className="mb-3 text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">
-              UGC Suite
+              Creator suite
             </div>
             <h2 className="text-[1.85rem] font-semibold tracking-tight text-white sm:text-[2.2rem]">
               Core creator paths
@@ -214,7 +226,7 @@ export default async function Home() {
       </main>
 
       <footer className="relative z-10 border-t border-white/[0.04] bg-black/70 px-6 py-8 text-center text-sm text-zinc-600 backdrop-blur-sm">
-        <p>© {new Date().getFullYear()} UGC copy. All rights reserved.</p>
+        <p>© {new Date().getFullYear()} magicbooklet. All rights reserved.</p>
       </footer>
     </div>
   );

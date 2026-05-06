@@ -1,0 +1,146 @@
+import type { HTMLAttributes, ReactNode } from 'react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import ShowcaseClient from '@/app/showcase/ShowcaseClient';
+import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
+
+const mockPush = vi.fn();
+const mockReplace = vi.fn();
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mockPush,
+    replace: mockReplace,
+  }),
+  usePathname: () => '/showcase',
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock('@/app/components/AuthProvider', () => ({
+  useAuth: () => ({
+    session: {
+      access_token: 'test-token',
+      user: { id: 'user-1' },
+    },
+    user: { id: 'user-1' },
+    credits: 25,
+    isLoading: false,
+  }),
+}));
+
+vi.mock('framer-motion', () => ({
+  AnimatePresence: ({ children }: { children: ReactNode }) => <>{children}</>,
+  motion: {
+    div: ({ children, ...props }: HTMLAttributes<HTMLDivElement>) => <div {...props}>{children}</div>,
+  },
+}));
+
+function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
+  return {
+    id: 'post-1',
+    mediaUrl: 'https://example.com/image.jpg',
+    mediaKind: 'image',
+    model: 'nano-banana-2',
+    title: 'Campaign Frame',
+    prompt: 'A creator-style product shot by a bright window.',
+    body: '',
+    category: 'image',
+    postFormat: 'media',
+    saveCount: 4,
+    remixCount: 2,
+    createdAt: '2026-03-28T10:00:00.000Z',
+    creator: {
+      id: 'creator-1',
+      username: 'creator-name',
+      name: 'Creator Name',
+      avatar: null,
+    },
+    isSaved: false,
+    sourceKind: 'magicbooklet',
+    sourceTool: null,
+    generationId: 'gen-1',
+    asset: null,
+    canRemix: false,
+    ...overrides,
+  };
+}
+
+function createFeed(item: ShowcaseFeedItem): ShowcaseFeedPage {
+  return {
+    items: [item],
+    pageInfo: {
+      hasMore: false,
+      nextOffset: null,
+      limit: 24,
+      offset: 0,
+    },
+  };
+}
+
+function renderShowcase(item: ShowcaseFeedItem) {
+  return render(
+    <ShowcaseClient
+      initialFeed={createFeed(item)}
+      initialCategory="all"
+      initialSort="recent"
+      initialTool={null}
+      initialUnlock="all"
+      initialResource="all"
+    />
+  );
+}
+
+describe('ShowcaseClient save actions', () => {
+  beforeEach(() => {
+    mockPush.mockReset();
+    mockReplace.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('optimistically saves a showcase card with accessible pressed state', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ success: true }),
+    })));
+
+    renderShowcase(createShowcaseItem());
+
+    const saveButton = screen.getByRole('button', {
+      name: /save campaign frame\. 4 saves/i,
+    });
+    expect(saveButton).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: /remove save from campaign frame\. 5 saves/i,
+      })).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  it('rolls the showcase card save state back when the API fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      json: async () => ({ error: 'Failed' }),
+    })));
+
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('button', {
+      name: /save campaign frame\. 4 saves/i,
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: /save campaign frame\. 4 saves/i,
+      })).toHaveAttribute('aria-pressed', 'false');
+    });
+  });
+});

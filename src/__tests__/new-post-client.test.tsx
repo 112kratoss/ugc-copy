@@ -59,7 +59,7 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getByRole('button', { name: /add details \(optional\)/i }));
 
     expect(screen.getByPlaceholderText(/optional: give the post a short one-line setup/i)).toBeInTheDocument();
-    expect(screen.getByText(/review what is public and what unlocks/i)).toBeInTheDocument();
+    expect(screen.getByText(/buyer preview/i)).toBeInTheDocument();
   });
 
   it('reveals only the selected resource sections and submits a resource bundle', async () => {
@@ -75,24 +75,24 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /note only/i }));
+    fireEvent.click(screen.getByRole('button', { name: /share a tip/i }));
     fireEvent.change(screen.getByPlaceholderText(/share the tactic, lesson, or idea/i), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /free resources/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add free unlock/i }));
 
-    expect(screen.getByText(/what are people unlocking/i)).toBeInTheDocument();
+    expect(screen.getByText(/what does the unlock include/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/https:\/\//i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /workflow link/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^workflow \/ setup$/i }));
     fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i), {
       target: { value: 'Use a before/after hook and keep the CTA visible in frame.' },
     });
     fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
       target: { value: 'https://ugc.example.com/workflow' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /publish post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -111,7 +111,7 @@ describe('NewPostClient', () => {
         allowRemix: false,
       },
     });
-    expect(await screen.findByRole('link', { name: /open resources section/i })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: /open unlock section/i })).toHaveAttribute(
       'href',
       '/showcase/post-1#resources'
     );
@@ -130,11 +130,11 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /note only/i }));
+    fireEvent.click(screen.getByRole('button', { name: /share a tip/i }));
     fireEvent.change(screen.getByPlaceholderText(/share the tactic, lesson, or idea/i), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /paid resources/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add paid unlock/i }));
 
     expect(screen.getByText(/public post required/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^private$/i })).not.toBeInTheDocument();
@@ -149,7 +149,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByDisplayValue('9'), {
       target: { value: '12' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /publish post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -193,7 +193,7 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: /publish post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
 
     await waitFor(() => {
       expect(storageUploadMock).toHaveBeenCalledTimes(1);
@@ -262,7 +262,7 @@ describe('NewPostClient', () => {
       expect(priceInput).toHaveFocus();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /publish post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -313,7 +313,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    expect(await screen.findByText(/does not have enough saved inputs to auto-fill a paid bundle yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/does not have enough saved inputs to auto-fill a paid unlock yet/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toHaveValue('');
   });
 
@@ -349,8 +349,8 @@ describe('NewPostClient', () => {
       />
     );
 
-    expect(screen.getByRole('heading', { name: /manage the paywall for this post/i })).toBeInTheDocument();
-    expect(screen.getByText(/you came from my creations to manage this post's unlock/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /manage the unlock behind this post/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/you came from my studio/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/public post required/i)).toBeInTheDocument();
 
     const priceInput = screen.getByRole('textbox', { name: /price/i });

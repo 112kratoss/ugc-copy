@@ -504,7 +504,6 @@ export function WorkflowCanvasShareActions({
                     />
                     <button
                       type="submit"
-                      disabled={importPreviewState === 'loading'}
                       className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Link2 className="h-4 w-4" />

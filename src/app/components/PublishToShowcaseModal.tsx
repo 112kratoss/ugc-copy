@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Globe, Loader2, Share2, X } from 'lucide-react';
+import { ArrowRight, BadgePlus, Globe, Loader2, Share2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 import { sharePublicGeneration } from '@/lib/share-client';
@@ -54,7 +54,7 @@ export default function PublishToShowcaseModal({
     return null;
   }
 
-  const buttonLabel = shareAfterPublish ? 'Publish & share' : 'Publish public post now';
+  const buttonLabel = shareAfterPublish ? 'Add to portfolio & share' : 'Add to portfolio';
 
   const handleQuickPublish = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -85,6 +85,7 @@ export default function PublishToShowcaseModal({
           isPublic: true,
           title: publishTitle.trim() || undefined,
           description: publishDescription.trim() || undefined,
+          resourceBundle: { accessMode: 'none' },
         }),
       });
 
@@ -146,7 +147,7 @@ export default function PublishToShowcaseModal({
           <div className="mb-6 flex items-center justify-between">
             <h3 className="flex items-center gap-2 text-xl font-bold text-white">
               {shareAfterPublish ? <Share2 className="h-5 w-5 text-emerald-300" /> : <Globe className="h-5 w-5 text-emerald-300" />}
-              {shareAfterPublish ? 'Publish & share' : 'Publish this creation'}
+              {shareAfterPublish ? 'Add to portfolio & share' : 'Add this creation to your portfolio'}
             </h3>
             <button
               type="button"
@@ -159,9 +160,12 @@ export default function PublishToShowcaseModal({
 
           <p className="text-sm leading-7 text-zinc-400">
             {showPaidShortcut
-              ? 'Keep this step lightweight. Publish the proof right away, or jump into the composer with the saved prompt attached and the price field ready if you want to sell this creation.'
-              : 'Keep this step lightweight. Publish the proof now and fine-tune anything else later from your workspace.'}
+              ? 'Publish the result as a public portfolio post, or continue into the composer to attach the saved prompt, setup notes, files, or remix access as a paid unlock.'
+              : 'Publish the result as a public portfolio post now and fine-tune it later from My Studio.'}
           </p>
+          <div className="mt-4 rounded-[20px] border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-50">
+            Quick publish shows the finished creation on your profile. The saved prompt stays private unless you choose to package it as an unlock.
+          </div>
 
           <form onSubmit={handleQuickPublish} className="mt-6 space-y-4">
             <div>
@@ -190,16 +194,19 @@ export default function PublishToShowcaseModal({
 
             {showPaidShortcut ? (
               <div className="rounded-[24px] border border-white/10 bg-black/35 p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Price the saved unlock</div>
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                  <BadgePlus className="h-3.5 w-3.5 text-emerald-300" />
+                  Add a paid unlock
+                </div>
                 <p className="mt-2 text-sm leading-6 text-zinc-300">
-                  Open the composer with this generation already attached, paid mode selected, and the price field focused. You can still edit the unlock or switch it to free once you land there.
+                  Open the composer with this result attached, paid unlock selected, and the price field focused. Use it when the reusable setup is part of what you want to sell.
                 </p>
                 <button
                   type="button"
                   onClick={handleRouteToComposer}
                   className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
                 >
-                  Set price and continue
+                  Build paid unlock
                   <ArrowRight className="h-4 w-4" />
                 </button>
               </div>

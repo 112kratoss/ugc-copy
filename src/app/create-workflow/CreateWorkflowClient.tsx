@@ -44,8 +44,10 @@ import {
   decorateWorkflowEdge,
   type WorkflowNodeRuntimeData,
 } from './WorkflowCanvasNodes';
+import { WorkflowAssistantDrawer } from './WorkflowPlannerDrawer';
 import { WorkflowCanvasSurface } from './WorkflowCanvasSurface';
 import { WorkflowCanvasInspector } from './WorkflowNodeEditors';
+import { useWorkflowCanvasAssistant } from './useWorkflowCanvasAssistant';
 import { useWorkflowCanvasCanvases } from './useWorkflowCanvasCanvases';
 import { useWorkflowCanvasContextMenu } from './useWorkflowCanvasContextMenu';
 import { useWorkflowCanvasPersistence } from './useWorkflowCanvasPersistence';
@@ -59,6 +61,7 @@ import type {
   WorkflowInspectorPanel,
 } from './workflowCanvasUiTypes';
 import { getNodeAnchoredPopupPosition, getNodeRunAffordance } from './workflowCanvasUiUtils';
+import { WORKFLOW_ASSISTANT_COST } from '@/lib/workflow-assistant';
 
 function areViewportsEqual(
   left: { x: number; y: number; zoom: number },
@@ -256,6 +259,7 @@ export default function CreateWorkflowClient({
   });
 
   const {
+    activeCanvasRevision,
     hasUnsavedChanges,
     persistCanvas,
     saveState,
@@ -272,11 +276,23 @@ export default function CreateWorkflowClient({
     onError: setError,
   });
 
+  const activeCanvasHasUnsavedChanges = saveState === 'dirty' || hasUnsavedChanges();
+
+  const workflowAssistant = useWorkflowCanvasAssistant({
+    activeCanvasId,
+    activeCanvasRevision,
+    authHeaders,
+    canvasTitle,
+    graph,
+    hasUnsavedChanges: activeCanvasHasUnsavedChanges,
+    onApplyCanvas: replaceActiveCanvas,
+    onPersistCanvas: persistCanvas,
+    onUpdateCredits: updateCredits,
+  });
+
   useEffect(() => {
     hasUnsavedChangesRef.current = saveState === 'dirty' || hasUnsavedChanges();
   }, [hasUnsavedChanges, saveState]);
-
-  const activeCanvasHasUnsavedChanges = saveState === 'dirty' || hasUnsavedChanges();
 
   const {
     clearSelection: clearSelectionState,
@@ -872,6 +888,7 @@ export default function CreateWorkflowClient({
       const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
 
       return [node.id, {
+        assistantManaged: Boolean(node.data.managed),
         capabilityValidation,
         isRunControlDisabled: Boolean(activeRunId),
         isRunMenuOpen: openNodeRunMenuId === node.id,
@@ -918,6 +935,28 @@ export default function CreateWorkflowClient({
     openNodeRunMenuId,
     setManualSelection,
   ]);
+
+  const assistantPreviewRuntimeById = useMemo<Record<string, WorkflowNodeRuntimeData | undefined>>(() => {
+    if (!workflowAssistant.previewGraph) {
+      return {};
+    }
+
+    return Object.fromEntries(workflowAssistant.previewGraph.nodes.map((node) => [node.id, {
+      assistantManaged: Boolean(node.data.managed),
+      assistantPreviewState: workflowAssistant.previewNodeStates[node.id] ?? null,
+      showPlayControl: false,
+    } satisfies WorkflowNodeRuntimeData]));
+  }, [workflowAssistant.previewGraph, workflowAssistant.previewNodeStates]);
+
+  const visibleNodes = workflowAssistant.previewGraph?.nodes ?? renderNodes;
+  const visibleEdges = workflowAssistant.previewGraph?.edges ?? edges;
+  const visibleNodeActionRuntimeById = workflowAssistant.previewGraph
+    ? assistantPreviewRuntimeById
+    : nodeActionRuntimeById;
+  const visibleNodeRunStateById = workflowAssistant.previewGraph ? {} : nodeRunStateById;
+  const assistantCreditsLabel = credits !== null
+    ? `${credits} credits`
+    : `${WORKFLOW_ASSISTANT_COST} credits / prompt`;
 
   const copySelection = useCallback((targetSelection?: CanvasSelectionState) => {
     const nextSelection = targetSelection ?? selection;
@@ -1197,46 +1236,75 @@ export default function CreateWorkflowClient({
           <WorkflowCanvasChrome
             canvasTitle={canvasTitle}
             canvasOverlay={(
-              <WorkflowCanvasInspector
-                activePanel={activeInspectorPanel}
-                graph={graph}
-                nodePopupPosition={nodePopupPosition}
-                nodes={nodes}
-                onCreditsUpdate={updateCredits}
-                runAffordance={selectedNodeRunAffordance}
-                selectedEdge={selectedEdge}
-                selectedNode={selectedNode}
-                selection={selection}
-                onClearSelection={clearSelection}
-                onDeleteEdge={(edgeId) => {
-                  const targetEdgeId = edgeId ?? selectedEdge?.id;
-                  if (targetEdgeId) {
-                    handleDeleteEdge(targetEdgeId);
-                  }
-                }}
-                onDeleteNode={() => {
-                  if (selectedNode) {
-                    handleDeleteNode(selectedNode.id);
-                  }
-                }}
-                onDeleteSelection={() => deleteSelection()}
-                onDuplicateSelection={() => undefined}
-                onOpenPreview={openPreviewMedia}
-                onRunBranch={() => {
-                  if (selectedNode) {
-                    handleRunBranchFromNode(selectedNode.id);
-                  }
-                }}
-                onRunNode={() => {
-                  if (selectedNode) {
-                    handleRunNodeFromNode(selectedNode.id);
-                  }
-                }}
-                onSetError={setError}
-                onPanelChange={setActiveInspectorPanel}
-                onUpdateNode={updateNode}
-                onUploadAsset={uploadAssetToBucket}
-              />
+              <>
+                <WorkflowCanvasInspector
+                  activePanel={activeInspectorPanel}
+                  graph={graph}
+                  nodePopupPosition={nodePopupPosition}
+                  nodes={nodes}
+                  onCreditsUpdate={updateCredits}
+                  runAffordance={selectedNodeRunAffordance}
+                  selectedEdge={selectedEdge}
+                  selectedNode={selectedNode}
+                  selection={selection}
+                  onClearSelection={clearSelection}
+                  onDeleteEdge={(edgeId) => {
+                    const targetEdgeId = edgeId ?? selectedEdge?.id;
+                    if (targetEdgeId) {
+                      handleDeleteEdge(targetEdgeId);
+                    }
+                  }}
+                  onDeleteNode={() => {
+                    if (selectedNode) {
+                      handleDeleteNode(selectedNode.id);
+                    }
+                  }}
+                  onDeleteSelection={() => deleteSelection()}
+                  onDuplicateSelection={() => undefined}
+                  onOpenPreview={openPreviewMedia}
+                  onRunBranch={() => {
+                    if (selectedNode) {
+                      handleRunBranchFromNode(selectedNode.id);
+                    }
+                  }}
+                  onRunNode={() => {
+                    if (selectedNode) {
+                      handleRunNodeFromNode(selectedNode.id);
+                    }
+                  }}
+                  onSetError={setError}
+                  onPanelChange={setActiveInspectorPanel}
+                  onUpdateNode={updateNode}
+                  onUploadAsset={uploadAssetToBucket}
+                />
+                <WorkflowAssistantDrawer
+                  availability={workflowAssistant.availability}
+                  creditsLabel={assistantCreditsLabel}
+                  error={workflowAssistant.error}
+                  input={workflowAssistant.input}
+                  isApplying={workflowAssistant.isApplying}
+                  isDiscarding={workflowAssistant.isDiscarding}
+                  isLoading={workflowAssistant.isLoading}
+                  isOpen={workflowAssistant.isOpen}
+                  isProposalStale={workflowAssistant.isProposalStale}
+                  isSubmitting={workflowAssistant.isSubmitting}
+                  messages={workflowAssistant.messages}
+                  onApplyProposal={() => {
+                    void workflowAssistant.applyProposal();
+                  }}
+                  onClose={workflowAssistant.closeAssistant}
+                  onDiscardProposal={() => {
+                    void workflowAssistant.discardProposal();
+                  }}
+                  onInputChange={workflowAssistant.setInput}
+                  onOpen={workflowAssistant.openAssistant}
+                  onSendMessage={() => {
+                    void workflowAssistant.sendMessage();
+                  }}
+                  proposal={workflowAssistant.proposal}
+                  setupMessage={workflowAssistant.setupMessage}
+                />
+              </>
             )}
             leftRail={(
               <WorkflowCanvasLeftRail
@@ -1282,11 +1350,12 @@ export default function CreateWorkflowClient({
           >
             <WorkflowCanvasSurface
               canvasSectionRef={canvasSectionRef}
-              contextMenu={contextMenu}
-              edges={edges}
+              contextMenu={workflowAssistant.previewGraph ? null : contextMenu}
+              edges={visibleEdges}
               error={error}
-              nodeActionRuntimeById={nodeActionRuntimeById}
-              nodeRunStateById={nodeRunStateById}
+              isReadOnly={Boolean(workflowAssistant.previewGraph)}
+              nodeActionRuntimeById={visibleNodeActionRuntimeById}
+              nodeRunStateById={visibleNodeRunStateById}
               onAddNote={(position) => addNode('note', position)}
               onClearSelection={clearSelection}
               onCloseContextMenu={closeContextMenu}
@@ -1314,7 +1383,7 @@ export default function CreateWorkflowClient({
               onSelectAll={selectAllElements}
               onSelectionChange={handleSelectionChange}
               previewMedia={previewMedia}
-              renderNodes={renderNodes}
+              renderNodes={visibleNodes}
               selection={selection}
               setReactFlowInstance={setReactFlowInstance}
             />

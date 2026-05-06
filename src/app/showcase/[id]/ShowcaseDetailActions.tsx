@@ -7,6 +7,7 @@ import { Archive, Globe2, Loader2, Lock, PencilLine, Sparkles, Trash2, Wand2 } f
 
 import { useAuth } from '@/app/components/AuthProvider';
 import PublicShareButton from '@/app/components/PublicShareButton';
+import { getCurrentInternalPath } from '@/lib/share';
 
 interface ShowcaseDetailActionsProps {
   postId: string;
@@ -37,7 +38,7 @@ export default function ShowcaseDetailActions({
 
   const handleRemix = async () => {
     if (!user || !session?.access_token) {
-      router.push(`/login?returnUrl=/showcase/${postId}`);
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
       return;
     }
 
@@ -62,7 +63,7 @@ export default function ShowcaseDetailActions({
 
   const updateOwnerVisibility = async (nextVisibility: 'public' | 'unlisted' | 'private') => {
     if (!session?.access_token) {
-      router.push(`/login?returnUrl=/showcase/${postId}`);
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
       return;
     }
 
@@ -205,22 +206,22 @@ export default function ShowcaseDetailActions({
   };
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-3">
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2.5">
         <PublicShareButton
           generationId={postId}
           title={title}
           description={description}
           sourceSurface="detail-page"
           accessToken={session?.access_token ?? null}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
         />
 
         {canRemix ? (
           <button
             type="button"
             onClick={handleRemix}
-            className="inline-flex items-center gap-2 rounded-full bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-purple-500"
+            className="inline-flex items-center gap-2 rounded-full bg-purple-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-purple-500"
           >
             <Wand2 className="h-4 w-4" />
             Remix
@@ -230,7 +231,7 @@ export default function ShowcaseDetailActions({
         {creatorUsername ? (
           <Link
             href={`/creators/${creatorUsername}`}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3.5 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
           >
             View creator
           </Link>
@@ -238,7 +239,7 @@ export default function ShowcaseDetailActions({
 
         <Link
           href="/create"
-          className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm font-medium text-emerald-200 transition hover:border-emerald-400/40 hover:bg-emerald-500/15"
+          className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-200 transition hover:border-emerald-400/40 hover:bg-emerald-500/15"
         >
           <Sparkles className="h-4 w-4" />
           Create your own
@@ -246,9 +247,13 @@ export default function ShowcaseDetailActions({
       </div>
 
       {viewerIsOwner ? (
-        <div className="rounded-[24px] border border-emerald-400/16 bg-emerald-500/8 p-4">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-100/75">Owner actions</div>
-          <div className="mt-3 flex flex-wrap gap-2">
+        <details className="group rounded-[22px] border border-white/8 bg-black/25">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+            <span>Owner tools</span>
+            <span className="text-xs font-medium text-zinc-500 group-open:hidden">Edit, visibility, archive</span>
+            <span className="hidden text-xs font-medium text-zinc-500 group-open:inline">Hide tools</span>
+          </summary>
+          <div className="flex flex-wrap gap-2 border-t border-white/8 px-4 pb-4 pt-3">
             <Link
               href={`/post/${postId}/edit`}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
@@ -262,7 +267,7 @@ export default function ShowcaseDetailActions({
                 href={`/post/${postId}/edit#resources`}
                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
               >
-                Manage resources
+                Manage unlock
               </Link>
             ) : null}
 
@@ -320,7 +325,7 @@ export default function ShowcaseDetailActions({
               Delete
             </button>
           </div>
-        </div>
+        </details>
       ) : null}
     </div>
   );

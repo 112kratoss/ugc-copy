@@ -8,7 +8,7 @@ import {
 } from '@/lib/workflow-blueprint';
 
 export type CreatorToolId = 'image' | 'video' | 'motion' | 'workflow';
-export type CreatorToolAccent = 'blue' | 'rose' | 'violet' | 'emerald';
+export type CreatorToolAccent = 'blue' | 'rose' | 'violet' | 'emerald' | 'amber';
 
 export interface CreatorToolDefinition {
   id: CreatorToolId;

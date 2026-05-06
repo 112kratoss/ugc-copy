@@ -1,9 +1,9 @@
 import type { WorkflowCanvasStatus } from '@/lib/workflow-canvas';
 
-export const WORKFLOW_CANVAS_LIST_SELECT = 'id, title, updated_at, revision, status, published_at';
-export const WORKFLOW_CANVAS_LIST_SELECT_LEGACY = 'id, title, updated_at, revision';
-export const WORKFLOW_CANVAS_SELECT = 'id, title, graph, created_at, updated_at, revision, status, published_at';
-export const WORKFLOW_CANVAS_SELECT_LEGACY = 'id, title, graph, created_at, updated_at, revision';
+export const WORKFLOW_CANVAS_LIST_SELECT = 'id,title,updated_at,revision,status,published_at';
+export const WORKFLOW_CANVAS_LIST_SELECT_LEGACY = 'id,title,updated_at,revision';
+export const WORKFLOW_CANVAS_SELECT = 'id,title,graph,created_at,updated_at,revision,status,published_at';
+export const WORKFLOW_CANVAS_SELECT_LEGACY = 'id,title,graph,created_at,updated_at,revision';
 
 type SupabaseLikeError = {
   code?: string | null;
@@ -71,5 +71,21 @@ export function isMissingWorkflowCanvasHistorySchemaError(error: unknown) {
     normalizedError.code === '42P01' ||
     normalizedError.code === '42p01' ||
     text.includes('workflow_canvas_history')
+  );
+}
+
+export function isMissingWorkflowCanvasAssistantSchemaError(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const normalizedError = error as SupabaseLikeError;
+  const text = getSupabaseErrorText(normalizedError);
+
+  return (
+    normalizedError.code === '42P01' ||
+    normalizedError.code === '42p01' ||
+    text.includes('workflow_canvas_assistant_messages') ||
+    text.includes('workflow_canvas_assistant_proposals')
   );
 }

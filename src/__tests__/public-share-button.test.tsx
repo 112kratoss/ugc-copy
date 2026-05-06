@@ -53,7 +53,7 @@ describe('PublicShareButton', () => {
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith({
         title: 'Public creation',
-        text: 'Look what I created on UGC Copy: Public creation',
+        text: 'Look what I created on magicbooklet: Public creation',
         url: shareUrl,
       });
     });
@@ -93,7 +93,7 @@ describe('PublicShareButton', () => {
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith(expect.objectContaining({
         title: 'Hero still',
-        text: 'Look what I created on UGC Copy: Hero still',
+        text: 'Look what I created on magicbooklet: Hero still',
       }));
     });
   });

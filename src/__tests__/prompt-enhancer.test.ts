@@ -5,8 +5,10 @@ import {
   buildPromptEnhancementArtifacts,
   buildPromptStrategyGuidance,
   buildWorkflowPromptFieldGuidance,
+  resolvePromptEnhancementAgent,
   resolvePromptScenario,
 } from '@/lib/prompt-enhancer';
+import { inspectPromptQuality } from '@/lib/prompt-quality';
 import { PROMPT_ENHANCER_FIXTURES } from '@/__tests__/fixtures/prompt-enhancer-fixtures';
 
 describe('prompt enhancer strategy', () => {
@@ -68,6 +70,41 @@ describe('prompt enhancer strategy', () => {
     expect(notGrounded).not.toContain('Google Search grounding is enabled');
   });
 
+  it('routes video enhancement through model-specific agents', () => {
+    expect(resolvePromptEnhancementAgent('kling-3.0-video').id).toBe('kling-video-director');
+    expect(resolvePromptEnhancementAgent('kling-3.0/video').id).toBe('kling-video-director');
+    expect(resolvePromptEnhancementAgent('seedance-2').id).toBe('seedance-2-reference-director');
+    expect(resolvePromptEnhancementAgent('veo-3.1').id).toBe('veo-31-director');
+
+    const guidance = buildEnhancerSystemPrompt(
+      'video',
+      'veo-3.1',
+      { duration: 8, hasStartImage: true, hasEndImage: true },
+      'Turn the product box into the final hero setup'
+    );
+
+    expect(guidance).toContain('Enhancement agent: Veo 3.1 director (veo-31-director)');
+    expect(guidance).toContain('For first/last frames, describe the transition mechanics');
+  });
+
+  it('flags risky video prompts before expensive generation', () => {
+    const inspection = inspectPromptQuality({
+      medium: 'video',
+      selectedModel: 'veo-3.1',
+      prompt: 'Cool cinematic video then it opens then it explodes and says "buy now"',
+      context: { duration: 8, sound: true },
+    });
+
+    expect(inspection.qualityScore).toBeLessThan(100);
+    expect(inspection.warnings.map((warning) => warning.code)).toEqual(
+      expect.arrayContaining([
+        'too_many_events_for_duration',
+        'missing_camera_intent',
+        'veo_quoted_dialogue',
+      ])
+    );
+  });
+
   it('builds structured image artifacts for Nano Banana 2 with concise readable-text output', () => {
     const artifacts = buildPromptEnhancementArtifacts(
       'image',
@@ -124,6 +161,36 @@ describe('prompt enhancer strategy', () => {
     expect(artifacts.compiledPrompt).toContain('Preserve the attached creator identity and the exact product packaging');
     expect(artifacts.compiledPrompt).toContain('Include readable text "Build Your Routine"');
     expect(artifacts.compiledPrompt).toContain('Keep the branding legible and the product label unobstructed');
+  });
+
+  it('builds structured image artifacts for GPT Image 2', () => {
+    const artifacts = buildPromptEnhancementArtifacts(
+      'image',
+      'gpt-image-2',
+      JSON.stringify({
+        subject: 'a ChatGPT-style product campaign still',
+        setting: 'on a warm amber studio set',
+        composition: 'clean ad composition with strong headline space',
+        cameraFraming: 'three-quarter product framing',
+        lighting: 'warm directional key light',
+        materialDetail: 'crisp packaging texture and realistic reflections',
+        referenceAnchors: ['the exact product shape'],
+        readableText: {
+          exactText: 'Glow Faster',
+          placement: 'top-left headline area',
+          treatment: 'bold editorial sans-serif',
+        },
+        finish: 'premium commercial polish',
+      }),
+      { referenceImageCount: 1 },
+      'ChatGPT image product ad'
+    );
+
+    expect(artifacts.playbookId).toBe('gpt-image-2');
+    expect(artifacts.plannerMode).toBe('structured-image');
+    expect(artifacts.compiledPrompt).toContain('ChatGPT-style product campaign still');
+    expect(artifacts.compiledPrompt).toContain('Preserve the exact product shape');
+    expect(artifacts.compiledPrompt).toContain('Include readable text "Glow Faster"');
   });
 
   it('compiles Veo prompts without quoted dialogue and keeps one scene per clip', () => {

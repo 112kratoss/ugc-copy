@@ -43,7 +43,7 @@ describe('/api/showcase/share route', () => {
       visibility: 'public',
       category: 'image',
       prompt: 'Prompt',
-      source_kind: 'ugc_copy',
+      source_kind: 'magicbooklet',
     });
 
     const { POST } = await import('@/app/api/showcase/share/route');

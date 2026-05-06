@@ -37,7 +37,7 @@ type PostRow = {
   remix_count: number | null;
   created_at: string;
   generation_id: string | null;
-  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_kind: 'magicbooklet' | 'emptybooklet' | 'ugc_copy' | 'external' | 'manual';
   source_tool: string | null;
   user_id: string;
   visibility: 'public' | 'unlisted' | 'private';
@@ -47,6 +47,7 @@ type PostRow = {
 let profilesState: ProfileRow[] = [];
 let generationsState: GenerationRow[] = [];
 let postsState: PostRow[] = [];
+let postsMissingSourceToolSlugColumn = false;
 
 function createServiceClientMock() {
   return {
@@ -118,7 +119,7 @@ function createServiceClientMock() {
 
       if (table === 'posts') {
         return {
-          select() {
+          select(fields?: string) {
             const filters: Record<string, unknown> = {};
             return {
               eq(column: string, value: unknown) {
@@ -133,6 +134,16 @@ function createServiceClientMock() {
                 return this;
               },
               async limit(limit: number) {
+                if (postsMissingSourceToolSlugColumn && fields?.includes('source_tool_slug')) {
+                  return {
+                    data: null,
+                    error: {
+                      code: '42703',
+                      message: 'column posts.source_tool_slug does not exist',
+                    },
+                  };
+                }
+
                 const rows = postsState
                   .filter((row) =>
                     Object.entries(filters).every(([key, value]) =>
@@ -152,21 +163,11 @@ function createServiceClientMock() {
       if (table === 'marketplace_assets') {
         return {
           select() {
-            let postIds: unknown[] = [];
-            let status: unknown = null;
-
             return {
-              in(column: string, values: unknown[]) {
-                if (column === 'post_id') {
-                  postIds = values;
-                }
+              in() {
                 return this;
               },
-              async eq(column: string, value: unknown) {
-                if (column === 'status') {
-                  status = value;
-                }
-
+              async eq() {
                 return {
                   data: [],
                   error: null,
@@ -264,11 +265,12 @@ describe('creator profile data loader', () => {
         remix_count: 4,
         created_at: '2026-03-19T10:00:00.000Z',
         generation_id: 'gen-1',
-        source_kind: 'ugc_copy',
+        source_kind: 'magicbooklet',
         source_tool: null,
         visibility: 'public',
       },
     ];
+    postsMissingSourceToolSlugColumn = false;
   });
 
   afterEach(() => {
@@ -284,6 +286,29 @@ describe('creator profile data loader', () => {
     expect(data?.items).toHaveLength(1);
     expect(data?.items[0].creator.username).toBe('creator-name');
     expect(data?.stats.totalSaves).toBe(12);
+  });
+
+  it('falls back when the source tool slug column is not deployed yet', async () => {
+    postsMissingSourceToolSlugColumn = true;
+    postsState[0].source_tool = 'Runway';
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const data = await getCreatorProfilePageData('Creator-Name');
+
+    expect(data).not.toBeNull();
+    expect(data?.items).toHaveLength(1);
+    expect(data?.items[0].sourceToolSlug).toBe('runway');
+  });
+
+  it('normalizes legacy app-owned source kinds to magicbooklet', async () => {
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+
+    for (const sourceKind of ['emptybooklet', 'ugc_copy'] as const) {
+      postsState[0].source_kind = sourceKind;
+      const data = await getCreatorProfilePageData('Creator-Name');
+
+      expect(data).not.toBeNull();
+      expect(data?.items[0].sourceKind).toBe('magicbooklet');
+    }
   });
 
   it('returns null for unknown usernames', async () => {

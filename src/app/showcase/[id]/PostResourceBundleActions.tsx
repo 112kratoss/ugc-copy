@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Copy, ExternalLink, Loader2, ShoppingCart } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
+import { getCurrentInternalPath } from '@/lib/share';
 
 declare global {
   interface Window {
@@ -49,14 +50,14 @@ export default function PostResourceBundleActions({
 
   const accessLabel = useMemo(() => {
     if (viewerIsOwner) {
-      return 'You own these resources.';
+      return 'You own this unlock.';
     }
 
     if (viewerCanAccess) {
-      return 'Resources unlocked on this post.';
+      return 'Unlock opened on this post.';
     }
 
-    return isFree ? 'Unlock the full prompt, remix access, and workflow notes for free.' : `Unlock the full resource bundle for ${priceLabel}.`;
+    return isFree ? 'Open the prompt, remix access, and workflow notes for free.' : `Open the full unlock for ${priceLabel}.`;
   }, [isFree, priceLabel, viewerCanAccess, viewerIsOwner]);
 
   const copyText = async (value: string, successMessage: string) => {
@@ -72,7 +73,7 @@ export default function PostResourceBundleActions({
 
   const unlockFree = async () => {
     if (!session?.access_token) {
-      router.push(`/login?returnUrl=${encodeURIComponent(`/showcase/${postId}`)}`);
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}#resources`))}`);
       return;
     }
 
@@ -90,12 +91,12 @@ export default function PostResourceBundleActions({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to unlock free resources.');
+        throw new Error(data.error || 'Failed to open the free unlock.');
       }
 
       router.refresh();
     } catch (unlockError) {
-      setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock free resources.');
+      setError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
     } finally {
       setIsWorking(false);
     }
@@ -103,7 +104,7 @@ export default function PostResourceBundleActions({
 
   const startCheckout = async () => {
     if (!session?.access_token) {
-      router.push(`/login?returnUrl=${encodeURIComponent(`/showcase/${postId}`)}`);
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}#resources`))}`);
       return;
     }
 
@@ -141,7 +142,7 @@ export default function PostResourceBundleActions({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'UGC copy resources',
+        name: 'magicbooklet unlock',
         description: orderData.bundleTitle || title,
         order_id: orderData.orderId,
         handler: async (response: {
@@ -207,7 +208,7 @@ export default function PostResourceBundleActions({
             className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            {isFree ? 'Unlock free resources' : 'Unlock resources'}
+            {isFree ? 'Open free unlock' : 'Unlock'}
           </button>
         ) : null}
 

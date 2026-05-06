@@ -12,7 +12,9 @@ const mockRedirect = vi.fn((target: string) => {
 });
 const getPostReferenceForShowcaseIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const getPublicPostDetailMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
-const recordPostShareEventMock = vi.fn(async (_payload?: unknown) => undefined);
+const recordPostShareEventMock = vi.fn(async (_payload: unknown) => {
+  void _payload;
+});
 
 vi.mock('next/headers', () => ({
   headers: () => mockHeaders(),
@@ -62,7 +64,7 @@ describe('Showcase detail page', () => {
       visibility: 'public',
       category: 'image',
       prompt: 'Prompt',
-      source_kind: 'ugc_copy',
+      source_kind: 'magicbooklet',
     });
     getPublicPostDetailMock.mockResolvedValue({
       id: 'post-1',
@@ -82,7 +84,7 @@ describe('Showcase detail page', () => {
       shareCount: 7,
       shareVisitCount: 18,
       createdAt: '2026-03-28T10:00:00.000Z',
-      sourceKind: 'ugc_copy',
+      sourceKind: 'magicbooklet',
       sourceTool: null,
       creator: {
         id: 'user-1',
@@ -115,6 +117,21 @@ describe('Showcase detail page', () => {
     });
   });
 
+  it('uses the source return context for the detail back link', async () => {
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+      searchParams: Promise.resolve({
+        from: 'unlocks',
+        returnTo: '/marketplace?access=paid&resource=workflow',
+      }),
+    }));
+
+    expect(screen.getByRole('link', { name: /back to unlocks/i })).toHaveAttribute(
+      'href',
+      '/marketplace?access=paid&resource=workflow'
+    );
+  });
+
   it('generates canonical metadata for the public detail page', async () => {
     const metadata = await generateMetadata({
       params: Promise.resolve({ id: 'post-1' }),
@@ -139,7 +156,7 @@ describe('Showcase detail page', () => {
       visibility: 'public',
       category: 'image',
       prompt: 'Prompt',
-      source_kind: 'ugc_copy',
+      source_kind: 'magicbooklet',
     });
 
     await expect(ShowcaseDetailPage({

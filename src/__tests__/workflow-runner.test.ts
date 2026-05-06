@@ -14,11 +14,26 @@ const resolveStoredMediaUrlMock = vi.fn(
   async (_adminClient: unknown, outputUrl: string) =>
     `https://signed.example.com/${encodeURIComponent(outputUrl)}`
 );
-const startVideoGenerationMock = vi.fn();
+type StartVideoGenerationResult = {
+  predictionId: string;
+  remainingCredits: number;
+  cost: number;
+  generationId: string;
+};
+type ResolveVideoStart = (value: StartVideoGenerationResult) => void;
+const startVideoGenerationMock = vi.fn(async (..._args: unknown[]): Promise<StartVideoGenerationResult> => {
+  void _args;
+  return {
+    predictionId: 'pred-video',
+    remainingCredits: 42,
+    cost: 30,
+    generationId: 'gen-video',
+  };
+});
 const syncGenerationStatusesMock = vi.fn(async () => undefined);
 
 vi.mock('@/lib/server-helpers', () => ({
-  createServiceClient: (...args: unknown[]) => createServiceClientMock(...args),
+  createServiceClient: () => createServiceClientMock(),
   resolveStoredMediaUrl: (...args: Parameters<typeof resolveStoredMediaUrlMock>) =>
     resolveStoredMediaUrlMock(...args),
 }));
@@ -321,14 +336,7 @@ describe('workflow-runner recovery', () => {
   it('dedupes concurrent recovery polls for the same run', async () => {
     const state = createQueuedWorkflowState();
     const supabase = createSupabaseMock(state);
-    let resolveVideoStart:
-      | ((value: {
-          predictionId: string;
-          remainingCredits: number;
-          cost: number;
-          generationId: string;
-        }) => void)
-      | null = null;
+    let resolveVideoStart: ResolveVideoStart | null = null;
 
     startVideoGenerationMock.mockImplementation(
       () =>
@@ -353,7 +361,9 @@ describe('workflow-runner recovery', () => {
       expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
     });
 
-    resolveVideoStart?.({
+    const finishVideoStart = resolveVideoStart as unknown as ResolveVideoStart;
+    expect(finishVideoStart).toBeTruthy();
+    finishVideoStart({
       predictionId: 'pred-video',
       remainingCredits: 42,
       cost: 30,

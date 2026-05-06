@@ -13,6 +13,7 @@ export interface GenerationTiming {
   completedAtMs: number | null;
   elapsedMs: number | null;
   completedInMs: number | null;
+  estimatedTotalMs?: number | null;
 }
 
 type TimingDescriptor = {
@@ -38,6 +39,35 @@ const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+const MIN_PROGRESS_PERCENT = 8;
+const MAX_ACTIVE_PROGRESS_PERCENT = 96;
+
+const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
+  'nano-banana-2': 120_000,
+  'nano-banana-pro': 165_000,
+  'gpt-image-2': 120_000,
+  'grok-imagine-image': 105_000,
+};
+
+const IMAGE_RESOLUTION_ESTIMATE_MS: Record<string, number> = {
+  '1K': 0,
+  '2K': 30_000,
+  '4K': 75_000,
+};
+
+const VIDEO_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
+  'kling-3.0-video': 90_000,
+  'seedance-1.5-pro': 90_000,
+  'seedance-2': 180_000,
+  'seedance-2-fast': 120_000,
+  'veo-3.1': 210_000,
+  'grok-imagine-video': 150_000,
+};
+
+const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
+  'kling-2.6': 180_000,
+  'kling-3.0': 240_000,
+};
 
 function normalizeNumericTimestamp(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -242,6 +272,7 @@ function buildGenerationTiming(params: {
   updatedAtMs?: number | null;
   completedAtMs?: number | null;
   completedInMs?: number | null;
+  estimatedTotalMs?: number | null;
   phaseLabel?: string | null;
   nowMs?: number;
 }): GenerationTiming {
@@ -273,6 +304,7 @@ function buildGenerationTiming(params: {
     completedAtMs,
     elapsedMs,
     completedInMs,
+    estimatedTotalMs: params.estimatedTotalMs ?? null,
   };
 }
 
@@ -281,6 +313,7 @@ export function createLocalGenerationTiming(params: {
   phaseLabel: string;
   startedAtMs?: number;
   appStatus?: GenerationAppStatus;
+  estimatedTotalMs?: number | null;
   nowMs?: number;
 }): GenerationTiming {
   return buildGenerationTiming({
@@ -289,6 +322,7 @@ export function createLocalGenerationTiming(params: {
     providerState: null,
     phaseLabel: params.phaseLabel,
     startedAtMs: params.startedAtMs ?? (params.nowMs ?? Date.now()),
+    estimatedTotalMs: params.estimatedTotalMs,
     nowMs: params.nowMs,
   });
 }
@@ -379,14 +413,104 @@ export function freezeGenerationTiming(timing: GenerationTiming, nowMs = Date.no
   };
 }
 
+export function estimateGenerationDurationMs(params: {
+  kind: GenerationKind;
+  model?: string | null;
+  resolution?: string | null;
+  mode?: string | null;
+  durationSeconds?: number | null;
+  isMultiShot?: boolean | null;
+  shotCount?: number | null;
+  referenceCount?: number | null;
+  hasSound?: boolean | null;
+  hasReferenceVideo?: boolean | null;
+}): number | null {
+  if (params.kind === 'image') {
+    const baseMs = params.model ? IMAGE_MODEL_BASE_ESTIMATE_MS[params.model] : null;
+    if (!baseMs) {
+      return null;
+    }
+
+    const resolutionMs = params.resolution ? (IMAGE_RESOLUTION_ESTIMATE_MS[params.resolution] ?? 0) : 0;
+    const referenceCount = Math.max(0, params.referenceCount ?? 0);
+    const referenceMs = referenceCount > 0 ? 15_000 + Math.min(referenceCount, 16) * 5_000 : 0;
+
+    return baseMs + resolutionMs + referenceMs;
+  }
+
+  if (params.kind === 'video') {
+    const baseMs = params.model ? VIDEO_MODEL_BASE_ESTIMATE_MS[params.model] : null;
+    if (!baseMs) {
+      return null;
+    }
+
+    const durationSeconds = Math.max(0, params.durationSeconds ?? 0);
+    const referenceCount = Math.max(0, params.referenceCount ?? 0);
+    const shotCount = Math.max(0, params.shotCount ?? 0);
+    const durationMs = durationSeconds * (
+      params.model === 'seedance-2-fast' ? 8_000 :
+      params.model === 'seedance-2' ? 10_000 :
+      params.model === 'veo-3.1' ? 0 :
+      12_000
+    );
+    const resolutionMs =
+      params.resolution === '1080p' ? 45_000 :
+      params.resolution === '480p' ? -15_000 :
+      0;
+    const modeMs =
+      params.mode === 'pro' || params.mode === 'veo3' ? 90_000 :
+      params.mode === 'veo3_fast' ? 0 :
+      0;
+    const soundMs = params.hasSound ? 30_000 : 0;
+    const referenceMs = referenceCount > 0 ? 20_000 + Math.min(referenceCount, 8) * 10_000 : 0;
+    const referenceVideoMs = params.hasReferenceVideo ? -30_000 : 0;
+    const multiShotMs = params.isMultiShot ? Math.max(1, shotCount || 2) * 45_000 : 0;
+
+    return Math.max(60_000, baseMs + durationMs + resolutionMs + modeMs + soundMs + referenceMs + referenceVideoMs + multiShotMs);
+  }
+
+  if (params.kind === 'motion') {
+    const baseMs = params.model ? MOTION_MODEL_BASE_ESTIMATE_MS[params.model] : null;
+    if (!baseMs) {
+      return null;
+    }
+
+    const durationSeconds = Math.max(0, params.durationSeconds ?? 0);
+    const durationMs = durationSeconds * (params.model === 'kling-3.0' ? 10_000 : 8_000);
+    const resolutionMs = params.resolution === '1080p' ? 60_000 : 0;
+
+    return baseMs + durationMs + resolutionMs;
+  }
+
+  return null;
+}
+
+export function withGenerationTimingEstimate(
+  timing: GenerationTiming,
+  estimatedTotalMs: number | null | undefined
+): GenerationTiming {
+  if (!estimatedTotalMs) {
+    return timing;
+  }
+
+  return {
+    ...timing,
+    estimatedTotalMs,
+  };
+}
+
 export function getGenerationTimingSummaryLabel(timing: GenerationTiming, nowMs = Date.now()): string | null {
   if (timing.completedInMs !== null) {
     return `Completed in ${formatDurationShort(timing.completedInMs)}`;
   }
 
   const elapsedMs =
-    timing.elapsedMs ??
-    (timing.startedAtMs !== null ? Math.max(0, nowMs - timing.startedAtMs) : null);
+    timing.appStatus === 'processing' || timing.appStatus === 'waiting'
+      ? timing.startedAtMs !== null
+        ? Math.max(0, nowMs - timing.startedAtMs)
+        : timing.elapsedMs
+      : timing.elapsedMs ??
+        (timing.startedAtMs !== null ? Math.max(0, nowMs - timing.startedAtMs) : null);
 
   if (elapsedMs === null) {
     return null;
@@ -395,8 +519,56 @@ export function getGenerationTimingSummaryLabel(timing: GenerationTiming, nowMs 
   return `Elapsed ${formatElapsedClock(elapsedMs)}`;
 }
 
+export function getGenerationTimingCountdownLabel(timing: GenerationTiming, nowMs = Date.now()): string | null {
+  if (
+    timing.appStatus === 'succeeded' ||
+    timing.appStatus === 'failed' ||
+    timing.completedInMs !== null ||
+    timing.startedAtMs === null ||
+    !timing.estimatedTotalMs
+  ) {
+    return null;
+  }
+
+  const elapsedMs = Math.max(0, nowMs - timing.startedAtMs);
+  const remainingMs = timing.estimatedTotalMs - elapsedMs;
+
+  if (remainingMs <= 0) {
+    return 'Taking longer than usual';
+  }
+
+  return `Est. ${formatCountdownClock(remainingMs)} left`;
+}
+
+export function getGenerationTimingProgressPercent(timing: GenerationTiming, nowMs = Date.now()): number | null {
+  if (timing.completedInMs !== null || timing.appStatus === 'succeeded') {
+    return 100;
+  }
+
+  if (timing.startedAtMs === null || !timing.estimatedTotalMs) {
+    return null;
+  }
+
+  const elapsedMs = Math.max(0, nowMs - timing.startedAtMs);
+  const progress = (elapsedMs / timing.estimatedTotalMs) * 100;
+  return Math.min(MAX_ACTIVE_PROGRESS_PERCENT, Math.max(MIN_PROGRESS_PERCENT, progress));
+}
+
 export function formatElapsedClock(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationMs / SECOND_MS));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatCountdownClock(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(durationMs / SECOND_MS));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;

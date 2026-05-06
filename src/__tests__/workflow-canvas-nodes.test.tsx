@@ -167,6 +167,30 @@ describe('WorkflowCanvasNodes edge controls', () => {
     expect(screen.getByTestId('workflow-node-action-delete')).toBeInTheDocument();
   });
 
+  it('shows assistant preview badges for assistant-managed nodes', () => {
+    const graph = createStarterGraph();
+    const node = graph.nodes.find((candidate) => candidate.type === 'video-generate');
+    expect(node).toBeTruthy();
+
+    const WorkflowNode = workflowCanvasNodeTypes['video-generate'] as unknown as ComponentType<Record<string, unknown>>;
+
+    render(
+      <WorkflowNode
+        id={node?.id}
+        data={{
+          ...node?.data,
+          __runtime: {
+            assistantManaged: true,
+            assistantPreviewState: 'changed',
+          },
+        }}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByText('Changed')).toBeInTheDocument();
+  });
+
   it('keeps image and video generator output handles vertically centered on compact cards', () => {
     const graph = createStarterGraph();
     const imageNode = graph.nodes.find((candidate) => candidate.type === 'image-generate');

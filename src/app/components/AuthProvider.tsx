@@ -30,12 +30,16 @@ export function AuthProvider({
     initialCredits?: number | null;
     hasResolvedInitialState?: boolean;
 }) {
-    const clientE2EAuth = getClientE2EAuthState();
+    const [clientE2EAuth] = useState(() => getClientE2EAuthState());
     const [session, setSession] = useState<Session | null>(initialSession ?? clientE2EAuth?.session ?? null);
     const [credits, setCredits] = useState<number | null>(initialCredits ?? clientE2EAuth?.credits ?? null);
     const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
 
     useEffect(() => {
+        if (clientE2EAuth) {
+            return;
+        }
+
         let isActive = true;
 
         const syncSessionState = async (nextSession?: Session | null) => {
@@ -96,7 +100,7 @@ export function AuthProvider({
             subscription.unsubscribe();
             window.removeEventListener('credits_updated', handleCreditsUpdated);
         };
-    }, [hasResolvedInitialState]);
+    }, [clientE2EAuth, hasResolvedInitialState]);
 
     const refreshSessionState = async () => {
         setIsLoading(true);

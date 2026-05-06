@@ -19,6 +19,7 @@ export interface EditablePostDraft {
   postFormat: ShowcasePostFormat;
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
+  sourceToolSlug?: string | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
   archivedAt: string | null;

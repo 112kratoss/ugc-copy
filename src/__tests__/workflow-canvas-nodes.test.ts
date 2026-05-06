@@ -27,12 +27,23 @@ describe('workflow canvas node summaries', () => {
       model: 'nano-banana-pro',
       googleSearch: true,
     } as never) as ImageGenerateNodeData;
+    const gptImage = normalizeNodeData('image-generate', {
+      model: 'gpt-image-2',
+      aspectRatio: '4:5',
+      resolution: '4K',
+      outputFormat: 'png',
+      googleSearch: true,
+    } as never) as ImageGenerateNodeData;
 
     expect(getImageGenerateNodeSummary(image)).toEqual([
       'Aspect 16:9',
       '2K • PNG • Google Search',
     ]);
     expect(getImageGenerateNodeSummary(proImage)[1]).toBe('1K • JPG');
+    expect(getImageGenerateNodeSummary(gptImage)).toEqual([
+      'Aspect 4:5',
+      '4K',
+    ]);
   });
 
   it('shows only model-relevant video-generator settings', () => {
@@ -100,8 +111,11 @@ describe('workflow canvas node summaries', () => {
       referenceImageLimit: 14,
       totalReferenceImageCount: 3,
       referenceVideoCount: 0,
+      referenceAudioCount: 0,
       referenceVideoLimit: null,
       referenceVideoDurationLimitSeconds: null,
+      connectedElementCount: 0,
+      legacyElementCount: 0,
       namedElementCount: 0,
       namedElementLimit: 14,
       startFrameCount: 0,
@@ -123,8 +137,11 @@ describe('workflow canvas node summaries', () => {
       referenceImageLimit: 1,
       totalReferenceImageCount: 0,
       referenceVideoCount: 0,
+      referenceAudioCount: 0,
       referenceVideoLimit: null,
       referenceVideoDurationLimitSeconds: null,
+      connectedElementCount: 0,
+      legacyElementCount: 0,
       namedElementCount: 0,
       namedElementLimit: 0,
       startFrameCount: 0,
@@ -155,8 +172,11 @@ describe('workflow canvas node summaries', () => {
       referenceImageLimit: 1,
       totalReferenceImageCount: 1,
       referenceVideoCount: 1,
+      referenceAudioCount: 0,
       referenceVideoLimit: 1,
       referenceVideoDurationLimitSeconds: 30,
+      connectedElementCount: 0,
+      legacyElementCount: 0,
       namedElementCount: 0,
       namedElementLimit: null,
       startFrameCount: 0,

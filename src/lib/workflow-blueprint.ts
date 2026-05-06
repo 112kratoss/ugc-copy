@@ -157,11 +157,21 @@ function normalizeStringArray(value: unknown, fallback: string[]): string[] {
 }
 
 function normalizeBlueprintImageModel(value: unknown): ImageModelId {
-  return value === 'nano-banana-pro' ? 'nano-banana-pro' : 'nano-banana-2';
+  if (value === 'nano-banana-pro' || value === 'gpt-image-2' || value === 'grok-imagine-image') {
+    return value;
+  }
+
+  return 'nano-banana-2';
 }
 
 function normalizeBlueprintVideoModel(value: unknown): VideoModelId {
-  if (value === 'seedance-1.5-pro' || value === 'seedance-2' || value === 'seedance-2-fast' || value === 'veo-3.1') {
+  if (
+    value === 'seedance-1.5-pro' ||
+    value === 'seedance-2' ||
+    value === 'seedance-2-fast' ||
+    value === 'veo-3.1' ||
+    value === 'grok-imagine-video'
+  ) {
     return value;
   }
 
@@ -198,7 +208,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
     'You are an expert creative strategist building a production-ready AI generation workflow for short-form ads and videos.',
     'Return valid JSON only. No markdown. No commentary.',
     'The JSON schema is: {"title":string,"creativeStrategy":string,"hook":string,"narrative":string,"voiceover":string,"editingNotes":string[],"assetChecklist":string[],"shots":[{"id":string,"title":string,"purpose":string,"beat":string,"visualPrompt":string,"videoPrompt":string,"motionPrompt":string,"duration":number}],"deliveryPlan":{"primaryModel":string,"stillImageModel":string,"motionModel":string,"recommendedSequence":string[]}}.',
-    'Use the existing models only: stillImageModel must be nano-banana-2 or nano-banana-pro; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, or veo-3.1; motionModel must be kling-2.6 or kling-3.0.',
+    'Use the existing models only: stillImageModel must be nano-banana-2, nano-banana-pro, gpt-image-2, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
     `Plan for a ${input.durationSeconds}-second ${input.objective} in ${input.aspectRatio} for ${input.platform}.`,
     'Generate 3 to 6 shots. Each prompt should be directly usable in an AI generation UI and must stay commercially focused.',
     buildWorkflowPromptFieldGuidance({
@@ -206,7 +216,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
       modelSelector: 'stillImageModel',
       medium: 'image',
       scenario: 'image.text_to_image',
-      modelIds: ['nano-banana-2', 'nano-banana-pro'],
+      modelIds: ['nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'grok-imagine-image'],
       context: plannerContext,
     }),
     buildWorkflowPromptFieldGuidance({
@@ -214,7 +224,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
       modelSelector: 'primaryModel',
       medium: 'video',
       scenario: 'video.image_to_video_start_frame',
-      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'veo-3.1'],
+      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'veo-3.1', 'grok-imagine-video'],
       context: plannerContext,
       additionalRules: [
         'These prompts should still read clearly as standalone text prompts, but they should stay reference-friendly because the workflow often pairs them with a still frame.',
@@ -465,6 +475,10 @@ function formatMotionPrompt(shot: WorkflowShot, index: number): string {
 function getBlueprintVideoMode(model: WorkflowBlueprint['deliveryPlan']['primaryModel']): string {
   if (model === 'veo-3.1') {
     return 'veo3_fast';
+  }
+
+  if (model === 'grok-imagine-video') {
+    return 'normal';
   }
 
   if (model === 'kling-3.0-video') {

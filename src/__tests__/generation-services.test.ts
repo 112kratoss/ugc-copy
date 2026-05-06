@@ -271,6 +271,229 @@ describe('generation services', () => {
     expect(String(generations[0].workflow_settings?.compiledPrompt)).toContain('@hero');
   });
 
+  it('uses GPT Image 2 text-to-image provider payload when no references are attached', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-gpt-image-2-text-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'A premium skincare product hero image.',
+      model: 'gpt-image-2',
+      aspectRatio: '4:5',
+      resolution: '2K',
+    });
+
+    expect(providerBody).toEqual({
+      model: 'gpt-image-2-text-to-image',
+      input: {
+        prompt: 'A premium skincare product hero image.',
+        aspect_ratio: '4:5',
+        resolution: '2K',
+      },
+    });
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 10 },
+    });
+    expect(generations[0]).toMatchObject({
+      model: 'gpt-image-2',
+      cost: 10,
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      model: 'gpt-image-2',
+      providerModel: 'gpt-image-2-text-to-image',
+    });
+  });
+
+  it('uses GPT Image 2 image-to-image provider payload when references are attached', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-gpt-image-2-edit-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Keep @hero but change the background to warm marble.',
+      model: 'gpt-image-2',
+      imageUrls: ['https://cdn.example.com/hero.png'],
+      elements: [
+        {
+          id: 'element-1',
+          displayName: 'Hero product',
+          handle: '@hero',
+          storagePath: null,
+          sourceGenerationId: null,
+        },
+      ],
+      aspectRatio: '1:1',
+      resolution: '2K',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'gpt-image-2-image-to-image',
+      input: {
+        input_urls: ['https://cdn.example.com/hero.png'],
+        aspect_ratio: '1:1',
+        resolution: '2K',
+      },
+    });
+    const providerInput = (providerBody as unknown as { input: Record<string, unknown> }).input;
+    expect(providerInput).not.toHaveProperty('image_input');
+    expect(providerInput).not.toHaveProperty('output_format');
+    expect(generations[0].workflow_settings).toMatchObject({
+      providerModel: 'gpt-image-2-image-to-image',
+      elements: [
+        expect.objectContaining({
+          handle: '@hero',
+        }),
+      ],
+    });
+  });
+
+  it('rejects invalid GPT Image 2 resolution combinations before deducting credits', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'A square product visual.',
+      model: 'gpt-image-2',
+      aspectRatio: '1:1',
+      resolution: '4K',
+    })).rejects.toThrow('GPT Image 2 supports 1K, 2K at aspect ratio 1:1.');
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('uses Grok text-to-image provider payload and quality pricing without references', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-grok-image-text-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'A surreal product launch poster.',
+      model: 'grok-imagine-image',
+      aspectRatio: '3:2',
+      qualityMode: 'quality',
+    });
+
+    expect(providerBody).toEqual({
+      model: 'grok-imagine/text-to-image',
+      input: {
+        prompt: 'A surreal product launch poster.',
+        nsfw_checker: true,
+        aspect_ratio: '3:2',
+        enable_pro: true,
+      },
+    });
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 5 },
+    });
+    expect(generations[0]).toMatchObject({
+      model: 'grok-imagine-image',
+      cost: 5,
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      providerModel: 'grok-imagine/text-to-image',
+      qualityMode: 'quality',
+    });
+  });
+
+  it('uses Grok image-to-image provider payload and fixed edit pricing with one reference', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-grok-image-edit-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Restyle @hero as a neon storefront campaign.',
+      model: 'grok-imagine-image',
+      imageUrls: ['https://cdn.example.com/hero.png'],
+      qualityMode: 'quality',
+      elements: [
+        {
+          id: 'element-1',
+          displayName: 'Hero',
+          handle: '@hero',
+          storagePath: null,
+          sourceGenerationId: null,
+        },
+      ],
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'grok-imagine/image-to-image',
+      input: {
+        image_urls: ['https://cdn.example.com/hero.png'],
+        nsfw_checker: true,
+      },
+    });
+    expect((providerBody as unknown as { input: Record<string, unknown> }).input).not.toHaveProperty('enable_pro');
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 4 },
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      providerModel: 'grok-imagine/image-to-image',
+    });
+  });
+
+  it('rejects Grok image runs with more than one reference before deducting credits', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Combine these references.',
+      model: 'grok-imagine-image',
+      imageUrls: ['https://cdn.example.com/one.png', 'https://cdn.example.com/two.png'],
+    })).rejects.toThrow('Grok Imagine supports up to 1 total reference images.');
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('sends Veo video generations with start and end frames', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -304,6 +527,120 @@ describe('generation services', () => {
       ],
     });
     expect(generations[0].workflow_settings?.referenceMode).toBe('frames');
+  });
+
+  it('uses Grok text-to-video provider payload without references', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-grok-video-text-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'A playful product reveal with quick camera energy.',
+      model: 'grok-imagine-video',
+      mode: 'fun',
+      aspectRatio: '16:9',
+      duration: 6,
+      resolution: '480p',
+    });
+
+    expect(providerBody).toEqual({
+      model: 'grok-imagine/text-to-video',
+      input: {
+        prompt: 'A playful product reveal with quick camera energy.',
+        mode: 'fun',
+        duration: 6,
+        resolution: '480p',
+        nsfw_checker: true,
+        aspect_ratio: '16:9',
+      },
+    });
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 10 },
+    });
+    expect(generations[0]).toMatchObject({
+      model: 'grok-imagine/text-to-video',
+      cost: 10,
+      duration: 6,
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      model: 'grok-imagine-video',
+      providerModel: 'grok-imagine/text-to-video',
+      providerMode: 'fun',
+    });
+  });
+
+  it('uses Grok image-to-video payload and coerces spicy external images to normal', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-grok-video-image-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Animate the still with a slow push-in.',
+      model: 'grok-imagine-video',
+      mode: 'spicy',
+      aspectRatio: '9:16',
+      duration: 10,
+      resolution: '720p',
+      startImageUrl: 'https://cdn.example.com/start.jpg',
+    });
+
+    expect(providerBody).toEqual({
+      model: 'grok-imagine/image-to-video',
+      input: {
+        prompt: 'Animate the still with a slow push-in.',
+        mode: 'normal',
+        duration: 10,
+        resolution: '720p',
+        nsfw_checker: true,
+        image_urls: ['https://cdn.example.com/start.jpg'],
+      },
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      providerModel: 'grok-imagine/image-to-video',
+      requestedMode: 'spicy',
+      providerMode: 'normal',
+    });
+  });
+
+  it('rejects Grok image-to-video runs with more than one frame before deducting credits', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Move between these images.',
+      model: 'grok-imagine-video',
+      mode: 'normal',
+      duration: 6,
+      resolution: '480p',
+      startImageUrl: 'https://cdn.example.com/start.jpg',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+    })).rejects.toThrow('Grok Imagine Video supports up to 1 image reference per run.');
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('sends Seedance 2 generations with image, video, and audio references', async () => {

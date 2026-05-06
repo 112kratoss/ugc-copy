@@ -13,7 +13,11 @@ import {
 } from '@/lib/generation-feedback';
 import { supabase } from '@/lib/supabase';
 
-const STATUS_CACHE_STORAGE_KEY = 'ugc:generation-status-cache:v1';
+const STATUS_CACHE_STORAGE_KEY = 'magicbooklet:generation-status-cache:v1';
+const LEGACY_STATUS_CACHE_STORAGE_KEYS = [
+  'emptybooklet:generation-status-cache:v1',
+  'ugc:generation-status-cache:v1',
+];
 const TOAST_LIFETIME_MS = 8000;
 const POLL_INTERVAL_MS = 30000;
 
@@ -40,7 +44,11 @@ function readStatusCache(): Record<string, string> {
   }
 
   try {
-    const raw = window.sessionStorage.getItem(STATUS_CACHE_STORAGE_KEY);
+    const raw =
+      window.sessionStorage.getItem(STATUS_CACHE_STORAGE_KEY) ??
+      LEGACY_STATUS_CACHE_STORAGE_KEYS
+        .map((key) => window.sessionStorage.getItem(key))
+        .find((value) => Boolean(value));
     if (!raw) {
       return {};
     }
@@ -71,6 +79,9 @@ function clearStatusCache() {
 
   try {
     window.sessionStorage.removeItem(STATUS_CACHE_STORAGE_KEY);
+    LEGACY_STATUS_CACHE_STORAGE_KEYS.forEach((key) => {
+      window.sessionStorage.removeItem(key);
+    });
   } catch {
     // Ignore storage failures.
   }

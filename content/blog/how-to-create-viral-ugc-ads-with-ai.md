@@ -40,7 +40,7 @@ This is the magic ingredient. Record yourself—or anyone—delivering the scrip
 - The AI will extract the *movement* and map it perfectly to your character photograph.
 
 ### 3. Generate and Scale
-Upload both assets into UGC copy. Within minutes, you'll receive a broadcast-quality, 30-second video featuring your chosen character delivering your exact performance.
+Upload both assets into magicbooklet. Within minutes, you'll receive a broadcast-quality, 30-second video featuring your chosen character delivering your exact performance.
 
 Because this process only costs a few credits per generated video, you can afford to A/B test 10 different opening hooks locally before putting budget behind your ads.
 

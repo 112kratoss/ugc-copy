@@ -90,6 +90,15 @@ export function normalizeUsername(value: string | null | undefined): string | nu
   return normalized.length > 0 ? normalized : null;
 }
 
+export function buildCreatorProfilePath(username: string): string {
+  const normalizedUsername = normalizeUsername(username);
+  return normalizedUsername ? `/creators/${normalizedUsername}` : '/showcase';
+}
+
+export function buildCreatorProfileUrl(username: string, origin: string): string {
+  return new URL(buildCreatorProfilePath(username), origin).toString();
+}
+
 function normalizeOptionalText(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;

@@ -1,8 +1,7 @@
 'use client';
 
-import { startTransition, useEffect, useState } from 'react';
-import { Sparkles, Edit2, Loader2, X } from 'lucide-react';
-import Link from 'next/link';
+import { startTransition, useEffect, useRef, useState } from 'react';
+import { Edit2, Loader2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -10,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
+import ProfileShareButton from '@/app/components/ProfileShareButton';
 
 interface ProfileActionsProps {
   profile: EditableCreatorProfile;
@@ -21,8 +21,29 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
   const [isFollowing, setIsFollowing] = useState(false);
   const [isFollowLoading, setIsFollowLoading] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
+  const [followStatusMessage, setFollowStatusMessage] = useState<string | null>(null);
+  const [pendingFollowIntent, setPendingFollowIntent] = useState<boolean | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [privateProfile, setPrivateProfile] = useState<EditableCreatorProfile>(profile);
+  const followStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearFollowStatusTimer = () => {
+    if (followStatusTimerRef.current) {
+      clearTimeout(followStatusTimerRef.current);
+      followStatusTimerRef.current = null;
+    }
+  };
+
+  const showTemporaryFollowStatus = (message: string) => {
+    clearFollowStatusTimer();
+    setFollowStatusMessage(message);
+    followStatusTimerRef.current = setTimeout(() => {
+      setFollowStatusMessage(null);
+      followStatusTimerRef.current = null;
+    }, 2400);
+  };
+
+  useEffect(() => clearFollowStatusTimer, []);
 
   useEffect(() => {
     let isActive = true;
@@ -39,6 +60,7 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
       const ownsProfile = session?.user?.id === profile.id;
       setIsOwner(ownsProfile);
       setFollowError(null);
+      setFollowStatusMessage(null);
 
       if (!ownsProfile || !session?.access_token) {
         if (session?.user?.id) {
@@ -91,7 +113,12 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
   if (isOwner === null) {
     return (
-      <div className="flex items-center gap-3 mt-4 md:mt-8">
+      <div className="flex items-center gap-3">
+        <ProfileShareButton
+          username={profile.username}
+          displayName={profile.displayName}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
+        />
         <div className="h-10 w-24 animate-pulse rounded-full bg-white/10" />
       </div>
     );
@@ -99,6 +126,7 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
   const handleFollowToggle = async () => {
     setFollowError(null);
+    setFollowStatusMessage(null);
 
     const {
       data: { session },
@@ -118,8 +146,11 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     }
 
     const nextFollowing = !isFollowing;
+    clearFollowStatusTimer();
     setIsFollowLoading(true);
     setIsFollowing(nextFollowing);
+    setPendingFollowIntent(nextFollowing);
+    setFollowStatusMessage(nextFollowing ? 'Following creator...' : 'Removing follow...');
 
     try {
       if (nextFollowing) {
@@ -142,22 +173,38 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
           throw error;
         }
       }
+      showTemporaryFollowStatus(nextFollowing ? 'Following creator.' : 'Removed follow.');
     } catch (error) {
       console.error('Failed to update follow state', error);
       setIsFollowing(!nextFollowing);
-      setFollowError('Failed to update follow state.');
+      setFollowError('Could not update follow. Your previous state was restored.');
+      setFollowStatusMessage(null);
     } finally {
       setIsFollowLoading(false);
+      setPendingFollowIntent(null);
     }
   };
 
+  const followButtonLabel = isFollowLoading
+    ? pendingFollowIntent
+      ? 'Following...'
+      : 'Removing...'
+    : isFollowing
+      ? 'Following'
+      : 'Follow';
+
   return (
     <>
-      <div className="mt-4 flex flex-wrap items-center gap-3 md:mt-8">
+      <div className="flex flex-wrap items-center gap-3">
+        <ProfileShareButton
+          username={profile.username}
+          displayName={profile.displayName}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
+        />
         {isOwner ? (
           <button
             onClick={() => setIsEditing(true)}
-            className="inline-flex items-center gap-2 rounded-full border border-purple-500/50 bg-purple-500/10 text-purple-200 px-5 py-2.5 text-sm font-semibold transition-all hover:bg-purple-500/20 hover:border-purple-500 hover:text-white"
+            className="inline-flex items-center gap-2 rounded-full border border-purple-500/50 bg-purple-500/10 px-5 py-2.5 text-sm font-semibold text-purple-200 transition-all hover:border-purple-500 hover:bg-purple-500/20 hover:text-white"
           >
             <Edit2 className="h-4 w-4" />
             Edit Profile
@@ -167,28 +214,27 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
             type="button"
             onClick={() => void handleFollowToggle()}
             disabled={isFollowLoading}
+            aria-pressed={isFollowing}
+            aria-busy={isFollowLoading}
             className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition ${
               isFollowing
                 ? 'border border-white/15 bg-white/10 text-white hover:bg-white/15'
-                : 'bg-white text-black hover:scale-105'
+                : 'border border-white/10 bg-white/[0.06] text-zinc-100 hover:border-white/20 hover:bg-white/[0.1]'
             } disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100`}
           >
             {isFollowLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {isFollowing ? 'Following' : 'Follow'}
+            {followButtonLabel}
           </button>
         )}
-
-        <Link
-          href="/showcase"
-          prefetch={false}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/50 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:border-white/20 hover:text-white"
-        >
-          Explore showcase
-          <Sparkles className="h-4 w-4" />
-        </Link>
       </div>
       {followError ? (
         <p className="mt-2 text-sm text-rose-300">{followError}</p>
+      ) : null}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {followError ?? followStatusMessage ?? ''}
+      </p>
+      {!followError && followStatusMessage ? (
+        <p className="mt-2 text-sm text-emerald-300">{followStatusMessage}</p>
       ) : null}
 
       <AnimatePresence>

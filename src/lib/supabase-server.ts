@@ -2,6 +2,7 @@ import 'server-only';
 
 import { cache } from 'react';
 import { createServerClient } from '@supabase/ssr';
+import type { Session } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 import {

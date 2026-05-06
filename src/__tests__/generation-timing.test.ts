@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  estimateGenerationDurationMs,
   formatDurationShort,
   formatElapsedClock,
+  getGenerationTimingCountdownLabel,
+  getGenerationTimingProgressPercent,
   getGenerationTimingSummaryLabel,
   normalizeMarketGenerationTiming,
   normalizeVeoGenerationTiming,
+  withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
 
 describe('generation timing', () => {
@@ -93,5 +97,94 @@ describe('generation timing', () => {
     });
 
     expect(getGenerationTimingSummaryLabel(succeededTiming)).toBe('Completed in 42s');
+  });
+
+  it('estimates remaining time for in-flight image generations', () => {
+    const estimatedTotalMs = estimateGenerationDurationMs({
+      kind: 'image',
+      model: 'gpt-image-2',
+      resolution: '2K',
+      referenceCount: 2,
+    });
+
+    expect(estimatedTotalMs).toBe(175_000);
+
+    const timing = withGenerationTimingEstimate(
+      normalizeMarketGenerationTiming({
+        kind: 'image',
+        task: {
+          state: 'waiting',
+          createTime: '2026-04-15T10:00:00.000Z',
+        },
+        nowMs: Date.parse('2026-04-15T10:00:40.000Z'),
+      }),
+      estimatedTotalMs
+    );
+
+    expect(getGenerationTimingCountdownLabel(timing, Date.parse('2026-04-15T10:00:40.000Z'))).toBe('Est. 02:15 left');
+    expect(getGenerationTimingSummaryLabel(timing, Date.parse('2026-04-15T10:00:40.000Z'))).toBe('Elapsed 00:40');
+    expect(getGenerationTimingProgressPercent(timing, Date.parse('2026-04-15T10:00:40.000Z'))).toBeCloseTo(22.857, 2);
+  });
+
+  it('switches countdown copy when an estimate is exceeded', () => {
+    const timing = withGenerationTimingEstimate(
+      normalizeMarketGenerationTiming({
+        kind: 'image',
+        task: {
+          state: 'waiting',
+          createTime: '2026-04-15T10:00:00.000Z',
+        },
+        nowMs: Date.parse('2026-04-15T10:03:10.000Z'),
+      }),
+      120_000
+    );
+
+    expect(getGenerationTimingCountdownLabel(timing, Date.parse('2026-04-15T10:03:10.000Z'))).toBe('Taking longer than usual');
+    expect(getGenerationTimingProgressPercent(timing, Date.parse('2026-04-15T10:03:10.000Z'))).toBe(96);
+  });
+
+  it('estimates video generation duration from model settings', () => {
+    expect(estimateGenerationDurationMs({
+      kind: 'video',
+      model: 'kling-3.0-video',
+      mode: 'pro',
+      durationSeconds: 10,
+      isMultiShot: true,
+      shotCount: 3,
+      hasSound: true,
+      referenceCount: 2,
+    })).toBe(505_000);
+
+    expect(estimateGenerationDurationMs({
+      kind: 'video',
+      model: 'seedance-2-fast',
+      resolution: '720p',
+      durationSeconds: 15,
+      referenceCount: 3,
+      hasReferenceVideo: true,
+    })).toBe(260_000);
+
+    expect(estimateGenerationDurationMs({
+      kind: 'video',
+      model: 'veo-3.1',
+      mode: 'veo3',
+      durationSeconds: 8,
+    })).toBe(300_000);
+  });
+
+  it('estimates motion generation duration from model, duration, and resolution', () => {
+    expect(estimateGenerationDurationMs({
+      kind: 'motion',
+      model: 'kling-3.0',
+      resolution: '1080p',
+      durationSeconds: 12,
+    })).toBe(420_000);
+
+    expect(estimateGenerationDurationMs({
+      kind: 'motion',
+      model: 'kling-2.6',
+      resolution: '720p',
+      durationSeconds: 10,
+    })).toBe(260_000);
   });
 });

@@ -4,6 +4,7 @@ import {
   createWorkflowGraphHash,
   mergeWorkflowCanvasGraph,
   normalizeWorkflowGraph,
+  type WorkflowCanvasGraph,
 } from '@/lib/workflow-canvas';
 import {
   isMissingWorkflowCanvasHistorySchemaError,
@@ -17,6 +18,17 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+type WorkflowCanvasRouteRow = {
+  id: string;
+  title: string;
+  graph: Partial<WorkflowCanvasGraph> | null;
+  created_at: string;
+  updated_at: string;
+  revision: number;
+  status?: string | null;
+  published_at?: string | null;
+};
+
 export async function GET(request: NextRequest, { params }: RouteParams) {
   const auth = await authenticateRequest(request);
   if (auth instanceof NextResponse) return auth;
@@ -24,14 +36,24 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const { id } = await params;
   const { supabase, userId } = auth;
 
-  const loadCanvas = async (useLifecycleColumns: boolean) => supabase
-    .from('workflow_canvases')
-    .select(useLifecycleColumns ? WORKFLOW_CANVAS_SELECT : WORKFLOW_CANVAS_SELECT_LEGACY)
-    .eq('id', id)
-    .eq('user_id', userId)
-    .single();
+  const loadCanvas = async (useLifecycleColumns: boolean) => {
+    const query = supabase
+      .from('workflow_canvases')
+      .select(useLifecycleColumns ? WORKFLOW_CANVAS_SELECT : WORKFLOW_CANVAS_SELECT_LEGACY)
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
+    const { data, error } = await query;
 
-  let { data, error } = await loadCanvas(true);
+    return {
+      data: (data as WorkflowCanvasRouteRow | null) ?? null,
+      error,
+    };
+  };
+
+  let data: WorkflowCanvasRouteRow | null = null;
+  let error: unknown = null;
+  ({ data, error } = await loadCanvas(true));
 
   if (error && isMissingWorkflowLifecycleColumnsError(error)) {
     const legacyResult = await loadCanvas(false);
@@ -58,26 +80,27 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const { id } = await params;
   const { supabase, userId } = auth;
   const body = await request.json().catch(() => ({}));
-  const loadCurrentCanvas = () =>
-    supabase
+  const loadCurrentCanvas = async (useLifecycleColumns: boolean) => {
+    const query = supabase
       .from('workflow_canvases')
-      .select(WORKFLOW_CANVAS_SELECT)
+      .select(useLifecycleColumns ? WORKFLOW_CANVAS_SELECT : WORKFLOW_CANVAS_SELECT_LEGACY)
       .eq('id', id)
       .eq('user_id', userId)
       .single();
+    const { data, error } = await query;
 
-  let { data: currentCanvas, error: currentCanvasError } = await loadCurrentCanvas();
+    return {
+      data: (data as WorkflowCanvasRouteRow | null) ?? null,
+      error,
+    };
+  };
+
+  let currentCanvas: WorkflowCanvasRouteRow | null = null;
+  let currentCanvasError: unknown = null;
+  ({ data: currentCanvas, error: currentCanvasError } = await loadCurrentCanvas(true));
 
   if (currentCanvasError && isMissingWorkflowLifecycleColumnsError(currentCanvasError)) {
-    const legacyCurrentCanvas = await supabase
-      .from('workflow_canvases')
-      .select(WORKFLOW_CANVAS_SELECT_LEGACY)
-      .eq('id', id)
-      .eq('user_id', userId)
-      .single();
-
-    currentCanvas = legacyCurrentCanvas.data;
-    currentCanvasError = legacyCurrentCanvas.error;
+    ({ data: currentCanvas, error: currentCanvasError } = await loadCurrentCanvas(false));
   }
 
   if (currentCanvasError || !currentCanvas) {
@@ -142,32 +165,34 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       updateQuery = updateQuery.eq('revision', baseRevision);
     }
 
-    return updateQuery
-      .select(useLifecycleColumns ? WORKFLOW_CANVAS_SELECT : WORKFLOW_CANVAS_SELECT_LEGACY)
-      .maybeSingle();
+    const selectedQuery = useLifecycleColumns
+      ? updateQuery.select(WORKFLOW_CANVAS_SELECT)
+      : updateQuery.select(WORKFLOW_CANVAS_SELECT_LEGACY);
+
+    return selectedQuery.maybeSingle();
   };
 
-  let { data, error } = await buildUpdateQuery(true);
+  let data: WorkflowCanvasRouteRow | null = null;
+  let error: unknown = null;
+  {
+    const result = await buildUpdateQuery(true);
+    data = (result.data as WorkflowCanvasRouteRow | null) ?? null;
+    error = result.error;
+  }
 
   if (error && isMissingWorkflowLifecycleColumnsError(error)) {
     const legacyUpdate = await buildUpdateQuery(false);
-    data = legacyUpdate.data;
+    data = (legacyUpdate.data as WorkflowCanvasRouteRow | null) ?? null;
     error = legacyUpdate.error;
   }
 
   if (!data && !error && baseRevision !== null) {
-    let { data: latestCanvas, error: latestCanvasError } = await loadCurrentCanvas();
+    let latestCanvas: WorkflowCanvasRouteRow | null = null;
+    let latestCanvasError: unknown = null;
+    ({ data: latestCanvas, error: latestCanvasError } = await loadCurrentCanvas(true));
 
     if (latestCanvasError && isMissingWorkflowLifecycleColumnsError(latestCanvasError)) {
-      const legacyLatestCanvas = await supabase
-        .from('workflow_canvases')
-        .select(WORKFLOW_CANVAS_SELECT_LEGACY)
-        .eq('id', id)
-        .eq('user_id', userId)
-        .single();
-
-      latestCanvas = legacyLatestCanvas.data;
-      latestCanvasError = legacyLatestCanvas.error;
+      ({ data: latestCanvas, error: latestCanvasError } = await loadCurrentCanvas(false));
     }
 
     if (latestCanvasError || !latestCanvas) {

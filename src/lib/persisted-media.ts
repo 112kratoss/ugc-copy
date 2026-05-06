@@ -1,6 +1,14 @@
 import localforage from 'localforage';
 
 const persistedMediaStore = localforage.createInstance({
+  name: 'magicbooklet-persisted-media',
+});
+
+const legacyPersistedMediaStore = localforage.createInstance({
+  name: 'emptybooklet-persisted-media',
+});
+
+const legacyUgcCopyPersistedMediaStore = localforage.createInstance({
   name: 'ugc-copy-persisted-media',
 });
 
@@ -121,8 +129,30 @@ function restoreFile(value: unknown, fallbackBaseName: string): File | null {
   return null;
 }
 
+async function getPersistedItem<T>(key: string): Promise<T | null> {
+  const value = await persistedMediaStore.getItem<T | null>(key);
+  if (value !== null && value !== undefined) {
+    return value;
+  }
+
+  const legacyValue = await legacyPersistedMediaStore.getItem<T | null>(key);
+  if (legacyValue !== null && legacyValue !== undefined) {
+    return legacyValue;
+  }
+
+  return legacyUgcCopyPersistedMediaStore.getItem<T | null>(key);
+}
+
+async function removePersistedItem(key: string): Promise<void> {
+  await Promise.all([
+    persistedMediaStore.removeItem(key),
+    legacyPersistedMediaStore.removeItem(key),
+    legacyUgcCopyPersistedMediaStore.removeItem(key),
+  ]);
+}
+
 export async function getPersistedFile(key: string): Promise<File | null> {
-  const value = await persistedMediaStore.getItem<StoredMediaFile | File | Blob | null>(key);
+  const value = await getPersistedItem<StoredMediaFile | File | Blob>(key);
   return restoreFile(value, key);
 }
 
@@ -131,7 +161,7 @@ export async function setPersistedFile(key: string, file: File): Promise<void> {
 }
 
 export async function getPersistedImageElementRecords(key: string): Promise<PersistedImageElementRecord[]> {
-  const value = await persistedMediaStore.getItem<StoredImageElementRecord[] | null>(key);
+  const value = await getPersistedItem<StoredImageElementRecord[]>(key);
   if (!Array.isArray(value)) return [];
 
   return value
@@ -159,7 +189,7 @@ export async function setPersistedImageElementRecords(
   elements: PersistedImageElementRecord[]
 ): Promise<void> {
   if (elements.length === 0) {
-    await persistedMediaStore.removeItem(key);
+    await removePersistedItem(key);
     return;
   }
 
@@ -174,7 +204,7 @@ export async function setPersistedImageElementRecords(
 }
 
 export async function getPersistedMediaRecords(key: string): Promise<PersistedMediaRecord[]> {
-  const value = await persistedMediaStore.getItem<StoredMediaRecord[] | null>(key);
+  const value = await getPersistedItem<StoredMediaRecord[]>(key);
   if (!Array.isArray(value)) return [];
 
   return value
@@ -203,7 +233,7 @@ export async function setPersistedMediaRecords(
   records: PersistedMediaRecord[]
 ): Promise<void> {
   if (records.length === 0) {
-    await persistedMediaStore.removeItem(key);
+    await removePersistedItem(key);
     return;
   }
 

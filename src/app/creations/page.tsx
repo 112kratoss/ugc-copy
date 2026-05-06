@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, Loader2, PencilLine, RotateCcw, Share2, Trash2, UserRound, Volume2, Wand2, X, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -18,6 +18,7 @@ import {
 } from '@/lib/creation-workspace';
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import { isAudioModel, isImageModel } from '@/lib/models';
+import type { ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { supabase } from '@/lib/supabase';
@@ -25,6 +26,7 @@ import { supabase } from '@/lib/supabase';
 interface Generation {
     id: string;
     output_url: string | null;
+    output_urls?: string[] | null;
     status: string;
     created_at: string;
     completed_at?: string | null;
@@ -60,7 +62,7 @@ interface OwnerPost {
     body: string;
     category: 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
     postFormat: 'text' | 'media' | 'mixed';
-    sourceKind: 'ugc_copy' | 'external' | 'manual';
+    sourceKind: 'magicbooklet' | 'external' | 'manual';
     sourceTool: string | null;
     sourceLabel: string;
     createdAt: string;
@@ -82,6 +84,7 @@ interface OwnerPost {
 
 export default function CreationsPage() {
     const router = useRouter();
+    const pathname = usePathname();
     const searchParams = useSearchParams();
     const { session } = useAuth();
     const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
@@ -94,6 +97,7 @@ export default function CreationsPage() {
     })();
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [posts, setPosts] = useState<OwnerPost[]>([]);
+    const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [filter, setFilter] = useState<FilterType>('all');
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
@@ -102,6 +106,15 @@ export default function CreationsPage() {
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
+    const creationsReturnPath = searchParams.toString()
+        ? `${pathname}?${searchParams.toString()}`
+        : pathname;
+    const buildStudioDetailPath = (postId: string, section?: string) =>
+        buildShowcaseDetailPath(postId, {
+            from: 'studio',
+            returnTo: creationsReturnPath,
+            section,
+        });
 
     useEffect(() => {
         const nextView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
@@ -118,19 +131,23 @@ export default function CreationsPage() {
     }, [searchParams]);
 
     const fetchCreations = useCallback(async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
+        const { data: { session: clientSession } } = await supabase.auth.getSession();
+        const activeSession = clientSession ?? session;
+        if (!activeSession) {
             router.push('/login');
             return;
         }
 
         try {
-            const [generationsRes, postsRes] = await Promise.all([
+            const [generationsRes, postsRes, profileRes] = await Promise.all([
                 fetch('/api/generations?includeArchived=true', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
                 }),
                 fetch('/api/posts?scope=owner&includeArchived=true', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
+                }),
+                fetch('/api/profile', {
+                    headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
                 }),
             ]);
 
@@ -143,12 +160,18 @@ export default function CreationsPage() {
             if (postsRes.ok) {
                 setPosts(postsData.posts || []);
             }
+
+            if (profileRes.ok) {
+                setProfile(await profileRes.json());
+            } else {
+                setProfile(null);
+            }
         } catch (err) {
             console.error('Failed to fetch creations:', err);
         } finally {
             setIsLoading(false);
         }
-    }, [router]);
+    }, [router, session]);
 
     useEffect(() => {
         void fetchCreations();
@@ -497,6 +520,16 @@ export default function CreationsPage() {
         return `${mediaLabel} · ${generation.model} · ${shortDate}`;
     };
 
+    const getPreviewSummary = (generation: Generation): string => {
+        const source = generation.description?.trim() || generation.prompt?.trim();
+        if (!source) {
+            const mediaKind = getMediaKind(generation);
+            return `${mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video'} is ready to publish, share, or turn into an unlock.`;
+        }
+
+        return source.length > 118 ? `${source.slice(0, 115).trim()}...` : source;
+    };
+
     const getPreviewMediaType = (generation: Generation): MediaDetailsType => {
         const mediaKind = getMediaKind(generation);
         if (mediaKind === 'audio') {
@@ -600,6 +633,14 @@ export default function CreationsPage() {
             })),
         [filteredSuccessful, posts]
     );
+    const publicProfileUsername = profile?.username?.trim() || null;
+    const activePortfolioPostCount = posts.filter((post) => !post.archivedAt).length;
+    const isProfileIncomplete = !profile?.displayName?.trim() || !profile?.bio?.trim() || !profile?.avatarUrl || !profile?.coverUrl;
+    const shouldShowPortfolioStarter = activeView === 'creations' && !isLoading && (
+        successfulGenerations.length === 0 ||
+        activePortfolioPostCount === 0 ||
+        isProfileIncomplete
+    );
 
     const getPublishBadgeClass = (badge: CreationWorkspacePublishBadge): string => {
         switch (badge) {
@@ -672,8 +713,8 @@ export default function CreationsPage() {
 
                 <div className="mb-6 flex flex-wrap items-center gap-3">
                     {([
-                        { key: 'creations', label: 'Creations', description: 'Outputs, publishing, and monetization' },
-                        { key: 'posts', label: 'Post Library', description: 'Advanced owner view for post management' },
+                        { key: 'creations', label: 'Creations', description: 'Outputs, posts, and unlocks' },
+                        { key: 'posts', label: 'Post Library', description: 'Owner view for posts and unlocks' },
                     ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
                         <button
                             key={tab.key}
@@ -690,10 +731,75 @@ export default function CreationsPage() {
                     ))}
                     <div className="text-sm text-zinc-500">
                         {activeView === 'creations'
-                            ? 'Manage outputs, publishing, and monetization without leaving the workspace.'
+                            ? 'Manage creations, posts, and unlocks without leaving the workspace.'
                             : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
                     </div>
                 </div>
+
+                {shouldShowPortfolioStarter ? (
+                    <section className="mb-8 rounded-[28px] border border-purple-400/15 bg-[linear-gradient(135deg,rgba(88,28,135,0.22),rgba(2,6,23,0.78)_48%,rgba(15,118,110,0.16))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-md sm:p-6">
+                        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
+                                    <UserRound className="h-3.5 w-3.5 text-purple-200" />
+                                    Portfolio setup
+                                </div>
+                                <h2 className="mt-4 max-w-2xl text-2xl font-semibold tracking-tight text-white">
+                                    Turn the first output into a profile-ready portfolio piece.
+                                </h2>
+                                <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">
+                                    New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional unlock.
+                                </p>
+                            </div>
+                            <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
+                                <Link
+                                    href="/profile"
+                                    className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                >
+                                    <UserRound className="h-4 w-4" />
+                                    Set up profile
+                                </Link>
+                                <Link
+                                    href={publicProfileUsername ? `/creators/${publicProfileUsername}` : '/profile'}
+                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+                                >
+                                    <ExternalLink className="h-4 w-4" />
+                                    {publicProfileUsername ? 'View portfolio' : 'Preview profile setup'}
+                                </Link>
+                            </div>
+                        </div>
+                        <div className="mt-5 grid gap-3 md:grid-cols-3">
+                            {[
+                                {
+                                    title: isProfileIncomplete ? 'Finish creator identity' : 'Creator identity ready',
+                                    body: 'Add a name, bio, avatar, and cover so published work feels intentional.',
+                                    ready: !isProfileIncomplete,
+                                },
+                                {
+                                    title: successfulGenerations.length > 0 ? 'Creation ready' : 'Create one proof piece',
+                                    body: 'Use image, video, motion, or workflow to make the first visual result.',
+                                    ready: successfulGenerations.length > 0,
+                                },
+                                {
+                                    title: activePortfolioPostCount > 0 ? 'Portfolio has posts' : 'Publish to portfolio',
+                                    body: 'Use Publish to add the result publicly, or attach a paid unlock for the reusable process.',
+                                    ready: activePortfolioPostCount > 0,
+                                },
+                            ].map((item) => (
+                                <div
+                                    key={item.title}
+                                    className="rounded-[22px] border border-white/8 bg-black/25 p-4"
+                                >
+                                    <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                                        <CheckCircle2 className={`h-4 w-4 ${item.ready ? 'text-emerald-300' : 'text-zinc-500'}`} />
+                                        {item.title}
+                                    </div>
+                                    <p className="mt-2 text-sm leading-6 text-zinc-400">{item.body}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                ) : null}
 
                 {/* Filter Tabs */}
                 {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
@@ -757,26 +863,40 @@ export default function CreationsPage() {
                 {/* Empty State */}
                 {activeView === 'creations' && !isLoading && activeGenerations.length === 0 && archivedGenerations.length === 0 && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                        className="flex flex-col items-center justify-center py-32 gap-6">
-                        <div className="p-6 rounded-full bg-zinc-900/50 border border-white/5">
+                        className="flex flex-col items-center justify-center gap-6 py-24">
+                        <div className="rounded-full border border-white/5 bg-zinc-900/50 p-6">
                             <Film className="w-12 h-12 text-zinc-600" />
                         </div>
                         <div className="text-center">
-                            <h2 className="text-xl font-semibold text-zinc-300 mb-2">No creations yet</h2>
-                            <p className="text-zinc-500 text-sm max-w-md">
-                                You haven&apos;t generated anything yet. Start by creating a motion control video or an AI image.
+                            <h2 className="mb-2 text-xl font-semibold text-zinc-200">Start your portfolio loop</h2>
+                            <p className="mx-auto max-w-xl text-sm leading-6 text-zinc-400">
+                                Make one strong output, publish it to your creator profile, then add an unlock when the prompt, workflow, or setup is worth sharing.
                             </p>
                         </div>
-                        <div className="flex gap-3">
-                            <Link href="/create" className="group relative overflow-hidden rounded-full p-[1px] bg-gradient-to-r from-purple-500 to-pink-500 hover:shadow-[0_0_30px_-5px_rgba(168,85,247,0.5)] transition-all duration-300 hover:scale-105">
-                                <div className="flex items-center justify-center gap-2 bg-zinc-950 px-6 py-3 rounded-full">
-                                    <span className="font-semibold text-white text-sm">🎬 Motion Control</span>
-                                </div>
+                        <div className="grid w-full max-w-3xl gap-3 sm:grid-cols-3">
+                            {[
+                                { icon: UserRound, title: 'Profile', body: 'Name, bio, avatar, cover.' },
+                                { icon: Wand2, title: 'Create', body: 'Generate image, video, or motion.' },
+                                { icon: Globe, title: 'Publish', body: 'Add to portfolio or attach an unlock.' },
+                            ].map((item) => {
+                                const Icon = item.icon;
+                                return (
+                                    <div key={item.title} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4 text-left">
+                                        <Icon className="h-5 w-5 text-purple-200" />
+                                        <div className="mt-3 text-sm font-semibold text-white">{item.title}</div>
+                                        <p className="mt-1 text-xs leading-5 text-zinc-500">{item.body}</p>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="flex flex-col gap-3 sm:flex-row">
+                            <Link href="/create" className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200">
+                                <Wand2 className="h-4 w-4" />
+                                Choose a creator tool
                             </Link>
-                            <Link href="/create-image" className="group relative overflow-hidden rounded-full p-[1px] bg-gradient-to-r from-blue-500 to-cyan-500 hover:shadow-[0_0_30px_-5px_rgba(59,130,246,0.5)] transition-all duration-300 hover:scale-105">
-                                <div className="flex items-center justify-center gap-2 bg-zinc-950 px-6 py-3 rounded-full">
-                                    <span className="font-semibold text-white text-sm">🖼 Generate Image</span>
-                                </div>
+                            <Link href="/profile" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
+                                <UserRound className="h-4 w-4" />
+                                Set up profile
                             </Link>
                         </div>
                     </motion.div>
@@ -834,6 +954,9 @@ export default function CreationsPage() {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
+                                const imageOutputs = isImage
+                                    ? (Array.isArray(gen.output_urls) && gen.output_urls.length > 0 ? gen.output_urls : (gen.output_url ? [gen.output_url] : []))
+                                    : [];
                                 const canManageFromCreation = !isAudio && isShareSupported(gen);
                                 const completedInLabel = getCompletedInLabel(gen);
                                 const badgeClass = isImage
@@ -857,8 +980,29 @@ export default function CreationsPage() {
                                         className="group bg-white/[0.02] rounded-[1.5rem] border border-white/[0.04] overflow-hidden backdrop-blur-md hover:border-purple-500/30 hover:shadow-[0_8px_30px_rgba(0,0,0,0.5)] transition-all duration-300 break-inside-avoid mb-6">
                                         <div className="bg-black relative overflow-hidden rounded-t-[1.5rem]">
                                             {isImage ? (
-                                                // eslint-disable-next-line @next/next/no-img-element
-                                                <img src={gen.output_url!} alt="Generated image" className="w-full h-auto block" />
+                                                imageOutputs.length > 1 ? (
+                                                    <div className="grid grid-cols-2 gap-1 p-1">
+                                                        {imageOutputs.map((imageUrl, outputIndex) => (
+                                                            <button
+                                                                key={`${imageUrl}-${outputIndex}`}
+                                                                type="button"
+                                                                onClick={() => setPreviewGen(gen)}
+                                                                className="relative overflow-hidden rounded-2xl bg-zinc-950"
+                                                            >
+                                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                <img src={imageUrl} alt={`Generated image ${outputIndex + 1}`} className="aspect-square w-full object-cover transition duration-300 group-hover:scale-[1.02]" />
+                                                                {outputIndex === 0 ? (
+                                                                    <span className="absolute bottom-2 left-2 rounded-full border border-white/10 bg-black/65 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white backdrop-blur-md">
+                                                                        Primary
+                                                                    </span>
+                                                                ) : null}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    // eslint-disable-next-line @next/next/no-img-element
+                                                    <img src={gen.output_url!} alt="Generated image" className="w-full h-auto block" />
+                                                )
                                             ) : isAudio ? (
                                                 <div className="p-6">
                                                     <div className="mb-4 flex items-center gap-3 text-emerald-300">
@@ -900,7 +1044,15 @@ export default function CreationsPage() {
                                         </div>
                                         
                                         <div className="px-4 pb-4">
-                                            <div className="flex flex-wrap gap-2">
+                                            <div>
+                                                <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">
+                                                    {getPreviewTitle(gen)}
+                                                </h3>
+                                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">
+                                                    {getPreviewSummary(gen)}
+                                                </p>
+                                            </div>
+                                            <div className="mt-3 flex flex-wrap gap-2">
                                                 <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getPublishBadgeClass(publishBadgeLabel)}`}>
                                                     {publishBadgeLabel}
                                                 </div>
@@ -928,7 +1080,7 @@ export default function CreationsPage() {
                                                     {workspaceState.primaryAction.type === 'publish' ? (
                                                         <button
                                                             type="button"
-                                                            onClick={() => openPublishModal(gen, { showPaidShortcut: false })}
+                                                            onClick={() => openPublishModal(gen)}
                                                             className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
                                                         >
                                                             <Globe className="h-4 w-4" />
@@ -1088,7 +1240,7 @@ export default function CreationsPage() {
                         <div className="text-center">
                             <h2 className="text-xl font-semibold text-zinc-300">No posts in this view yet</h2>
                             <p className="mx-auto mt-2 max-w-md text-sm text-zinc-500">
-                                Publish a post from a generation or upload new proof in the post composer. Private and archived posts will show here once they exist.
+                                Publish a post from a generation or upload media in the post composer. Private and archived posts will show here once they exist.
                             </p>
                         </div>
                         <Link
@@ -1108,7 +1260,7 @@ export default function CreationsPage() {
                                 {postVisibilityFilter === 'archived' ? 'Archived posts' : 'Your posts'}
                             </h2>
                             <p className="mt-2 max-w-2xl text-sm text-zinc-500">
-                                Post Library is the advanced owner view for the actual posts people can visit, unlock, archive, or clean up.
+                                Post Library is the owner view for the actual posts people can visit, unlock, archive, or clean up.
                             </p>
                         </div>
                         <div className="grid gap-5 lg:grid-cols-2">
@@ -1138,7 +1290,7 @@ export default function CreationsPage() {
                                                         ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
                                                         : 'border-amber-400/20 bg-amber-500/10 text-amber-100'
                                                 }`}>
-                                                    {post.bundle.status === 'published' ? 'Resources live' : 'Resources draft'}
+                                                    {post.bundle.status === 'published' ? 'Unlock live' : 'Unlock draft'}
                                                 </div>
                                             ) : null}
                                         </div>
@@ -1164,7 +1316,7 @@ export default function CreationsPage() {
                                             <>
                                                 <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
                                                     {post.bundle.accessMode === 'free'
-                                                        ? 'Free resources'
+                                                        ? 'Free unlock'
                                                         : formatUsdCents(post.bundle.priceUsdCents)}
                                                 </div>
                                                 {post.bundle.resourceKinds.map((kind) => (
@@ -1178,7 +1330,7 @@ export default function CreationsPage() {
                                             </>
                                         ) : (
                                             <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
-                                                No locked resources
+                                                No unlock
                                             </div>
                                         )}
                                     </div>
@@ -1186,7 +1338,7 @@ export default function CreationsPage() {
                                     <div className="mt-5 flex flex-wrap gap-2">
                                         {post.publicPath ? (
                                             <Link
-                                                href={post.publicPath}
+                                                href={buildStudioDetailPath(post.id)}
                                                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                                             >
                                                 <ExternalLink className="h-4 w-4" />
@@ -1202,11 +1354,11 @@ export default function CreationsPage() {
                                         </Link>
                                         {post.resourcePath ? (
                                             <Link
-                                                href={post.resourcePath}
+                                                href={buildStudioDetailPath(post.id, 'resources')}
                                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
                                             >
                                                 <Wand2 className="h-4 w-4" />
-                                                Manage resources
+                                                Manage unlock
                                             </Link>
                                         ) : null}
                                         {post.canShare ? (
@@ -1271,8 +1423,8 @@ export default function CreationsPage() {
                                     previewGen.linked_post_id
                                         ? previewGen.linked_post_visibility === 'private' || previewGen.linked_post_archived_at
                                             ? `/post/${previewGen.linked_post_id}/edit`
-                                            : `/showcase/${previewGen.linked_post_id}`
-                                        : buildShowcaseDetailPath(previewGen.id)
+                                            : buildStudioDetailPath(previewGen.linked_post_id)
+                                        : buildStudioDetailPath(previewGen.id)
                                 }
                                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
                             >

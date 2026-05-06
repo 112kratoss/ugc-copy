@@ -13,6 +13,9 @@ const supabaseMocks = vi.hoisted(() => ({
   delete: vi.fn(),
 }));
 
+let followLookupData: { follower_id: string } | null = null;
+let followLookupError: unknown = null;
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: mockPush,
@@ -59,6 +62,8 @@ const profile: EditableCreatorProfile = {
 describe('ProfileActions', () => {
   beforeEach(() => {
     mockPush.mockReset();
+    followLookupData = null;
+    followLookupError = null;
     supabaseMocks.insert.mockReset().mockResolvedValue({ error: null });
     supabaseMocks.delete.mockReset().mockResolvedValue({ error: null });
     supabaseMocks.from.mockImplementation((table: string) => {
@@ -77,7 +82,10 @@ describe('ProfileActions', () => {
                   expect(innerColumn).toBe('following_id');
                   expect(innerValue).toBe(profile.id);
                   return {
-                    maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+                    maybeSingle: vi.fn(async () => ({
+                      data: followLookupData,
+                      error: followLookupError,
+                    })),
                   };
                 },
               };
@@ -105,6 +113,7 @@ describe('ProfileActions', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -130,6 +139,113 @@ describe('ProfileActions', () => {
       });
     });
     expect(await screen.findByRole('button', { name: /^following$/i })).toBeInTheDocument();
+  });
+
+  it('toggles from following to follow for a logged-in non-owner', async () => {
+    followLookupData = { follower_id: 'viewer-1' };
+    supabaseMocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'viewer-token',
+          user: { id: 'viewer-1' },
+        },
+      },
+    });
+
+    render(<ProfileActions profile={profile} />);
+
+    const followingButton = await screen.findByRole('button', { name: /^following$/i });
+    expect(followingButton).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(followingButton);
+
+    await waitFor(() => {
+      expect(supabaseMocks.delete).toHaveBeenCalled();
+    });
+    expect(await screen.findByRole('button', { name: /^follow$/i })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('shows loading feedback while follow is pending', async () => {
+    let resolveInsert: (value: { error: null }) => void = () => undefined;
+    supabaseMocks.insert.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveInsert = resolve;
+      })
+    );
+    supabaseMocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'viewer-token',
+          user: { id: 'viewer-1' },
+        },
+      },
+    });
+
+    render(<ProfileActions profile={profile} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^follow$/i }));
+
+    const loadingButton = await screen.findByRole('button', { name: /following\.\.\./i });
+    expect(loadingButton).toBeDisabled();
+    expect(screen.getAllByText('Following creator...').length).toBeGreaterThan(0);
+
+    resolveInsert({ error: null });
+    expect(await screen.findByRole('button', { name: /^following$/i })).toBeInTheDocument();
+  });
+
+  it('restores the previous follow state when the update fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    supabaseMocks.insert.mockResolvedValue({ error: new Error('Insert failed') });
+    supabaseMocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'viewer-token',
+          user: { id: 'viewer-1' },
+        },
+      },
+    });
+
+    render(<ProfileActions profile={profile} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^follow$/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/previous state was restored/i).length).toBeGreaterThan(0);
+    });
+    expect(await screen.findByRole('button', { name: /^follow$/i })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('keeps owners on edit profile instead of follow', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        id: profile.id,
+        username: profile.username,
+        suggestedUsername: profile.username,
+        displayName: profile.displayName,
+        bio: profile.bio,
+        avatarUrl: profile.avatarUrl,
+        coverUrl: profile.coverUrl,
+        websiteUrl: profile.websiteUrl,
+        twitterHandle: profile.twitterHandle,
+        instagramHandle: profile.instagramHandle,
+        tiktokHandle: profile.tiktokHandle,
+        location: profile.location,
+        credits: profile.credits,
+      }),
+    })));
+    supabaseMocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'owner-token',
+          user: { id: profile.id },
+        },
+      },
+    });
+
+    render(<ProfileActions profile={profile} />);
+
+    expect(await screen.findByRole('button', { name: /edit profile/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^follow$/i })).not.toBeInTheDocument();
   });
 
   it('redirects signed-out visitors to login when they click follow', async () => {

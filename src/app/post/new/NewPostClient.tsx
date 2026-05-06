@@ -11,7 +11,6 @@ import {
   Check,
   Film,
   ImageIcon,
-  Link2,
   Loader2,
   Plus,
   Sparkles,
@@ -31,6 +30,7 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
+import { CURATED_SOURCE_TOOLS, normalizeSourceToolInput } from '@/lib/source-tools';
 import type { EditablePostDraft } from './post-editor-types';
 
 type PostCategory = 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
@@ -50,7 +50,12 @@ interface CreatedPostState {
 interface AttachmentRow {
   id: string;
   label: string;
+  kind: 'link' | 'file';
   url: string;
+  storagePath: string;
+  contentType: string;
+  sizeBytes: number | null;
+  isUploading?: boolean;
 }
 
 interface GenerationDraft {
@@ -65,17 +70,17 @@ interface GenerationDraft {
 }
 
 const BODY_MAX_LENGTH = 2000;
-const STEP_ORDER = ['Proof', 'Story', 'Resources', 'Publish'] as const;
+const STEP_ORDER = ['Post', 'Story', 'Unlock', 'Publish'] as const;
 
 const CATEGORY_OPTIONS: Array<{
   value: Exclude<PostCategory, 'text'>;
   label: string;
   description: string;
 }> = [
-  { value: 'image', label: 'Image', description: 'Still images and frames' },
-  { value: 'video', label: 'Video', description: 'Standard video posts' },
-  { value: 'motion', label: 'Motion', description: 'Movement studies or motion transfer' },
-  { value: 'ugc-ad', label: 'UGC ad', description: 'Creator-style ad deliverables' },
+  { value: 'image', label: 'Image', description: 'Still images, product frames, and visual tests' },
+  { value: 'video', label: 'Video', description: 'Standard video posts from any creation tool' },
+  { value: 'motion', label: 'Motion', description: 'Movement studies, animation, or motion transfer' },
+  { value: 'ugc-ad', label: 'UGC ad', description: 'Creator-style ad deliverables and examples' },
 ];
 
 const VISIBILITY_OPTIONS: Array<{
@@ -86,7 +91,7 @@ const VISIBILITY_OPTIONS: Array<{
   {
     value: 'public',
     label: 'Public',
-    description: 'Appears in the feed and is shareable right away.',
+    description: 'Appears in the community and is shareable right away.',
   },
   {
     value: 'unlisted',
@@ -96,7 +101,7 @@ const VISIBILITY_OPTIONS: Array<{
   {
     value: 'private',
     label: 'Private',
-    description: 'Keep it private while you are still shaping the proof.',
+    description: 'Keep it private while you are still shaping the post.',
   },
 ];
 
@@ -107,18 +112,18 @@ const RESOURCE_ACCESS_OPTIONS: Array<{
 }> = [
   {
     value: 'none',
-    label: 'No resources',
-    description: 'Publish the proof post on its own.',
+    label: 'No unlock',
+    description: 'Share the public result or tip without an unlock.',
   },
   {
     value: 'free',
-    label: 'Free resources',
-    description: 'Let people unlock the prompt, notes, files, or remix access for free.',
+    label: 'Free unlock',
+    description: 'Let people reveal the prompt, notes, files, workflow, or remix access for free.',
   },
   {
     value: 'paid',
-    label: 'Paid resources',
-    description: 'Charge for the reusable resources behind this post.',
+    label: 'Paid unlock',
+    description: 'Charge for the reusable process behind this post.',
   },
 ];
 
@@ -128,10 +133,42 @@ const RESOURCE_KIND_OPTIONS: Array<{
   description: string;
 }> = [
   { value: 'prompt', label: 'Prompt', description: 'The exact prompt or prompt pack.' },
-  { value: 'workflow', label: 'Workflow link', description: 'A shared workflow or build path.' },
-  { value: 'files', label: 'Files / links', description: 'Reference files, docs, or resource links.' },
+  { value: 'workflow', label: 'Workflow / setup', description: 'A workflow link, file link, or build path.' },
+  { value: 'files', label: 'Files / links', description: 'Reference files, docs, presets, or source links.' },
   { value: 'notes', label: 'Notes', description: 'Usage notes, steps, or instructions.' },
   { value: 'remix', label: 'Remix access', description: 'Require an unlock before someone can remix.' },
+];
+
+const UNLOCK_TEMPLATES: Array<{
+  label: string;
+  description: string;
+  kinds: PostResourceKind[];
+}> = [
+  {
+    label: 'Prompt only',
+    description: 'Sell or share the exact prompt behind the post.',
+    kinds: ['prompt'],
+  },
+  {
+    label: 'Workflow link',
+    description: 'Gate a reusable setup link or workflow URL.',
+    kinds: ['workflow'],
+  },
+  {
+    label: 'Workflow file',
+    description: 'Gate workflow files, presets, source files, or references.',
+    kinds: ['files'],
+  },
+  {
+    label: 'Notes / guide',
+    description: 'Gate a written guide, settings, or process notes.',
+    kinds: ['notes'],
+  },
+  {
+    label: 'Prompt + workflow',
+    description: 'Bundle the prompt with the workflow or setup path.',
+    kinds: ['prompt', 'workflow'],
+  },
 ];
 
 const EMPTY_RESOURCE_SELECTIONS: Record<PostResourceKind, boolean> = {
@@ -150,7 +187,11 @@ function createAttachmentRow(partial?: Partial<Omit<AttachmentRow, 'id'>>): Atta
   return {
     id: `attachment-${attachmentIdCounter}`,
     label: partial?.label ?? '',
+    kind: partial?.kind ?? 'link',
     url: partial?.url ?? '',
+    storagePath: partial?.storagePath ?? '',
+    contentType: partial?.contentType ?? '',
+    sizeBytes: partial?.sizeBytes ?? null,
   };
 }
 
@@ -222,15 +263,34 @@ function acceptsCategory(file: File | null, category: Exclude<PostCategory, 'tex
 
 function serializeAttachmentRows(rows: AttachmentRow[]): PostResourceAttachment[] {
   return rows
-    .map((row) => ({
-      label: row.label.trim(),
-      url: row.url.trim(),
-    }))
-    .filter((row) => row.url)
-    .map((row) => ({
-      label: row.label || row.url,
-      url: row.url,
-    }));
+    .map((row): PostResourceAttachment | null => {
+      if (row.kind === 'file') {
+        const storagePath = row.storagePath.trim();
+        if (!storagePath) {
+          return null;
+        }
+
+        return {
+          label: row.label.trim() || storagePath.split('/').pop() || 'File',
+          kind: 'file' as const,
+          storagePath,
+          contentType: row.contentType || null,
+          sizeBytes: row.sizeBytes,
+        };
+      }
+
+      const url = row.url.trim();
+      if (!url) {
+        return null;
+      }
+
+      return {
+        label: row.label.trim() || url,
+        kind: 'link' as const,
+        url,
+      };
+    })
+    .filter((row): row is PostResourceAttachment => row !== null);
 }
 
 function formatGeneratedCategory(value: string | null | undefined): Exclude<PostCategory, 'text'> {
@@ -266,12 +326,36 @@ function getInitialAttachmentRows(bundle: PostResourceBundleInput | null | undef
     return [createAttachmentRow()];
   }
 
-  return attachments.map((attachment) =>
-    createAttachmentRow({
-      label: attachment.label,
-      url: attachment.url,
-    })
-  );
+    return attachments.map((attachment) =>
+      createAttachmentRow({
+        label: attachment.label,
+        kind: attachment.kind === 'file' ? 'file' : 'link',
+        url: attachment.url ?? '',
+        storagePath: attachment.storagePath ?? '',
+        contentType: attachment.contentType ?? '',
+        sizeBytes: attachment.sizeBytes ?? null,
+      })
+    );
+}
+
+async function uploadResourceFile(file: File, accessToken: string): Promise<PostResourceAttachment> {
+  const formData = new FormData();
+  formData.set('file', file);
+
+  const response = await fetch('/api/posts/resource-files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: formData,
+  });
+  const data = await response.json();
+
+  if (!response.ok || !data.attachment) {
+    throw new Error(data.error || 'Failed to upload resource file.');
+  }
+
+  return data.attachment as PostResourceAttachment;
 }
 
 function getInitialPriceUsd(bundle: PostResourceBundleInput | null | undefined): string {
@@ -349,6 +433,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [description, setDescription] = useState(initialPost?.description ?? '');
   const [body, setBody] = useState(initialPost?.body ?? '');
   const [sourceTool, setSourceTool] = useState(initialPost?.sourceTool ?? '');
+  const [sourceToolSlug, setSourceToolSlug] = useState(initialPost?.sourceToolSlug ?? '');
   const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
   const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>(initialCategory);
   const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost));
@@ -380,7 +465,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           prompt: initialPost.prompt,
           outputUrl: initialPost.mediaUrl,
           category: initialCategory,
-          model: 'UGC copy',
+          model: 'magicbooklet',
           paywallPrefill: null,
         }
       : null
@@ -403,6 +488,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   const effectiveVisibility = resourceAccessMode === 'none' ? visibility : 'public';
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
+  const normalizedSourceTool = useMemo(
+    () => normalizeSourceToolInput({ label: sourceTool, slug: sourceToolSlug }),
+    [sourceTool, sourceToolSlug]
+  );
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   const shouldFocusPriceInput =
@@ -414,7 +503,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     (resourceSelections.files && attachments.length > 0) ||
     resourceSelections.remix
   );
-  const stepBadgeLabel = hasGeneratedProof ? 'Generated proof attached' : proofMode === 'text' ? 'Note only' : 'Proof media';
+  const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
 
   useEffect(() => {
     if (!previewUrl) {
@@ -468,7 +557,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     const paywallPrefill = prefilledGeneration.paywallPrefill;
-    if (!hasUsableGenerationPaywallPrefill(paywallPrefill)) {
+    if (!paywallPrefill || !hasUsableGenerationPaywallPrefill(paywallPrefill)) {
       setDidApplyGenerationPaywallPrefill(true);
       return;
     }
@@ -573,7 +662,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           prompt: typeof generation.prompt === 'string' ? generation.prompt : '',
           outputUrl: typeof generation.output_url === 'string' ? generation.output_url : null,
           category: formatGeneratedCategory(generation.category),
-          model: typeof generation.model === 'string' ? generation.model : 'UGC copy',
+          model: typeof generation.model === 'string' ? generation.model : 'magicbooklet',
           paywallPrefill: isGenerationPaywallPrefill(generation.paywallPrefill)
             ? generation.paywallPrefill
             : null,
@@ -617,11 +706,63 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetFeedback();
   };
 
+  const applyUnlockTemplate = (templateKinds: PostResourceKind[]) => {
+    const nextSelections = { ...EMPTY_RESOURCE_SELECTIONS };
+    templateKinds.forEach((kind) => {
+      nextSelections[kind] = true;
+    });
+
+    setResourceSelections(nextSelections);
+    setResourceSelectionsTouched(true);
+
+    if (templateKinds.includes('files') && resourceAttachmentRows.length === 0) {
+      setResourceAttachmentRows([createAttachmentRow()]);
+    }
+
+    resetFeedback();
+  };
+
   const updateAttachmentRow = (id: string, field: 'label' | 'url', value: string) => {
     setResourceAttachmentRows((current) =>
       current.map((row) => (row.id === id ? { ...row, [field]: value } : row))
     );
     resetFeedback();
+  };
+
+  const handleAttachmentFileUpload = async (id: string, fileToUpload: File | null) => {
+    if (!fileToUpload || !session?.access_token) {
+      return;
+    }
+
+    setResourceAttachmentRows((current) =>
+      current.map((row) => row.id === id ? { ...row, isUploading: true } : row)
+    );
+    resetFeedback();
+
+    try {
+      const uploaded = await uploadResourceFile(fileToUpload, session.access_token);
+      setResourceAttachmentRows((current) =>
+        current.map((row) =>
+          row.id === id
+            ? {
+                ...row,
+                label: uploaded.label,
+                kind: 'file',
+                url: '',
+                storagePath: uploaded.storagePath ?? '',
+                contentType: uploaded.contentType ?? '',
+                sizeBytes: uploaded.sizeBytes ?? null,
+                isUploading: false,
+              }
+            : row
+        )
+      );
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : 'Failed to upload resource file.');
+      setResourceAttachmentRows((current) =>
+        current.map((row) => row.id === id ? { ...row, isUploading: false } : row)
+      );
+    }
   };
 
   const addAttachmentRow = () => {
@@ -637,6 +778,17 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetFeedback();
   };
 
+  const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
+    setCreatedPost(nextPost);
+
+    if (options.redirect) {
+      const nextPath = nextPost.showcasePath ?? nextPost.ownerPath;
+      if (nextPath) {
+        router.push(nextPath);
+      }
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
@@ -648,17 +800,17 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (proofMode === 'media' && !hasMediaProof) {
-      setError(hasGeneratedProof ? 'We could not load the generated proof. Try again from your creation workspace.' : 'Upload an image or video to start the post.');
+      setError(hasGeneratedProof ? 'We could not load the generated media. Try again from My Studio.' : 'Upload an image or video to start the post.');
       return;
     }
 
     if (!trimmedBody && !hasMediaProof) {
-      setError('Add a story or proof before publishing.');
+      setError('Add a story or media before publishing.');
       return;
     }
 
     if (proofMode === 'text' && !trimmedBody) {
-      setError('Write the story before publishing a note-only post.');
+      setError('Write the story before publishing a text post.');
       return;
     }
 
@@ -687,12 +839,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       }
 
       if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedPrice) || parsedPrice < 1)) {
-        setError('Paid resources must be priced at $1.00 or above.');
+        setError('Paid unlocks must be priced at $1.00 or above.');
         return;
       }
 
       if (!hasResourceContent) {
-        setError('Add content for at least one selected resource before publishing.');
+        setError('Add content for at least one selected unlock item before publishing.');
         return;
       }
 
@@ -719,14 +871,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             'Content-Type': 'application/json',
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({
+            body: JSON.stringify({
             generationId,
             visibility: effectiveVisibility,
             title: title.trim() || undefined,
             description: description.trim() || undefined,
             body: trimmedBody || undefined,
             category,
-            ...(resourceBundle ? { resourceBundle } : {}),
+            sourceTool: normalizedSourceTool.label,
+            sourceToolSlug: normalizedSourceTool.slug,
+            resourceBundle: resourceBundle ?? { accessMode: 'none' },
           }),
         });
 
@@ -736,14 +890,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           throw new Error(data.error || 'Failed to publish post.');
         }
 
-        setCreatedPost({
+        completePublish({
           postId: data.postId as string,
           showcasePath: (data.showcasePath as string | null) ?? null,
           ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
           resourceAccessMode,
-        });
+        }, { redirect: true });
 
         return;
       }
@@ -760,6 +914,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             description: description.trim() || null,
             body: trimmedBody || null,
             sourceTool: sourceTool.trim() || null,
+            sourceToolSlug: normalizedSourceTool.slug,
             visibility: effectiveVisibility,
             category,
             resourceBundle: resourceBundle ?? { accessMode: 'none' },
@@ -771,7 +926,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           throw new Error(data.error || 'Failed to save post.');
         }
 
-        setCreatedPost({
+        completePublish({
           postId: data.postId as string,
           showcasePath: (data.showcasePath as string | null) ?? null,
           ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
@@ -788,6 +943,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       formData.set('description', description);
       formData.set('body', body);
       formData.set('sourceTool', sourceTool);
+      if (normalizedSourceTool.slug) {
+        formData.set('sourceToolSlug', normalizedSourceTool.slug);
+      }
       formData.set('visibility', effectiveVisibility);
       formData.set('postFormat', postFormat);
       formData.set('resourceBundle', JSON.stringify(resourceBundle ?? { accessMode: 'none' }));
@@ -813,14 +971,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         throw new Error(data.error || 'Failed to publish post.');
       }
 
-      setCreatedPost({
+      completePublish({
         postId: data.postId as string,
         showcasePath: (data.showcasePath as string | null) ?? null,
         ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
         resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
         visibility: data.visibility as PostVisibility,
         resourceAccessMode,
-      });
+      }, { redirect: true });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to publish post.');
     } finally {
@@ -833,7 +991,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
   const primaryPostLabel = createdPost?.showcasePath ? 'View post' : 'Open editor';
   const backHref = isEditMode || entrySurface === 'creations' ? '/creations' : '/showcase';
-  const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to workspace' : 'Back to feed';
+  const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to studio' : 'Back to community';
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -841,6 +999,34 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         <div className="absolute left-[-10%] top-[-8%] h-[40%] w-[32%] rounded-full bg-sky-500/12 blur-[140px]" />
         <div className="absolute bottom-[-12%] right-[-8%] h-[36%] w-[30%] rounded-full bg-emerald-500/10 blur-[160px]" />
       </div>
+
+      {!createdPost ? (
+        <div className="fixed inset-x-4 bottom-4 z-40 lg:hidden">
+          <div className="flex items-center justify-between gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                Ready when you are
+              </div>
+              <div className="mt-1 truncate text-sm font-semibold text-white">
+                {resourceAccessMode === 'paid'
+                  ? `Paid unlock · ${formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}`
+                  : resourceAccessMode === 'free'
+                    ? 'Free unlock'
+                    : 'Public post'}
+              </div>
+            </div>
+            <button
+              type="submit"
+              form="post-composer-form"
+              disabled={isSubmitting || isLoadingGeneration}
+              className="inline-flex shrink-0 items-center gap-2 rounded-full bg-sky-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
+              {isEditMode ? 'Save now' : 'Share now'}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="studio-shell relative z-10 py-12 sm:py-16">
         <Link
@@ -856,28 +1042,28 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             <div className="mb-6 flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Post composer</div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Community post composer</div>
                   <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                     {isCreationPaywallManagementIntent
-                      ? 'Manage the paywall for this post'
+                      ? 'Manage the unlock behind this post'
                       : isEditMode
-                      ? 'Update the post and its unlockable resources'
+                      ? 'Update the post and its unlock'
                       : isGeneratedPaywallIntent
                         ? 'Set the price for this creation'
-                        : 'Publish the proof and decide what unlocks with it'}
+                        : 'Share a media or text post'}
                   </h1>
                   <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300">
                     {isCreationPaywallManagementIntent
-                      ? 'You came from My Creations. The proof stays attached while you adjust the unlock, update the price, or remove the paywall here.'
+                      ? 'You came from My Studio. The media stays attached while you adjust the unlock, update the price, or remove the paid layer here.'
                       : isEditMode
-                      ? 'Edit the public story, adjust visibility, and keep the proof and attached resources aligned in one place.'
+                      ? 'Edit the public story, adjust visibility, and keep the post and attached unlock aligned in one place.'
                       : isGeneratedPaywallIntent
-                        ? 'The proof is already attached. We will preload the saved prompt, reusable setup notes, and remix access when available so you can price the unlock and publish.'
-                        : 'One flow, one post, one optional unlock. Start with the proof, add the story, and only attach resources if the post needs them.'}
+                        ? 'The media is already attached. We will preload the saved prompt, reusable setup notes, and remix access when available so you can price the unlock and publish.'
+                        : 'Start with the public post: upload media from any creator tool or write a text tip. If there is reusable value behind it, attach an optional free or paid unlock later.'}
                   </p>
                 </div>
                 <div className="hidden rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100 sm:inline-flex">
-                  {isCreationPaywallManagementIntent ? 'From My Creations' : isEditMode ? 'Owner editor' : 'Creator-first publishing'}
+                  {isCreationPaywallManagementIntent ? 'From My Studio' : isEditMode ? 'Owner editor' : 'Post first, unlock optional'}
                 </div>
               </div>
 
@@ -896,10 +1082,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               </div>
             </div>
 
-            <form className="space-y-6" onSubmit={handleSubmit}>
+            <form id="post-composer-form" className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
               {initialPost?.archivedAt ? (
                 <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
-                  This post is archived. It stays out of public surfaces until you restore it from your workspace.
+                  This post is archived. It stays out of public surfaces until you restore it from My Studio.
                 </div>
               ) : null}
 
@@ -907,13 +1093,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/75">Step 1</div>
-                    <h2 className="mt-2 text-xl font-semibold text-white">Start with the proof</h2>
+                    <h2 className="mt-2 text-xl font-semibold text-white">Choose media or text</h2>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
                       {isEditMode
-                        ? 'The proof is already attached. This edit screen keeps the proof fixed while you update the story, visibility, and resources around it.'
+                        ? 'The post is already attached. This editor keeps the public media fixed while you update the story, visibility, and unlock around it.'
                         : hasGeneratedProof
-                          ? 'Your generated proof is already attached. You can tell the story and decide what unlocks next.'
-                          : 'Pick the simplest starting point: proof media or a note-only post.'}
+                          ? 'Your generated media is already attached. You can tell the story and decide what unlocks next.'
+                          : 'Start with media when you have a result to show, or text when you want to share a tip, note, or lesson.'}
                     </p>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
@@ -922,32 +1108,51 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </div>
 
                 {!hasGeneratedProof && !isEditMode ? (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <div className="mt-5 grid gap-3 lg:grid-cols-3">
                     {([
                       {
                         value: 'media',
-                        label: 'Media proof',
-                        description: 'Upload the result first, then add the story and optional unlock.',
+                        label: 'Share media I made',
+                        description: 'Upload media from magicbooklet, Higgsfield, Freepik, Runway, or any other tool.',
                         icon: UploadCloud,
                       },
                       {
                         value: 'text',
-                        label: 'Note only',
-                        description: 'Publish a tactic, lesson, or idea without media.',
+                        label: 'Share a tip',
+                        description: 'Post a lesson, tactic, or observation without attaching media.',
                         icon: BookText,
+                      },
+                      {
+                        value: 'sell',
+                        label: 'Sell the process',
+                        description: 'Start with media and prepare a paid prompt, workflow, file, or remix unlock.',
+                        icon: BadgePlus,
                       },
                     ] as const).map((option) => {
                       const Icon = option.icon;
-                      const active = proofMode === option.value;
+                      const active = option.value === 'sell'
+                        ? proofMode === 'media' && resourceAccessMode === 'paid'
+                        : proofMode === option.value;
 
                       return (
                         <button
                           key={option.value}
                           type="button"
                           onClick={() => {
-                            setProofMode(option.value);
                             if (option.value === 'text') {
+                              setProofMode('text');
                               setFile(null);
+                              setResourceAccessMode('none');
+                            } else if (option.value === 'sell') {
+                              setProofMode('media');
+                              setResourceAccessMode('paid');
+                              setResourceSelections((current) => ({
+                                ...current,
+                                prompt: true,
+                                workflow: true,
+                              }));
+                            } else {
+                              setProofMode('media');
                             }
                             resetFeedback();
                           }}
@@ -978,12 +1183,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-5">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Generated proof</div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Generated media</div>
                             <div className="mt-2 text-lg font-semibold text-white">
-                              {prefilledGeneration?.title || 'UGC copy creation'}
+                              {prefilledGeneration?.title || 'magicbooklet creation'}
                             </div>
                             <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
-                              Created in UGC copy with {prefilledGeneration?.model || 'your latest model'}.
+                              Created in magicbooklet with {prefilledGeneration?.model || 'your latest model'}.
                             </p>
                           </div>
                           <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-50">
@@ -1032,16 +1237,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-5">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Attached proof</div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Attached media</div>
                             <div className="mt-2 text-lg font-semibold text-white">
                               {title.trim() || 'Existing post media'}
                             </div>
                             <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
-                              This proof is already saved on the post. Use the sections below to update the story or the resources around it.
+                              This media is already saved on the post. Use the sections below to update the story or the unlock around it.
                             </p>
                           </div>
                           <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">
-                            Proof locked in
+                            Media locked in
                           </div>
                         </div>
 
@@ -1073,7 +1278,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             <div>
                               <div className="text-sm font-semibold text-white">Upload image or video</div>
                               <p className="mt-1 text-sm text-zinc-400">
-                                Start with the proof. Everything else can layer in after this.
+                                Upload the public result first. Any prompt, workflow, or files can be attached later.
                               </p>
                             </div>
                           </div>
@@ -1119,7 +1324,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                 <ImageIcon className="h-10 w-10 text-zinc-500" />
                               )}
                               <p className="mt-4 max-w-sm text-sm leading-6 text-zinc-400">
-                                Drop in the creative first, then decide if the post needs a story or unlockable resources.
+                                Drop in the result first, then decide whether this stays a simple community post or includes an optional unlock.
                               </p>
                             </div>
                           )}
@@ -1134,23 +1339,95 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <BookText className="h-6 w-6" />
                       </div>
                       <div>
-                        <div className="text-sm font-semibold text-white">This will be a note-only post</div>
+                        <div className="text-sm font-semibold text-white">This will be a text post</div>
                         <p className="mt-1 text-sm text-zinc-400">
-                          Use the story section below to write the actual post. Media is optional for this path.
+                          Use the story section below to publish the tip. You can still attach notes, files, or workflow links if the tip has reusable value.
                         </p>
                       </div>
                     </div>
                   </div>
                 )}
+
+                {proofMode === 'media' && !hasGeneratedProof ? (
+                  <div className="mt-5 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Made with</div>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                          Tag the source tool now so buyers can scan the feed by Higgsfield, Freepik, Runway, Midjourney, Kling, Sora, Veo, or your own custom tool.
+                        </p>
+                      </div>
+                      <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
+                        {normalizedSourceTool.label || 'Choose tool'}
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {CURATED_SOURCE_TOOLS.map((toolOption) => (
+                        <button
+                          key={toolOption.slug}
+                          type="button"
+                          onClick={() => {
+                            setSourceTool(toolOption.label);
+                            setSourceToolSlug(toolOption.slug);
+                            resetFeedback();
+                          }}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                            normalizedSourceTool.slug === toolOption.slug
+                              ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                              : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          {toolOption.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSourceToolSlug('');
+                          resetFeedback();
+                        }}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                          sourceTool && !normalizedSourceTool.slug
+                            ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                            : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                        }`}
+                      >
+                        Custom
+                      </button>
+                    </div>
+                    <input
+                      value={sourceTool}
+                      onChange={(event) => {
+                        setSourceTool(event.target.value);
+                        setSourceToolSlug('');
+                        resetFeedback();
+                      }}
+                      placeholder="Runway, Midjourney, CapCut..."
+                      list="source-tool-options"
+                      className="mt-3 w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                    />
+                    <datalist id="source-tool-options">
+                      <option value="magicbooklet" />
+                      <option value="Higgsfield" />
+                      <option value="Freepik" />
+                      <option value="Runway" />
+                      <option value="Midjourney" />
+                      <option value="Kling" />
+                      <option value="Sora" />
+                      <option value="Veo" />
+                      <option value="CapCut" />
+                    </datalist>
+                  </div>
+                ) : null}
               </div>
 
               <div className="rounded-[28px] border border-white/8 bg-black/20 p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 2</div>
-                    <h2 className="mt-2 text-lg font-semibold text-white">Tell the story behind the proof</h2>
+                    <h2 className="mt-2 text-lg font-semibold text-white">Write the public post</h2>
                     <p className="mt-2 text-sm leading-6 text-zinc-400">
-                      This is the public part people see before they decide to unlock anything.
+                      This is what everyone sees in the community before any prompt, workflow, file, or remix access unlocks.
                     </p>
                   </div>
                   <button
@@ -1180,7 +1457,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     placeholder={
                       proofMode === 'text'
                         ? 'Share the tactic, lesson, or idea people should take away from this post.'
-                        : 'Optional: explain why this worked, what changed, or what someone should notice before they unlock the resources.'
+                        : 'Optional: explain what tool you used, what changed, or what someone should notice before they open an optional unlock.'
                     }
                     rows={proofMode === 'text' ? 8 : 6}
                     className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
@@ -1203,26 +1480,27 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         />
                       </label>
 
-                      {proofMode === 'media' && !hasGeneratedProof ? (
-                        <label className="block">
-                          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Made with</div>
-                          <input
-                            value={sourceTool}
-                            onChange={(event) => {
-                              setSourceTool(event.target.value);
-                              resetFeedback();
-                            }}
-                            placeholder="Runway, Midjourney, CapCut..."
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                          />
-                        </label>
+                      {proofMode === 'media' ? (
+                        <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
+                          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                            {hasGeneratedProof ? 'Source' : 'Source tool'}
+                          </div>
+                          <div className="mt-3 inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100">
+                            {hasGeneratedProof ? 'Created in magicbooklet' : normalizedSourceTool.label || 'Choose in Step 1'}
+                          </div>
+                          {!hasGeneratedProof ? (
+                            <p className="mt-2 text-xs leading-5 text-zinc-500">
+                              Tool selection lives in Step 1 so the feed and buyer filters stay accurate.
+                            </p>
+                          ) : null}
+                        </div>
                       ) : (
                         <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
                           <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                            {hasGeneratedProof ? 'Source' : 'Post type'}
+                            Post type
                           </div>
                           <div className="mt-3 inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100">
-                            {hasGeneratedProof ? 'Created in UGC copy' : 'Text only'}
+                            Text only
                           </div>
                         </div>
                       )}
@@ -1267,7 +1545,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         </select>
                         <p className="mt-2 text-xs leading-5 text-zinc-500">
                           {hasGeneratedProof
-                            ? 'Generated proof keeps its category automatically.'
+                            ? 'Generated media keeps its category automatically.'
                             : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
                         </p>
                       </label>
@@ -1284,13 +1562,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Step 3</div>
-                    <h2 className="mt-2 text-lg font-semibold text-white">Choose whether this post has resources</h2>
+                    <h2 className="mt-2 text-lg font-semibold text-white">Optional unlock</h2>
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                      If people should unlock the prompt, workflow, files, notes, or remix access from this same post, choose free or paid and reveal only what matters.
+                      Attach prompts, workflows, files, notes, or remix access if this post has reusable value.
                     </p>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
-                    {resourceAccessMode === 'none' ? 'Post only' : resourceAccessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
+                    {resourceAccessMode === 'none' ? 'No unlock' : resourceAccessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
                   </div>
                 </div>
 
@@ -1300,43 +1578,108 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       ? 'Preparing the saved prompt and generation setup for this paid unlock.'
                       : hasGenerationPaywallPrefill
                         ? 'Saved prompt, reusable setup notes, and remix access are ready where this creation supports them. Set the price first, then publish or edit anything below.'
-                        : 'This creation does not have enough saved inputs to auto-fill a paid bundle yet. The proof is still attached, and you can add the prompt, notes, or remix access manually below.'}
+                        : 'This creation does not have enough saved inputs to auto-fill a paid unlock yet. The media is still attached, and you can add the prompt, notes, or remix access manually below.'}
                   </div>
                 ) : isCreationPaywallManagementIntent ? (
                   <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
-                    You came from My Creations to manage this post&apos;s unlock. The resource mode is ready here, and the price field is focused so you can adjust the paywall quickly.
+                    You came from My Studio to manage this post&apos;s unlock. The unlock mode is ready here, and the price field is focused so you can adjust the paid layer quickly.
                   </div>
                 ) : null}
 
-                <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                  {RESOURCE_ACCESS_OPTIONS.map((option) => {
-                    const active = resourceAccessMode === option.value;
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => {
-                          setResourceAccessMode(option.value);
-                          resetFeedback();
-                        }}
-                        className={`rounded-[24px] border p-4 text-left transition ${
-                          active
-                            ? 'border-emerald-300/35 bg-emerald-400/12 text-white'
-                            : 'border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/20 hover:bg-white/[0.04] hover:text-white'
-                        }`}
-                      >
-                        <div className="text-sm font-semibold">{option.label}</div>
-                        <p className="mt-2 text-xs leading-5 text-zinc-400">{option.description}</p>
-                      </button>
-                    );
-                  })}
-                </div>
+                {resourceAccessMode === 'none' ? (
+                  <div className="mt-5 rounded-[26px] border border-white/8 bg-black/25 p-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <p className="max-w-2xl text-sm leading-6 text-zinc-300">
+                        Keep the post simple by default. Add an unlock only when there is a reusable prompt, workflow, file, note, or remix path worth sharing.
+                      </p>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResourceAccessMode('free');
+                            resetFeedback();
+                          }}
+                          className="inline-flex items-center justify-center rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/15"
+                        >
+                          Add free unlock
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResourceAccessMode('paid');
+                            resetFeedback();
+                          }}
+                          className="inline-flex items-center justify-center rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200"
+                        >
+                          Add paid unlock
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {resourceAccessMode !== 'none' ? (
                   <div className="mt-5 space-y-5">
+                    <div className="flex flex-wrap gap-2">
+                      {RESOURCE_ACCESS_OPTIONS.map((option) => {
+                        const active = resourceAccessMode === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => {
+                              setResourceAccessMode(option.value);
+                              resetFeedback();
+                            }}
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                              active
+                                ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
+                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
+                            }`}
+                          >
+                            {active ? <Check className="h-4 w-4" /> : null}
+                            {option.value === 'none' ? 'No unlock' : option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Unlock templates</div>
+                      <p className="mt-2 text-sm leading-6 text-zinc-400">
+                        Start from the buyer shape, then edit the fields that open below.
+                      </p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {UNLOCK_TEMPLATES.map((template) => {
+                          const active =
+                            template.kinds.every((kind) => resourceSelections[kind]) &&
+                            selectedResourceKinds.length === template.kinds.length;
+
+                          return (
+                            <button
+                              key={template.label}
+                              type="button"
+                              onClick={() => applyUnlockTemplate(template.kinds)}
+                              className={`rounded-[18px] border p-3 text-left transition ${
+                                active
+                                  ? 'border-emerald-300/35 bg-emerald-400/15 text-white'
+                                  : 'border-white/10 bg-white/[0.025] text-zinc-300 hover:border-white/20 hover:bg-white/[0.05] hover:text-white'
+                              }`}
+                            >
+                              <div className="text-sm font-semibold">{template.label}</div>
+                              <p className="mt-1 text-xs leading-5 text-zinc-500">{template.description}</p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
                     <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">What are people unlocking?</div>
-                      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">What does the unlock include?</div>
+                      <p className="mt-2 text-sm leading-6 text-zinc-400">
+                        Select only the reusable pieces people should reveal after choosing this unlock.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
                         {RESOURCE_KIND_OPTIONS.map((option) => {
                           const active = resourceSelections[option.value];
 
@@ -1345,17 +1688,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               key={option.value}
                               type="button"
                               onClick={() => updateResourceSelection(option.value)}
-                              className={`rounded-[22px] border px-4 py-4 text-left transition ${
+                              title={option.description}
+                              className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
                                 active
-                                  ? 'border-emerald-300/35 bg-emerald-400/12'
-                                  : 'border-white/10 bg-white/[0.02] hover:border-white/18 hover:bg-white/[0.04]'
+                                  ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
+                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
                               }`}
                             >
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="text-sm font-semibold text-white">{option.label}</div>
-                                {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
-                              </div>
-                              <p className="mt-2 text-xs leading-5 text-zinc-400">{option.description}</p>
+                              {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
+                              {option.label}
                             </button>
                           );
                         })}
@@ -1398,7 +1739,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                     {resourceSelections.workflow ? (
                       <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Workflow link</div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Workflow / setup link</div>
                         <input
                           value={resourceWorkflowUrl}
                           onChange={(event) => {
@@ -1417,7 +1758,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           <div>
                             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Files / links</div>
                             <p className="mt-1 text-sm leading-6 text-zinc-400">
-                              Add one or more labeled links people should open after unlocking.
+                              Add gated workflow files or labeled links people should open after unlocking. Use this for workflow files, docs, presets, references, or source folders.
                             </p>
                           </div>
                           <button
@@ -1439,12 +1780,35 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                 placeholder={`Label ${index + 1}`}
                                 className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
                               />
-                              <input
-                                value={row.url}
-                                onChange={(event) => updateAttachmentRow(row.id, 'url', event.target.value)}
-                                placeholder="https://..."
-                                className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                              />
+                              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                                {row.kind === 'file' && row.storagePath ? (
+                                  <div className="rounded-2xl border border-emerald-300/15 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-50">
+                                    {row.label || row.storagePath}
+                                    {row.sizeBytes ? (
+                                      <span className="ml-2 text-xs text-emerald-50/65">{Math.ceil(row.sizeBytes / 1024)} KB</span>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <input
+                                    value={row.url}
+                                    onChange={(event) => updateAttachmentRow(row.id, 'url', event.target.value)}
+                                    placeholder="https://..."
+                                    className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
+                                  />
+                                )}
+                                <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl border border-white/10 bg-black/35 px-3 py-3 text-sm font-medium text-zinc-200 transition hover:bg-black/45 hover:text-white">
+                                  {row.isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Upload file'}
+                                  <input
+                                    type="file"
+                                    className="sr-only"
+                                    disabled={row.isUploading}
+                                    onChange={(event) => {
+                                      void handleAttachmentFileUpload(row.id, event.target.files?.[0] ?? null);
+                                      event.target.value = '';
+                                    }}
+                                  />
+                                </label>
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => removeAttachmentRow(row.id)}
@@ -1463,36 +1827,33 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
                         <div className="text-sm font-semibold text-white">Remix access is included in this unlock</div>
                         <p className="mt-1 text-sm leading-6 text-zinc-400">
-                          People will need to unlock these resources before remixing this post.
+                          People will need to open this unlock before remixing this post.
                         </p>
                       </div>
                     ) : null}
 
-                    <div className="grid gap-4 md:grid-cols-[minmax(0,220px)_1fr]">
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
-                        <input
-                          ref={priceInputRef}
-                          value={resourcePriceUsd}
-                          onChange={(event) => {
-                            setResourcePriceUsd(event.target.value);
-                            resetFeedback();
-                          }}
-                          disabled={resourceAccessMode !== 'paid'}
-                          placeholder="9"
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">
-                          {resourceAccessMode === 'paid'
-                            ? 'Choose any price at or above $1.00.'
-                            : 'Free unlock. Buyers just click once to access it.'}
-                        </p>
-                      </label>
+                    <div className={`grid gap-4 ${resourceAccessMode === 'paid' ? 'md:grid-cols-[minmax(0,220px)_1fr]' : ''}`}>
+                      {resourceAccessMode === 'paid' ? (
+                        <label className="block">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
+                          <input
+                            ref={priceInputRef}
+                            value={resourcePriceUsd}
+                            onChange={(event) => {
+                              setResourcePriceUsd(event.target.value);
+                              resetFeedback();
+                            }}
+                            placeholder="9"
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
+                          />
+                          <p className="mt-2 text-xs leading-5 text-zinc-500">Choose any price at or above $1.00.</p>
+                        </label>
+                      ) : null}
 
                       <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
                         <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Visibility</div>
                         <p className="mt-3 text-sm leading-6 text-zinc-300">
-                          Posts with unlockable resources are public so others can discover the proof first.
+                          Posts with unlocks are public so others can discover the result first.
                         </p>
                         <div className="mt-3 inline-flex rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
                           Public post required
@@ -1500,11 +1861,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       </div>
                     </div>
                   </div>
-                ) : (
-                  <p className="mt-4 text-sm leading-6 text-zinc-400">
-                    Leave this off if the post should stand alone with no locked prompt, workflow, files, notes, or remix access.
-                  </p>
-                )}
+                ) : null}
               </div>
 
               {error ? (
@@ -1520,7 +1877,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       {isEditMode
                         ? 'Changes saved'
                         : createdPostHasResources
-                          ? 'Post published with resources'
+                          ? 'Post published with an unlock'
                           : 'Post published'}
                     </div>
                     <div className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
@@ -1533,7 +1890,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         ? 'Your changes are saved in the owner editor. This post is not publicly visible right now.'
                         : 'The post has been updated and the latest version is ready.'
                       : createdPostHasResources
-                        ? 'The proof is public and the locked resources are ready on the same post page.'
+                        ? 'The post is public and the unlockable process is ready on the same page.'
                         : createdPost.visibility === 'public'
                           ? 'Your post is live.'
                           : 'Your post is saved with limited visibility.'}
@@ -1552,7 +1909,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         href={createdPost.resourceBundlePath}
                         className="rounded-full border border-emerald-300/30 bg-emerald-400/15 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/20"
                       >
-                        Open resources section
+                        Open unlock section
                       </Link>
                     ) : null}
                   </div>
@@ -1563,69 +1920,121 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 4</div>
                 <div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="max-w-xl">
-                    <h2 className="text-lg font-semibold text-white">Review what is public and what unlocks</h2>
+                    <h2 className="text-lg font-semibold text-white">Review the public post and unlock</h2>
                     <p className="mt-2 text-sm leading-6 text-zinc-400">{selectedVisibilityOption.description}</p>
                   </div>
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="submit"
-                      disabled={isSubmitting || isLoadingGeneration}
+                      disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
                       className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
                     >
                       {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-                      {isEditMode ? 'Save changes' : 'Publish post'}
+                      {isEditMode ? 'Save changes' : 'Share post'}
                     </button>
                     <Link
                       href={isEditMode ? '/creations' : '/showcase'}
                       className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                     >
-                      {isEditMode ? 'Back to workspace' : 'Back to feed'}
+                      {isEditMode ? 'Back to studio' : 'Back to community'}
                     </Link>
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 lg:grid-cols-3">
+                <div className="mt-5 rounded-[24px] border border-emerald-400/15 bg-emerald-500/5 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/75">Buyer preview</div>
+                      <h3 className="mt-2 text-base font-semibold text-white">
+                        {title.trim() || (proofMode === 'text' ? 'Untitled tip' : 'Untitled media post')}
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                        {trimmedBody
+                          ? trimmedBody.slice(0, 180)
+                          : proofMode === 'media'
+                            ? `${normalizedSourceTool.label ? `Made with ${normalizedSourceTool.label}. ` : ''}Public media is visible before any unlock.`
+                            : 'Public tip is visible before any unlock.'}
+                      </p>
+                    </div>
+                    <div className="shrink-0 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1.5 text-sm font-semibold text-emerald-50">
+                      {resourceAccessMode === 'none'
+                        ? 'No unlock'
+                        : resourceAccessMode === 'free'
+                          ? 'Free unlock'
+                          : `Paid unlock · ${formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}`}
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Unlock kinds</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedResourceKinds.length > 0 ? selectedResourceKinds.map((kind) => (
+                          <span
+                            key={kind}
+                            className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-zinc-200"
+                          >
+                            {getPostResourceKindLabel(kind)}
+                          </span>
+                        )) : (
+                          <span className="text-sm text-zinc-400">Nothing for buyers to unlock.</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">What remains locked</div>
+                      <p className="mt-3 text-sm leading-6 text-zinc-300">
+                        {resourceAccessMode === 'none'
+                          ? 'The public post stands alone.'
+                          : selectedResourceKinds.length > 0
+                            ? `${getLockedSummary(selectedResourceKinds)} reveal after access.`
+                            : 'Choose a template or kind to define the locked layer.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={`mt-5 grid gap-4 ${resourceAccessMode === 'paid' ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
                   <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
                     <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Public</div>
-                    <div className="mt-3 text-sm font-semibold text-white">{effectiveVisibility === 'public' ? 'Public post' : selectedVisibilityOption.label}</div>
+                    <div className="mt-3 text-sm font-semibold text-white">
+                      {proofMode === 'media' ? 'Media post' : 'Text post'}
+                    </div>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {proofMode === 'media'
-                        ? 'Proof media'
-                        : 'Story only'}
+                      {effectiveVisibility === 'public' ? 'Public post' : selectedVisibilityOption.label}
                       {title.trim() ? `, ${title.trim()}` : ''}
                       {trimmedBody ? ', story included' : ''}
                     </p>
                   </div>
 
                   <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Locked</div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Unlock</div>
                     <div className="mt-3 text-sm font-semibold text-white">
-                      {resourceAccessMode === 'none' ? 'No resources attached' : getLockedSummary(selectedResourceKinds)}
+                      {resourceAccessMode === 'none'
+                        ? 'No unlock'
+                        : resourceAccessMode === 'free'
+                          ? 'Free unlock'
+                          : getLockedSummary(selectedResourceKinds)}
                     </div>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
                       {resourceAccessMode === 'none'
                         ? 'This post stands alone.'
-                        : 'People unlock these resources directly from the post page.'}
+                        : selectedResourceKinds.length > 0
+                          ? getLockedSummary(selectedResourceKinds)
+                          : 'People unlock the reusable process directly from the post page.'}
                     </p>
                   </div>
 
-                  <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Price</div>
-                    <div className="mt-3 text-sm font-semibold text-white">
-                      {resourceAccessMode === 'paid'
-                        ? formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))
-                        : resourceAccessMode === 'free'
-                          ? 'Free unlock'
-                          : 'No unlock'}
+                  {resourceAccessMode === 'paid' ? (
+                    <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Price</div>
+                      <div className="mt-3 text-sm font-semibold text-white">
+                        {formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-zinc-300">
+                        Buyers pay once to reveal the full unlock.
+                      </p>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {resourceAccessMode === 'paid'
-                        ? 'Buyers pay once to reveal the full resource set.'
-                        : resourceAccessMode === 'free'
-                          ? 'Buyers click once to reveal the resources.'
-                          : 'Nothing sits behind a paywall or free unlock.'}
-                    </p>
-                  </div>
+                  ) : null}
                 </div>
 
                 {resourceAccessMode === 'none' ? (
@@ -1662,11 +2071,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Fast path</div>
               <div className="mt-4 space-y-4">
                 {[
-                  'Start with the proof: upload media, keep the generated proof, or publish a note-only post.',
-                  'Write only the public story people should see before they decide to unlock anything.',
+                  'Start with the public post: upload a result, keep the generated media, or publish a creator tip.',
+                  'Write only the context people should see before they decide to unlock anything.',
                   isGeneratedPaywallIntent
-                    ? 'When the proof came from UGC copy, we preload the saved prompt and reusable setup so you can price the unlock first.'
-                    : 'If this post has reusable value, choose free or paid resources and reveal only the sections you actually need.',
+                    ? 'When the media came from magicbooklet, we preload the saved prompt and reusable setup so you can price the unlock first.'
+                    : 'If this post has reusable value, choose a free or paid unlock and reveal only the sections you actually need.',
                 ].map((step, index) => (
                   <div key={step} className="flex items-start gap-3">
                     <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-sm font-semibold text-white">
@@ -1680,35 +2089,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
             <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
               <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">What people unlock</div>
-              <h2 className="mt-3 text-xl font-semibold text-white">One post, one optional resource bundle</h2>
+              <h2 className="mt-3 text-xl font-semibold text-white">One post, one optional unlock</h2>
               <p className="mt-3 text-sm leading-7 text-zinc-300">
-                The proof stays public. If the prompt, workflow, files, notes, or remix access should unlock later, attach them here and buyers will access everything directly on the post page.
+                The post stays public. If the prompt, workflow, files, notes, or remix access should unlock later, attach them here and buyers will access everything directly on the post page.
               </p>
               <Link
                 href="/marketplace"
                 className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
               >
-                See discovery examples
+                Browse unlocks
                 <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
 
-            {selectedResourceKinds.length > 0 ? (
-              <div className="rounded-[30px] border border-emerald-500/15 bg-emerald-500/5 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-                <div className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-200/75">Current unlock</div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {selectedResourceKinds.map((kind) => (
-                    <div
-                      key={kind}
-                      className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1.5 text-sm font-medium text-emerald-50"
-                    >
-                      {kind === 'workflow' ? <Link2 className="h-3.5 w-3.5" /> : null}
-                      {getPostResourceKindLabel(kind)}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
           </aside>
         </div>
       </div>

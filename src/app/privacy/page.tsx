@@ -1,11 +1,11 @@
 import { Metadata } from "next";
 
-import { createMetadata } from "@/lib/seo";
+import { createMetadata, siteConfig } from "@/lib/seo";
 
 export const metadata: Metadata = createMetadata({
     title: "Privacy Policy",
     description:
-        "Review how UGC copy collects, processes, stores, and protects data across its AI image, video, and motion-transfer workflows.",
+        `Review how ${siteConfig.name} collects, processes, stores, and protects data across its AI image, video, and motion-transfer workflows.`,
     path: '/privacy',
 });
 
@@ -21,7 +21,7 @@ export default function PrivacyPolicy() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">1. Introduction</h2>
                         <p>
-                            UGC copy (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;) is committed to protecting your privacy.
+                            {siteConfig.name} (&ldquo;we,&rdquo; &ldquo;our,&rdquo; or &ldquo;us&rdquo;) is committed to protecting your privacy.
                             This Privacy Policy explains how we collect, use, disclose, and safeguard your
                             information when you use our AI video generation service.
                         </p>
@@ -112,8 +112,8 @@ export default function PrivacyPolicy() {
                         </ul>
                         <p className="mt-4">
                             To exercise these rights, contact us at{" "}
-                            <a href="mailto:privacy@ugccopy.com" className="text-purple-400 hover:text-purple-300">
-                                privacy@ugccopy.com
+                            <a href={`mailto:${siteConfig.privacyEmail}`} className="text-purple-400 hover:text-purple-300">
+                                {siteConfig.privacyEmail}
                             </a>
                         </p>
                     </section>
@@ -161,8 +161,8 @@ export default function PrivacyPolicy() {
                         <ul className="mt-4 space-y-2">
                             <li>
                                 Email:{" "}
-                                <a href="mailto:privacy@ugccopy.com" className="text-purple-400 hover:text-purple-300">
-                                    privacy@ugccopy.com
+                                <a href={`mailto:${siteConfig.privacyEmail}`} className="text-purple-400 hover:text-purple-300">
+                                    {siteConfig.privacyEmail}
                                 </a>
                             </li>
                         </ul>
@@ -170,7 +170,7 @@ export default function PrivacyPolicy() {
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC copy. All rights reserved.</p>
+                    <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                 </div>
             </div>
         </div>

@@ -5,7 +5,7 @@ import { RequireAuth } from '@/app/components/RouteAuthBoundary';
 
 export const metadata: Metadata = createNoIndexMetadata(
     'Create',
-    'Launch your UGC copy workspace to generate AI images, videos, motion-transfer ads, and reusable workflows.'
+    'Launch your magicbooklet workspace to generate AI images, videos, motion-transfer ads, and reusable workflows.'
 );
 
 export default async function CreateLayout({ children }: { children: React.ReactNode }) {

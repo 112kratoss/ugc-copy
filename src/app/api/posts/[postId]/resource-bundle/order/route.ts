@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
 
@@ -49,11 +48,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const bundle = await getBundleForOrderByPostId(postId);
   if (!bundle || bundle.status !== 'published') {
-    return NextResponse.json({ error: 'Resources not found.' }, { status: 404 });
+    return NextResponse.json({ error: 'Unlock not found.' }, { status: 404 });
   }
 
   if (bundle.owner_user_id === user.id) {
-    return NextResponse.json({ error: 'You already own these resources.' }, { status: 400 });
+    return NextResponse.json({ error: 'You already own this unlock.' }, { status: 400 });
   }
 
   const { data: existingPurchase } = await adminSupabase

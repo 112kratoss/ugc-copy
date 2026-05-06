@@ -4,8 +4,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
+  getPostResourceKinds,
+  normalizePostResourceAttachments,
+  type PostResourceBundleResources,
+} from '@/lib/post-resource-bundles';
+import {
+  MAGICBOOKLET_SOURCE_KIND,
   getShowcaseMediaKind,
   isShowcaseItemCategory,
+  type RawShowcaseSourceKind,
   type ShowcaseMediaKind,
   type ShowcasePostFormat,
   type ShowcaseAssetSummary,
@@ -21,7 +28,7 @@ export interface PostReferenceRow {
   visibility: PostVisibility;
   category: PostCategory;
   prompt: string | null;
-  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_kind: RawShowcaseSourceKind;
 }
 
 export interface PostMediaRow {
@@ -128,7 +135,7 @@ async function findLegacyGenerationReference(
     visibility: row.is_public ? 'public' : 'private',
     category: normalizeLegacyCategory(row.category),
     prompt: row.prompt ?? null,
-    source_kind: 'ugc_copy',
+    source_kind: MAGICBOOKLET_SOURCE_KIND,
   };
 }
 
@@ -161,6 +168,13 @@ export function isMissingPostTextColumnsError(error: unknown): boolean {
       message.includes('body')
     )
   );
+}
+
+export function isMissingPostSourceToolSlugColumnError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return code === '42703' && message.includes('source_tool_slug');
 }
 
 export function isMissingMarketplaceSchemaError(error: unknown): boolean {
@@ -290,7 +304,7 @@ export async function getMarketplaceAssetSummaryMap(
 
   const bundleResult = await adminSupabase
     .from('post_resource_bundles')
-    .select('id, post_id, title, access_mode, price_usd_cents, preview_text, allow_remix, status')
+    .select('id, post_id, title, access_mode, price_usd_cents, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, sales_count, status')
     .in('post_id', postIds)
     .eq('status', 'published');
 
@@ -304,7 +318,18 @@ export async function getMarketplaceAssetSummaryMap(
           (row.access_mode === 'free' || row.access_mode === 'paid') &&
           typeof row.price_usd_cents === 'number'
         )
-        .map((row) => [
+        .map((row) => {
+          const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
+          const resourceKinds = getPostResourceKinds({
+            promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
+            notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
+            workflowShareUrl: typeof row.workflow_share_url === 'string' ? row.workflow_share_url : null,
+            workflowSnapshot: row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
+            attachments: normalizePostResourceAttachments(row.attachments),
+            allowRemix: Boolean(row.allow_remix),
+          });
+
+          return [
           row.post_id as string,
           {
             id: row.id as string,
@@ -314,8 +339,11 @@ export async function getMarketplaceAssetSummaryMap(
             priceUsdCents: row.price_usd_cents as number,
             previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
             allowRemix: Boolean(row.allow_remix),
+            ...(salesCount > 0 ? { salesCount } : {}),
+            ...(resourceKinds.some((kind) => kind !== 'remix') ? { resourceKinds } : {}),
           } satisfies ShowcaseAssetSummary,
-        ])
+        ] as const;
+        })
     );
   }
 
@@ -355,6 +383,8 @@ export async function getMarketplaceAssetSummaryMap(
           priceUsdCents: row.price_usd_cents as number,
           previewText: '',
           allowRemix: false,
+          salesCount: 0,
+          resourceKinds: [],
         } satisfies ShowcaseAssetSummary,
       ])
   );

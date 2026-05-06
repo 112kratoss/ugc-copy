@@ -32,7 +32,7 @@ type PostRow = {
   visibility: 'public' | 'unlisted' | 'private';
   showcase_asset_path: string | null;
   output_url: string | null;
-  source_kind: 'ugc_copy' | 'external' | 'manual';
+  source_kind: 'magicbooklet' | 'external' | 'manual';
   source_tool: string | null;
 };
 
@@ -201,7 +201,7 @@ describe('marketplace server visibility hardening', () => {
         visibility: 'private',
         showcase_asset_path: null,
         output_url: 'https://cdn.example.com/private-proof.jpg',
-        source_kind: 'ugc_copy',
+        source_kind: 'magicbooklet',
         source_tool: null,
       },
     ];

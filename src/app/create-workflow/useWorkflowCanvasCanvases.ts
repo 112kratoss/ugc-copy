@@ -60,6 +60,7 @@ export function useWorkflowCanvasCanvases({
   const activeCanvasRecordRef = useRef<WorkflowCanvasRecord | null>(null);
   const authHeadersRef = useRef(authHeaders);
   const sessionUserIdRef = useRef(sessionUserId);
+  const canvasesRef = useRef<WorkflowCanvasListItem[]>([]);
   const canvasesCountRef = useRef(0);
 
   useEffect(() => {
@@ -71,8 +72,9 @@ export function useWorkflowCanvasCanvases({
   }, [activeCanvasRecord]);
 
   useEffect(() => {
+    canvasesRef.current = canvases;
     canvasesCountRef.current = canvases.length;
-  }, [canvases.length]);
+  }, [canvases]);
 
   useEffect(() => {
     authHeadersRef.current = authHeaders;
@@ -199,10 +201,8 @@ export function useWorkflowCanvasCanvases({
           throw new Error(data.error || 'Failed to delete canvas');
         }
 
-        const remaining = canvases.filter((canvas) => canvas.id !== canvasId);
-        startTransition(() => {
-          setCanvases(remaining);
-        });
+        const remaining = canvasesRef.current.filter((canvas) => canvas.id !== canvasId);
+        setCanvases((current) => current.filter((canvas) => canvas.id !== canvasId));
 
         if (canvasId === activeCanvasIdRef.current) {
           if (remaining[0]) {
@@ -220,7 +220,7 @@ export function useWorkflowCanvasCanvases({
     } catch (deleteError) {
       onError(deleteError instanceof Error ? deleteError.message : 'Failed to delete canvas');
     }
-  }, [activateCanvas, authHeaders, canvases, createCanvas, fetchCanvasDetails, onError]);
+  }, [activateCanvas, authHeaders, createCanvas, fetchCanvasDetails, onError]);
 
   const selectCanvas = useCallback(async (canvas: WorkflowCanvasListItem) => {
     if (canvas.id === activeCanvasIdRef.current) {
@@ -290,7 +290,7 @@ export function useWorkflowCanvasCanvases({
             method: 'POST',
             headers: await authHeadersRef.current(),
             body: JSON.stringify({
-              title: 'UGC workflow canvas',
+              title: 'magicbooklet workflow canvas',
               graph: createStarterGraph(),
             }),
           });

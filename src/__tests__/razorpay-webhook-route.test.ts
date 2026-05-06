@@ -1,0 +1,255 @@
+import crypto from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+type OrderStatus = 'created' | 'paid';
+
+type CreditTransactionRow = {
+  id: string;
+  user_id: string;
+  credits: number;
+  status: 'pending' | 'success';
+} | null;
+
+type MarketplaceOrderRow = {
+  id: string;
+  buyer_user_id: string;
+  status: OrderStatus;
+} | null;
+
+type BundleOrderRow = {
+  id: string;
+  buyer_user_id: string;
+  status: OrderStatus;
+} | null;
+
+let creditTransactionState: CreditTransactionRow = null;
+let marketplaceOrderState: MarketplaceOrderRow = null;
+let bundleOrderState: BundleOrderRow = null;
+let bundleRpcMode: 'success' | 'fail-return' | 'error' = 'success';
+const rpcMock = vi.fn(async (name: string, payload: Record<string, unknown>) => {
+  if (name === 'complete_post_resource_bundle_purchase') {
+    if (bundleRpcMode === 'error') {
+      return {
+        data: null,
+        error: { message: 'bundle rpc failed' },
+      };
+    }
+
+    if (bundleRpcMode === 'fail-return') {
+      return {
+        data: false,
+        error: null,
+      };
+    }
+
+    if (bundleOrderState) {
+      bundleOrderState.status = 'paid';
+    }
+
+    return {
+      data: true,
+      error: null,
+    };
+  }
+
+  if (name === 'complete_marketplace_purchase' && marketplaceOrderState) {
+    marketplaceOrderState.status = 'paid';
+    return {
+      data: true,
+      error: null,
+    };
+  }
+
+  if (name === 'add_credits' && creditTransactionState) {
+    creditTransactionState.status = 'success';
+    return {
+      data: true,
+      error: null,
+    };
+  }
+
+  return {
+    data: null,
+    error: null,
+  };
+});
+
+function createSupabaseAdminMock() {
+  return {
+    from(table: string) {
+      return {
+        select() {
+          return {
+            eq(_column: string, _value: unknown) {
+              return {
+                async maybeSingle() {
+                  if (table === 'transactions') {
+                    return { data: creditTransactionState, error: null };
+                  }
+
+                  if (table === 'marketplace_orders') {
+                    return { data: marketplaceOrderState, error: null };
+                  }
+
+                  if (table === 'post_resource_bundle_orders') {
+                    return { data: bundleOrderState, error: null };
+                  }
+
+                  throw new Error(`Unexpected table access: ${table}`);
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    rpc(name: string, payload: Record<string, unknown>) {
+      return rpcMock(name, payload);
+    },
+  };
+}
+
+const createClientMock = vi.fn((..._args: unknown[]) => {
+  void _args;
+  return createSupabaseAdminMock();
+});
+
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: (...args: unknown[]) => createClientMock(...args),
+}));
+
+function buildSignedWebhookRequest(body: Record<string, unknown>) {
+  const serializedBody = JSON.stringify(body);
+  const signature = crypto
+    .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET as string)
+    .update(serializedBody)
+    .digest('hex');
+
+  return new Request('http://localhost/api/razorpay/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-razorpay-signature': signature,
+    },
+    body: serializedBody,
+  });
+}
+
+describe('/api/razorpay/webhook route', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    creditTransactionState = null;
+    marketplaceOrderState = null;
+    bundleOrderState = null;
+    bundleRpcMode = 'success';
+    rpcMock.mockClear();
+    createClientMock.mockClear();
+    process.env.RAZORPAY_WEBHOOK_SECRET = 'webhook-secret';
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('finalizes post resource bundle orders from payment.captured', async () => {
+    bundleOrderState = {
+      id: 'bundle-order-1',
+      buyer_user_id: 'user-1',
+      status: 'created',
+    };
+
+    const { POST } = await import('@/app/api/razorpay/webhook/route');
+    const response = await POST(buildSignedWebhookRequest({
+      event: 'payment.captured',
+      payload: {
+        payment: {
+          entity: {
+            id: 'pay_123',
+            order_id: 'order_123',
+          },
+        },
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(bundleOrderState.status).toBe('paid');
+    expect(rpcMock).toHaveBeenCalledWith('complete_post_resource_bundle_purchase', {
+      p_razorpay_order_id: 'order_123',
+      p_razorpay_payment_id: 'pay_123',
+    });
+  });
+
+  it('treats already-paid post resource bundle orders as idempotent', async () => {
+    bundleOrderState = {
+      id: 'bundle-order-1',
+      buyer_user_id: 'user-1',
+      status: 'paid',
+    };
+
+    const { POST } = await import('@/app/api/razorpay/webhook/route');
+    const response = await POST(buildSignedWebhookRequest({
+      event: 'payment.captured',
+      payload: {
+        payment: {
+          entity: {
+            id: 'pay_123',
+            order_id: 'order_123',
+          },
+        },
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      'complete_post_resource_bundle_purchase',
+      expect.anything()
+    );
+  });
+
+  it('returns 500 when bundle completion fails and the order stays unresolved', async () => {
+    bundleOrderState = {
+      id: 'bundle-order-1',
+      buyer_user_id: 'user-1',
+      status: 'created',
+    };
+    bundleRpcMode = 'fail-return';
+
+    const { POST } = await import('@/app/api/razorpay/webhook/route');
+    const response = await POST(buildSignedWebhookRequest({
+      event: 'payment.captured',
+      payload: {
+        payment: {
+          entity: {
+            id: 'pay_123',
+            order_id: 'order_123',
+          },
+        },
+      },
+    }));
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('Failed to finalize post resource bundle purchase');
+    expect(bundleOrderState.status).toBe('created');
+  });
+
+  it('returns 200 when payment.captured does not match any known order', async () => {
+    const { POST } = await import('@/app/api/razorpay/webhook/route');
+    const response = await POST(buildSignedWebhookRequest({
+      event: 'payment.captured',
+      payload: {
+        payment: {
+          entity: {
+            id: 'pay_123',
+            order_id: 'order_123',
+          },
+        },
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('OK');
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+});

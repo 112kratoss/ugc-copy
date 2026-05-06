@@ -206,7 +206,7 @@ export function normalizeSubmittedElementDescriptors(value: unknown): ImageEleme
   }
 
   return value
-    .map((element, index) => {
+    .map((element, index): ImageElementDescriptor | null => {
       if (typeof element !== 'object' || element === null) {
         return null;
       }

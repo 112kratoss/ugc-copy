@@ -8,8 +8,11 @@ import {
   createWorkflowNode,
   normalizeNodeData,
   normalizeWorkflowGraph,
+  type AudioInputNodeData,
   type WorkflowCanvasGraph,
   type WorkflowCanvasNode,
+  type ImageInputNodeData,
+  type VideoInputNodeData,
   type WorkflowNodeData,
 } from '@/lib/workflow-canvas';
 
@@ -162,18 +165,7 @@ describe('WorkflowNodeEditors', () => {
           selectedNode={node}
           selection={{ nodeIds: [node.id], edgeIds: [] }}
           onClearSelection={onClearSelection}
-          onDeleteEdge={(edgeId) => {
-            options?.onDeleteEdgeSpy?.(edgeId);
-            if (!edgeId) {
-              return;
-            }
-
-            setGraph((current) => ({
-              ...current,
-              edges: current.edges.filter((edge) => edge.id !== edgeId),
-              nodes: current.nodes,
-            }));
-          }}
+          onDeleteEdge={vi.fn()}
           onDeleteNode={vi.fn()}
           onDeleteSelection={vi.fn()}
           onDuplicateSelection={vi.fn()}
@@ -292,6 +284,8 @@ describe('WorkflowNodeEditors', () => {
 
     renderInteractiveInspector(node);
 
+    expect(screen.getByRole('option', { name: 'GPT Image 2' })).toBeInTheDocument();
+
     const googleSearch = screen.getByLabelText(/google search grounding/i) as HTMLInputElement;
     expect(googleSearch).not.toBeChecked();
 
@@ -310,6 +304,17 @@ describe('WorkflowNodeEditors', () => {
     });
 
     expect(screen.getByLabelText(/google search grounding/i)).not.toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'gpt-image-2' },
+    });
+    expect(screen.queryByLabelText(/google search grounding/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Output format')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Aspect ratio'), {
+      target: { value: 'auto' },
+    });
+    expect(Array.from((screen.getByLabelText('Resolution') as HTMLSelectElement).options).map((option) => option.value)).toEqual(['1K']);
   });
 
   it('shows image-reference limits and invalid-state guidance when the selected model is over capacity', () => {
@@ -550,7 +555,7 @@ describe('WorkflowNodeEditors', () => {
             ...imageInput.data,
             imageUrl: 'https://example.com/reference.jpg',
             seedanceAsset: {
-              ...imageInput.data.seedanceAsset,
+              ...(imageInput.data as ImageInputNodeData).seedanceAsset,
               assetId: 'asset-image',
               status: 'active',
               sourceUrl: 'https://example.com/reference.jpg',
@@ -564,7 +569,7 @@ describe('WorkflowNodeEditors', () => {
             videoUrl: 'https://example.com/reference.mp4',
             durationSeconds: 6,
             seedanceAsset: {
-              ...videoInput.data.seedanceAsset,
+              ...(videoInput.data as VideoInputNodeData).seedanceAsset,
               assetId: 'asset-video',
               status: 'processing',
               sourceUrl: 'https://example.com/reference.mp4',
@@ -577,7 +582,7 @@ describe('WorkflowNodeEditors', () => {
             ...audioInput.data,
             audioUrl: 'https://example.com/reference.mp3',
             seedanceAsset: {
-              ...audioInput.data.seedanceAsset,
+              ...(audioInput.data as AudioInputNodeData).seedanceAsset,
               assetId: null,
               status: 'idle',
               sourceUrl: 'https://example.com/reference.mp3',

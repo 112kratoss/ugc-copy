@@ -5,12 +5,19 @@ export type PersistedPostResourceBundleAccessMode = Exclude<PostResourceBundleAc
 export type PostResourceBundleStatus = 'draft' | 'published';
 export type PostResourceKind = 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type MarketplaceResourceFilter = 'all' | 'free' | 'paid';
+export type MarketplaceResourceKindFilter = 'all' | PostResourceKind;
 export type MarketplaceResourceSort = 'recent' | 'top-sales';
 export type MarketplaceCheckoutCurrency = 'INR' | 'USD';
 
+export type PostResourceAttachmentKind = 'link' | 'file';
+
 export interface PostResourceAttachment {
   label: string;
-  url: string;
+  kind?: PostResourceAttachmentKind;
+  url?: string | null;
+  storagePath?: string | null;
+  contentType?: string | null;
+  sizeBytes?: number | null;
 }
 
 export interface PostResourceBundleResources {
@@ -20,6 +27,23 @@ export interface PostResourceBundleResources {
   workflowSnapshot: SerializedWorkflowCanvasGraph | null;
   attachments: PostResourceAttachment[];
   allowRemix: boolean;
+}
+
+export interface PostResourceAttachmentPreview {
+  label: string;
+  kind: PostResourceAttachmentKind;
+  contentType?: string | null;
+  sizeBytes?: number | null;
+}
+
+export interface PostResourceBundleLockedPreview {
+  resourceKinds: PostResourceKind[];
+  attachmentPreviews: PostResourceAttachmentPreview[];
+  hasPrompt: boolean;
+  hasNotes: boolean;
+  hasWorkflow: boolean;
+  hasRemix: boolean;
+  updatedAt: string | null;
 }
 
 export interface PostResourceBundleInput {
@@ -87,6 +111,16 @@ export function normalizeMarketplaceResourceSort(
   return value === 'top-sales' ? 'top-sales' : 'recent';
 }
 
+export function isPostResourceKind(value: string | null | undefined): value is PostResourceKind {
+  return value === 'prompt' || value === 'workflow' || value === 'files' || value === 'notes' || value === 'remix';
+}
+
+export function normalizeMarketplaceResourceKindFilter(
+  value: string | null | undefined
+): MarketplaceResourceKindFilter {
+  return isPostResourceKind(value) ? value : 'all';
+}
+
 export function formatUsdCents(amountUsdCents: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -101,7 +135,7 @@ export function getBundleAccessLabel(
   priceUsdCents: number
 ): string {
   if (accessMode === 'free' || priceUsdCents === 0) {
-    return 'Free resources';
+    return 'Free unlock';
   }
 
   return `${formatUsdCents(priceUsdCents)} unlock`;
@@ -139,6 +173,84 @@ export function getPostResourceKinds(
   return kinds;
 }
 
+export function normalizePostResourceAttachments(value: unknown): PostResourceAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): PostResourceAttachment | null => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const label = typeof record.label === 'string' ? record.label.trim() : '';
+      const kind = record.kind === 'file' ? 'file' : 'link';
+      const url = typeof record.url === 'string' ? record.url.trim() : '';
+      const storagePath = typeof record.storagePath === 'string' ? record.storagePath.trim().replace(/^\/+/, '') : '';
+      const contentType = typeof record.contentType === 'string' ? record.contentType.trim() : null;
+      const sizeBytes = typeof record.sizeBytes === 'number' && Number.isFinite(record.sizeBytes)
+        ? Math.max(0, Math.round(record.sizeBytes))
+        : null;
+
+      if (kind === 'file') {
+        if (!storagePath) {
+          return null;
+        }
+
+        return {
+          label: label || storagePath.split('/').pop() || 'File',
+          kind,
+          storagePath,
+          contentType,
+          sizeBytes,
+        } satisfies PostResourceAttachment;
+      }
+
+      if (!url) {
+        return null;
+      }
+
+      return {
+        label: label || url,
+        kind,
+        url,
+      } satisfies PostResourceAttachment;
+    })
+    .filter((item): item is PostResourceAttachment => item !== null);
+}
+
+export function buildPostResourceBundleLockedPreview(
+  resources: Partial<PostResourceBundleResources> | null | undefined,
+  updatedAt: string | null = null
+): PostResourceBundleLockedPreview {
+  const attachments = normalizePostResourceAttachments(resources?.attachments);
+  const normalizedResources: Partial<PostResourceBundleResources> = {
+    promptText: resources?.promptText ?? null,
+    notesMarkdown: resources?.notesMarkdown ?? null,
+    workflowShareUrl: resources?.workflowShareUrl ?? null,
+    workflowSnapshot: resources?.workflowSnapshot ?? null,
+    attachments,
+    allowRemix: Boolean(resources?.allowRemix),
+  };
+
+  return {
+    resourceKinds: getPostResourceKinds(normalizedResources),
+    attachmentPreviews: attachments.map((attachment) => ({
+      label: attachment.label,
+      kind: attachment.kind ?? 'link',
+      contentType: attachment.kind === 'file' ? attachment.contentType ?? null : null,
+      sizeBytes: attachment.kind === 'file' ? attachment.sizeBytes ?? null : null,
+    })),
+    hasPrompt: Boolean(normalizedResources.promptText?.trim()),
+    hasNotes: Boolean(normalizedResources.notesMarkdown?.trim()),
+    hasWorkflow: Boolean(normalizedResources.workflowShareUrl?.trim() || normalizedResources.workflowSnapshot),
+    hasRemix: Boolean(normalizedResources.allowRemix),
+    updatedAt,
+  };
+}
+
 export function getPostResourceKindLabel(kind: PostResourceKind): string {
   switch (kind) {
     case 'prompt':
@@ -158,7 +270,7 @@ export function getPostResourceKindLabel(kind: PostResourceKind): string {
 
 export function describePostResourceKinds(kinds: PostResourceKind[]): string {
   if (kinds.length === 0) {
-    return 'Unlock the reusable resources attached to this post.';
+    return 'Open the reusable unlock attached to this post.';
   }
 
   if (kinds.length === 1) {

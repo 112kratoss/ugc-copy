@@ -82,7 +82,7 @@ export function extractWorkflowShareId(value: string): string | null {
   }
 
   try {
-    const parsedUrl = new URL(trimmed);
+    const parsedUrl = new URL(trimmed, 'http://localhost');
     const shareId = parsedUrl.searchParams.get('import');
     return shareId && isWorkflowShareId(shareId) ? shareId : null;
   } catch {

@@ -1,13 +1,40 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft, Sparkles, UserRound } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Sparkles, UserRound } from 'lucide-react';
 
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
+import ProfileShareButton from '@/app/components/ProfileShareButton';
+import { isE2EAuthBypassEnabled } from '@/lib/e2e-auth';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
-import { toEditableCreatorProfile } from '@/lib/profile';
+import { buildFallbackUsername, toEditableCreatorProfile } from '@/lib/profile';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { buildProfileApiResponse, PROFILE_SELECT_FIELDS, type ProfileRow } from '@/lib/profile-server';
+
+function buildStarterProfile({
+  userId,
+  displayName,
+  credits,
+}: {
+  userId: string;
+  displayName: string;
+  credits: number | null;
+}): EditableCreatorProfile {
+  return {
+    id: userId,
+    username: buildFallbackUsername(userId),
+    displayName,
+    bio: '',
+    avatarUrl: '',
+    coverUrl: '',
+    websiteUrl: '',
+    twitterHandle: '',
+    instagramHandle: '',
+    tiktokHandle: '',
+    location: '',
+    credits,
+  };
+}
 
 export default async function ProfilePage() {
   const auth = await getServerAuthState();
@@ -23,16 +50,29 @@ export default async function ProfilePage() {
     .eq('id', auth.session.user.id)
     .maybeSingle();
 
-  if (profile?.username?.trim()) {
-    redirect(`/creators/${profile.username}`);
-  }
-
+  const shouldUseStarterProfile = !profile && (!error || isE2EAuthBypassEnabled());
+  const authDisplayName =
+    typeof auth.session.user.user_metadata?.name === 'string'
+      ? auth.session.user.user_metadata.name
+      : '';
   const initialProfile: EditableCreatorProfile | null = profile
     ? toEditableCreatorProfile(
         buildProfileApiResponse(profile as ProfileRow, auth.session.user.id) as ProfileApiResponse
       )
+    : shouldUseStarterProfile
+      ? buildStarterProfile({
+          userId: auth.session.user.id,
+          displayName: authDisplayName,
+          credits: auth.credits,
+        })
+      : null;
+  const loadError = error && !shouldUseStarterProfile ? 'Failed to load creator profile.' : null;
+  const publicProfileUsername = profile?.username?.trim() ?? '';
+  const publicProfilePath = publicProfileUsername
+    ? `/creators/${publicProfileUsername}`
     : null;
-  const loadError = error ? 'Failed to load creator profile.' : profile ? null : 'Profile not found.';
+  const publicProfileDisplayName =
+    profile?.display_name?.trim() || authDisplayName || publicProfileUsername;
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -64,20 +104,37 @@ export default async function ProfilePage() {
             </div>
           </div>
 
-          <Link
-            href="/creations"
-            className="inline-flex items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white"
-          >
-            <UserRound className="h-4 w-4" />
-            View creations
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {publicProfilePath ? (
+              <Link
+                href={publicProfilePath}
+                className="inline-flex items-center justify-center gap-2 self-start rounded-full border border-purple-400/25 bg-purple-500/10 px-5 py-2.5 text-sm font-medium text-purple-100 transition-all hover:border-purple-300/40 hover:bg-purple-500/15 hover:text-white"
+              >
+                <ExternalLink className="h-4 w-4" />
+                View public profile
+              </Link>
+            ) : null}
+            {publicProfileUsername ? (
+              <ProfileShareButton
+                username={publicProfileUsername}
+                displayName={publicProfileDisplayName}
+                className="inline-flex items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+              />
+            ) : null}
+            <Link
+              href="/creations"
+              className="inline-flex items-center justify-center gap-2 self-start rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white"
+            >
+              <UserRound className="h-4 w-4" />
+              View creations
+            </Link>
+          </div>
         </div>
 
         <CreatorProfileCard
           initialProfile={initialProfile}
           isLoading={false}
           loadError={loadError}
-          onProfileSaved={() => undefined}
         />
       </div>
     </div>

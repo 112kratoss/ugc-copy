@@ -28,6 +28,13 @@ describe('useWorkflowCanvasRunState', () => {
     const starter = createStarterGraph();
     const [firstNode, secondNode] = starter.nodes;
     let latestState: ReturnType<typeof useWorkflowCanvasRunState> | null = null;
+    const getLatestState = () => {
+      if (!latestState) {
+        throw new Error('Run state hook did not render');
+      }
+
+      return latestState;
+    };
 
     render(
       <RunStateHarness
@@ -38,8 +45,8 @@ describe('useWorkflowCanvasRunState', () => {
       />
     );
 
-    expect(latestState?.renderNodes[0]).toBe(firstNode);
-    expect(latestState?.renderNodes[1]).toBe(secondNode);
+    expect(getLatestState().renderNodes[0]).toBe(firstNode);
+    expect(getLatestState().renderNodes[1]).toBe(secondNode);
 
     const run: WorkflowCanvasRunRecord = {
       id: 'run-1',
@@ -63,26 +70,26 @@ describe('useWorkflowCanvasRunState', () => {
     };
 
     await act(async () => {
-      latestState?.applyRunUpdate(run);
+      getLatestState().applyRunUpdate(run);
       await Promise.resolve();
     });
 
-    expect(latestState?.renderNodes[0]).not.toBe(firstNode);
-    expect(latestState?.renderNodes[1]).toBe(secondNode);
-    expect(latestState?.renderNodes[0].data.runState.status).toBe('processing');
+    expect(getLatestState().renderNodes[0]).not.toBe(firstNode);
+    expect(getLatestState().renderNodes[1]).toBe(secondNode);
+    expect(getLatestState().renderNodes[0].data.runState.status).toBe('processing');
     expect(firstNode.data.runState.status).toBe('idle');
 
     await act(async () => {
-      latestState?.clearRunStateOverlay();
+      getLatestState().clearRunStateOverlay();
       await Promise.resolve();
     });
 
-    expect(latestState?.renderNodes[0]).toBe(firstNode);
+    expect(getLatestState().renderNodes[0]).toBe(firstNode);
   });
 
   it('merges persisted run state back into canonical nodes without changing untouched nodes', () => {
     const starter = createStarterGraph();
-    const persistedNodes = starter.nodes.map((node, index) => (
+    const persistedNodes: WorkflowCanvasNode[] = starter.nodes.map((node, index) => (
       index === 0
         ? {
             ...node,
@@ -90,7 +97,7 @@ describe('useWorkflowCanvasRunState', () => {
               ...node.data,
               runState: {
                 ...node.data.runState,
-                status: 'succeeded',
+                status: 'succeeded' as const,
                 outputUrl: 'generated_images/user-1/run-1.jpg',
               },
             },

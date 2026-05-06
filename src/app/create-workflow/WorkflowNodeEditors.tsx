@@ -14,7 +14,7 @@ import {
   isValidElementHandle,
 } from '@/lib/image-elements';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getVideoDurationRange, getVideoElementSupport } from '@/lib/models';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type {
   AudioInputNodeData,
@@ -2015,20 +2015,22 @@ function NodeEditorContent({
             onChange={(value) => onUpdateNode(node.id, { ...node.data, aspectRatio: value } as Partial<WorkflowNodeData>)}
             options={imageModel ? [...imageModel.aspectRatios] : []}
           />
-          <SelectField
-            label="Resolution"
-            value={imageGenerateNode?.resolution || ''}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, resolution: value } as Partial<WorkflowNodeData>)}
-            options={imageModel ? [...imageModel.resolutions] : []}
-          />
-          <SelectField
-            label="Output format"
-            value={imageGenerateNode?.outputFormat || ''}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, outputFormat: value } as Partial<WorkflowNodeData>)}
-            options={imageModel
-              ? imageModel.outputFormats.map((format) => ({ value: format, label: format.toUpperCase() }))
-              : []}
-          />
+          {imageGenerateNode && supportsImageResolutionControl(imageGenerateNode.model) && (
+            <SelectField
+              label="Resolution"
+              value={imageGenerateNode?.resolution || ''}
+              onChange={(value) => onUpdateNode(node.id, { ...node.data, resolution: value } as Partial<WorkflowNodeData>)}
+              options={[...getImageResolutionOptions(imageGenerateNode.model, imageGenerateNode.aspectRatio)]}
+            />
+          )}
+          {imageModel?.supportsOutputFormat && (
+            <SelectField
+              label="Output format"
+              value={imageGenerateNode?.outputFormat || ''}
+              onChange={(value) => onUpdateNode(node.id, { ...node.data, outputFormat: value } as Partial<WorkflowNodeData>)}
+              options={imageModel.outputFormats.map((format) => ({ value: format, label: format.toUpperCase() }))}
+            />
+          )}
           {imageModel?.supportsGoogleSearch && (
             <CheckboxField
               label="Google Search grounding"
@@ -2110,7 +2112,7 @@ function NodeEditorContent({
           )}
           {videoModel.modeOptions.length > 0 && (
             <SelectField
-              label={videoGenerateNode.model === 'veo-3.1' ? 'Model variant' : 'Quality mode'}
+              label={videoGenerateNode.model === 'veo-3.1' ? 'Model variant' : videoGenerateNode.model === 'grok-imagine-video' ? 'Grok mode' : 'Quality mode'}
               value={videoGenerateNode.mode}
               onChange={(value) => onUpdateNode(node.id, { ...node.data, mode: value } as Partial<WorkflowNodeData>)}
               options={videoModel.modeOptions.map((option) => ({

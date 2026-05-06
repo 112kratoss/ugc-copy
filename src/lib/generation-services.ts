@@ -10,10 +10,13 @@ import {
 } from '@/lib/image-elements';
 import {
   getImageCost,
+  getImageResolutionOptions,
   getMotionCost,
   getSoundEffectCost,
   getVideoCost,
   getVideoElementSupport,
+  isValidImageResolution,
+  isValidImageQualityMode,
   isValidVideoDuration,
   getVoiceoverCost,
   IMAGE_MODELS,
@@ -23,7 +26,10 @@ import {
   VOICEOVER_MODELS,
   isAudioModel,
   isImageModel,
+  type ImageOutputFormat,
   type ImageModelId,
+  type ImageQualityMode,
+  type ImageResolution,
   type MotionModelId,
   type SoundEffectModelId,
   type VideoModelId,
@@ -92,6 +98,11 @@ interface SyncableGenerationRecord {
   workflow_settings: Record<string, unknown> | null;
   created_at: string;
   completed_at: string | null;
+}
+
+export interface PersistedGenerationOutput {
+  index: number;
+  storagePath: string;
 }
 
 function requireApiKey(): string {
@@ -263,29 +274,35 @@ function getStoredWorkflowModel(workflowSettings: Record<string, unknown> | null
   return typeof model === 'string' ? model : fallbackModel;
 }
 
-function getFirstResultUrl(value: unknown): string | null {
+export function getGenerationResultUrls(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return typeof value[0] === 'string' ? value[0] : null;
+    return value.flatMap((item) => getGenerationResultUrls(item));
   }
 
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      return getFirstResultUrl(parsed);
+      return getGenerationResultUrls(parsed);
     } catch {
-      return value;
+      return value ? [value] : [];
     }
   }
 
   if (value && typeof value === 'object') {
     const candidate = value as Record<string, unknown>;
-    return getFirstResultUrl(candidate.resultUrls)
-      || getFirstResultUrl(candidate.originUrls)
-      || getFirstResultUrl(candidate.resultUrl)
-      || getFirstResultUrl(candidate.url);
+    return [
+      ...getGenerationResultUrls(candidate.resultUrls),
+      ...getGenerationResultUrls(candidate.originUrls),
+      ...getGenerationResultUrls(candidate.resultUrl),
+      ...getGenerationResultUrls(candidate.url),
+    ];
   }
 
-  return null;
+  return [];
+}
+
+function getFirstResultUrl(value: unknown): string | null {
+  return getGenerationResultUrls(value)[0] ?? null;
 }
 
 function inferOutputExtension(tempUrl: string, contentType: string, category: string | null): string {
@@ -320,6 +337,18 @@ function getStorageBucket(category: string | null, model: string): 'generated_im
   }
 
   return 'generated_videos';
+}
+
+function getKieImageModelId(model: ImageModelId, referenceCount: number): string {
+  if (model === 'grok-imagine-image') {
+    return referenceCount > 0 ? 'grok-imagine/image-to-image' : 'grok-imagine/text-to-image';
+  }
+
+  if (model === 'gpt-image-2') {
+    return referenceCount > 0 ? 'gpt-image-2-image-to-image' : 'gpt-image-2-text-to-image';
+  }
+
+  return model;
 }
 
 async function persistGeneratedOutput(
@@ -380,6 +409,78 @@ async function persistGeneratedOutput(
       })
       .eq('id', generation.id);
   }
+}
+
+export async function persistGeneratedOutputList(
+  supabase: SupabaseClient,
+  generation: Pick<SyncableGenerationRecord, 'id' | 'user_id' | 'prediction_id' | 'category' | 'model' | 'workflow_settings'>,
+  tempUrls: string[],
+  completedAt?: string | null
+): Promise<PersistedGenerationOutput[]> {
+  const bucket = getStorageBucket(generation.category, generation.model);
+  const outputs: PersistedGenerationOutput[] = [];
+
+  for (const [index, tempUrl] of tempUrls.entries()) {
+    try {
+      const mediaResponse = await fetch(tempUrl);
+      if (!mediaResponse.ok) {
+        throw new Error('Failed to download generated media from KIE');
+      }
+
+      const mediaBlob = await mediaResponse.blob();
+      const extension = inferOutputExtension(tempUrl, mediaBlob.type, generation.category);
+      const suffix = tempUrls.length > 1 ? `_${index}` : '';
+      const fileName = `${generation.user_id}/generated_${generation.prediction_id}${suffix}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(fileName, mediaBlob, {
+          contentType: mediaBlob.type || undefined,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      outputs.push({
+        index,
+        storagePath: `${bucket}/${fileName}`,
+      });
+    } catch (error) {
+      console.error(`Error persisting generated output ${index}:`, error);
+      outputs.push({
+        index,
+        storagePath: tempUrl,
+      });
+    }
+  }
+
+  const primaryOutput = outputs[0]?.storagePath ?? null;
+  const workflowSettings = generation.workflow_settings && typeof generation.workflow_settings === 'object'
+    ? generation.workflow_settings
+    : {};
+  const shouldStoreOutputList = generation.model === 'grok-imagine-image' || outputs.length > 1;
+  const updatePayload: Record<string, unknown> = {
+    status: 'succeeded',
+    output_url: primaryOutput,
+    completed_at: completedAt ?? new Date().toISOString(),
+  };
+
+  if (shouldStoreOutputList) {
+    updatePayload.workflow_settings = {
+      ...workflowSettings,
+      outputs,
+      primaryOutputIndex: 0,
+    };
+  }
+
+  await supabase
+    .from('generations')
+    .update(updatePayload)
+    .eq('id', generation.id);
+
+  return outputs;
 }
 
 async function markGenerationFailed(
@@ -477,9 +578,10 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
 
   if (state === 'success') {
     let tempUrl: string | null = null;
+    let result: unknown = null;
 
     try {
-      const result = typeof data.data?.resultJson === 'string'
+      result = typeof data.data?.resultJson === 'string'
         ? JSON.parse(data.data.resultJson)
         : data.data?.resultJson;
       tempUrl = getFirstResultUrl(result);
@@ -488,7 +590,16 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
     }
 
     if (tempUrl) {
-      await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+      if (generation.model === 'grok-imagine-image') {
+        await persistGeneratedOutputList(
+          supabase,
+          generation,
+          getGenerationResultUrls(result),
+          toIsoTimestamp(timing.completedAtMs)
+        );
+      } else {
+        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+      }
     } else {
       await supabase
         .from('generations')
@@ -546,8 +657,9 @@ export async function startImageGeneration(params: {
   imageUrls?: string[];
   elements?: ImageElementDescriptor[];
   aspectRatio?: string;
-  resolution?: '1K' | '2K' | '4K';
-  outputFormat?: 'jpg' | 'png';
+  resolution?: ImageResolution;
+  qualityMode?: ImageQualityMode;
+  outputFormat?: ImageOutputFormat;
   googleSearch?: boolean;
   sourceGenerationId?: string | null;
 }): Promise<StartGenerationResult> {
@@ -560,8 +672,9 @@ export async function startImageGeneration(params: {
     references,
     imageUrls = [],
     elements = [],
-    aspectRatio = 'auto',
+    aspectRatio: requestedAspectRatio,
     resolution = '1K',
+    qualityMode = 'standard',
     outputFormat = 'jpg',
     googleSearch = false,
     sourceGenerationId = null,
@@ -571,6 +684,31 @@ export async function startImageGeneration(params: {
   const modelConfig = IMAGE_MODELS[model];
   if (!modelConfig) {
     throw new GenerationServiceError(`Unsupported image model: ${model}`, 400);
+  }
+  const aspectRatio = requestedAspectRatio ?? (model === 'grok-imagine-image' ? modelConfig.aspectRatios[0] : 'auto');
+
+  assertGenerationRequest(
+    (modelConfig.aspectRatios as readonly string[]).includes(aspectRatio),
+    `${modelConfig.displayName} does not support aspect ratio ${aspectRatio}.`
+  );
+
+  assertGenerationRequest(
+    isValidImageResolution(model, resolution, aspectRatio),
+    `${modelConfig.displayName} supports ${getImageResolutionOptions(model, aspectRatio).join(', ')} at aspect ratio ${aspectRatio}.`
+  );
+
+  if (model === 'grok-imagine-image') {
+    assertGenerationRequest(
+      isValidImageQualityMode(qualityMode),
+      'Unsupported quality mode for Grok Imagine.'
+    );
+  }
+
+  if (modelConfig.supportsOutputFormat) {
+    assertGenerationRequest(
+      (modelConfig.outputFormats as readonly string[]).includes(outputFormat),
+      `${modelConfig.displayName} does not support ${outputFormat.toUpperCase()} output.`
+    );
   }
 
   const normalizedReferences = normalizeReferenceImageInputs(references);
@@ -617,26 +755,56 @@ export async function startImageGeneration(params: {
     ? compileImagePromptWithElements(trimmedPrompt, normalizedElements)
     : trimmedPrompt;
 
-  const cost = getImageCost(model, resolution);
+  const cost = getImageCost(model, resolution, {
+    qualityMode,
+    referenceCount: resolvedImageUrls.length,
+  });
   const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
+  const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
 
   try {
-    const input: Record<string, unknown> = {
-      prompt: compiledPrompt,
-      aspect_ratio: aspectRatio,
-      resolution,
-      output_format: outputFormat,
-    };
+    let input: Record<string, unknown>;
 
-    if (modelConfig.supportsGoogleSearch) {
-      input.google_search = googleSearch;
+    if (model === 'grok-imagine-image') {
+      input = {
+        prompt: compiledPrompt,
+        nsfw_checker: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
+      } else {
+        input.aspect_ratio = aspectRatio;
+        input.enable_pro = qualityMode === 'quality';
+      }
+    } else if (model === 'gpt-image-2') {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.input_urls = resolvedImageUrls;
+      }
+    } else {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+      };
+      input.output_format = outputFormat;
+
+      if (modelConfig.supportsGoogleSearch) {
+        input.google_search = googleSearch;
+      }
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_input = resolvedImageUrls;
+      }
     }
 
-    if (resolvedImageUrls.length > 0) {
-      input.image_input = resolvedImageUrls;
-    }
-
-    const predictionId = await createKieTask({ model, input });
+    const predictionId = await createKieTask({ model: providerModel, input });
     const insert = await supabase
       .from('generations')
       .insert({
@@ -650,8 +818,10 @@ export async function startImageGeneration(params: {
         source_generation_id: sourceGenerationId,
         workflow_settings: {
           model,
+          providerModel,
           aspectRatio,
           resolution,
+          ...(model === 'grok-imagine-image' ? { qualityMode } : {}),
           outputFormat,
           googleSearch,
           ...(normalizedElements.length > 0
@@ -841,6 +1011,13 @@ export async function startVideoGeneration(params: {
     resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null,
     resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null,
   ].filter((url): url is string => Boolean(url));
+  const grokVideoImageUrls = model === 'grok-imagine-video'
+    ? (
+        resolvedReferenceImageUrls.length > 0
+          ? resolvedReferenceImageUrls
+          : (resolvedElementImageUrls.length > 0 ? resolvedElementImageUrls : frameImageUrls)
+      )
+    : [];
 
   if (totalReferenceImageCount > 0 && frameImageUrls.length > 0) {
     throw new GenerationServiceError(
@@ -852,6 +1029,13 @@ export async function startVideoGeneration(params: {
   if (isMultiShot && frameImageUrls.length > 1) {
     throw new GenerationServiceError(
       'End frames are not available in multi-shot mode.',
+      400
+    );
+  }
+
+  if (model === 'grok-imagine-video' && grokVideoImageUrls.length > 1) {
+    throw new GenerationServiceError(
+      'Grok Imagine Video supports up to 1 image reference per run.',
       400
     );
   }
@@ -932,6 +1116,10 @@ export async function startVideoGeneration(params: {
     const seedanceReferenceImageUrls = referenceImageUrls.length > 0
       ? referenceImageUrls
       : (resolvedElementImageUrls.length > 0 ? resolvedElementImageUrls : frameImageUrls);
+    const requestedMode = mode;
+    const providerMode = model === 'grok-imagine-video' && grokVideoImageUrls.length > 0 && mode === 'spicy'
+      ? 'normal'
+      : mode;
 
     if (selectedModel.provider === 'kling') {
       const input: Record<string, unknown> = {
@@ -1008,6 +1196,29 @@ export async function startVideoGeneration(params: {
           input,
         };
       }
+    } else if (selectedModel.provider === 'grok') {
+      providerModelId = grokVideoImageUrls.length > 0
+        ? 'grok-imagine/image-to-video'
+        : 'grok-imagine/text-to-video';
+
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        mode: providerMode,
+        duration: totalDuration,
+        resolution,
+        nsfw_checker: true,
+      };
+
+      if (grokVideoImageUrls.length > 0) {
+        input.image_urls = grokVideoImageUrls;
+      } else {
+        input.aspect_ratio = aspectRatio;
+      }
+
+      body = {
+        model: providerModelId,
+        input,
+      };
     } else {
       endpoint = 'https://api.kie.ai/api/v1/veo/generate';
       providerModelId = mode === 'veo3' ? 'veo3' : 'veo3_fast';
@@ -1040,6 +1251,13 @@ export async function startVideoGeneration(params: {
         workflow_settings: {
           model,
           mode,
+          ...(model === 'grok-imagine-video'
+            ? {
+                providerModel: providerModelId,
+                requestedMode,
+                providerMode,
+              }
+            : {}),
           aspectRatio,
           sound: soundEnabled,
           duration: totalDuration,

@@ -17,7 +17,7 @@ describe('resolveCreationWorkspaceCardState', () => {
 
     expect(state.state).toBe('unpublished');
     expect(state.publishBadge).toBe('Not published');
-    expect(state.monetizationLabel).toBe('No paywall');
+    expect(state.monetizationLabel).toBe('No unlock');
     expect(state.primaryAction).toMatchObject({
       type: 'publish',
       label: 'Publish',
@@ -25,7 +25,7 @@ describe('resolveCreationWorkspaceCardState', () => {
     });
     expect(state.secondaryAction).toMatchObject({
       type: 'set-paywall',
-      label: 'Set paywall',
+      label: 'Add paid unlock',
       href: '/post/new?generationId=gen-1&publishIntent=paid-generation&resourceMode=paid&focus=price&from=creations',
     });
   });
@@ -47,16 +47,16 @@ describe('resolveCreationWorkspaceCardState', () => {
 
     expect(state.state).toBe('published_no_bundle');
     expect(state.publishBadge).toBe('Public');
-    expect(state.monetizationLabel).toBe('No paywall');
+    expect(state.monetizationLabel).toBe('No unlock');
     expect(state.primaryAction).toMatchObject({
       type: 'add-paywall',
-      label: 'Add paywall',
+      label: 'Add unlock',
       href: '/post/post-1/edit?resourceMode=paid&focus=price&from=creations#resources',
     });
     expect(state.secondaryAction).toMatchObject({
       type: 'open-post',
       label: 'Open post',
-      href: '/showcase/post-1',
+      href: '/showcase/post-1?from=studio&returnTo=%2Fcreations',
     });
   });
 
@@ -110,7 +110,7 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.publishBadge).toBe('Unlisted');
     expect(state.monetizationKind).toBe('paid');
     expect(state.monetizationPriceUsdCents).toBe(2400);
-    expect(state.primaryAction.label).toBe('Manage paywall');
+    expect(state.primaryAction.label).toBe('Manage unlock');
   });
 
   it('surfaces draft bundle state separately from live unlocks', () => {
@@ -135,7 +135,7 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.state).toBe('published_bundle_draft');
     expect(state.publishBadge).toBe('Archived');
     expect(state.monetizationKind).toBe('draft');
-    expect(state.monetizationLabel).toBe('Resources draft');
+    expect(state.monetizationLabel).toBe('Unlock draft');
     expect(state.secondaryAction.href).toBe('/post/post-draft/edit');
   });
 });

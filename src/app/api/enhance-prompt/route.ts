@@ -5,13 +5,14 @@ import {
     getPromptEnhancementCost,
     buildEnhancerSystemPrompt,
     buildPromptEnhancementArtifacts,
-    applyPromptEnhancementSafeguards,
+    applyPromptEnhancementSafeguardsWithMetadata,
     callPromptEnhancer,
     PROMPT_ENHANCER_PROVIDER_MODEL,
     SUPPORTED_ENHANCEMENT_MODELS,
     Medium,
     EnhancerContext,
 } from '@/lib/prompt-enhancer';
+import { inspectPromptQuality } from '@/lib/prompt-quality';
 
 export async function POST(request: NextRequest) {
     try {
@@ -118,11 +119,18 @@ export async function POST(request: NextRequest) {
                 context,
                 prompt
             );
-            const enhancedPrompt = applyPromptEnhancementSafeguards(
+            const safeguardResult = applyPromptEnhancementSafeguardsWithMetadata(
                 prompt,
                 artifacts.compiledPrompt,
                 context
             );
+            const enhancedPrompt = safeguardResult.enhancedPrompt;
+            const finalInspection = inspectPromptQuality({
+                medium: medium as Medium,
+                selectedModel,
+                prompt: enhancedPrompt,
+                context,
+            });
 
             // 6. Update usage event to succeeded
             if (eventId) {
@@ -138,6 +146,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({
                 enhancedPrompt,
                 remainingCredits,
+                agentId: artifacts.agentId,
+                qualityScore: finalInspection.qualityScore,
+                warnings: finalInspection.warnings,
+                appliedSafeguards: [
+                    ...artifacts.appliedSafeguards,
+                    ...safeguardResult.appliedSafeguards,
+                ],
             });
         } catch (enhanceError) {
             console.error('[EnhancePrompt] Enhancement failed:', enhanceError);

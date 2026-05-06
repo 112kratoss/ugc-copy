@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
+    estimateGenerationDurationMs,
     getGenerationKind,
     normalizeMarketGenerationTiming,
     normalizeStoredGenerationTiming,
     normalizeVeoGenerationTiming,
     toIsoTimestamp,
+    withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
@@ -50,6 +52,13 @@ function getWorkflowModelId(localGeneration: { workflow_settings?: unknown; mode
 
     if (localGeneration?.model === 'bytedance/seedance-2-fast') {
         return 'seedance-2-fast';
+    }
+
+    if (
+        localGeneration?.model === 'grok-imagine/text-to-video' ||
+        localGeneration?.model === 'grok-imagine/image-to-video'
+    ) {
+        return 'grok-imagine-video';
     }
 
     return 'kling-3.0-video';
@@ -293,6 +302,32 @@ export async function GET(request: NextRequest) {
         }
 
         const selectedModel = getWorkflowModelId(localGeneration);
+        const workflowSettings =
+            localGeneration?.workflow_settings && typeof localGeneration.workflow_settings === 'object'
+                ? localGeneration.workflow_settings as Record<string, unknown>
+                : null;
+        const referenceCount =
+            (Array.isArray(workflowSettings?.elements) ? workflowSettings.elements.length : 0) +
+            (Array.isArray(workflowSettings?.referenceVideoUrls) ? workflowSettings.referenceVideoUrls.length : 0) +
+            (Array.isArray(workflowSettings?.referenceAudioUrls) ? workflowSettings.referenceAudioUrls.length : 0) +
+            (workflowSettings?.startFrame ? 1 : 0) +
+            (workflowSettings?.endFrame ? 1 : 0);
+        const estimatedTotalMs = estimateGenerationDurationMs({
+            kind: 'video',
+            model: selectedModel,
+            mode: typeof workflowSettings?.mode === 'string' ? workflowSettings.mode : null,
+            resolution: typeof workflowSettings?.resolution === 'string' ? workflowSettings.resolution : null,
+            durationSeconds: typeof localGeneration?.duration === 'number'
+                ? localGeneration.duration
+                : typeof workflowSettings?.duration === 'number'
+                    ? workflowSettings.duration
+                    : null,
+            isMultiShot: typeof workflowSettings?.isMultiShot === 'boolean' ? workflowSettings.isMultiShot : null,
+            shotCount: Array.isArray(workflowSettings?.multiPrompts) ? workflowSettings.multiPrompts.length : null,
+            referenceCount,
+            hasSound: typeof workflowSettings?.sound === 'boolean' ? workflowSettings.sound : null,
+            hasReferenceVideo: Array.isArray(workflowSettings?.referenceVideoUrls) && workflowSettings.referenceVideoUrls.length > 0,
+        });
         let status: 'processing' | 'waiting' | 'succeeded' | 'failed' = 'processing';
         let output: string | null = null;
         let error: string | null = null;
@@ -397,7 +432,12 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        return NextResponse.json({ status, output, error, timing });
+        return NextResponse.json({
+            status,
+            output,
+            error,
+            timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
+        });
     } catch (error) {
         console.error('Error fetching video status:', error);
         return NextResponse.json({ error: 'Failed to fetch generation status' }, { status: 500 });

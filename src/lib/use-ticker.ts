@@ -2,17 +2,20 @@
 
 import { useEffect, useState } from 'react';
 
+function getCurrentTimeMs() {
+  return Date.now();
+}
+
 export function useTicker(enabled: boolean, intervalMs = 1000) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(getCurrentTimeMs);
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
 
-    setNowMs(Date.now());
     const intervalId = window.setInterval(() => {
-      setNowMs(Date.now());
+      setNowMs(getCurrentTimeMs());
     }, intervalMs);
 
     return () => {

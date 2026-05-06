@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Mail, MapPin, MessageSquare, Phone } from "lucide-react";
+import { siteConfig } from "@/lib/seo";
 import { ContactForm } from "./ContactForm";
 
 export default function Contact() {
@@ -38,10 +39,10 @@ export default function Contact() {
                                     <div>
                                         <h3 className="font-medium mb-1">Email Support</h3>
                                         <a
-                                            href="mailto:support@ugccopy.com"
+                                            href={`mailto:${siteConfig.supportEmail}`}
                                             className="text-purple-400 hover:text-purple-300"
                                         >
-                                            support@ugccopy.com
+                                            {siteConfig.supportEmail}
                                         </a>
                                         <p className="text-sm text-zinc-500 mt-1">We respond within 24 hours</p>
                                     </div>
@@ -54,10 +55,10 @@ export default function Contact() {
                                     <div>
                                         <h3 className="font-medium mb-1">General Inquiries</h3>
                                         <a
-                                            href="mailto:hello@ugccopy.com"
+                                            href={`mailto:${siteConfig.helloEmail}`}
                                             className="text-purple-400 hover:text-purple-300"
                                         >
-                                            hello@ugccopy.com
+                                            {siteConfig.helloEmail}
                                         </a>
                                         <p className="text-sm text-zinc-500 mt-1">For partnerships and press</p>
                                     </div>
@@ -129,7 +130,7 @@ export default function Contact() {
                 </div>
 
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
-                    <p>© 2026 UGC copy. All rights reserved.</p>
+                    <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                     <div className="flex justify-center gap-6 mt-4">
                         <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
                         <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>

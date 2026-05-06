@@ -3,7 +3,11 @@
 import { useEffect } from 'react';
 
 const VERSION_CHECK_INTERVAL_MS = 15000;
-const VERSION_RELOAD_MARKER_KEY = 'ugc:deployment-refresh:last-build-id';
+const VERSION_RELOAD_MARKER_KEY = 'magicbooklet:deployment-refresh:last-build-id';
+const LEGACY_VERSION_RELOAD_MARKER_KEYS = [
+  'emptybooklet:deployment-refresh:last-build-id',
+  'ugc:deployment-refresh:last-build-id',
+];
 
 function getCurrentBuildId() {
   if (typeof document === 'undefined') {
@@ -11,6 +15,22 @@ function getCurrentBuildId() {
   }
 
   return document.documentElement.dataset.buildId?.trim() || null;
+}
+
+function getLastReloadedBuildId() {
+  const storedBuildId = window.sessionStorage.getItem(VERSION_RELOAD_MARKER_KEY);
+  if (storedBuildId) {
+    return storedBuildId;
+  }
+
+  for (const key of LEGACY_VERSION_RELOAD_MARKER_KEYS) {
+    const legacyBuildId = window.sessionStorage.getItem(key);
+    if (legacyBuildId) {
+      return legacyBuildId;
+    }
+  }
+
+  return null;
 }
 
 export function useDeploymentRefresh(enabled: boolean, intervalMs = VERSION_CHECK_INTERVAL_MS) {
@@ -43,7 +63,7 @@ export function useDeploymentRefresh(enabled: boolean, intervalMs = VERSION_CHEC
           return;
         }
 
-        const lastReloadedBuildId = window.sessionStorage.getItem(VERSION_RELOAD_MARKER_KEY);
+        const lastReloadedBuildId = getLastReloadedBuildId();
         if (lastReloadedBuildId === latestBuildId) {
           return;
         }

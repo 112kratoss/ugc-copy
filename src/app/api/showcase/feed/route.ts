@@ -5,7 +5,9 @@ import {
     SHOWCASE_PAGE_SIZE,
     normalizeShowcaseCategory,
     normalizeShowcaseOffset,
+    normalizeShowcaseResourceFilter,
     normalizeShowcaseSort,
+    normalizeShowcaseUnlockFilter,
     parsePositiveInt,
 } from '@/lib/showcase';
 
@@ -29,6 +31,9 @@ export async function GET(request: NextRequest) {
             offset: normalizeShowcaseOffset(searchParams.get('offset'), searchParams.get('page'), limit),
             limit,
             viewerUserId,
+            tool: searchParams.get('tool'),
+            unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
+            resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
         });
         const cacheControl = viewerUserId
             ? 'private, no-store'

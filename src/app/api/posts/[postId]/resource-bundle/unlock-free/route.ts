@@ -23,7 +23,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const bundle = await getBundleForOrderByPostId(postId);
   if (!bundle || bundle.status !== 'published') {
-    return NextResponse.json({ error: 'Resources not found.' }, { status: 404 });
+    return NextResponse.json({ error: 'Unlock not found.' }, { status: 404 });
   }
 
   if (bundle.owner_user_id === user.id) {
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   if (orderError) {
     console.error('Failed to create free bundle order:', orderError);
-    return NextResponse.json({ error: 'Failed to unlock free resources.' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to open the free unlock.' }, { status: 500 });
   }
 
   const { data: completed, error: completionError } = await adminSupabase.rpc('complete_post_resource_bundle_purchase', {
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   if (completionError) {
     console.error('Failed to complete free bundle unlock:', completionError);
-    return NextResponse.json({ error: 'Failed to unlock free resources.' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to open the free unlock.' }, { status: 500 });
   }
 
   return NextResponse.json({

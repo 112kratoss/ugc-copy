@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getDefaultVideoDuration, getMotionCost, getImageCost, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isValidVideoDuration } from '@/lib/models';
+import { getDefaultVideoDuration, getMotionCost, getImageCost, getImageResolutionOptions, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isVideoModel, isValidImageResolution, isValidVideoDuration, supportsImageResolutionControl } from '@/lib/models';
 
 describe('Model Pricing', () => {
     describe('getMotionCost', () => {
@@ -35,6 +35,37 @@ describe('Model Pricing', () => {
         });
         it('nano-banana-pro at 4K costs 24 credits', () => {
             expect(getImageCost('nano-banana-pro', '4K')).toBe(24);
+        });
+        it('gpt-image-2 has GPT Image 2 pricing tiers', () => {
+            expect(getImageCost('gpt-image-2', '1K')).toBe(6);
+            expect(getImageCost('gpt-image-2', '2K')).toBe(10);
+            expect(getImageCost('gpt-image-2', '4K')).toBe(16);
+        });
+        it('grok image pricing follows quality and reference mode', () => {
+            expect(getImageCost('grok-imagine-image', '1K')).toBe(4);
+            expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality' })).toBe(5);
+            expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality', referenceCount: 1 })).toBe(4);
+        });
+    });
+
+    describe('image resolution metadata', () => {
+        it('limits GPT Image 2 auto and square resolution combinations', () => {
+            expect(getImageResolutionOptions('gpt-image-2', 'auto')).toEqual(['1K']);
+            expect(getImageResolutionOptions('gpt-image-2', '1:1')).toEqual(['1K', '2K']);
+            expect(getImageResolutionOptions('gpt-image-2', '4:5')).toEqual(['1K', '2K', '4K']);
+            expect(isValidImageResolution('gpt-image-2', '4K', '1:1')).toBe(false);
+            expect(isValidImageResolution('gpt-image-2', '4K', '4:5')).toBe(true);
+        });
+
+        it('keeps existing image model resolution options unchanged', () => {
+            expect(getImageResolutionOptions('nano-banana-2', 'auto')).toEqual(['1K', '2K', '4K']);
+            expect(isValidImageResolution('nano-banana-pro', '4K', '1:1')).toBe(true);
+        });
+
+        it('hides Grok image resolution controls behind a fixed backend placeholder', () => {
+            expect(getImageResolutionOptions('grok-imagine-image', '3:2')).toEqual(['1K']);
+            expect(isValidImageResolution('grok-imagine-image', '2K', '3:2')).toBe(false);
+            expect(supportsImageResolutionControl('grok-imagine-image')).toBe(false);
         });
     });
 
@@ -73,6 +104,10 @@ describe('Model Pricing', () => {
         it('veo 3.1 quality has flat pricing', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3' })).toBe(250);
         });
+        it('grok video scales by duration and resolution', () => {
+            expect(getVideoCost('grok-imagine-video', { resolution: '480p', durationSeconds: 6 })).toBe(10);
+            expect(getVideoCost('grok-imagine-video', { resolution: '720p', durationSeconds: 10 })).toBe(30);
+        });
     });
 
     describe('video duration metadata', () => {
@@ -85,6 +120,12 @@ describe('Model Pricing', () => {
             expect(getVideoDurationRange('seedance-2')).toEqual({ min: 4, max: 15, default: 15 });
             expect(getDefaultVideoDuration('seedance-2-fast')).toBe(15);
             expect(isValidVideoDuration('seedance-2', 16)).toBe(false);
+        });
+
+        it('exposes the Grok Imagine Video duration range and default duration', () => {
+            expect(getVideoDurationRange('grok-imagine-video')).toEqual({ min: 6, max: 30, default: 6 });
+            expect(getDefaultVideoDuration('grok-imagine-video')).toBe(6);
+            expect(isValidVideoDuration('grok-imagine-video', 31)).toBe(false);
         });
     });
 
@@ -118,6 +159,8 @@ describe('Model Type Checks', () => {
     it('identifies image models correctly', () => {
         expect(isImageModel('nano-banana-2')).toBe(true);
         expect(isImageModel('nano-banana-pro')).toBe(true);
+        expect(isImageModel('gpt-image-2')).toBe(true);
+        expect(isImageModel('grok-imagine-image')).toBe(true);
         expect(isImageModel('kling-2.6')).toBe(false);
     });
 
@@ -131,5 +174,10 @@ describe('Model Type Checks', () => {
         expect(isAudioModel('text-to-speech-turbo-2-5')).toBe(true);
         expect(isAudioModel('elevenlabs/text-to-dialogue-v3')).toBe(true);
         expect(isAudioModel('kling-3.0/video')).toBe(false);
+    });
+
+    it('identifies video models correctly', () => {
+        expect(isVideoModel('grok-imagine-video')).toBe(true);
+        expect(isVideoModel('grok-imagine-image')).toBe(false);
     });
 });

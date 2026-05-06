@@ -8,6 +8,13 @@ import {
   type ImageInputNodeData,
   type TextInputNodeData,
 } from '@/lib/workflow-canvas';
+import {
+  buildWorkflowShareImportPath,
+  buildWorkflowShareImportUrl,
+  extractWorkflowShareId,
+} from '@/lib/workflow-share';
+
+const SHARE_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('createWorkflowShareSnapshotGraph', () => {
   it('removes run state and private media bindings while preserving editable workflow structure', () => {
@@ -67,5 +74,24 @@ describe('createWorkflowShareSnapshotGraph', () => {
     expect((sharedImageGenerateNode?.data as { elements?: Array<Record<string, unknown>> }).elements?.[0]).not.toHaveProperty('url');
     expect((sharedImageGenerateNode?.data as { elements?: Array<Record<string, unknown>> }).elements?.[0]).not.toHaveProperty('storagePath');
     expect((sharedImageGenerateNode?.data as { elements?: Array<Record<string, unknown>> }).elements?.[0]).not.toHaveProperty('sourceGenerationId');
+  });
+});
+
+describe('extractWorkflowShareId', () => {
+  it('accepts a raw workflow share id', () => {
+    expect(extractWorkflowShareId(SHARE_ID)).toBe(SHARE_ID);
+  });
+
+  it('accepts an absolute workflow share import url', () => {
+    expect(extractWorkflowShareId(buildWorkflowShareImportUrl(SHARE_ID, 'http://localhost'))).toBe(SHARE_ID);
+  });
+
+  it('accepts a relative workflow share import path', () => {
+    expect(extractWorkflowShareId(buildWorkflowShareImportPath(SHARE_ID))).toBe(SHARE_ID);
+  });
+
+  it('rejects malformed share inputs', () => {
+    expect(extractWorkflowShareId('/create-workflow?import=not-a-share-id')).toBeNull();
+    expect(extractWorkflowShareId('not a url or share id')).toBeNull();
   });
 });

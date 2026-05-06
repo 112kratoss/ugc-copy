@@ -208,6 +208,7 @@ describe('/api/showcase/publish route', () => {
     });
     expect(postUpserts[0]).toMatchObject({
       generation_id: 'gen-1',
+      source_kind: 'magicbooklet',
       visibility: 'private',
     });
     expect(bundleUpdateCalls).toHaveLength(1);

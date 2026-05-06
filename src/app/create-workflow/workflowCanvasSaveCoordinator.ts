@@ -101,6 +101,10 @@ export async function flushCanvasSaveBeforeTransition({
   clearAutosaveTimer();
 
   if (!hasUnsavedChanges) {
+    if (!currentSavePromise) {
+      return true;
+    }
+
     const result = await currentSavePromise;
     return result.status === 'saved' || result.status === 'noop';
   }

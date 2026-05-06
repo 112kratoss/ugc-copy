@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { JsonLd } from "@/app/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
 import { supabase } from "@/lib/supabase";
-import { buildSoftwareApplicationSchema } from "@/lib/seo";
+import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
 import { convertFromUsd, formatMoney, inferCurrencyFromNavigator, type SupportedCurrency } from "@/lib/currency";
 
 const iconByPlanId: Record<PricingPlanId, LucideIcon> = {
@@ -71,10 +71,10 @@ const faqSchema = {
 };
 
 const pricingSchema = buildSoftwareApplicationSchema({
-    name: 'UGC copy pricing',
+    name: `${siteConfig.name} pricing`,
     path: '/pricing',
     description:
-        'Compare UGC copy credit packs for AI image generation, AI video generation, motion transfer, and reusable workflow production.',
+        `Compare ${siteConfig.name} credit packs for AI image generation, AI video generation, motion transfer, and reusable workflow production.`,
     featureList: [
         'Credit packs for AI image generation, AI video generation, and motion transfer',
         'Pay-as-you-go pricing without a subscription lock-in',
@@ -106,7 +106,8 @@ const relatedLinks = [
     },
 ];
 
-const CURRENCY_STORAGE_KEY = 'ugc_currency';
+const CURRENCY_STORAGE_KEY = 'magicbooklet_currency';
+const LEGACY_CURRENCY_STORAGE_KEYS = ['emptybooklet_currency', 'ugc_currency'];
 
 const currencyOptions: Array<{ value: SupportedCurrency; label: string }> = [
     { value: 'INR', label: 'INR' },
@@ -144,12 +145,15 @@ export default function Pricing() {
     useEffect(() => {
         const storedCurrency = typeof window !== 'undefined'
             ? window.localStorage.getItem(CURRENCY_STORAGE_KEY)
+                ?? LEGACY_CURRENCY_STORAGE_KEYS
+                    .map((key) => window.localStorage.getItem(key))
+                    .find((value) => Boolean(value))
             : null;
 
         if (storedCurrency && isSupportedCurrency(storedCurrency)) {
             setSelectedCurrency(storedCurrency);
         } else if (typeof navigator !== 'undefined') {
-            setSelectedCurrency(inferCurrencyFromNavigator(navigator.languages ?? []));
+            setSelectedCurrency(inferCurrencyFromNavigator(Array.from(navigator.languages ?? [])));
         }
 
         const fetchFx = async () => {
@@ -214,7 +218,7 @@ export default function Pricing() {
                 key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
                 amount: orderData.amount,
                 currency: orderData.currency,
-                name: 'UGC copy',
+                name: 'magicbooklet',
                 description: `Purchase ${planId} credits`,
                 order_id: orderData.orderId,
                 handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
@@ -335,6 +339,9 @@ export default function Pricing() {
 
                                     setSelectedCurrency(value);
                                     window.localStorage.setItem(CURRENCY_STORAGE_KEY, value);
+                                    LEGACY_CURRENCY_STORAGE_KEYS.forEach((key) => {
+                                        window.localStorage.removeItem(key);
+                                    });
                                 }}
                                 className="bg-transparent text-zinc-100 outline-none"
                             >
@@ -519,7 +526,7 @@ export default function Pricing() {
                 </section>
 
                 <div className="mt-16 border-t border-zinc-800 pt-8 text-center text-sm text-zinc-500">
-                    <p>© 2026 UGC copy. All rights reserved.</p>
+                    <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                     <div className="mt-4 flex justify-center gap-6">
                         <Link href="/terms" className="transition-colors hover:text-white">Terms of Service</Link>
                         <Link href="/privacy" className="transition-colors hover:text-white">Privacy Policy</Link>

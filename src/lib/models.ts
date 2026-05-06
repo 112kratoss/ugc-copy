@@ -43,7 +43,7 @@ export const MOTION_MODELS = {
 
 export type MotionModelId = keyof typeof MOTION_MODELS;
 
-// ─── Image Models (Nano Banana) ───────────────────────────────────────────────
+// ─── Image Models ─────────────────────────────────────────────────────────────
 
 export const IMAGE_MODELS = {
     'nano-banana-2': {
@@ -55,6 +55,7 @@ export const IMAGE_MODELS = {
         accentColor: 'blue',
         maxImages: 14,
         supportsGoogleSearch: true,
+        supportsOutputFormat: true,
         aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'] as const,
         resolutions: ['1K', '2K', '4K'] as const,
         outputFormats: ['jpg', 'png'] as const,
@@ -73,6 +74,7 @@ export const IMAGE_MODELS = {
         accentColor: 'violet',
         maxImages: 8,
         supportsGoogleSearch: false,
+        supportsOutputFormat: true,
         aspectRatios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', 'auto'] as const,
         resolutions: ['1K', '2K', '4K'] as const,
         outputFormats: ['jpg', 'png'] as const,
@@ -82,9 +84,99 @@ export const IMAGE_MODELS = {
             '4K': 24,
         },
     },
+    'gpt-image-2': {
+        id: 'gpt-image-2' as const,
+        displayName: 'GPT Image 2',
+        description: 'ChatGPT image generation with fast, high-quality edits',
+        badge: 'New',
+        badgeColor: 'from-amber-500 to-orange-500',
+        accentColor: 'amber',
+        maxImages: 16,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '5:4', '9:16', '21:9', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 6,
+            '2K': 10,
+            '4K': 16,
+        },
+    },
+    'grok-imagine-image': {
+        id: 'grok-imagine-image' as const,
+        displayName: 'Grok Imagine',
+        description: 'xAI image generation and edits with multi-output results',
+        badge: 'New',
+        badgeColor: 'from-amber-500 to-orange-500',
+        accentColor: 'amber',
+        maxImages: 1,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['3:2', '2:3', '1:1', '9:16', '16:9'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 4,
+            '2K': 4,
+            '4K': 4,
+        },
+        qualityPricing: {
+            standard: 4,
+            quality: 5,
+            imageToImage: 4,
+        },
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
+export type ImageResolution = '1K' | '2K' | '4K';
+export type ImageOutputFormat = 'jpg' | 'png';
+export type ImageQualityMode = 'standard' | 'quality';
+
+const GPT_IMAGE_2_AUTO_RESOLUTIONS = ['1K'] as const satisfies readonly ImageResolution[];
+const GPT_IMAGE_2_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly ImageResolution[];
+
+export function getImageResolutionOptions(
+    modelId: ImageModelId,
+    aspectRatio?: string
+): readonly ImageResolution[] {
+    const selectedAspectRatio = aspectRatio ?? IMAGE_MODELS[modelId].aspectRatios[0];
+
+    if (modelId === 'grok-imagine-image') {
+        return IMAGE_MODELS[modelId].resolutions;
+    }
+
+    if (modelId !== 'gpt-image-2') {
+        return IMAGE_MODELS[modelId].resolutions;
+    }
+
+    if (selectedAspectRatio === 'auto') {
+        return GPT_IMAGE_2_AUTO_RESOLUTIONS;
+    }
+
+    if (selectedAspectRatio === '1:1') {
+        return GPT_IMAGE_2_SQUARE_RESOLUTIONS;
+    }
+
+    return IMAGE_MODELS[modelId].resolutions;
+}
+
+export function isValidImageResolution(
+    modelId: ImageModelId,
+    resolution: string,
+    aspectRatio?: string
+): resolution is ImageResolution {
+    return getImageResolutionOptions(modelId, aspectRatio).includes(resolution as ImageResolution);
+}
+
+export function supportsImageResolutionControl(modelId: ImageModelId): boolean {
+    return modelId !== 'grok-imagine-image';
+}
+
+export function isValidImageQualityMode(value: string): value is ImageQualityMode {
+    return value === 'standard' || value === 'quality';
+}
 
 // ─── Video Models ─────────────────────────────────────────────────────────────
 
@@ -228,6 +320,34 @@ export const VIDEO_MODELS = {
             veo3: 250,
         },
     },
+    'grok-imagine-video': {
+        id: 'grok-imagine-video' as const,
+        displayName: 'Grok Imagine Video',
+        description: 'xAI video generation with playful, normal, and spicy modes',
+        provider: 'grok' as const,
+        apiModelId: 'grok-imagine/text-to-video',
+        enhancerModelId: 'grok-imagine-video',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['2:3', '3:2', '1:1', '9:16', '16:9'] as const,
+        durations: [6, 10, 15, 30] as const,
+        singleShotDurationRange: {
+            min: 6,
+            max: 30,
+            default: 6,
+        } as const,
+        resolutions: ['480p', '720p'] as const,
+        modeOptions: [
+            { value: 'normal', label: 'Normal' },
+            { value: 'fun', label: 'Fun' },
+            { value: 'spicy', label: 'Spicy' },
+        ] as const,
+        pricing: {
+            '480p': 1.6,
+            '720p': 3,
+        },
+    },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -274,6 +394,14 @@ export function getVideoElementSupport(
             enabled: false,
             maxElements: 0,
             reason: 'Named elements require Veo Fast.',
+        };
+    }
+
+    if (modelId === 'grok-imagine-video') {
+        return {
+            enabled: true,
+            maxElements: 1,
+            reason: null,
         };
     }
 
@@ -399,8 +527,21 @@ export function getMotionCost(
 /** Calculate credits for an image generation. */
 export function getImageCost(
     modelId: ImageModelId,
-    resolution: '1K' | '2K' | '4K'
+    resolution: ImageResolution,
+    options: {
+        qualityMode?: ImageQualityMode;
+        referenceCount?: number;
+    } = {}
 ): number {
+    if (modelId === 'grok-imagine-image') {
+        const pricing = IMAGE_MODELS['grok-imagine-image'].qualityPricing;
+        if ((options.referenceCount ?? 0) > 0) {
+            return pricing.imageToImage;
+        }
+
+        return options.qualityMode === 'quality' ? pricing.quality : pricing.standard;
+    }
+
     return IMAGE_MODELS[modelId].pricing[resolution];
 }
 
@@ -445,6 +586,15 @@ export function getVideoCost(
         return Math.ceil(durationSeconds * perSecond);
     }
 
+    if (modelId === 'grok-imagine-video') {
+        const pricingTable = VIDEO_MODELS['grok-imagine-video'].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '480p';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        return Math.ceil(durationSeconds * pricingTable[resolution]);
+    }
+
     const mode = options.mode === 'veo3' ? 'veo3' : 'veo3_fast';
     return VIDEO_MODELS['veo-3.1'].pricing[mode];
 }
@@ -484,6 +634,11 @@ export function isImageModel(modelId: string): boolean {
 /** Returns true if the model ID is a motion model. */
 export function isMotionModel(modelId: string): boolean {
     return modelId in MOTION_MODELS;
+}
+
+/** Returns true if the model ID is a video model. */
+export function isVideoModel(modelId: string): boolean {
+    return modelId in VIDEO_MODELS;
 }
 
 /** Returns true if the model ID is an audio model or audio provider ID. */

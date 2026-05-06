@@ -162,6 +162,10 @@ describe('/api/enhance-prompt route', () => {
 
     const data = await response.json();
     expect(data.remainingCredits).toBe(98);
+    expect(data.agentId).toBe('generic-media-enhancer');
+    expect(typeof data.qualityScore).toBe('number');
+    expect(Array.isArray(data.warnings)).toBe(true);
+    expect(Array.isArray(data.appliedSafeguards)).toBe(true);
     expect(data.enhancedPrompt).toContain('a premium product poster');
     expect(data.enhancedPrompt).toContain('Include readable text "SALE"');
     expect(currentAdminClient.updates[0]).toMatchObject({

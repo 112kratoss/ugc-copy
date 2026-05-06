@@ -20,21 +20,27 @@ import {
   createServiceClient,
 } from '@/lib/server-helpers';
 import {
-  getPostResourceKinds,
+  buildPostResourceBundleLockedPreview,
+  normalizePostResourceAttachments,
 } from '@/lib/post-resource-bundles';
 import type {
   MarketplaceCheckoutCurrency,
   MarketplacePriceQuote,
   MarketplaceResourceFilter,
+  MarketplaceResourceKindFilter,
   MarketplaceResourceSort,
   PersistedPostResourceBundleAccessMode,
   PostResourceAttachment,
   PostResourceBundleInput,
+  PostResourceBundleLockedPreview,
   PostResourceBundleResources,
   PostResourceBundleStatus,
   PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { slugifySourceTool } from '@/lib/source-tools';
 import {
+  normalizeShowcaseSourceKind,
+  type RawShowcaseSourceKind,
   type ShowcaseItemCategory,
   type ShowcaseMediaKind,
   type ShowcasePostFormat,
@@ -44,11 +50,15 @@ import {
 import {
   normalizeWorkflowGraph,
   serializeWorkflowGraph,
-  type SerializedWorkflowCanvasGraph,
   type WorkflowCanvasGraph,
 } from '@/lib/workflow-canvas';
 
 type LinkedPostScope = 'public' | 'owner';
+
+type LinkedPostQueryResult = {
+  data: unknown[] | null;
+  error: unknown;
+};
 
 interface ProfileRow {
   id: string;
@@ -88,13 +98,9 @@ interface LinkedPostRow extends PostMediaRow {
   post_format: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
   archived_at: string | null;
-  source_kind: ShowcaseSourceKind;
+  source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
-}
-
-interface PurchaseRow {
-  bundle_id: string;
-  buyer_user_id: string;
+  source_tool_slug: string | null;
 }
 
 interface OrderRow {
@@ -124,6 +130,7 @@ export interface PostResourceBundleLinkedPost {
   archivedAt: string | null;
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
+  sourceToolSlug: string | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
 }
@@ -141,6 +148,7 @@ export interface MarketplaceResourceListItem {
   earningsUsdCents: number;
   allowRemix: boolean;
   resourceKinds: PostResourceKind[];
+  lockedPreview: PostResourceBundleLockedPreview;
   createdAt: string;
   updatedAt: string;
   seller: PostResourceBundleSellerSummary;
@@ -250,28 +258,12 @@ function normalizeText(value: string | null | undefined): string | null {
 }
 
 function normalizeAttachments(value: unknown): PostResourceAttachment[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+  return normalizePostResourceAttachments(value);
+}
 
-  return value
-    .map((item) => {
-      if (!item || typeof item !== 'object') {
-        return null;
-      }
-
-      const label = typeof item.label === 'string' ? item.label.trim() : '';
-      const url = typeof item.url === 'string' ? item.url.trim() : '';
-      if (!url) {
-        return null;
-      }
-
-      return {
-        label: label || url,
-        url,
-      } satisfies PostResourceAttachment;
-    })
-    .filter((item): item is PostResourceAttachment => item !== null);
+function isMissingSourceToolSlugColumn(error: unknown): boolean {
+  const candidate = error as { code?: string; message?: string } | null;
+  return candidate?.code === '42703' && Boolean(candidate.message?.includes('source_tool_slug'));
 }
 
 async function buildPriceQuote(
@@ -363,27 +355,53 @@ async function loadLinkedPostMap(
   const adminSupabase = createServiceClient();
   let resultQuery = adminSupabase
     .from('posts')
-    .select('id, title, body, category, post_format, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
+    .select('id, title, body, category, post_format, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug')
     .in('id', uniquePostIds);
 
   if (scope === 'public') {
     resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null);
   }
 
-  const result = await resultQuery;
+  let result: LinkedPostQueryResult = await resultQuery;
+  if (isMissingSourceToolSlugColumn(result.error)) {
+    let fallbackQuery = adminSupabase
+      .from('posts')
+      .select('id, title, body, category, post_format, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
+      .in('id', uniquePostIds);
+
+    if (scope === 'public') {
+      fallbackQuery = fallbackQuery.eq('visibility', 'public').is('archived_at', null);
+    }
+
+    result = await fallbackQuery;
+  }
+
   let rows: LinkedPostRow[] = [];
 
   if (isMissingPostTextColumnsError(result.error)) {
     let legacyQuery = adminSupabase
       .from('posts')
-      .select('id, title, category, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
+      .select('id, title, category, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug')
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
       legacyQuery = legacyQuery.eq('visibility', 'public').is('archived_at', null);
     }
 
-    const legacyResult = await legacyQuery;
+    let legacyResult: LinkedPostQueryResult = await legacyQuery;
+    if (isMissingSourceToolSlugColumn(legacyResult.error)) {
+      let fallbackLegacyQuery = adminSupabase
+        .from('posts')
+        .select('id, title, category, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
+        .in('id', uniquePostIds);
+
+      if (scope === 'public') {
+        fallbackLegacyQuery = fallbackLegacyQuery.eq('visibility', 'public').is('archived_at', null);
+      }
+
+      legacyResult = await fallbackLegacyQuery;
+    }
+
     if (legacyResult.error) {
       if (!isMissingPostsSchemaError(legacyResult.error)) {
         console.error('Failed to load linked posts for resource bundles:', legacyResult.error);
@@ -414,8 +432,9 @@ async function loadLinkedPostMap(
       postFormat: row.post_format,
       visibility: row.visibility,
       archivedAt: row.archived_at,
-      sourceKind: row.source_kind,
+      sourceKind: normalizeShowcaseSourceKind(row.source_kind),
       sourceTool: row.source_tool,
+      sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
       mediaUrl: await resolvePostMediaUrl(adminSupabase, row),
       mediaKind: getPostMediaKind(row.category, row.post_format),
     }))
@@ -435,6 +454,7 @@ async function hydrateBundleRows(
   return Promise.all(
     rows.map(async (row) => {
       const normalizedResources = normalizeResources(row);
+      const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, row.updated_at);
 
       return {
         id: row.id,
@@ -448,7 +468,8 @@ async function hydrateBundleRows(
         salesCount: row.sales_count,
         earningsUsdCents: row.earnings_usd_cents,
         allowRemix: row.allow_remix,
-        resourceKinds: getPostResourceKinds(normalizedResources),
+        resourceKinds: lockedPreview.resourceKinds,
+        lockedPreview,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         seller: toSellerSummary(row.owner_user_id, profilesMap),
@@ -507,7 +528,7 @@ export async function savePostResourceBundle(params: {
 
   const resources = bundle?.resources ?? {};
   const status: PostResourceBundleStatus = postVisibility === 'public' ? 'published' : 'draft';
-  const normalizedTitle = normalizeText(postTitle) ?? 'Attached resources';
+  const normalizedTitle = normalizeText(postTitle) ?? 'Attached unlock';
   const priceUsdCents = accessMode === 'free'
     ? 0
     : Math.max(100, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0);
@@ -524,7 +545,7 @@ export async function savePostResourceBundle(params: {
     notes_markdown: normalizeText(resources.notesMarkdown ?? null),
     workflow_share_url: normalizeText(resources.workflowShareUrl ?? null),
     workflow_snapshot: resources.workflowSnapshot ?? null,
-    attachments: resources.attachments ?? [],
+    attachments: normalizePostResourceAttachments(resources.attachments),
     allow_remix: Boolean(resources.allowRemix),
     price_usd_cents: priceUsdCents,
   };
@@ -550,6 +571,8 @@ export async function savePostResourceBundle(params: {
 
 export async function getMarketplaceResourceList(options?: {
   filter?: MarketplaceResourceFilter;
+  resource?: MarketplaceResourceKindFilter;
+  tool?: string | null;
   sort?: MarketplaceResourceSort;
   offset?: number;
   limit?: number;
@@ -557,11 +580,14 @@ export async function getMarketplaceResourceList(options?: {
 }) {
   const {
     filter = 'all',
+    resource = 'all',
+    tool = null,
     sort = 'recent',
     offset = 0,
     limit = 24,
     countryCode = null,
   } = options ?? {};
+  const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
 
   const adminSupabase = createServiceClient();
   let query = adminSupabase
@@ -583,7 +609,7 @@ export async function getMarketplaceResourceList(options?: {
     query = query.order('created_at', { ascending: false });
   }
 
-  const { data, error } = await query.range(offset, offset + limit);
+  const { data, error } = await query;
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
       return {
@@ -602,11 +628,19 @@ export async function getMarketplaceResourceList(options?: {
   }
 
   const rows = (data ?? []) as BundleRow[];
-  const hasMore = rows.length > limit;
-  const visibleRows = hasMore ? rows.slice(0, limit) : rows;
+  const hydratedItems = await hydrateBundleRows(rows, countryCode);
+  const filteredItems = hydratedItems.filter((item) => {
+    const matchesResource = resource === 'all' || item.resourceKinds.includes(resource);
+    const itemToolSlug = item.post?.sourceToolSlug ?? slugifySourceTool(item.post?.sourceTool);
+    const matchesTool = !normalizedToolFilter || itemToolSlug === normalizedToolFilter;
+
+    return matchesResource && matchesTool;
+  });
+  const pageItems = filteredItems.slice(offset, offset + limit);
+  const hasMore = filteredItems.length > offset + limit;
 
   return {
-    items: await hydrateBundleRows(visibleRows, countryCode),
+    items: pageItems,
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + limit : null,
@@ -746,7 +780,7 @@ export async function getSellerPostResourceBundleDashboard(
       return {
         id: row.id,
         bundleId: row.bundle_id,
-        bundleTitle: bundleIdToTitle.get(row.bundle_id) ?? 'Attached resources',
+        bundleTitle: bundleIdToTitle.get(row.bundle_id) ?? 'Attached unlock',
         buyerUserId: row.buyer_user_id,
         buyerLabel,
         amountSubunits: row.amount_subunits,
@@ -771,7 +805,7 @@ export async function getSellerPostResourceBundleDashboard(
     id: string;
     title: string;
     visibility: ShowcaseVisibility;
-    source_kind: ShowcaseSourceKind;
+    source_kind: RawShowcaseSourceKind;
     bundle_access_mode: PersistedPostResourceBundleAccessMode | null;
     bundle_status: PostResourceBundleStatus | null;
     bundle_price_usd_cents: number | null;
@@ -784,7 +818,7 @@ export async function getSellerPostResourceBundleDashboard(
     id: row.id,
     title: row.title,
     visibility: row.visibility,
-    sourceKind: row.source_kind,
+    sourceKind: normalizeShowcaseSourceKind(row.source_kind),
     bundleAccessMode: row.bundle_access_mode,
     bundleStatus: row.bundle_status,
     bundlePriceUsdCents: row.bundle_price_usd_cents,
