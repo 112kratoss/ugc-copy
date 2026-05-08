@@ -9,6 +9,7 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { persistGenerationInputMedia } from '@/lib/generation-input-media';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
@@ -227,6 +228,32 @@ export async function POST(request: NextRequest) {
         if (logError) {
             console.error('Error logging generation:', logError);
         }
+
+        await persistGenerationInputMedia({
+            supabase,
+            generationId: generationRecord?.id,
+            userId: user.id,
+            candidates: [
+                {
+                    mediaType: 'image',
+                    role: 'character_image',
+                    label: normalizedCharacterImage?.label ?? 'Character image',
+                    sourceUrl: characterImageUrl,
+                    sourceStoragePath: normalizedCharacterImage?.storagePath ?? null,
+                    sourceGenerationId: normalizedCharacterImage?.sourceGenerationId ?? null,
+                    sortOrder: 0,
+                },
+                {
+                    mediaType: 'video',
+                    role: 'motion_reference_video',
+                    label: normalizedReferenceVideo?.label ?? 'Motion reference video',
+                    sourceUrl: referenceVideoUrl,
+                    sourceStoragePath: normalizedReferenceVideo?.storagePath ?? null,
+                    sourceGenerationId: normalizedReferenceVideo?.sourceGenerationId ?? null,
+                    sortOrder: 1,
+                },
+            ],
+        });
 
         return NextResponse.json({
             success: true,

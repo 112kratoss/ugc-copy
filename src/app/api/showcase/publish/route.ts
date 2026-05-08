@@ -248,6 +248,7 @@ export async function POST(request: NextRequest) {
             category?: string;
             workflowSettings?: unknown;
             exposePromptPublic?: boolean;
+            shareInputMediaForRemix?: boolean;
             resourceBundle?: PostResourceBundleInput | null;
         };
         const { generationId, isPublic, title, description, prompt, body, category, workflowSettings } = requestBody;
@@ -294,6 +295,7 @@ export async function POST(request: NextRequest) {
         const effectiveVisibility = shouldForcePublic ? 'public' : requestedVisibility;
         const shouldExposePost = effectiveVisibility !== 'private';
         const effectiveIsPublic = effectiveVisibility === 'public';
+        const effectiveShareInputMediaForRemix = effectiveIsPublic && requestBody.shareInputMediaForRemix === true;
 
         if (shouldExposePost && (generation.category === 'audio' || isAudioModel(generation.model))) {
             return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
@@ -308,7 +310,10 @@ export async function POST(request: NextRequest) {
             detectedCategory = detectCategoryFromModel(generation.model);
         }
 
-        const updatePayload: { is_public: boolean; [key: string]: unknown } = { is_public: effectiveIsPublic };
+        const updatePayload: { is_public: boolean; [key: string]: unknown } = {
+            is_public: effectiveIsPublic,
+            share_input_media_for_remix: effectiveShareInputMediaForRemix,
+        };
 
         let nextShowcaseAssetPath = hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null;
 

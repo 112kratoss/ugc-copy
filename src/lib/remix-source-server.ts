@@ -3,6 +3,14 @@ import 'server-only';
 import type { NextRequest } from 'next/server';
 
 import { getUploadsBucketPath, isUploadsStoragePath, normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
+import {
+  buildLegacyGenerationInputMedia,
+  loadGenerationInputMediaMap,
+  sanitizeWorkflowSettingsForRemix,
+  toRemixAssetDescriptor,
+  toRemixImageElement,
+  type GenerationInputMediaItem,
+} from '@/lib/generation-input-media';
 import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
 import {
   type RemixMediaAssetDescriptor,
@@ -19,6 +27,7 @@ type RemixSourceGenerationRow = {
   id: string;
   user_id: string | null;
   is_public: boolean | null;
+  share_input_media_for_remix?: boolean | null;
   output_url: string | null;
   showcase_asset_path: string | null;
   category: string | null;
@@ -34,7 +43,7 @@ type ResultGenerationRow = Pick<
 >;
 
 const GENERATION_SELECT =
-  'id, user_id, is_public, output_url, showcase_asset_path, category, model, prompt, title, workflow_settings';
+  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, model, prompt, title, workflow_settings';
 
 export class RemixSourceError extends Error {
   status: number;
@@ -100,7 +109,7 @@ async function resolveGenerationResultUrl(
 async function resolveUploadsStoragePathUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
   storagePath: string,
-  requesterUserId: string
+  allowedOwnerUserId: string | null
 ): Promise<string | null> {
   if (!isUploadsStoragePath(storagePath)) {
     return null;
@@ -108,7 +117,7 @@ async function resolveUploadsStoragePathUrl(
 
   const filePath = getUploadsBucketPath(storagePath);
   const storageOwnerId = filePath.split('/')[0]?.trim();
-  if (!storageOwnerId || storageOwnerId !== requesterUserId) {
+  if (!storageOwnerId || storageOwnerId !== allowedOwnerUserId) {
     return null;
   }
 
@@ -125,7 +134,7 @@ async function resolveUploadsStoragePathUrl(
 async function fetchGenerationById(
   adminSupabase: ReturnType<typeof createServiceClient>,
   generationId: string,
-  requesterUserId: string
+  allowedOwnerUserId: string | null
 ): Promise<ResultGenerationRow | null> {
   const { data, error } = await adminSupabase
     .from('generations')
@@ -143,7 +152,7 @@ async function fetchGenerationById(
     return null;
   }
 
-  if (generation.user_id !== requesterUserId && !generation.is_public) {
+  if (generation.user_id !== allowedOwnerUserId && !generation.is_public) {
     return null;
   }
 
@@ -186,7 +195,8 @@ export async function loadRemixSourceBundle(
   }
 
   const typedGeneration = generation as RemixSourceGenerationRow;
-  if (typedGeneration.user_id !== user.id && !typedGeneration.is_public) {
+  const isOwner = typedGeneration.user_id === user.id;
+  if (!isOwner && !typedGeneration.is_public) {
     throw new RemixSourceError('Remix source not found', 404);
   }
 
@@ -199,6 +209,27 @@ export async function loadRemixSourceBundle(
     typedGeneration.workflow_settings && typeof typedGeneration.workflow_settings === 'object'
       ? typedGeneration.workflow_settings
       : {};
+  const includeInputMedia = isOwner || (typedGeneration.is_public === true && typedGeneration.share_input_media_for_remix === true);
+  const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, includeInputMedia);
+  const durableInputMediaMap = includeInputMedia
+    ? await loadGenerationInputMediaMap({
+        supabase: adminSupabase,
+        generationIds: [typedGeneration.id],
+        urlMode: 'signed',
+      })
+    : new Map<string, GenerationInputMediaItem[]>();
+  let inputMedia = durableInputMediaMap.get(typedGeneration.id) ?? [];
+  const hasDurableInputMedia = inputMedia.length > 0;
+
+  if (includeInputMedia && !hasDurableInputMedia) {
+    inputMedia = await buildLegacyGenerationInputMedia({
+      supabase: adminSupabase,
+      generationId: typedGeneration.id,
+      ownerUserId: typedGeneration.user_id,
+      category: typedGeneration.category,
+      workflowSettings,
+    });
+  }
 
   const restoreIssues: string[] = [];
   const referencedGenerationCache = new Map<string, Promise<ResultGenerationRow | null>>();
@@ -211,7 +242,7 @@ export async function loadRemixSourceBundle(
       const signedUrl = await resolveUploadsStoragePathUrl(
         adminSupabase,
         descriptor.storagePath,
-        user.id
+        typedGeneration.user_id
       );
       if (signedUrl) {
         return signedUrl;
@@ -226,7 +257,7 @@ export async function loadRemixSourceBundle(
       if (!referencedGenerationCache.has(cacheKey)) {
         referencedGenerationCache.set(
           cacheKey,
-          fetchGenerationById(adminSupabase, cacheKey, user.id)
+          fetchGenerationById(adminSupabase, cacheKey, typedGeneration.user_id)
         );
       }
 
@@ -306,42 +337,87 @@ export async function loadRemixSourceBundle(
     },
     result,
     inputs: {},
-    workflowSettings,
+    inputMedia: includeInputMedia ? inputMedia : [],
+    workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
   };
 
-  if (category === 'image') {
-    bundle.inputs.image = {
-      elements: await resolveElementDescriptors('image-element'),
-    };
-  }
+  if (includeInputMedia && hasDurableInputMedia) {
+    const referenceImages = inputMedia.filter((item) => item.mediaType === 'image' && item.role === 'reference_image');
 
-  if (category === 'video' || category === 'ugc-ad') {
-    bundle.inputs.video = {
-      referenceMode: workflowSettings.referenceMode === 'elements' ? 'elements' : 'frames',
-      startFrame: await resolveAssetDescriptor(
-        workflowSettings.startFrame,
-        'image',
-        'video-start-frame'
-      ),
-      endFrame: await resolveAssetDescriptor(workflowSettings.endFrame, 'image', 'video-end-frame'),
-      elements: await resolveElementDescriptors('video-element'),
-    };
-  }
+    if (category === 'image') {
+      bundle.inputs.image = {
+        elements: referenceImages.map((item, index) => toRemixImageElement(item, index)),
+      };
+    }
 
-  if (category === 'motion') {
-    bundle.inputs.motion = {
-      characterImage: await resolveAssetDescriptor(
-        workflowSettings.characterImage,
-        'image',
-        'motion-character-image'
-      ),
-      referenceVideo: await resolveAssetDescriptor(
-        workflowSettings.referenceVideo,
-        'video',
-        'motion-reference-video'
-      ),
-    };
+    if (category === 'video' || category === 'ugc-ad') {
+      bundle.inputs.video = {
+        referenceMode: workflowSettings.referenceMode === 'elements' ? 'elements' : 'frames',
+        startFrame: inputMedia.find((item) => item.role === 'start_frame')
+          ? toRemixAssetDescriptor(inputMedia.find((item) => item.role === 'start_frame')!)
+          : null,
+        endFrame: inputMedia.find((item) => item.role === 'end_frame')
+          ? toRemixAssetDescriptor(inputMedia.find((item) => item.role === 'end_frame')!)
+          : null,
+        elements: referenceImages.map((item, index) => toRemixImageElement(item, index)),
+        referenceVideos: inputMedia
+          .filter((item) => item.mediaType === 'video' && item.role === 'reference_video')
+          .map((item) => toRemixAssetDescriptor(item)),
+        referenceAudios: inputMedia
+          .filter((item) => item.mediaType === 'audio' && item.role === 'reference_audio')
+          .map((item) => toRemixAssetDescriptor(item)),
+      };
+    }
+
+    if (category === 'motion') {
+      const characterImage = inputMedia.find((item) => item.role === 'character_image');
+      const referenceVideo = inputMedia.find((item) => item.role === 'motion_reference_video');
+      bundle.inputs.motion = {
+        characterImage: characterImage ? toRemixAssetDescriptor(characterImage) : null,
+        referenceVideo: referenceVideo ? toRemixAssetDescriptor(referenceVideo) : null,
+      };
+    }
+  } else if (includeInputMedia) {
+    if (category === 'image') {
+      bundle.inputs.image = {
+        elements: await resolveElementDescriptors('image-element'),
+      };
+    }
+
+    if (category === 'video' || category === 'ugc-ad') {
+      bundle.inputs.video = {
+        referenceMode: workflowSettings.referenceMode === 'elements' ? 'elements' : 'frames',
+        startFrame: await resolveAssetDescriptor(
+          workflowSettings.startFrame,
+          'image',
+          'video-start-frame'
+        ),
+        endFrame: await resolveAssetDescriptor(workflowSettings.endFrame, 'image', 'video-end-frame'),
+        elements: await resolveElementDescriptors('video-element'),
+        referenceVideos: inputMedia
+          .filter((item) => item.mediaType === 'video' && item.role === 'reference_video')
+          .map((item) => toRemixAssetDescriptor(item)),
+        referenceAudios: inputMedia
+          .filter((item) => item.mediaType === 'audio' && item.role === 'reference_audio')
+          .map((item) => toRemixAssetDescriptor(item)),
+      };
+    }
+
+    if (category === 'motion') {
+      bundle.inputs.motion = {
+        characterImage: await resolveAssetDescriptor(
+          workflowSettings.characterImage,
+          'image',
+          'motion-character-image'
+        ),
+        referenceVideo: await resolveAssetDescriptor(
+          workflowSettings.referenceVideo,
+          'video',
+          'motion-reference-video'
+        ),
+      };
+    }
   }
 
   return bundle;

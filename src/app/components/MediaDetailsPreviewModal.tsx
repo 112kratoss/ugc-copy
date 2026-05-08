@@ -2,10 +2,11 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, Copy, X } from 'lucide-react';
+import { Check, Copy, Film, Image as ImageIcon, Volume2, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
 import CreatorIdentity from '@/app/components/CreatorIdentity';
+import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseCreator } from '@/lib/showcase';
 
 export type MediaDetailsType = 'image' | 'video' | 'audio' | 'text';
@@ -19,6 +20,7 @@ interface MediaDetailsPreviewModalProps {
   title: string;
   prompt?: string | null;
   body?: string | null;
+  inputMedia?: GenerationInputMediaItem[] | null;
   creator?: ShowcaseCreator;
   actions?: ReactNode;
 }
@@ -32,6 +34,7 @@ export default function MediaDetailsPreviewModal({
   title,
   prompt,
   body,
+  inputMedia,
   creator,
   actions,
 }: MediaDetailsPreviewModalProps) {
@@ -47,6 +50,7 @@ export default function MediaDetailsPreviewModal({
           title={title}
           prompt={prompt}
           body={body}
+          inputMedia={inputMedia}
           creator={creator}
           actions={actions}
         />
@@ -63,6 +67,7 @@ function MediaDetailsPreviewDialog({
   title,
   prompt,
   body,
+  inputMedia,
   creator,
   actions,
 }: Omit<MediaDetailsPreviewModalProps, 'isOpen'>) {
@@ -74,6 +79,7 @@ function MediaDetailsPreviewDialog({
   const trimmedBody = body?.trim() ?? '';
   const hasPrompt = trimmedPrompt.length > 0;
   const hasBody = trimmedBody.length > 0;
+  const visibleInputMedia = (inputMedia ?? []).filter((item) => Boolean(item.url));
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -173,6 +179,41 @@ function MediaDetailsPreviewDialog({
     );
   };
 
+  const getInputMediaIcon = (item: GenerationInputMediaItem) => {
+    if (item.mediaType === 'video') return <Film className="h-3.5 w-3.5" />;
+    if (item.mediaType === 'audio') return <Volume2 className="h-3.5 w-3.5" />;
+    return <ImageIcon className="h-3.5 w-3.5" />;
+  };
+
+  const renderInputMediaPreview = (item: GenerationInputMediaItem) => {
+    if (!item.url) return null;
+
+    if (item.mediaType === 'image') {
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={item.url} alt={item.label} className="h-24 w-full rounded-2xl object-cover" />
+      );
+    }
+
+    if (item.mediaType === 'audio') {
+      return (
+        <div className="flex h-24 items-center rounded-2xl border border-white/8 bg-zinc-950/80 p-3">
+          <audio src={item.url} controls className="w-full" />
+        </div>
+      );
+    }
+
+    return (
+      <video
+        src={item.url}
+        controls
+        playsInline
+        preload="metadata"
+        className="h-24 w-full rounded-2xl object-cover"
+      />
+    );
+  };
+
   if (!portalRoot) {
     return null;
   }
@@ -223,6 +264,23 @@ function MediaDetailsPreviewDialog({
         <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1 sm:rounded-[24px]">
           {renderMedia()}
         </div>
+
+        {visibleInputMedia.length > 0 ? (
+          <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">
+            <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Inputs used</div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {visibleInputMedia.map((item) => (
+                <div key={item.id} className="min-w-0 rounded-[18px] border border-white/8 bg-white/[0.03] p-2">
+                  {renderInputMediaPreview(item)}
+                  <div className="mt-2 flex min-w-0 items-center gap-2 px-1 text-xs font-semibold text-zinc-200">
+                    <span className="shrink-0 text-zinc-400">{getInputMediaIcon(item)}</span>
+                    <span className="truncate">{item.label}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {mediaType !== 'text' && hasBody ? (
           <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">

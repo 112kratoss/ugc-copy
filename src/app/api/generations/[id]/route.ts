@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { createServiceClient, createUserClient, getStoredMediaLocation } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient, getStoredMediaLocation, type MediaBucket } from '@/lib/server-helpers';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -48,7 +48,27 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     }
 
     const hasLinkedPosts = Array.isArray(linkedPosts) && linkedPosts.length > 0;
-    const removablePaths: Array<{ bucket: 'generated_images' | 'generated_videos' | 'generated_audio' | 'showcase_media'; path: string }> = [];
+    const removablePaths: Array<{ bucket: MediaBucket | 'showcase_media'; path: string }> = [];
+
+    const { data: inputMediaRows, error: inputMediaError } = await adminSupabase
+      .from('generation_input_media')
+      .select('storage_path')
+      .eq('generation_id', id)
+      .eq('user_id', user.id);
+
+    if (inputMediaError) {
+      console.error('Failed to load generation input media before delete:', inputMediaError);
+    } else {
+      for (const row of (inputMediaRows ?? []) as Array<{ storage_path: string | null }>) {
+        const location = row.storage_path ? getStoredMediaLocation(row.storage_path) : null;
+        if (location) {
+          removablePaths.push({
+            bucket: location.bucket,
+            path: location.filePath,
+          });
+        }
+      }
+    }
 
     if (!hasLinkedPosts) {
       const rawLocation = typeof generation.output_url === 'string' ? getStoredMediaLocation(generation.output_url) : null;

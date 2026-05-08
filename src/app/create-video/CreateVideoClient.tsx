@@ -762,28 +762,51 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         : [];
 
                     commitElements(hydrateVideoElements([...restoredSeeds, ...legacyFrameSeeds]));
-                    commitReferenceVideos(hydrateSeedanceMediaReferences(
-                        'Video',
-                        (settings?.referenceVideoUrls ?? []).map((url, index) => ({
+                    const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
+                    const restoredReferenceAudios = restoredVideoInputs?.referenceAudios ?? [];
+                    const referenceVideoSeeds = restoredReferenceVideos.length > 0
+                        ? restoredReferenceVideos
+                            .flatMap((item, index) => item.url ? [{
+                                displayName: item.label ?? `Video reference ${index + 1}`,
+                                file: null,
+                                previewUrl: item.url,
+                                providerUrl: item.url,
+                                storagePath: item.storagePath ?? null,
+                                source: 'remix' as const,
+                                sourceGenerationId: item.sourceGenerationId ?? null,
+                                seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
+                            }] : [])
+                        : (settings?.referenceVideoUrls ?? []).map((url, index) => ({
                             displayName: `Video reference ${index + 1}`,
                             file: null,
                             previewUrl: url,
                             providerUrl: url,
-                            source: 'remix',
+                            source: 'remix' as const,
                             seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
-                        }))
-                    ));
-                    commitReferenceAudios(hydrateSeedanceMediaReferences(
-                        'Audio',
-                        (settings?.referenceAudioUrls ?? []).map((url, index) => ({
+                        }));
+                    const referenceAudioSeeds = restoredReferenceAudios.length > 0
+                        ? restoredReferenceAudios
+                            .flatMap((item, index) => item.url ? [{
+                                displayName: item.label ?? `Audio reference ${index + 1}`,
+                                file: null,
+                                previewUrl: item.url,
+                                providerUrl: item.url,
+                                storagePath: item.storagePath ?? null,
+                                source: 'remix' as const,
+                                sourceGenerationId: item.sourceGenerationId ?? null,
+                                seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
+                            }] : [])
+                        : (settings?.referenceAudioUrls ?? []).map((url, index) => ({
                             displayName: `Audio reference ${index + 1}`,
                             file: null,
                             previewUrl: '',
                             providerUrl: url,
-                            source: 'remix',
+                            source: 'remix' as const,
                             seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
-                        }))
-                    ));
+                        }));
+
+                    commitReferenceVideos(hydrateSeedanceMediaReferences('Video', referenceVideoSeeds));
+                    commitReferenceAudios(hydrateSeedanceMediaReferences('Audio', referenceAudioSeeds));
 
                     setStartImageFile(null);
                     setStartImageUrl(null);

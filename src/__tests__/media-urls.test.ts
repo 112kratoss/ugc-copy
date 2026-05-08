@@ -16,6 +16,13 @@ describe('media url helpers', () => {
     });
   });
 
+  it('parses stored generation input paths', () => {
+    expect(getStoredMediaLocation('generation_inputs/user-1/gen-1/00-reference-image.png')).toEqual({
+      bucket: 'generation_inputs',
+      filePath: 'user-1/gen-1/00-reference-image.png',
+    });
+  });
+
   it('converts stored media into same-origin proxy urls for display', () => {
     expect(getDisplayMediaUrl('generated_audio/user/track.mp3')).toBe(
       buildMediaProxyUrl('generated_audio', 'user/track.mp3')

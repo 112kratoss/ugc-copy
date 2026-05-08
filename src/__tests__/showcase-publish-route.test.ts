@@ -41,6 +41,7 @@ vi.mock('@/lib/server-helpers', () => ({
     storage: {
       from: vi.fn(() => ({
         remove: removeMock,
+        upload: vi.fn(async () => ({ data: null, error: null })),
       })),
     },
   }),
@@ -153,6 +154,27 @@ describe('/api/showcase/publish route', () => {
 
         if (table === 'post_resource_bundles') {
           return {
+            delete() {
+              const call = {
+                payload: {
+                  deleted: true,
+                },
+                filters: {} as Record<string, unknown>,
+              };
+              bundleUpdateCalls.push(call);
+
+              const query = {
+                eq(column: string, value: unknown) {
+                  call.filters[column] = value;
+                  return query;
+                },
+                then(resolve: (value: { error: null }) => void) {
+                  resolve({ error: null });
+                },
+              };
+
+              return query;
+            },
             update(payload: Record<string, unknown>) {
               const call = {
                 payload,
@@ -181,6 +203,7 @@ describe('/api/showcase/publish route', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -204,6 +227,7 @@ describe('/api/showcase/publish route', () => {
     expect(data.success).toBe(true);
     expect(generationUpdates[0]).toMatchObject({
       is_public: false,
+      share_input_media_for_remix: false,
       showcase_asset_path: null,
     });
     expect(postUpserts[0]).toMatchObject({
@@ -232,6 +256,52 @@ describe('/api/showcase/publish route', () => {
         seller_user_id: 'user-1',
         status: 'active',
       },
+    });
+  });
+
+  it('persists input-media remix sharing only for public publishes', async () => {
+    generationState = {
+      ...generationState!,
+      output_url: 'https://cdn.example.com/generated.jpg',
+      showcase_asset_path: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        headers: new Headers({ 'content-type': 'image/jpeg' }),
+        blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
+      }))
+    );
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        isPublic: true,
+        shareInputMediaForRemix: true,
+        title: 'Shared remix source',
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest);
+
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(generationUpdates[0]).toMatchObject({
+      is_public: true,
+      share_input_media_for_remix: true,
+      title: 'Shared remix source',
+    });
+    expect(postUpserts[0]).toMatchObject({
+      generation_id: 'gen-1',
+      visibility: 'public',
     });
   });
 });

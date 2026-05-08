@@ -1,4 +1,4 @@
-export type MediaBucket = 'generated_images' | 'generated_videos' | 'generated_audio';
+export type MediaBucket = 'generated_images' | 'generated_videos' | 'generated_audio' | 'generation_inputs';
 
 type MediaProxyOptions = {
   download?: boolean;
@@ -6,7 +6,12 @@ type MediaProxyOptions = {
 };
 
 export function isMediaBucket(bucket: string): bucket is MediaBucket {
-  return bucket === 'generated_images' || bucket === 'generated_videos' || bucket === 'generated_audio';
+  return (
+    bucket === 'generated_images'
+    || bucket === 'generated_videos'
+    || bucket === 'generated_audio'
+    || bucket === 'generation_inputs'
+  );
 }
 
 export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket; filePath: string } | null {
@@ -32,6 +37,13 @@ export function getStoredMediaLocation(outputUrl: string): { bucket: MediaBucket
     return {
       bucket: 'generated_audio',
       filePath: outputUrl.replace('generated_audio/', ''),
+    };
+  }
+
+  if (outputUrl.startsWith('generation_inputs/')) {
+    return {
+      bucket: 'generation_inputs',
+      filePath: outputUrl.replace('generation_inputs/', ''),
     };
   }
 

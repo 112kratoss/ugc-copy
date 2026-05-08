@@ -37,6 +37,7 @@ export default function PublishToShowcaseModal({
   const router = useRouter();
   const [publishTitle, setPublishTitle] = useState(defaultTitle);
   const [publishDescription, setPublishDescription] = useState(defaultDescription);
+  const [shareInputMedia, setShareInputMedia] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -47,6 +48,7 @@ export default function PublishToShowcaseModal({
 
     setPublishTitle(defaultTitle);
     setPublishDescription(defaultDescription);
+    setShareInputMedia(false);
     setFormError(null);
   }, [defaultDescription, defaultTitle, generationId, isOpen]);
 
@@ -85,6 +87,7 @@ export default function PublishToShowcaseModal({
           isPublic: true,
           title: publishTitle.trim() || undefined,
           description: publishDescription.trim() || undefined,
+          shareInputMediaForRemix: shareInputMedia,
           resourceBundle: { accessMode: 'none' },
         }),
       });
@@ -191,6 +194,21 @@ export default function PublishToShowcaseModal({
                 maxLength={200}
               />
             </div>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-[22px] border border-white/10 bg-black/35 p-4 transition hover:border-emerald-300/25 hover:bg-emerald-500/5">
+              <input
+                type="checkbox"
+                checked={shareInputMedia}
+                onChange={(event) => setShareInputMedia(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-white/20 bg-black text-emerald-400 focus:ring-emerald-400"
+              />
+              <span>
+                <span className="block text-sm font-semibold text-zinc-100">Share input media with remixers</span>
+                <span className="mt-1 block text-sm leading-6 text-zinc-400">
+                  Remixers can use the reference media from this creation after they click Remix. It will not appear on the public post.
+                </span>
+              </span>
+            </label>
 
             {showPaidShortcut ? (
               <div className="rounded-[24px] border border-white/10 bg-black/35 p-4">

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { syncGenerationStatuses } from '@/lib/generation-services';
+import {
+    buildLegacyGenerationInputMedia,
+    loadGenerationInputMediaMap,
+} from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/server-helpers';
+import { buildMediaProxyUrl, createServiceClient, getStoredMediaLocation } from '@/lib/server-helpers';
 
 type LinkedPostRow = {
     id: string;
@@ -130,9 +134,26 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        const generationsWithUrls = generations.map((generation) => {
+        const adminSupabase = createServiceClient();
+        const inputMediaMap = await loadGenerationInputMediaMap({
+            supabase: adminSupabase,
+            generationIds,
+            urlMode: 'proxy',
+        });
+
+        const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
             const workflowSettings = getWorkflowSettings(generation.workflow_settings);
             const outputUrls = getPersistedOutputUrls(workflowSettings);
+            const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
+            const inputMedia = durableInputMedia.length > 0
+                ? durableInputMedia
+                : await buildLegacyGenerationInputMedia({
+                    supabase: adminSupabase,
+                    generationId: generation.id,
+                    ownerUserId: user.id,
+                    category: generation.category,
+                    workflowSettings: workflowSettings ?? {},
+                });
             const paywallPrefill = buildGenerationPaywallPrefill({
                 category: generation.category,
                 model: generation.model,
@@ -145,6 +166,7 @@ export async function GET(request: NextRequest) {
                 return {
                     ...rest,
                     ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
+                    input_media: inputMedia,
                     paywallPrefill,
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
@@ -159,6 +181,7 @@ export async function GET(request: NextRequest) {
                 return {
                     ...rest,
                     ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
+                    input_media: inputMedia,
                     paywallPrefill,
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
@@ -172,13 +195,14 @@ export async function GET(request: NextRequest) {
                 ...rest,
                 output_url: buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath),
                 ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
+                input_media: inputMedia,
                 paywallPrefill,
                 linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                 linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
                 linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,
                 linked_post_archived_at: linkedPostMap.get(generation.id)?.archived_at ?? null,
             };
-        });
+        }));
 
         return NextResponse.json({ generations: generationsWithUrls });
     } catch (error) {
