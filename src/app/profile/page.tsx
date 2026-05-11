@@ -169,26 +169,17 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps = {
 
         {isFirstRunProfile ? (
           <section className="mb-8 rounded-[32px] border border-sky-400/15 bg-[linear-gradient(135deg,rgba(14,23,35,0.94),rgba(7,12,18,0.96))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.42)] sm:p-6">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-              <div className="max-w-2xl">
-                <div className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-100">
-                  <BadgeCheck className="h-3.5 w-3.5" />
-                  Profile setup
-                </div>
-                <h2 className="mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-                  Claim the identity your posts and unlocks will point to
-                </h2>
-                <p className="mt-3 max-w-xl text-sm leading-7 text-zinc-300">
-                  Start with the handle. The rest can improve over time, but the public URL should be ready before you share posts or sell unlocks.
-                </p>
+            <div className="max-w-2xl">
+              <div className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-100">
+                <BadgeCheck className="h-3.5 w-3.5" />
+                Profile setup
               </div>
-              <a
-                href="#creator-profile-form"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200"
-              >
-                Set up profile
-                <ExternalLink className="h-4 w-4" />
-              </a>
+              <h2 className="mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                Claim the identity your posts and unlocks will point to
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-7 text-zinc-300">
+                Start with the handle. The rest can improve over time, but the public URL should be ready before you share posts or sell unlocks.
+              </p>
             </div>
             <div className="mt-6 grid gap-3 md:grid-cols-3">
               {setupSteps.map((step) => (
