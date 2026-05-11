@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
             tool: searchParams.get('tool'),
             unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
             resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
+            countryCode: request.headers.get('x-vercel-ip-country'),
         });
         const cacheControl = viewerUserId
             ? 'private, no-store'

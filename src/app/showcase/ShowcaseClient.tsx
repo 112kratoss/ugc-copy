@@ -21,7 +21,14 @@ import {
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
-import { getBundleAccessLabel, getPostResourceKindLabel, isPostResourceKind, type PostResourceKind } from '@/lib/post-resource-bundles';
+import {
+    formatUnlockCountLabel,
+    getBundleAccessLabel,
+    getPostResourceKindLabel,
+    isPostResourceKind,
+    type PostResourceKind,
+} from '@/lib/post-resource-bundles';
+import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { CURATED_SOURCE_TOOLS } from '@/lib/source-tools';
 
@@ -123,6 +130,17 @@ function formatResourceKinds(kinds: PostResourceKind[]): string {
     }
 
     return kinds.map((kind) => getPostResourceKindLabel(kind)).join(' + ');
+}
+
+function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+    if (asset.priceQuote) {
+        return formatBundleAccessLabel({
+            accessMode: asset.accessMode,
+            priceQuote: asset.priceQuote,
+        });
+    }
+
+    return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
 }
 
 export default function ShowcaseClient({
@@ -604,7 +622,7 @@ export default function ShowcaseClient({
                                                 })}
                                                 saveCount={item.saveCount}
                                                 remixCount={item.remixCount}
-                                                unlockLabel={item.asset ? getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents) : null}
+                                                unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
                                                 resourceKinds={getItemResourceKinds(item)}
                                                 className="rounded-none border-0 border-b border-white/8 shadow-none"
                                             />
@@ -679,13 +697,13 @@ export default function ShowcaseClient({
                                                 {item.asset ? (
                                                     <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
                                                         <ShoppingBag className="h-3.5 w-3.5" />
-                                                        {getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents)}
+                                                        {getAssetAccessLabel(item.asset)}
                                                     </div>
                                                 ) : null}
                                                 {item.asset?.salesCount ? (
                                                     <div className="ml-2 mt-2 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-200">
                                                         <ShieldCheck className="h-3.5 w-3.5 text-emerald-200" />
-                                                        {item.asset.salesCount} unlock{item.asset.salesCount === 1 ? '' : 's'}
+                                                        {formatUnlockCountLabel(item.asset.accessMode, item.asset.salesCount)}
                                                     </div>
                                                 ) : null}
                                                 {resourceKinds.length > 0 ? (

@@ -10,6 +10,12 @@ vi.mock('next/headers', () => ({
   headers: () => headersMock(),
 }));
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+  }),
+}));
+
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   getMarketplaceResourceList: (...args: unknown[]) => getMarketplaceResourceListMock(...args),
 }));

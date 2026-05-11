@@ -36,8 +36,13 @@ function inferRegion(locale: string) {
   return match ? match[1].toUpperCase() : null;
 }
 
-function currencyForRegion(region: string): SupportedCurrency | null {
-  switch (region) {
+export function inferCurrencyFromCountry(countryCode?: string | null): SupportedCurrency | null {
+  const normalizedCountryCode = countryCode?.trim().toUpperCase();
+  if (!normalizedCountryCode) {
+    return null;
+  }
+
+  switch (normalizedCountryCode) {
     case 'IN':
       return 'INR';
     case 'GB':
@@ -51,7 +56,7 @@ function currencyForRegion(region: string): SupportedCurrency | null {
     case 'SG':
       return 'SGD';
     default:
-      return EUROZONE_REGIONS.has(region) ? 'EUR' : null;
+      return EUROZONE_REGIONS.has(normalizedCountryCode) ? 'EUR' : null;
   }
 }
 
@@ -62,7 +67,7 @@ export function inferCurrencyFromNavigator(languages: string[]): SupportedCurren
       continue;
     }
 
-    const currency = currencyForRegion(region);
+    const currency = inferCurrencyFromCountry(region);
     if (currency) {
       return currency;
     }

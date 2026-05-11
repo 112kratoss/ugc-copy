@@ -9,6 +9,7 @@ import {
   getPostMediaKind,
   isMissingMarketplaceSchemaError,
   isMissingPostResourceBundlesSchemaError,
+  isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
   normalizeLegacyPostFormat,
@@ -22,7 +23,13 @@ import {
 import {
   buildPostResourceBundleLockedPreview,
   normalizePostResourceAttachments,
+  validatePostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
+import {
+  assessMarketplaceListingQuality,
+  getMarketplaceQualityError,
+  type MarketplaceQualityAssessment,
+} from '@/lib/marketplace-trust';
 import type {
   MarketplaceCheckoutCurrency,
   MarketplacePriceQuote,
@@ -98,9 +105,13 @@ interface LinkedPostRow extends PostMediaRow {
   post_format: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
   archived_at: string | null;
+  review_status?: 'visible' | 'flagged' | 'hidden' | null;
   source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
   source_tool_slug: string | null;
+  save_count?: number | null;
+  remix_count?: number | null;
+  share_visit_count?: number | null;
 }
 
 interface OrderRow {
@@ -128,11 +139,15 @@ export interface PostResourceBundleLinkedPost {
   postFormat: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
   archivedAt: string | null;
+  reviewStatus: 'visible' | 'flagged' | 'hidden';
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
   sourceToolSlug: string | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
+  saveCount: number;
+  remixCount: number;
+  shareVisitCount: number;
 }
 
 export interface MarketplaceResourceListItem {
@@ -167,6 +182,14 @@ export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
 export interface SellerResourceDashboardBundle extends MarketplaceResourceListItem {
   status: PostResourceBundleStatus;
   post: PostResourceBundleLinkedPost | null;
+  quality: MarketplaceQualityAssessment;
+}
+
+export interface PostResourceBundleMutationResult {
+  postId: string;
+  visibility: ShowcaseVisibility;
+  bundleId: string | null;
+  bundleStatus: PostResourceBundleStatus | null;
 }
 
 export interface DeletedPostResourceSnapshot {
@@ -199,6 +222,7 @@ export interface SellerPostResourceBundleDashboard {
   }>;
   totalSalesCount: number;
   totalEarningsUsdCents: number;
+  generatedAt: string;
 }
 
 type ExchangeRateApiResponse = {
@@ -255,6 +279,31 @@ function normalizeText(value: string | null | undefined): string | null {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeMarketplaceSearchQuery(value: string | null | undefined): string {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80)
+    : '';
+}
+
+function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normalizedQuery: string): boolean {
+  const searchableText = [
+    item.title,
+    item.summary,
+    item.previewText,
+    item.seller.username,
+    item.seller.name,
+    item.post?.title,
+    item.post?.body,
+    item.post?.sourceTool,
+    item.resourceKinds.join(' '),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return searchableText.includes(normalizedQuery);
 }
 
 function normalizeAttachments(value: unknown): PostResourceAttachment[] {
@@ -355,22 +404,46 @@ async function loadLinkedPostMap(
   const adminSupabase = createServiceClient();
   let resultQuery = adminSupabase
     .from('posts')
-    .select('id, title, body, category, post_format, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug')
+    .select('id, title, body, category, post_format, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
     .in('id', uniquePostIds);
 
   if (scope === 'public') {
-    resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null);
+    resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null).neq('review_status', 'hidden');
   }
 
   let result: LinkedPostQueryResult = await resultQuery;
-  if (isMissingSourceToolSlugColumn(result.error)) {
+  if (isMissingSourceToolSlugColumn(result.error) || isMissingPostReviewStatusColumnError(result.error)) {
+    const includeSourceToolSlug = !isMissingSourceToolSlugColumn(result.error);
+    const includeReviewStatus = !isMissingPostReviewStatusColumnError(result.error);
     let fallbackQuery = adminSupabase
       .from('posts')
-      .select('id, title, body, category, post_format, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
+      .select(
+        [
+          'id',
+          'title',
+          'body',
+          'category',
+          'post_format',
+          'visibility',
+          'archived_at',
+          includeReviewStatus ? 'review_status' : null,
+          'showcase_asset_path',
+          'output_url',
+          'source_kind',
+          'source_tool',
+          includeSourceToolSlug ? 'source_tool_slug' : null,
+          'save_count',
+          'remix_count',
+          'share_visit_count',
+        ].filter(Boolean).join(', ')
+      )
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
       fallbackQuery = fallbackQuery.eq('visibility', 'public').is('archived_at', null);
+      if (includeReviewStatus) {
+        fallbackQuery = fallbackQuery.neq('review_status', 'hidden');
+      }
     }
 
     result = await fallbackQuery;
@@ -381,22 +454,44 @@ async function loadLinkedPostMap(
   if (isMissingPostTextColumnsError(result.error)) {
     let legacyQuery = adminSupabase
       .from('posts')
-      .select('id, title, category, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug')
+      .select('id, title, category, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
-      legacyQuery = legacyQuery.eq('visibility', 'public').is('archived_at', null);
+      legacyQuery = legacyQuery.eq('visibility', 'public').is('archived_at', null).neq('review_status', 'hidden');
     }
 
     let legacyResult: LinkedPostQueryResult = await legacyQuery;
-    if (isMissingSourceToolSlugColumn(legacyResult.error)) {
+    if (isMissingSourceToolSlugColumn(legacyResult.error) || isMissingPostReviewStatusColumnError(legacyResult.error)) {
+      const includeSourceToolSlug = !isMissingSourceToolSlugColumn(legacyResult.error);
+      const includeReviewStatus = !isMissingPostReviewStatusColumnError(legacyResult.error);
       let fallbackLegacyQuery = adminSupabase
         .from('posts')
-        .select('id, title, category, visibility, archived_at, showcase_asset_path, output_url, source_kind, source_tool')
+        .select(
+          [
+            'id',
+            'title',
+            'category',
+            'visibility',
+            'archived_at',
+            includeReviewStatus ? 'review_status' : null,
+            'showcase_asset_path',
+            'output_url',
+            'source_kind',
+          'source_tool',
+          includeSourceToolSlug ? 'source_tool_slug' : null,
+          'save_count',
+          'remix_count',
+          'share_visit_count',
+          ].filter(Boolean).join(', ')
+        )
         .in('id', uniquePostIds);
 
       if (scope === 'public') {
         fallbackLegacyQuery = fallbackLegacyQuery.eq('visibility', 'public').is('archived_at', null);
+        if (includeReviewStatus) {
+          fallbackLegacyQuery = fallbackLegacyQuery.neq('review_status', 'hidden');
+        }
       }
 
       legacyResult = await fallbackLegacyQuery;
@@ -432,11 +527,15 @@ async function loadLinkedPostMap(
       postFormat: row.post_format,
       visibility: row.visibility,
       archivedAt: row.archived_at,
+      reviewStatus: row.review_status ?? 'visible',
       sourceKind: normalizeShowcaseSourceKind(row.source_kind),
       sourceTool: row.source_tool,
       sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
       mediaUrl: await resolvePostMediaUrl(adminSupabase, row),
       mediaKind: getPostMediaKind(row.category, row.post_format),
+      saveCount: row.save_count ?? 0,
+      remixCount: row.remix_count ?? 0,
+      shareVisitCount: row.share_visit_count ?? 0,
     }))
   );
 
@@ -493,6 +592,197 @@ function normalizeResources(row: BundleRow): PostResourceBundleResources {
   };
 }
 
+function buildBundleMutationPayload(bundle: PostResourceBundleInput | null | undefined, ownerUserId?: string | null) {
+  const accessMode = bundle?.accessMode ?? 'none';
+
+  if (accessMode === 'none') {
+    return {
+      accessMode: 'none',
+    };
+  }
+
+  const validationError = validatePostResourceBundleInput(bundle, { ownerUserId });
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  const resources = bundle?.resources ?? {};
+
+  return {
+    accessMode,
+    summary: normalizeText(bundle?.summary ?? null) ?? '',
+    previewText: normalizeText(bundle?.previewText ?? null) ?? '',
+    priceUsdCents: accessMode === 'paid'
+      ? Math.max(100, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0)
+      : 0,
+    resources: {
+      promptText: normalizeText(resources.promptText ?? null),
+      notesMarkdown: normalizeText(resources.notesMarkdown ?? null),
+      workflowShareUrl: normalizeText(resources.workflowShareUrl ?? null),
+      workflowSnapshot: resources.workflowSnapshot ?? null,
+      attachments: normalizePostResourceAttachments(resources.attachments),
+      allowRemix: Boolean(resources.allowRemix),
+    },
+  };
+}
+
+export async function getMarketplaceQualityErrorForPostBundle(params: {
+  supabase: SupabaseClient;
+  ownerUserId: string;
+  post: {
+    title?: string | null;
+    body?: string | null;
+    visibility?: ShowcaseVisibility | string | null;
+    archivedAt?: string | null;
+    reviewStatus?: string | null;
+    showcaseAssetPath?: string | null;
+    outputUrl?: string | null;
+    mediaUrl?: string | null;
+    hasMedia?: boolean | null;
+  };
+  bundle: PostResourceBundleInput | null | undefined;
+}): Promise<string | null> {
+  const accessMode = params.bundle?.accessMode ?? 'none';
+  if (accessMode === 'none') {
+    return null;
+  }
+
+  const { data: profile, error } = await params.supabase
+    .from('profiles')
+    .select('username, display_name')
+    .eq('id', params.ownerUserId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Failed to load creator profile for marketplace quality gate:', error);
+  }
+
+  const postHasMedia = Boolean(
+    params.post.hasMedia ||
+    params.post.mediaUrl ||
+    params.post.showcaseAssetPath ||
+    params.post.outputUrl
+  );
+
+  return getMarketplaceQualityError({
+    title: params.post.title ?? 'Attached unlock',
+    summary: params.bundle?.summary ?? null,
+    previewText: params.bundle?.previewText ?? null,
+    accessMode,
+    priceUsdCents: params.bundle?.priceUsdCents ?? null,
+    resources: params.bundle?.resources ?? null,
+    post: {
+      title: params.post.title ?? null,
+      body: params.post.body ?? null,
+      visibility: params.post.visibility ?? null,
+      archivedAt: params.post.archivedAt ?? null,
+      reviewStatus: params.post.reviewStatus ?? 'visible',
+      hasMedia: postHasMedia,
+    },
+    seller: {
+      username: typeof profile?.username === 'string' ? profile.username : null,
+      displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
+    },
+  });
+}
+
+function normalizeMutationResult(row: unknown): PostResourceBundleMutationResult {
+  const record = row as {
+    post_id?: unknown;
+    visibility?: unknown;
+    bundle_id?: unknown;
+    bundle_status?: unknown;
+  } | null;
+
+  if (!record || typeof record.post_id !== 'string') {
+    throw new Error('Post publish transaction did not return a post id.');
+  }
+
+  const visibility = record.visibility === 'public' || record.visibility === 'unlisted' || record.visibility === 'private'
+    ? record.visibility
+    : 'private';
+  const bundleStatus = record.bundle_status === 'draft' || record.bundle_status === 'published'
+    ? record.bundle_status
+    : null;
+
+  return {
+    postId: record.post_id,
+    visibility,
+    bundleId: typeof record.bundle_id === 'string' ? record.bundle_id : null,
+    bundleStatus,
+  };
+}
+
+export async function createPostWithResourceBundleAtomically(params: {
+  supabase: SupabaseClient;
+  post: Record<string, unknown>;
+  bundle: PostResourceBundleInput | null | undefined;
+}): Promise<PostResourceBundleMutationResult> {
+  const ownerUserId = typeof params.post.user_id === 'string' ? params.post.user_id : null;
+  const { data, error } = await params.supabase.rpc('upsert_post_with_resource_bundle', {
+    p_post: params.post,
+    p_bundle: buildBundleMutationPayload(params.bundle, ownerUserId),
+    p_has_bundle: true,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return normalizeMutationResult(row);
+}
+
+export async function updatePostWithResourceBundleAtomically(params: {
+  supabase: SupabaseClient;
+  postId: string;
+  ownerUserId: string;
+  patch: Record<string, unknown>;
+  hasBundlePayload: boolean;
+  bundle: PostResourceBundleInput | null | undefined;
+}): Promise<PostResourceBundleMutationResult> {
+  const { data, error } = await params.supabase.rpc('update_post_with_resource_bundle', {
+    p_post_id: params.postId,
+    p_owner_user_id: params.ownerUserId,
+    p_post_patch: params.patch,
+    p_has_bundle: params.hasBundlePayload,
+    p_bundle: params.hasBundlePayload ? buildBundleMutationPayload(params.bundle, params.ownerUserId) : null,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return normalizeMutationResult(row);
+}
+
+export async function publishGenerationPostWithResourceBundleAtomically(params: {
+  supabase: SupabaseClient;
+  generationId: string;
+  ownerUserId: string;
+  generationUpdate: Record<string, unknown>;
+  post: Record<string, unknown>;
+  bundle: PostResourceBundleInput | null | undefined;
+  hasBundlePayload: boolean;
+}): Promise<PostResourceBundleMutationResult> {
+  const { data, error } = await params.supabase.rpc('publish_generation_post_with_resource_bundle', {
+    p_generation_id: params.generationId,
+    p_owner_user_id: params.ownerUserId,
+    p_generation_update: params.generationUpdate,
+    p_post: params.post,
+    p_bundle: params.hasBundlePayload ? buildBundleMutationPayload(params.bundle, params.ownerUserId) : null,
+    p_has_bundle: params.hasBundlePayload,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return normalizeMutationResult(row);
+}
+
 export function isBundlePublishedForMarketplace(row: BundleRow): boolean {
   return row.status === 'published';
 }
@@ -527,6 +817,11 @@ export async function savePostResourceBundle(params: {
   }
 
   const resources = bundle?.resources ?? {};
+  const validationError = validatePostResourceBundleInput(bundle, { ownerUserId });
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
   const status: PostResourceBundleStatus = postVisibility === 'public' ? 'published' : 'draft';
   const normalizedTitle = normalizeText(postTitle) ?? 'Attached unlock';
   const priceUsdCents = accessMode === 'free'
@@ -569,26 +864,30 @@ export async function savePostResourceBundle(params: {
   };
 }
 
-export async function getMarketplaceResourceList(options?: {
-  filter?: MarketplaceResourceFilter;
-  resource?: MarketplaceResourceKindFilter;
-  tool?: string | null;
-  sort?: MarketplaceResourceSort;
-  offset?: number;
-  limit?: number;
-  countryCode?: string | null;
-}) {
-  const {
-    filter = 'all',
-    resource = 'all',
-    tool = null,
-    sort = 'recent',
-    offset = 0,
-    limit = 24,
-    countryCode = null,
-  } = options ?? {};
-  const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
+function isMissingMarketplaceListRpcError(error: unknown): boolean {
+  const candidate = error as { code?: string; message?: string } | null;
+  const message = candidate?.message ?? '';
 
+  return (
+    candidate?.code === 'PGRST202' ||
+    message.includes('list_marketplace_resource_bundles') ||
+    isMissingPostResourceBundlesSchemaError(error)
+  );
+}
+
+async function getMarketplaceResourceListFallback(options: {
+  filter: MarketplaceResourceFilter;
+  resource: MarketplaceResourceKindFilter;
+  tool: string | null;
+  q: string | null;
+  sort: MarketplaceResourceSort;
+  offset: number;
+  limit: number;
+  countryCode: string | null;
+}) {
+  const { filter, resource, tool, q, sort, offset, limit, countryCode } = options;
+  const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
+  const normalizedQuery = normalizeMarketplaceSearchQuery(q);
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('post_resource_bundles')
@@ -604,6 +903,14 @@ export async function getMarketplaceResourceList(options?: {
   if (sort === 'top-sales') {
     query = query
       .order('sales_count', { ascending: false })
+      .order('created_at', { ascending: false });
+  } else if (sort === 'price-low') {
+    query = query
+      .order('price_usd_cents', { ascending: true })
+      .order('created_at', { ascending: false });
+  } else if (sort === 'price-high') {
+    query = query
+      .order('price_usd_cents', { ascending: false })
       .order('created_at', { ascending: false });
   } else {
     query = query.order('created_at', { ascending: false });
@@ -630,11 +937,26 @@ export async function getMarketplaceResourceList(options?: {
   const rows = (data ?? []) as BundleRow[];
   const hydratedItems = await hydrateBundleRows(rows, countryCode);
   const filteredItems = hydratedItems.filter((item) => {
-    const matchesResource = resource === 'all' || item.resourceKinds.includes(resource);
-    const itemToolSlug = item.post?.sourceToolSlug ?? slugifySourceTool(item.post?.sourceTool);
-    const matchesTool = !normalizedToolFilter || itemToolSlug === normalizedToolFilter;
+    if (!item.post) {
+      return false;
+    }
 
-    return matchesResource && matchesTool;
+    const matchesResource = resource === 'all' || item.resourceKinds.includes(resource);
+    const itemToolSlug = item.post.sourceToolSlug ?? slugifySourceTool(item.post.sourceTool);
+    const matchesTool = !normalizedToolFilter || itemToolSlug === normalizedToolFilter;
+    const matchesQuery = !normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery);
+    const quality = assessMarketplaceListingQuality({
+      title: item.title,
+      summary: item.summary,
+      previewText: item.previewText,
+      accessMode: item.accessMode,
+      priceUsdCents: item.priceUsdCents,
+      resourceKinds: item.resourceKinds,
+      post: item.post,
+      seller: item.seller,
+    });
+
+    return quality.eligible && matchesResource && matchesTool && matchesQuery;
   });
   const pageItems = filteredItems.slice(offset, offset + limit);
   const hasMore = filteredItems.length > offset + limit;
@@ -644,6 +966,92 @@ export async function getMarketplaceResourceList(options?: {
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + limit : null,
+      offset,
+      limit,
+    },
+  };
+}
+
+export async function getMarketplaceResourceList(options?: {
+  filter?: MarketplaceResourceFilter;
+  resource?: MarketplaceResourceKindFilter;
+  tool?: string | null;
+  q?: string | null;
+  sort?: MarketplaceResourceSort;
+  offset?: number;
+  limit?: number;
+  countryCode?: string | null;
+}) {
+  const {
+    filter = 'all',
+    resource = 'all',
+    tool = null,
+    q = null,
+    sort = 'recent',
+    offset = 0,
+    limit = 24,
+    countryCode = null,
+  } = options ?? {};
+  const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
+  const normalizedQuery = normalizeMarketplaceSearchQuery(q);
+
+  const adminSupabase = createServiceClient();
+  const { data, error } = await adminSupabase.rpc('list_marketplace_resource_bundles', {
+    p_access_filter: filter,
+    p_resource_filter: resource,
+    p_tool_slug: normalizedToolFilter || null,
+    p_query: normalizedQuery || null,
+    p_sort: sort,
+    p_offset: offset,
+    p_limit: limit + 1,
+  });
+
+  if (error) {
+    if (isMissingMarketplaceListRpcError(error)) {
+      return getMarketplaceResourceListFallback({
+        filter,
+        resource,
+        tool,
+        q,
+        sort,
+        offset,
+        limit,
+        countryCode,
+      });
+    }
+
+    console.error('Failed to load marketplace resource list:', error);
+    throw error;
+  }
+
+  const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
+  const hasMore = rows.length > limit;
+  const hydratedItems = await hydrateBundleRows(rows, countryCode);
+  const pageItems = hydratedItems.filter((item) => {
+    if (!item.post) {
+      return false;
+    }
+
+    const quality = assessMarketplaceListingQuality({
+      title: item.title,
+      summary: item.summary,
+      previewText: item.previewText,
+      accessMode: item.accessMode,
+      priceUsdCents: item.priceUsdCents,
+      resourceKinds: item.resourceKinds,
+      post: item.post,
+      seller: item.seller,
+    });
+
+    return quality.eligible && (!normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery));
+  }).slice(0, limit);
+  const hasDroppedItems = hydratedItems.length > pageItems.length;
+
+  return {
+    items: pageItems,
+    pageInfo: {
+      hasMore: hasMore || hasDroppedItems,
+      nextOffset: hasMore || hasDroppedItems ? offset + limit : null,
       offset,
       limit,
     },
@@ -735,6 +1143,7 @@ export async function getSellerPostResourceBundleDashboard(
         sales: [],
         totalSalesCount: 0,
         totalEarningsUsdCents: 0,
+        generatedAt: new Date().toISOString(),
       };
     }
 
@@ -747,6 +1156,16 @@ export async function getSellerPostResourceBundleDashboard(
   const bundles = hydratedBundles.map((bundle, index) => ({
     ...bundle,
     status: rows[index]?.status ?? 'draft',
+    quality: assessMarketplaceListingQuality({
+      title: bundle.title,
+      summary: bundle.summary,
+      previewText: bundle.previewText,
+      accessMode: bundle.accessMode,
+      priceUsdCents: bundle.priceUsdCents,
+      resourceKinds: bundle.resourceKinds,
+      post: bundle.post,
+      seller: bundle.seller,
+    }),
   }));
   const bundleIdToTitle = new Map(rows.map((row) => [row.id, row.title]));
 
@@ -840,6 +1259,7 @@ export async function getSellerPostResourceBundleDashboard(
     sales,
     totalSalesCount: rows.reduce((sum, row) => sum + row.sales_count, 0),
     totalEarningsUsdCents: rows.reduce((sum, row) => sum + row.earnings_usd_cents, 0),
+    generatedAt: new Date().toISOString(),
   };
 }
 

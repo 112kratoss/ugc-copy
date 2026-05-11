@@ -25,6 +25,7 @@ const bundleUpdateCalls: Array<{
   payload: Record<string, unknown>;
   filters: Record<string, unknown>;
 }> = [];
+const publishRpcCalls: Array<Record<string, unknown>> = [];
 const removeMock = vi.fn(async () => ({ data: null, error: null }));
 const createUserClientMock = vi.fn();
 
@@ -38,9 +39,29 @@ vi.mock('@/lib/posts-server', () => ({
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: NextRequest) => createUserClientMock(request),
   createServiceClient: () => ({
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name !== 'publish_generation_post_with_resource_bundle') {
+        throw new Error(`Unexpected rpc call: ${name}`);
+      }
+
+      publishRpcCalls.push(args);
+      generationUpdates.push(args.p_generation_update as Record<string, unknown>);
+      postUpserts.push(args.p_post as Record<string, unknown>);
+
+      return {
+        data: [{
+          post_id: 'post-1',
+          visibility: (args.p_post as Record<string, unknown>).visibility,
+          bundle_id: null,
+          bundle_status: null,
+        }],
+        error: null,
+      };
+    }),
     storage: {
       from: vi.fn(() => ({
         remove: removeMock,
+        upload: vi.fn(async () => ({ data: null, error: null })),
       })),
     },
   }),
@@ -66,6 +87,7 @@ describe('/api/showcase/publish route', () => {
     postUpserts.length = 0;
     listingUpdateCalls.length = 0;
     bundleUpdateCalls.length = 0;
+    publishRpcCalls.length = 0;
     removeMock.mockClear();
     createUserClientMock.mockReset();
     createUserClientMock.mockReturnValue({
@@ -181,6 +203,7 @@ describe('/api/showcase/publish route', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -204,6 +227,7 @@ describe('/api/showcase/publish route', () => {
     expect(data.success).toBe(true);
     expect(generationUpdates[0]).toMatchObject({
       is_public: false,
+      share_input_media_for_remix: false,
       showcase_asset_path: null,
     });
     expect(postUpserts[0]).toMatchObject({
@@ -211,27 +235,58 @@ describe('/api/showcase/publish route', () => {
       source_kind: 'magicbooklet',
       visibility: 'private',
     });
-    expect(bundleUpdateCalls).toHaveLength(1);
-    expect(bundleUpdateCalls[0]).toEqual({
-      payload: {
-        status: 'draft',
-      },
-      filters: {
-        post_id: 'post-1',
-        owner_user_id: 'user-1',
-        status: 'published',
-      },
+    expect(bundleUpdateCalls).toHaveLength(0);
+    expect(listingUpdateCalls).toHaveLength(0);
+    expect(publishRpcCalls[0]).toMatchObject({
+      p_generation_id: 'gen-1',
+      p_owner_user_id: 'user-1',
+      p_has_bundle: false,
     });
-    expect(listingUpdateCalls).toHaveLength(1);
-    expect(listingUpdateCalls[0]).toEqual({
-      payload: {
-        status: 'unlisted',
+  });
+
+  it('persists input-media remix sharing only for public publishes', async () => {
+    generationState = {
+      ...generationState!,
+      output_url: 'https://cdn.example.com/generated.jpg',
+      showcase_asset_path: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        headers: new Headers({ 'content-type': 'image/jpeg' }),
+        blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
+      }))
+    );
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
       },
-      filters: {
-        post_id: 'post-1',
-        seller_user_id: 'user-1',
-        status: 'active',
-      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        isPublic: true,
+        shareInputMediaForRemix: true,
+        title: 'Shared remix source',
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest);
+
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(generationUpdates[0]).toMatchObject({
+      is_public: true,
+      share_input_media_for_remix: true,
+      title: 'Shared remix source',
+    });
+    expect(postUpserts[0]).toMatchObject({
+      generation_id: 'gen-1',
+      visibility: 'public',
     });
   });
 });

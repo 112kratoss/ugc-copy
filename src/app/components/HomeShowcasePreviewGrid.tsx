@@ -12,6 +12,7 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import { getBundleAccessLabel, isPostResourceKind, type PostResourceKind } from '@/lib/post-resource-bundles';
+import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { buildShowcaseDetailPath } from '@/lib/share';
 
@@ -32,6 +33,17 @@ function getItemSummary(item: ShowcaseFeedItem) {
 
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
   return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
+}
+
+function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  if (asset.priceQuote) {
+    return formatBundleAccessLabel({
+      accessMode: asset.accessMode,
+      priceQuote: asset.priceQuote,
+    });
+  }
+
+  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
 }
 
 function formatHomeDate(value: string) {
@@ -117,7 +129,7 @@ export default function HomeShowcasePreviewGrid({
                 dateLabel={formatHomeDate(item.createdAt)}
                 saveCount={item.saveCount}
                 remixCount={item.remixCount}
-                unlockLabel={item.asset ? getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents) : null}
+                unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
                 resourceKinds={getItemResourceKinds(item)}
                 className="rounded-none border-0 shadow-none"
               />
@@ -144,7 +156,7 @@ export default function HomeShowcasePreviewGrid({
                 {item.asset ? (
                   <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
                     <ShoppingBag className="h-3.5 w-3.5" />
-                    {getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents)}
+                    {getAssetAccessLabel(item.asset)}
                   </div>
                 ) : null}
               </div>

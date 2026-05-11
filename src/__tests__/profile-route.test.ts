@@ -83,6 +83,43 @@ function createAdminClient() {
             },
           };
         },
+        upsert(values: Record<string, unknown>) {
+          return {
+            select() {
+              return {
+                async single() {
+                  const profileId = values.id as string;
+                  const index = profilesState.findIndex((profile) => profile.id === profileId);
+                  const nextProfile = {
+                    id: profileId,
+                    username: (values.username as string | null) ?? null,
+                    display_name: (values.display_name as string | null) ?? null,
+                    bio: (values.bio as string | null) ?? null,
+                    avatar_url: (values.avatar_url as string | null) ?? null,
+                    cover_url: (values.cover_url as string | null) ?? null,
+                    website_url: (values.website_url as string | null) ?? null,
+                    twitter_handle: (values.twitter_handle as string | null) ?? null,
+                    instagram_handle: (values.instagram_handle as string | null) ?? null,
+                    tiktok_handle: (values.tiktok_handle as string | null) ?? null,
+                    location: (values.location as string | null) ?? null,
+                    credits: index === -1 ? null : profilesState[index].credits,
+                  };
+
+                  if (index === -1) {
+                    profilesState.push(nextProfile);
+                  } else {
+                    profilesState[index] = {
+                      ...profilesState[index],
+                      ...nextProfile,
+                    };
+                  }
+
+                  return { data: nextProfile, error: null };
+                },
+              };
+            },
+          };
+        },
       };
     },
   };
@@ -155,6 +192,19 @@ describe('/api/profile route', () => {
     expect(data.credits).toBe(25);
   });
 
+  it('returns a starter profile payload when the profile row is missing', async () => {
+    profilesState = [];
+
+    const { GET } = await import('@/app/api/profile/route');
+    const response = await GET(new Request('http://localhost/api/profile') as never);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.username).toBeNull();
+    expect(data.suggestedUsername).toBe('creator-11111111');
+    expect(data.displayName).toBe('Creator');
+  });
+
   it('normalizes usernames to lowercase on successful updates', async () => {
     const { PATCH } = await import('@/app/api/profile/route');
     const response = await PATCH(
@@ -174,6 +224,33 @@ describe('/api/profile route', () => {
     expect(response.status).toBe(200);
     expect(data.username).toBe('creator-name');
     expect(profilesState[0].username).toBe('creator-name');
+  });
+
+  it('creates the profile row on first save if it is missing', async () => {
+    profilesState = [];
+
+    const { PATCH } = await import('@/app/api/profile/route');
+    const response = await PATCH(
+      new Request('http://localhost/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'First-Creator',
+          displayName: 'First Creator',
+          bio: 'Launching a creator profile.',
+        }),
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.username).toBe('first-creator');
+    expect(profilesState).toHaveLength(1);
+    expect(profilesState[0]).toMatchObject({
+      id: authUserId,
+      username: 'first-creator',
+      display_name: 'First Creator',
+    });
   });
 
   it('validates an available username without updating the profile', async () => {

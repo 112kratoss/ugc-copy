@@ -1,8 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
-import { convertFromInr, convertFromUsd, inferCurrencyFromNavigator } from '@/lib/currency';
+import {
+  convertFromInr,
+  convertFromUsd,
+  inferCurrencyFromCountry,
+  inferCurrencyFromNavigator,
+} from '@/lib/currency';
 
 describe('currency helpers', () => {
+  describe('inferCurrencyFromCountry', () => {
+    it('maps India country codes to INR', () => {
+      expect(inferCurrencyFromCountry('IN')).toBe('INR');
+    });
+
+    it('maps US country codes to USD', () => {
+      expect(inferCurrencyFromCountry('US')).toBe('USD');
+    });
+
+    it('maps UK country codes to GBP', () => {
+      expect(inferCurrencyFromCountry('GB')).toBe('GBP');
+    });
+
+    it('maps Eurozone country codes to EUR', () => {
+      expect(inferCurrencyFromCountry('DE')).toBe('EUR');
+      expect(inferCurrencyFromCountry('FR')).toBe('EUR');
+    });
+
+    it('returns null for unknown or missing country codes', () => {
+      expect(inferCurrencyFromCountry('BR')).toBeNull();
+      expect(inferCurrencyFromCountry(null)).toBeNull();
+      expect(inferCurrencyFromCountry()).toBeNull();
+    });
+  });
+
   describe('inferCurrencyFromNavigator', () => {
     it('maps India locales to INR', () => {
       expect(inferCurrencyFromNavigator(['en-IN'])).toBe('INR');

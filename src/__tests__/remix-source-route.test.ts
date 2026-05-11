@@ -4,6 +4,7 @@ type GenerationRow = {
   id: string;
   user_id: string | null;
   is_public: boolean | null;
+  share_input_media_for_remix?: boolean | null;
   output_url: string | null;
   showcase_asset_path: string | null;
   category: string | null;
@@ -16,6 +17,18 @@ type GenerationRow = {
 let currentUserId: string | null = 'user-1';
 let generationRows = new Map<string, GenerationRow>();
 let signedUploads = new Map<string, string | null>();
+let inputMediaRows: Array<{
+  id: string;
+  generation_id: string;
+  user_id: string;
+  media_type: 'image' | 'video' | 'audio';
+  role: string;
+  label: string | null;
+  storage_path: string;
+  source_generation_id: string | null;
+  sort_order: number;
+  metadata: Record<string, unknown> | null;
+}> = [];
 
 const resolveStoredMediaUrlMock = vi.fn(
   async (_adminClient: unknown, outputUrl: string) => `https://signed.example.com/${encodeURIComponent(outputUrl)}`
@@ -33,6 +46,25 @@ function createRouteRequest(url: string) {
 function createAdminClientMock() {
   return {
     from: vi.fn((table: string) => {
+      if (table === 'generation_input_media') {
+        return {
+          select() {
+            return {
+              in(_column: string, values: string[]) {
+                return {
+                  order() {
+                    return {
+                      data: inputMediaRows.filter((row) => values.includes(row.generation_id)),
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
       if (table !== 'generations') {
         throw new Error(`Unexpected table access: ${table}`);
       }
@@ -79,6 +111,15 @@ function createAdminClientMock() {
           };
         }
 
+        if (bucket === 'generation_inputs') {
+          return {
+            createSignedUrl: vi.fn(async (filePath: string) => ({
+              data: { signedUrl: `https://signed.example.com/generation-inputs/${filePath}` },
+              error: null,
+            })),
+          };
+        }
+
         if (bucket === 'showcase_media') {
           return {
             getPublicUrl: vi.fn((filePath: string) => ({
@@ -118,17 +159,21 @@ describe('/api/remix-source route', () => {
     currentUserId = 'user-1';
     generationRows = new Map();
     signedUploads = new Map();
+    inputMediaRows = [];
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('redacts inaccessible nested remix inputs while returning a public source bundle', async () => {
+  it('redacts public source input media when the owner has not opted in', async () => {
+    currentUserId = 'user-2';
+
     generationRows.set('ref-1', {
       id: 'ref-1',
       user_id: 'creator-2',
       is_public: false,
+      share_input_media_for_remix: false,
       output_url: 'generated_images/creator-2/ref-1.png',
       showcase_asset_path: null,
       category: 'image',
@@ -142,6 +187,7 @@ describe('/api/remix-source route', () => {
       id: 'source-1',
       user_id: 'creator-1',
       is_public: true,
+      share_input_media_for_remix: false,
       output_url: 'generated_images/creator-1/source-1.png',
       showcase_asset_path: null,
       category: 'image',
@@ -182,24 +228,70 @@ describe('/api/remix-source route', () => {
       mediaType: 'image',
       url: 'https://signed.example.com/generated_images%2Fcreator-1%2Fsource-1.png',
     });
-    expect(data.inputs.image.elements).toEqual([
+    expect(data.inputs.image).toBeUndefined();
+    expect(data.inputMedia).toEqual([]);
+    expect(data.workflowSettings.elements).toBeUndefined();
+    expect(data.restoreIssues).toEqual([]);
+  });
+
+  it('returns shared durable input media to public remixers after owner opt-in', async () => {
+    currentUserId = 'user-2';
+    generationRows.set('video-shared-1', {
+      id: 'video-shared-1',
+      user_id: 'creator-1',
+      is_public: true,
+      share_input_media_for_remix: true,
+      output_url: 'generated_videos/creator-1/video.mp4',
+      showcase_asset_path: null,
+      category: 'video',
+      model: 'kling-3.0/video',
+      prompt: 'Product video',
+      title: 'Shared source',
+      workflow_settings: {
+        referenceMode: 'frames',
+        startFrame: {
+          kind: 'image',
+          label: 'Old start frame',
+          storagePath: 'uploads/creator-1/old-start.png',
+        },
+      },
+    });
+    inputMediaRows = [
+      {
+        id: 'input-start-1',
+        generation_id: 'video-shared-1',
+        user_id: 'creator-1',
+        media_type: 'image',
+        role: 'start_frame',
+        label: 'Shared start frame',
+        storage_path: 'generation_inputs/creator-1/video-shared-1/00-start-frame.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: null,
+      },
+    ];
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=video-shared-1'));
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.inputMedia).toEqual([
       expect.objectContaining({
-        displayName: 'Bottle',
-        storagePath: 'uploads/creator-1/bottle.png',
-        url: null,
-      }),
-      expect.objectContaining({
-        displayName: 'Reference result',
-        sourceGenerationId: 'ref-1',
-        url: null,
+        id: 'input-start-1',
+        label: 'Shared start frame',
+        url: 'https://signed.example.com/generation-inputs/creator-1/video-shared-1/00-start-frame.png',
       }),
     ]);
-    expect(data.restoreIssues).toEqual(
-      expect.arrayContaining([
-        'image-element:Bottle',
-        'image-element:Reference result',
-      ])
-    );
+    expect(data.inputs.video.startFrame).toMatchObject({
+      label: 'Shared start frame',
+      url: 'https://signed.example.com/generation-inputs/creator-1/video-shared-1/00-start-frame.png',
+    });
+    expect(data.workflowSettings.startFrame).toEqual({
+      kind: 'image',
+      label: 'Old start frame',
+      storagePath: 'uploads/creator-1/old-start.png',
+    });
   });
 
   it('allows the owner to restore motion remix inputs from a private creation', async () => {
@@ -207,6 +299,7 @@ describe('/api/remix-source route', () => {
       id: 'motion-1',
       user_id: 'user-1',
       is_public: false,
+      share_input_media_for_remix: false,
       output_url: 'generated_videos/user-1/motion-1.mp4',
       showcase_asset_path: null,
       category: 'motion',
@@ -249,6 +342,7 @@ describe('/api/remix-source route', () => {
       id: 'video-1',
       user_id: 'creator-1',
       is_public: true,
+      share_input_media_for_remix: false,
       output_url: 'generated_videos/creator-1/video-1.mp4',
       showcase_asset_path: null,
       category: 'video',
@@ -290,6 +384,7 @@ describe('/api/remix-source route', () => {
       id: 'private-1',
       user_id: 'creator-9',
       is_public: false,
+      share_input_media_for_remix: false,
       output_url: 'generated_images/creator-9/private.png',
       showcase_asset_path: null,
       category: 'image',

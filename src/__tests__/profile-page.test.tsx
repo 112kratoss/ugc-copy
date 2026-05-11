@@ -134,6 +134,7 @@ describe('ProfilePage', () => {
     render(await ProfilePage());
 
     expect(await screen.findByText('creator-user1')).toBeInTheDocument();
+    expect(screen.getByText(/profile setup/i)).toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
   });
 

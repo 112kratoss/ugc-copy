@@ -136,6 +136,47 @@ describe('CreatorProfileCard', () => {
     expect(screen.getByRole('link', { name: /preview profile/i })).toHaveAttribute('href', '/creators/updated-name');
   });
 
+  it('shows first-run setup progress when used for onboarding', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={{
+          ...profile,
+          username: 'starter-name',
+          displayName: '',
+          bio: '',
+          avatarUrl: '',
+        }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+      />
+    );
+
+    expect(screen.getByText(/setup progress/i)).toBeInTheDocument();
+    expect(screen.getByText(/public preview/i)).toBeInTheDocument();
+    expect(screen.getByText(/save the handle first/i)).toBeInTheDocument();
+  });
+
+  it('rejects non-image profile uploads before save', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(['not-an-image'], 'avatar.pdf', { type: 'application/pdf' });
+
+    fireEvent.change(fileInputs[0], {
+      target: { files: [file] },
+    });
+
+    expect(screen.getByText(/upload an image file/i)).toBeInTheDocument();
+    expect(supabaseMocks.upload).not.toHaveBeenCalled();
+  });
+
   it('shows validation errors from the validate endpoint without uploading files', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: false,

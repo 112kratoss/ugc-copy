@@ -81,6 +81,52 @@ vi.mock('@/lib/server-helpers', () => ({
     },
   }),
   createServiceClient: () => ({
+    from(table: string) {
+      if (table === 'profiles') {
+        const profile = {
+          username: 'creator-one',
+          display_name: 'Creator One',
+        };
+        const query = {
+          select() {
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async maybeSingle() {
+            return {
+              data: profile,
+              error: null,
+            };
+          },
+        };
+
+        return query;
+      }
+
+      throw new Error(`Unexpected service table access: ${table}`);
+    },
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name !== 'upsert_post_with_resource_bundle') {
+        throw new Error(`Unexpected rpc call: ${name}`);
+      }
+
+      const post = args.p_post as Record<string, unknown>;
+      insertPayloads.push(post);
+
+      return Promise.resolve({
+        data: bundleUpsertError
+          ? null
+          : [{
+              post_id: post.id,
+              visibility: post.visibility,
+              bundle_id: 'bundle-1',
+              bundle_status: 'published',
+            }],
+        error: bundleUpsertError,
+      });
+    },
     storage: {
       from: () => ({
         upload: uploadMock,
@@ -224,6 +270,95 @@ describe('/api/posts route', () => {
     expect(insertPayloads).toHaveLength(0);
   });
 
+  it('rejects paid unlocks without any resource content', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'The hook works because it resolves the objection before the demo.');
+    formData.set('visibility', 'public');
+    formData.set(
+      'resourceBundle',
+      JSON.stringify({
+        accessMode: 'paid',
+        priceUsdCents: 500,
+        resources: {
+          promptText: ' ',
+          notesMarkdown: '',
+          workflowShareUrl: '',
+          attachments: [],
+          allowRemix: false,
+        },
+      })
+    );
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/add content/i);
+    expect(insertPayloads).toHaveLength(0);
+  });
+
+  it('rejects unlock file attachments outside the creator storage prefix', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'A short post with a gated workflow file.');
+    formData.set('visibility', 'public');
+    formData.set(
+      'resourceBundle',
+      JSON.stringify({
+        accessMode: 'free',
+        resources: {
+          attachments: [{
+            label: 'Workflow export',
+            kind: 'file',
+            storagePath: 'someone-else/workflow.json',
+          }],
+          allowRemix: false,
+        },
+      })
+    );
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/belong to the creator/i);
+    expect(insertPayloads).toHaveLength(0);
+  });
+
+  it('rejects low-quality marketplace unlock listings before publishing', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('title', 'test text');
+    formData.set('body', 'A useful public proof post that explains the reusable hook structure.');
+    formData.set('visibility', 'public');
+    formData.set(
+      'resourceBundle',
+      JSON.stringify({
+        accessMode: 'paid',
+        summary: 'A reusable launch prompt for a proof-led product hook.',
+        previewText: 'Includes the prompt structure and CTA guidance buyers can reuse.',
+        priceUsdCents: 500,
+        resources: {
+          promptText: 'Use a before and after hook with one product proof frame and a short CTA.',
+          attachments: [],
+          allowRemix: false,
+        },
+      })
+    );
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/improve this unlock before publishing/i);
+    expect(payload.error).toMatch(/placeholder listing title/i);
+    expect(insertPayloads).toHaveLength(0);
+  });
+
   it('surfaces a clear migration error when post resource bundles are not enabled yet', async () => {
     bundleUpsertError = {
       code: 'PGRST205',
@@ -239,9 +374,11 @@ describe('/api/posts route', () => {
       'resourceBundle',
       JSON.stringify({
         accessMode: 'paid',
+        summary: 'A reusable launch prompt for a proof-led product hook.',
+        previewText: 'Includes the prompt structure and CTA guidance buyers can reuse.',
         priceUsdCents: 200,
         resources: {
-          promptText: 'Hook first, then show the product payoff.',
+          promptText: 'Hook first, then show the product payoff with one proof frame and a short CTA.',
           attachments: [],
           allowRemix: false,
         },
@@ -252,7 +389,43 @@ describe('/api/posts route', () => {
     const payload = await response.json();
 
     expect(response.status).toBe(500);
-    expect(payload.error).toMatch(/resource bundles are not enabled/i);
-    expect(payload.error).toMatch(/20260406200000_post_resource_bundles\.sql/i);
+    expect(payload.error).toMatch(/atomic unlock publishing is not enabled/i);
+    expect(payload.error).toMatch(/20260508120000_post_system_marketplace_reliability\.sql/i);
+  });
+
+  it('removes uploaded media when the atomic post publish fails', async () => {
+    bundleUpsertError = {
+      message: 'bundle write failed',
+    };
+
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'mixed');
+    formData.set('body', 'This post should not survive a failed unlock save.');
+    formData.set('category', 'image');
+    formData.set('visibility', 'public');
+    formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
+    formData.set(
+      'resourceBundle',
+      JSON.stringify({
+        accessMode: 'paid',
+        summary: 'A reusable launch prompt for a proof-led product hook.',
+        previewText: 'Includes the prompt structure and CTA guidance buyers can reuse.',
+        priceUsdCents: 200,
+        resources: {
+          promptText: 'Prompt buyers should unlock with one proof frame and a concise CTA.',
+          attachments: [],
+          allowRemix: false,
+        },
+      })
+    );
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toMatch(/failed to create post/i);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(removeMock).toHaveBeenCalledWith([expect.stringContaining('posts/')]);
   });
 });

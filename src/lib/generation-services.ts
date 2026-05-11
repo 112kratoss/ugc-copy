@@ -47,6 +47,12 @@ import {
   normalizeVeoGenerationTiming,
   toIsoTimestamp,
 } from '@/lib/generation-timing';
+import {
+  collectImageInputCandidates,
+  collectSeedanceAssetCandidates,
+  persistGenerationInputMedia,
+  type PersistGenerationInputCandidate,
+} from '@/lib/generation-input-media';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -836,6 +842,16 @@ export async function startImageGeneration(params: {
       .select('id')
       .single();
 
+    await persistGenerationInputMedia({
+      supabase,
+      generationId: insert.data?.id,
+      userId,
+      candidates: collectImageInputCandidates({
+        resolvedImageUrls,
+        elements: normalizedElements,
+      }),
+    });
+
     return {
       predictionId,
       remainingCredits,
@@ -1301,6 +1317,66 @@ export async function startVideoGeneration(params: {
       .select('id')
       .single();
 
+    const videoInputCandidates: PersistGenerationInputCandidate[] = [];
+    let inputSortOrder = 0;
+    const referenceImageCandidates = normalizedElements.length > 0
+      ? collectImageInputCandidates({
+          resolvedImageUrls: resolvedElementImageUrls,
+          elements: normalizedElements,
+        })
+      : collectImageInputCandidates({
+          resolvedImageUrls: resolvedReferenceImageUrls,
+          elements: [],
+        });
+
+    for (const candidate of referenceImageCandidates) {
+      videoInputCandidates.push({
+        ...candidate,
+        sortOrder: inputSortOrder++,
+      });
+    }
+
+    const startFrameSourceUrl = resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null;
+    const endFrameSourceUrl = resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null;
+
+    if (effectiveReferenceMode === 'frames' && startFrameSourceUrl) {
+      videoInputCandidates.push({
+        mediaType: 'image',
+        role: 'start_frame',
+        label: normalizedStartFrame?.label ?? 'Start frame',
+        sourceUrl: startFrameSourceUrl,
+        sourceStoragePath: normalizedStartFrame?.storagePath ?? startImageUrl ?? null,
+        sourceGenerationId: normalizedStartFrame?.sourceGenerationId ?? null,
+        sortOrder: inputSortOrder++,
+      });
+    }
+
+    if (effectiveReferenceMode === 'frames' && endFrameSourceUrl) {
+      videoInputCandidates.push({
+        mediaType: 'image',
+        role: 'end_frame',
+        label: normalizedEndFrame?.label ?? 'End frame',
+        sourceUrl: endFrameSourceUrl,
+        sourceStoragePath: normalizedEndFrame?.storagePath ?? endImageUrl ?? null,
+        sourceGenerationId: normalizedEndFrame?.sourceGenerationId ?? null,
+        sortOrder: inputSortOrder++,
+      });
+    }
+
+    videoInputCandidates.push(
+      ...collectSeedanceAssetCandidates({
+        assets: seedanceAssets,
+        offset: inputSortOrder,
+      })
+    );
+
+    await persistGenerationInputMedia({
+      supabase,
+      generationId: insert.data?.id,
+      userId,
+      candidates: videoInputCandidates,
+    });
+
     return {
       predictionId,
       remainingCredits,
@@ -1384,6 +1460,28 @@ export async function startMotionGeneration(params: {
       })
       .select('id')
       .single();
+
+    await persistGenerationInputMedia({
+      supabase,
+      generationId: insert.data?.id,
+      userId,
+      candidates: [
+        {
+          mediaType: 'image',
+          role: 'character_image',
+          label: 'Character image',
+          sourceUrl: characterImageUrl,
+          sortOrder: 0,
+        },
+        {
+          mediaType: 'video',
+          role: 'motion_reference_video',
+          label: 'Motion reference video',
+          sourceUrl: referenceVideoUrl,
+          sortOrder: 1,
+        },
+      ],
+    });
 
     return {
       predictionId,

@@ -72,6 +72,7 @@ describe('/api/showcase/feed route', () => {
       tool: null,
       unlock: 'all',
       resource: 'all',
+      countryCode: null,
     });
   });
 
@@ -97,6 +98,7 @@ describe('/api/showcase/feed route', () => {
       tool: null,
       unlock: 'all',
       resource: 'all',
+      countryCode: null,
     });
   });
 });

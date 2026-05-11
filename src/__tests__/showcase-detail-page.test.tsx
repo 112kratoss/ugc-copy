@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseDetailPage, { generateMetadata } from '@/app/showcase/[id]/page';
@@ -117,6 +117,45 @@ describe('Showcase detail page', () => {
     });
   });
 
+  it('keeps media posts in the media frame and preserves public notes', async () => {
+    getPublicPostDetailMock.mockResolvedValueOnce({
+      id: 'post-1',
+      generationId: 'gen-1',
+      visibility: 'public',
+      mediaUrl: 'https://cdn.example.com/showcase/gen-1.jpg',
+      mediaKind: 'image',
+      model: 'nano-banana-2',
+      title: 'Shared creation',
+      description: 'A polished showcase description.',
+      prompt: '',
+      body: 'Behind-the-scenes context for this frame.',
+      category: 'image',
+      postFormat: 'mixed',
+      saveCount: 12,
+      remixCount: 3,
+      shareCount: 7,
+      shareVisitCount: 18,
+      createdAt: '2026-03-28T10:00:00.000Z',
+      sourceKind: 'magicbooklet',
+      sourceTool: null,
+      creator: {
+        id: 'user-1',
+        username: 'creator-name',
+        name: 'Creator Name',
+        avatar: null,
+      },
+      resourceBundle: null,
+      canRemix: true,
+    });
+
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    expect(screen.getByTestId('media-detail-frame')).toBeInTheDocument();
+    expect(screen.getByTestId('post-body-panel')).toHaveTextContent('Behind-the-scenes context for this frame.');
+  });
+
   it('uses the source return context for the detail back link', async () => {
     render(await ShowcaseDetailPage({
       params: Promise.resolve({ id: 'post-1' }),
@@ -215,7 +254,85 @@ describe('Showcase detail page', () => {
       params: Promise.resolve({ id: 'post-text' }),
     }));
 
-    expect(screen.getAllByText(/open with tension/i)).toHaveLength(2);
+    expect(screen.getByTestId('text-detail-note')).toHaveTextContent('Open with tension.');
+    expect(screen.getAllByText(/open with tension/i)).toHaveLength(1);
+    expect(screen.queryByTestId('media-detail-frame')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('post-body-panel')).not.toBeInTheDocument();
     expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-text:false');
+  });
+
+  it('uses the top unlock card as a jump link, not a second unlock action', async () => {
+    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
+      id: 'post-text',
+      generation_id: null,
+      visibility: 'public',
+      category: 'text',
+      prompt: null,
+      source_kind: 'manual',
+    });
+    getPublicPostDetailMock.mockResolvedValueOnce({
+      id: 'post-text',
+      generationId: null,
+      visibility: 'public',
+      mediaUrl: null,
+      mediaKind: null,
+      model: 'manual',
+      title: 'Prompt tip',
+      description: '',
+      prompt: '',
+      body: 'Use fewer modifiers.',
+      category: 'text',
+      postFormat: 'text',
+      saveCount: 0,
+      remixCount: 0,
+      shareCount: 0,
+      shareVisitCount: 0,
+      createdAt: '2026-03-28T10:00:00.000Z',
+      sourceKind: 'manual',
+      sourceTool: null,
+      creator: {
+        id: 'user-1',
+        username: 'creator-name',
+        name: 'Creator Name',
+        avatar: null,
+      },
+      resourceBundle: {
+        id: 'bundle-1',
+        accessMode: 'free',
+        priceQuote: {
+          formatted: '$0.00',
+          note: null,
+        },
+        resourceKinds: ['prompt'],
+        lockedPreview: {
+          resourceKinds: ['prompt'],
+          attachmentPreviews: [],
+          hasPrompt: true,
+          hasNotes: false,
+          hasWorkflow: false,
+          hasRemix: false,
+          updatedAt: '2026-03-28T10:00:00.000Z',
+        },
+        viewerCanAccess: false,
+        viewerIsOwner: false,
+        salesCount: 0,
+        resources: null,
+        title: 'Prompt tip',
+        summary: '',
+        previewText: '',
+        priceUsdCents: 0,
+        status: 'published',
+      },
+      canRemix: false,
+    });
+
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-text' }),
+    }));
+
+    const unlockSummary = screen.getByTestId('unlock-summary-link');
+    expect(within(unlockSummary).getByText(/free unlock available/i)).toBeInTheDocument();
+    expect(within(unlockSummary).getByText(/view unlock details/i)).toBeInTheDocument();
+    expect(within(unlockSummary).queryByText(/open free unlock/i)).not.toBeInTheDocument();
   });
 });

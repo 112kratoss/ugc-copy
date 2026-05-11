@@ -107,4 +107,49 @@ describe('MediaDetailsPreviewModal', () => {
     expect(await screen.findByText('No prompt available')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /copy prompt/i })).toBeNull();
   });
+
+  it('renders input media previews with labels', async () => {
+    render(
+      <MediaDetailsPreviewModal
+        isOpen
+        onClose={() => undefined}
+        mediaType="image"
+        src="https://example.com/output.jpg"
+        alt="Output"
+        title="Input-backed preview"
+        prompt="Prompt"
+        inputMedia={[
+          {
+            id: 'input-image-1',
+            generationId: 'gen-1',
+            mediaType: 'image',
+            role: 'reference_image',
+            label: 'Hero product',
+            url: 'https://example.com/hero.png',
+            storagePath: 'generation_inputs/user-1/gen-1/hero.png',
+            sourceGenerationId: null,
+            sortOrder: 0,
+            metadata: {},
+          },
+          {
+            id: 'input-audio-1',
+            generationId: 'gen-1',
+            mediaType: 'audio',
+            role: 'reference_audio',
+            label: 'Voice timing',
+            url: 'https://example.com/audio.mp3',
+            storagePath: 'generation_inputs/user-1/gen-1/audio.mp3',
+            sourceGenerationId: null,
+            sortOrder: 1,
+            metadata: {},
+          },
+        ]}
+      />
+    );
+
+    expect(await screen.findByText('Inputs used')).toBeInTheDocument();
+    expect(screen.getByAltText('Hero product')).toBeInTheDocument();
+    expect(screen.getByText('Voice timing')).toBeInTheDocument();
+    expect(document.querySelectorAll('audio')).toHaveLength(1);
+  });
 });

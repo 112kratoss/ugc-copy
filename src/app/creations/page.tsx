@@ -17,6 +17,7 @@ import {
     type CreationWorkspacePublishBadge,
 } from '@/lib/creation-workspace';
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
+import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import type { ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
@@ -27,6 +28,7 @@ interface Generation {
     id: string;
     output_url: string | null;
     output_urls?: string[] | null;
+    input_media?: GenerationInputMediaItem[] | null;
     status: string;
     created_at: string;
     completed_at?: string | null;
@@ -1414,6 +1416,7 @@ export default function CreationsPage() {
                 alt={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
                 title={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
                 prompt={previewGen?.prompt ?? ''}
+                inputMedia={previewGen?.input_media ?? []}
                 actions={previewGen ? (
                     <>
                         {renderShareAction(previewGen, true)}

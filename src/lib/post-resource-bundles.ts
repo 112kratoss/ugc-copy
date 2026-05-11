@@ -6,7 +6,7 @@ export type PostResourceBundleStatus = 'draft' | 'published';
 export type PostResourceKind = 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type MarketplaceResourceFilter = 'all' | 'free' | 'paid';
 export type MarketplaceResourceKindFilter = 'all' | PostResourceKind;
-export type MarketplaceResourceSort = 'recent' | 'top-sales';
+export type MarketplaceResourceSort = 'recent' | 'top-sales' | 'price-low' | 'price-high';
 export type MarketplaceCheckoutCurrency = 'INR' | 'USD';
 
 export type PostResourceAttachmentKind = 'link' | 'file';
@@ -66,6 +66,10 @@ export interface PostResourceBundleSummary {
   resourceKinds: PostResourceKind[];
 }
 
+export interface PostResourceBundleValidationOptions {
+  ownerUserId?: string | null;
+}
+
 export interface MarketplacePriceQuote {
   currency: MarketplaceCheckoutCurrency;
   amountSubunits: number;
@@ -108,7 +112,7 @@ export function normalizeMarketplaceResourceFilter(
 export function normalizeMarketplaceResourceSort(
   value: string | null | undefined
 ): MarketplaceResourceSort {
-  return value === 'top-sales' ? 'top-sales' : 'recent';
+  return value === 'top-sales' || value === 'price-low' || value === 'price-high' ? value : 'recent';
 }
 
 export function isPostResourceKind(value: string | null | undefined): value is PostResourceKind {
@@ -139,6 +143,19 @@ export function getBundleAccessLabel(
   }
 
   return `${formatUsdCents(priceUsdCents)} unlock`;
+}
+
+export function formatUnlockCountLabel(
+  accessMode: PersistedPostResourceBundleAccessMode,
+  count: number
+): string {
+  const normalizedCount = Math.max(0, Math.round(count));
+
+  if (accessMode === 'free') {
+    return `${normalizedCount} opened`;
+  }
+
+  return `${normalizedCount} sold`;
 }
 
 export function getPostResourceKinds(
@@ -219,6 +236,97 @@ export function normalizePostResourceAttachments(value: unknown): PostResourceAt
       } satisfies PostResourceAttachment;
     })
     .filter((item): item is PostResourceAttachment => item !== null);
+}
+
+export function isSafePostResourceUrl(value: string | null | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function isSafePostResourceStoragePath(value: string | null | undefined, ownerUserId?: string | null): boolean {
+  const normalizedPath = value?.trim().replace(/^\/+/, '');
+  if (!normalizedPath || normalizedPath.includes('\\')) {
+    return false;
+  }
+
+  const segments = normalizedPath.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    return false;
+  }
+
+  return ownerUserId ? normalizedPath.startsWith(`${ownerUserId}/`) : true;
+}
+
+export function validatePostResourceBundleInput(
+  bundle: unknown,
+  options: PostResourceBundleValidationOptions = {}
+): string | null {
+  if (bundle != null && typeof bundle !== 'object') {
+    return 'Invalid unlock payload.';
+  }
+
+  const typedBundle = bundle as PostResourceBundleInput | null | undefined;
+  const accessMode = typedBundle?.accessMode ?? 'none';
+
+  if (!isPostResourceBundleAccessMode(accessMode)) {
+    return 'Choose whether the unlock should be free or paid.';
+  }
+
+  if (accessMode === 'none') {
+    return null;
+  }
+
+  const priceUsdCents = Number.isFinite(typedBundle?.priceUsdCents)
+    ? Math.round(typedBundle?.priceUsdCents ?? 0)
+    : 0;
+
+  if (accessMode === 'paid' && priceUsdCents < 100) {
+    return 'Paid unlocks must be priced at $1.00 or above.';
+  }
+
+  const resources = typedBundle?.resources ?? {};
+  const promptText = resources.promptText?.trim() ?? '';
+  const notesMarkdown = resources.notesMarkdown?.trim() ?? '';
+  const workflowShareUrl = resources.workflowShareUrl?.trim() ?? '';
+  const attachments = normalizePostResourceAttachments(resources.attachments);
+
+  if (workflowShareUrl && !isSafePostResourceUrl(workflowShareUrl)) {
+    return 'Workflow links must start with http:// or https://.';
+  }
+
+  for (const attachment of attachments) {
+    if ((attachment.kind ?? 'link') === 'file') {
+      if (!isSafePostResourceStoragePath(attachment.storagePath, options.ownerUserId)) {
+        return 'Uploaded unlock files must belong to the creator publishing this post.';
+      }
+    } else if (!isSafePostResourceUrl(attachment.url ?? null)) {
+      return 'Unlock links must start with http:// or https://.';
+    }
+  }
+
+  const hasResourceContent = Boolean(
+    promptText ||
+    notesMarkdown ||
+    workflowShareUrl ||
+    resources.workflowSnapshot ||
+    attachments.length > 0 ||
+    resources.allowRemix
+  );
+
+  if (!hasResourceContent) {
+    return 'Add content for at least one unlock item before publishing.';
+  }
+
+  return null;
 }
 
 export function buildPostResourceBundleLockedPreview(

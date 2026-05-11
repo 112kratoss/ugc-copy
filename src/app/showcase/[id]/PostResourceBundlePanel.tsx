@@ -10,6 +10,7 @@ import {
   Link2,
   LockKeyhole,
   Loader2,
+  ShieldCheck,
   ShoppingCart,
   Sparkles,
 } from 'lucide-react';
@@ -17,6 +18,7 @@ import {
 import { useAuth } from '@/app/components/AuthProvider';
 import {
   describePostResourceKinds,
+  formatUnlockCountLabel,
   getPostResourceKindLabel,
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
@@ -105,6 +107,14 @@ export default function PostResourceBundlePanel({
       updatedAt: null,
     }
   ), [lockedPreview, resourceKinds]);
+  const isPromptOnlyUnlock =
+    preview.resourceKinds.length === 1 &&
+    preview.resourceKinds[0] === 'prompt' &&
+    preview.hasPrompt &&
+    !preview.hasWorkflow &&
+    !preview.hasNotes &&
+    !preview.hasRemix &&
+    preview.attachmentPreviews.length === 0;
   const accessLabel = useMemo(() => {
     if (viewerIsOwner) {
       return 'You own this unlock.';
@@ -310,6 +320,9 @@ export default function PostResourceBundlePanel({
         year: 'numeric',
       })
     : null;
+  const includedResourceLabel = preview.resourceKinds.length > 0
+    ? preview.resourceKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ')
+    : 'Reusable resources';
 
   const formatFileSize = (sizeBytes: number | null | undefined) => {
     if (!sizeBytes) {
@@ -370,7 +383,7 @@ export default function PostResourceBundlePanel({
         </div>
 
         <div className="mt-4 flex flex-wrap gap-3 text-xs text-zinc-400">
-          <span>{salesCount} sold</span>
+          <span>{formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}</span>
           {priceNote ? <span>{priceNote}</span> : null}
           <span>
             {hasAccess || viewerIsOwner
@@ -404,67 +417,124 @@ export default function PostResourceBundlePanel({
         ) : null}
       </div>
 
+      <div className="mt-5 rounded-[24px] border border-sky-300/12 bg-sky-500/[0.06] p-5">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
+          <ShieldCheck className="h-4 w-4" />
+          Buyer trust
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included after unlock</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-200">{includedResourceLabel}</p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Access</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-200">
+              {isFree ? 'Instant access after login.' : 'Secure Razorpay checkout with instant access after payment.'}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Terms</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-300">
+              Digital unlocks are final sale. Use for personal or commercial creation; do not resell, redistribute, or claim the raw bundle as your own.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Proof</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-300">
+              {formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}
+              {formattedUpdatedAt ? ` · Updated ${formattedUpdatedAt}` : ''}
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className="mt-5 rounded-[24px] border border-white/8 bg-black/30 p-5">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
           {hasAccess || viewerIsOwner ? <FileText className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
           {hasAccess || viewerIsOwner ? 'Included resources' : 'Preview before access'}
         </div>
-        <p className="mt-3 text-sm leading-7 text-zinc-400">
-          Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {preview.resourceKinds.length > 0 ? preview.resourceKinds.map((kind) => (
-                <span
-                  key={kind}
-                  className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-50"
-                >
-                  {getPostResourceKindLabel(kind)}
+        {isPromptOnlyUnlock ? (
+          <>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-50">
+                Prompt
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-sm font-medium text-zinc-200">
+                {viewerIsOwner ? 'Owner access' : hasAccess ? 'Unlocked' : 'Locked'}
+              </span>
+              {formattedUpdatedAt ? (
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-sm text-zinc-400">
+                  Updated {formattedUpdatedAt}
                 </span>
-              )) : (
-                <span className="text-sm text-zinc-400">Reusable unlock metadata</span>
-              )}
+              ) : null}
             </div>
-          </div>
-          <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Locked until access</div>
-            <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
-              {preview.hasPrompt ? <div>Prompt text</div> : null}
-              {preview.hasWorkflow ? <div>Workflow link or snapshot</div> : null}
-              {preview.hasNotes ? <div>Notes or guide</div> : null}
-              {preview.hasRemix ? <div>Remix access</div> : null}
-              {preview.attachmentPreviews.length > 0 ? <div>{preview.attachmentPreviews.length} file/link attachment{preview.attachmentPreviews.length === 1 ? '' : 's'}</div> : null}
-              {formattedUpdatedAt ? <div className="text-zinc-500">Updated {formattedUpdatedAt}</div> : null}
+            <p className="mt-3 text-sm leading-7 text-zinc-400">
+              {hasAccess || viewerIsOwner
+                ? 'The prompt is available below.'
+                : 'The prompt text stays locked until this unlock is opened.'}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-3 text-sm leading-7 text-zinc-400">
+              Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {preview.resourceKinds.length > 0 ? preview.resourceKinds.map((kind) => (
+                    <span
+                      key={kind}
+                      className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-50"
+                    >
+                      {getPostResourceKindLabel(kind)}
+                    </span>
+                  )) : (
+                    <span className="text-sm text-zinc-400">Reusable unlock metadata</span>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Locked until access</div>
+                <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
+                  {preview.hasPrompt ? <div>Prompt text</div> : null}
+                  {preview.hasWorkflow ? <div>Workflow link or snapshot</div> : null}
+                  {preview.hasNotes ? <div>Notes or guide</div> : null}
+                  {preview.hasRemix ? <div>Remix access</div> : null}
+                  {preview.attachmentPreviews.length > 0 ? <div>{preview.attachmentPreviews.length} file/link attachment{preview.attachmentPreviews.length === 1 ? '' : 's'}</div> : null}
+                  {formattedUpdatedAt ? <div className="text-zinc-500">Updated {formattedUpdatedAt}</div> : null}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {preview.attachmentPreviews.length > 0 ? (
-          <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Attachment preview</div>
-            <div className="mt-3 space-y-2">
-              {preview.attachmentPreviews.map((attachment, index) => {
-                const meta = [
-                  attachment.kind === 'file' ? 'File' : 'Link',
-                  attachment.contentType,
-                  formatFileSize(attachment.sizeBytes),
-                ].filter(Boolean).join(' · ');
+            {preview.attachmentPreviews.length > 0 ? (
+              <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Attachment preview</div>
+                <div className="mt-3 space-y-2">
+                  {preview.attachmentPreviews.map((attachment, index) => {
+                    const meta = [
+                      attachment.kind === 'file' ? 'File' : 'Link',
+                      attachment.contentType,
+                      formatFileSize(attachment.sizeBytes),
+                    ].filter(Boolean).join(' · ');
 
-                return (
-                  <div
-                    key={`${attachment.label}-${index}`}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/25 px-3 py-2"
-                  >
-                    <span className="min-w-0 truncate text-sm font-medium text-zinc-100">{attachment.label}</span>
-                    {meta ? <span className="shrink-0 text-xs text-zinc-500">{meta}</span> : null}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
+                    return (
+                      <div
+                        key={`${attachment.label}-${index}`}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/25 px-3 py-2"
+                      >
+                        <span className="min-w-0 truncate text-sm font-medium text-zinc-100">{attachment.label}</span>
+                        {meta ? <span className="shrink-0 text-xs text-zinc-500">{meta}</span> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
       {hasAccess || viewerIsOwner ? (
@@ -485,6 +555,11 @@ export default function PostResourceBundlePanel({
               <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
                 {resources.promptText}
               </pre>
+              {viewerIsOwner ? (
+                <p className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-50/85">
+                  Owner preview. Buyers must unlock before seeing this.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -571,7 +646,9 @@ export default function PostResourceBundlePanel({
         </div>
       ) : (
         <div className="mt-6 rounded-[24px] border border-white/8 bg-black/30 p-5 text-sm leading-7 text-zinc-300">
-          The public post stays visible. Prompt text, workflow links, notes, files, and optional remix access reveal here after unlock.
+          {isPromptOnlyUnlock
+            ? 'The prompt appears here after this unlock is opened.'
+            : 'The public post stays visible. Prompt text, workflow links, notes, files, and optional remix access reveal here after unlock.'}
         </div>
       )}
     </div>

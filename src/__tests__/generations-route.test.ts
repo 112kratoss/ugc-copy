@@ -27,6 +27,18 @@ let linkedPostsState: Array<{
   visibility: 'public' | 'unlisted' | 'private';
   archived_at: string | null;
 }> = [];
+let inputMediaState: Array<{
+  id: string;
+  generation_id: string;
+  user_id: string;
+  media_type: 'image' | 'video' | 'audio';
+  role: string;
+  label: string | null;
+  storage_path: string;
+  source_generation_id: string | null;
+  sort_order: number;
+  metadata: Record<string, unknown> | null;
+}> = [];
 const syncGenerationStatusesMock = vi.fn(async (_params?: { generationIds: string[] }) => undefined);
 
 function createSupabaseClientMock() {
@@ -132,6 +144,56 @@ vi.mock('@/lib/generation-services', () => ({
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
+  createServiceClient: () => ({
+    from(table: string) {
+      if (table === 'generation_input_media') {
+        return {
+          select() {
+            return {
+              in(_column: string, values: string[]) {
+                return {
+                  order() {
+                    return {
+                      data: inputMediaState.filter((item) => values.includes(item.generation_id)),
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'generations') {
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  async maybeSingle() {
+                    return { data: null, error: null };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      throw new Error(`Unexpected service table: ${table}`);
+    },
+    storage: {
+      from(bucket: string) {
+        return {
+          createSignedUrl: async (filePath: string) => ({
+            data: { signedUrl: `https://signed.example.com/${bucket}/${filePath}` },
+            error: null,
+          }),
+        };
+      },
+    },
+  }),
   buildMediaProxyUrl: (bucket: string, filePath: string) => `https://proxy.example.com/${bucket}/${filePath}`,
   getStoredMediaLocation: (outputUrl: string) => {
     const normalized = outputUrl.replace(/^\/+/, '');
@@ -185,6 +247,7 @@ describe('/api/generations route', () => {
       },
     ];
     linkedPostsState = [];
+    inputMediaState = [];
   });
 
   afterEach(() => {
@@ -222,6 +285,13 @@ describe('/api/generations route', () => {
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
     expect(data.generations[0].completed_at).toBeNull();
     expect(data.generations[0].workflow_settings).toBeUndefined();
+    expect(data.generations[0].input_media).toEqual([
+      expect.objectContaining({
+        label: 'Bottle',
+        role: 'reference_image',
+        url: 'https://signed.example.com/uploads/user-1/bottle.png',
+      }),
+    ]);
     expect(data.generations[0].paywallPrefill).toMatchObject({
       promptText: 'A creator-style product image with warm natural light.',
       allowRemix: true,
@@ -272,6 +342,46 @@ describe('/api/generations route', () => {
     expect(data.generations[0].output_urls).toEqual([
       'https://proxy.example.com/generated_images/user-1/grok-0.jpg',
       'https://proxy.example.com/generated_images/user-1/grok-1.jpg',
+    ]);
+    expect(data.generations[0].workflow_settings).toBeUndefined();
+  });
+
+  it('returns durable input media when snapshots exist', async () => {
+    inputMediaState = [
+      {
+        id: 'input-1',
+        generation_id: 'gen-1',
+        user_id: 'user-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Hero bottle',
+        storage_path: 'generation_inputs/user-1/gen-1/00-reference-image.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: { handle: '@hero' },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].input_media).toEqual([
+      expect.objectContaining({
+        id: 'input-1',
+        label: 'Hero bottle',
+        mediaType: 'image',
+        role: 'reference_image',
+        url: '/api/media?bucket=generation_inputs&path=user-1%2Fgen-1%2F00-reference-image.png',
+      }),
     ]);
     expect(data.generations[0].workflow_settings).toBeUndefined();
   });

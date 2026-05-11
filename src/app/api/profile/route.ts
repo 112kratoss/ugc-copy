@@ -7,6 +7,45 @@ import {
   type ProfileRow,
   validateProfileSubmission,
 } from '@/lib/profile-server';
+import {
+  buildFallbackUsername,
+  getAuthAvatarUrl,
+  getCreatorDisplayName,
+  type ProfileApiResponse,
+} from '@/lib/profile';
+
+function buildStarterProfileApiResponse(user: {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}): ProfileApiResponse {
+  const metadata = user.user_metadata ?? null;
+  const metadataName =
+    typeof metadata?.full_name === 'string'
+      ? metadata.full_name
+      : typeof metadata?.name === 'string'
+        ? metadata.name
+        : null;
+
+  return {
+    id: user.id,
+    username: null,
+    suggestedUsername: buildFallbackUsername(user.id),
+    displayName: getCreatorDisplayName({
+      displayName: metadataName,
+      email: user.email ?? null,
+    }),
+    bio: null,
+    avatarUrl: getAuthAvatarUrl(metadata),
+    coverUrl: null,
+    websiteUrl: null,
+    twitterHandle: null,
+    instagramHandle: null,
+    tiktokHandle: null,
+    location: null,
+    credits: null,
+  };
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,7 +72,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (!profile) {
-      return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
+      return NextResponse.json(buildStarterProfileApiResponse(user));
     }
 
     return NextResponse.json(buildProfileApiResponse(profile as ProfileRow, user.id));
@@ -65,21 +104,25 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(validation.body, { status: validation.status });
     }
 
+    const profileValues = {
+      id: user.id,
+      username: validation.payload.data.username ?? validation.existingUsername,
+      display_name: validation.payload.data.displayName,
+      bio: validation.payload.data.bio,
+      avatar_url: validation.payload.data.avatarUrl,
+      cover_url: validation.payload.data.coverUrl,
+      website_url: validation.payload.data.websiteUrl,
+      twitter_handle: validation.payload.data.twitterHandle,
+      instagram_handle: validation.payload.data.instagramHandle,
+      tiktok_handle: validation.payload.data.tiktokHandle,
+      location: validation.payload.data.location,
+    };
+
     const { data: updatedProfile, error: updateError } = await adminSupabase
       .from('profiles')
-      .update({
-        username: validation.payload.data.username ?? validation.existingUsername,
-        display_name: validation.payload.data.displayName,
-        bio: validation.payload.data.bio,
-        avatar_url: validation.payload.data.avatarUrl,
-        cover_url: validation.payload.data.coverUrl,
-        website_url: validation.payload.data.websiteUrl,
-        twitter_handle: validation.payload.data.twitterHandle,
-        instagram_handle: validation.payload.data.instagramHandle,
-        tiktok_handle: validation.payload.data.tiktokHandle,
-        location: validation.payload.data.location,
+      .upsert(profileValues, {
+        onConflict: 'id',
       })
-      .eq('id', user.id)
       .select(PROFILE_SELECT_FIELDS)
       .single();
 

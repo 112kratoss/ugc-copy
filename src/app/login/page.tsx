@@ -1,10 +1,31 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
+
+function getSafeRedirectPath(value: string | null, fallback = '/profile') {
+    if (!value) {
+        return fallback;
+    }
+
+    try {
+        const decoded = decodeURIComponent(value);
+        if (decoded.startsWith('/') && !decoded.startsWith('//') && !decoded.includes('\\')) {
+            return decoded;
+        }
+    } catch {
+        if (value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')) {
+            return value;
+        }
+    }
+
+    return fallback;
+}
+
+const PROFILE_SETUP_REDIRECT = '/profile?welcome=1';
 
 export default function LoginPage() {
     return (
@@ -21,7 +42,9 @@ export default function LoginPage() {
 function LoginContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const redirectTo = searchParams.get('redirect') || searchParams.get('returnUrl') || '/create';
+    const explicitRedirect = searchParams.get('redirect') || searchParams.get('returnUrl');
+    const redirectTo = getSafeRedirectPath(explicitRedirect, PROFILE_SETUP_REDIRECT);
+    const signupRedirectTo = PROFILE_SETUP_REDIRECT;
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -29,6 +52,23 @@ function LoginContent() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+    useEffect(() => {
+        let isActive = true;
+
+        supabase.auth.getSession().then(({ data }) => {
+            if (!isActive || !data.session) {
+                return;
+            }
+
+            router.replace(redirectTo);
+            router.refresh();
+        });
+
+        return () => {
+            isActive = false;
+        };
+    }, [redirectTo, router]);
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -43,15 +83,24 @@ function LoginContent() {
                     password,
                 });
                 if (error) throw error;
-                router.push(redirectTo);
+                router.replace(redirectTo);
+                router.refresh();
             } else {
-                const { error } = await supabase.auth.signUp({
+                const { data, error } = await supabase.auth.signUp({
                     email,
                     password,
+                    options: {
+                        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(signupRedirectTo)}`,
+                    },
                 });
                 if (error) throw error;
+                if (data.session) {
+                    router.replace(signupRedirectTo);
+                    router.refresh();
+                    return;
+                }
                 // Check if email confirmation is required based on project settings
-                setSuccessMessage('Check your email for the confirmation link, then log in.');
+                setSuccessMessage('Check your email for the confirmation link. It will open your creator profile setup automatically.');
                 setIsLogin(true); // Switch to login mode
                 setLoading(false); // Stop loading since we're just showing a message
                 return;
@@ -69,10 +118,11 @@ function LoginContent() {
         setError(null);
         setSuccessMessage(null);
         try {
+            const nextPath = isLogin ? redirectTo : signupRedirectTo;
             const { error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
-                redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectTo)}`,
+                    redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`,
                 },
             });
             if (error) throw error;

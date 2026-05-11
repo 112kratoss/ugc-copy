@@ -1,3 +1,5 @@
+import type { MarketplacePriceQuote } from '@/lib/post-resource-bundles';
+
 export const SHOWCASE_PAGE_SIZE = 12;
 
 export type ShowcaseCategory = 'all' | 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
@@ -32,6 +34,7 @@ export interface ShowcaseAssetSummary {
     title: string;
     accessMode: ShowcaseResourceAccessMode;
     priceUsdCents: number;
+    priceQuote?: MarketplacePriceQuote;
     previewText: string;
     allowRemix: boolean;
     salesCount?: number;

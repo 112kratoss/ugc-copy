@@ -177,6 +177,13 @@ export function isMissingPostSourceToolSlugColumnError(error: unknown): boolean 
   return code === '42703' && message.includes('source_tool_slug');
 }
 
+export function isMissingPostReviewStatusColumnError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return code === '42703' && message.includes('review_status');
+}
+
 export function isMissingMarketplaceSchemaError(error: unknown): boolean {
   const message = getErrorMessage(error);
   const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
@@ -204,7 +211,11 @@ export function isMissingPostResourceBundlesSchemaError(error: unknown): boolean
         message.includes('public.post_resource_bundle_purchases')
       )) ||
     message.includes("Could not find the table 'public.post_resource_bundles'") ||
-    message.includes('complete_post_resource_bundle_purchase')
+    message.includes('complete_post_resource_bundle_purchase') ||
+    message.includes('upsert_post_with_resource_bundle') ||
+    message.includes('update_post_with_resource_bundle') ||
+    message.includes('publish_generation_post_with_resource_bundle') ||
+    message.includes('list_marketplace_resource_bundles')
   );
 }
 

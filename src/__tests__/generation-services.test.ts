@@ -20,6 +20,7 @@ type GenerationRow = {
 function createSupabaseMock(initialRows: GenerationRow[] = []) {
   const generations = [...initialRows];
   const uploads: Array<{ bucket: string; filePath: string }> = [];
+  const inputMediaRows: Record<string, unknown>[] = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
 
   const supabase = {
@@ -37,6 +38,15 @@ function createSupabaseMock(initialRows: GenerationRow[] = []) {
       return { data: null, error: null };
     }),
     from: vi.fn((table: string) => {
+      if (table === 'generation_input_media') {
+        return {
+          async insert(record: Record<string, unknown>) {
+            inputMediaRows.push(record);
+            return { data: null, error: null };
+          },
+        };
+      }
+
       if (table !== 'generations') {
         throw new Error(`Unexpected table access: ${table}`);
       }
@@ -108,6 +118,16 @@ function createSupabaseMock(initialRows: GenerationRow[] = []) {
     }),
     storage: {
       from: vi.fn((bucket: string) => ({
+        download: vi.fn(async (filePath: string) => {
+          if (bucket === 'uploads') {
+            return {
+              data: new Blob([`stored:${filePath}`], { type: filePath.endsWith('.mp4') ? 'video/mp4' : 'image/png' }),
+              error: null,
+            };
+          }
+
+          return { data: null, error: { message: 'missing' } };
+        }),
         upload: vi.fn(async (filePath: string) => {
           uploads.push({ bucket, filePath });
           return { error: null };
@@ -120,6 +140,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = []) {
     supabase: supabase as unknown as SupabaseClient,
     generations,
     uploads,
+    inputMediaRows,
     rpcCalls,
   };
 }
@@ -269,6 +290,50 @@ describe('generation services', () => {
       }),
     ]);
     expect(String(generations[0].workflow_settings?.compiledPrompt)).toContain('@hero');
+  });
+
+  it('snapshots uploaded image inputs after creating the generation record', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-snapshot-1' } }),
+    } as Response);
+
+    const { supabase, uploads, inputMediaRows } = createSupabaseMock();
+    const result = await startImageGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Use @hero in a clean scene.',
+      model: 'nano-banana-2',
+      imageUrls: ['https://signed.example.com/hero.png'],
+      elements: [
+        {
+          id: 'element-1',
+          displayName: 'Hero product',
+          handle: '@hero',
+          storagePath: 'uploads/user-1/hero.png',
+          sourceGenerationId: null,
+        },
+      ],
+    });
+
+    expect(result.generationId).toBe('gen-1');
+    expect(uploads).toContainEqual({
+      bucket: 'generation_inputs',
+      filePath: 'user-1/gen-1/00-reference_image.png',
+    });
+    expect(inputMediaRows[0]).toMatchObject({
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: 'Hero product',
+      storage_path: 'generation_inputs/user-1/gen-1/00-reference_image.png',
+      metadata: expect.objectContaining({
+        handle: '@hero',
+      }),
+    });
   });
 
   it('uses GPT Image 2 text-to-image provider payload when no references are attached', async () => {

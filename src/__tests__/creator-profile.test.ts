@@ -39,6 +39,8 @@ type PostRow = {
   generation_id: string | null;
   source_kind: 'magicbooklet' | 'emptybooklet' | 'ugc_copy' | 'external' | 'manual';
   source_tool: string | null;
+  source_tool_slug?: string | null;
+  review_status?: 'visible' | 'flagged' | 'hidden' | null;
   user_id: string;
   visibility: 'public' | 'unlisted' | 'private';
   archived_at?: string | null;
@@ -86,6 +88,10 @@ function createServiceClientMock() {
                 filters[column] = value;
                 return this;
               },
+              neq(column: string, value: unknown) {
+                filters[`neq:${column}`] = value;
+                return this;
+              },
               is(column: string, value: unknown) {
                 filters[column] = value;
                 return this;
@@ -104,7 +110,9 @@ function createServiceClientMock() {
                 const rows = generationsState
                   .filter((row) =>
                     Object.entries(filters).every(([key, value]) =>
-                      key === 'archived_at' && value === null
+                      key.startsWith('neq:')
+                        ? ((row as Record<string, unknown>)[key.slice(4)] ?? null) !== value
+                        : key === 'archived_at' && value === null
                         ? ((row as Record<string, unknown>)[key] ?? null) === null
                         : (row as Record<string, unknown>)[key] === value
                     )
@@ -124,6 +132,10 @@ function createServiceClientMock() {
             return {
               eq(column: string, value: unknown) {
                 filters[column] = value;
+                return this;
+              },
+              neq(column: string, value: unknown) {
+                filters[`neq:${column}`] = value;
                 return this;
               },
               is(column: string, value: unknown) {
@@ -147,7 +159,9 @@ function createServiceClientMock() {
                 const rows = postsState
                   .filter((row) =>
                     Object.entries(filters).every(([key, value]) =>
-                      key === 'archived_at' && value === null
+                      key.startsWith('neq:')
+                        ? ((row as Record<string, unknown>)[key.slice(4)] ?? null) !== value
+                        : key === 'archived_at' && value === null
                         ? ((row as Record<string, unknown>)[key] ?? null) === null
                         : (row as Record<string, unknown>)[key] === value
                     )
@@ -267,6 +281,7 @@ describe('creator profile data loader', () => {
         generation_id: 'gen-1',
         source_kind: 'magicbooklet',
         source_tool: null,
+        review_status: 'visible',
         visibility: 'public',
       },
     ];
@@ -286,6 +301,17 @@ describe('creator profile data loader', () => {
     expect(data?.items).toHaveLength(1);
     expect(data?.items[0].creator.username).toBe('creator-name');
     expect(data?.stats.totalSaves).toBe(12);
+    expect(data?.pageInfo.hasMore).toBe(false);
+  });
+
+  it('hides posts that moderation has marked hidden', async () => {
+    postsState[0].review_status = 'hidden';
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const data = await getCreatorProfilePageData('Creator-Name');
+
+    expect(data).not.toBeNull();
+    expect(data?.items).toHaveLength(0);
   });
 
   it('falls back when the source tool slug column is not deployed yet', async () => {

@@ -4,12 +4,15 @@ import { getOwnerPostDetail } from '@/lib/owner-posts';
 import {
   getPostResourceKinds,
   isPostResourceBundleAccessMode,
+  validatePostResourceBundleInput,
   type PostResourceBundleInput,
   type PostResourceBundleResources,
 } from '@/lib/post-resource-bundles';
-import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
 import {
-  isMissingMarketplaceSchemaError,
+  getMarketplaceQualityErrorForPostBundle,
+  updatePostWithResourceBundleAtomically,
+} from '@/lib/post-resource-bundles-server';
+import {
   isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -40,6 +43,8 @@ type MutablePostRow = {
   source_kind: RawShowcaseSourceKind;
   archived_at: string | null;
   showcase_asset_path: string | null;
+  output_url: string | null;
+  review_status: 'visible' | 'flagged' | 'hidden' | null;
 };
 
 type BundleAuditRow = {
@@ -75,7 +80,7 @@ function normalizeVisibility(value: unknown): ShowcaseVisibility | null {
   return null;
 }
 
-function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | null; error: string | null } {
+function parseBundleInput(value: unknown, ownerUserId: string): { bundle: PostResourceBundleInput | null; error: string | null } {
   if (value == null) {
     return {
       bundle: null,
@@ -98,17 +103,12 @@ function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | n
     };
   }
 
-  if (bundle.accessMode === 'paid') {
-    const priceUsdCents = Number.isFinite(bundle.priceUsdCents)
-      ? Math.round(bundle.priceUsdCents ?? 0)
-      : 0;
-
-    if (priceUsdCents < 100) {
-      return {
-        bundle: null,
-        error: 'Paid unlocks must be priced at $1.00 or above.',
-      };
-    }
+  const validationError = validatePostResourceBundleInput(bundle, { ownerUserId });
+  if (validationError) {
+    return {
+      bundle: null,
+      error: validationError,
+    };
   }
 
   return {
@@ -117,52 +117,12 @@ function parseBundleInput(value: unknown): { bundle: PostResourceBundleInput | n
   };
 }
 
-async function downgradeAttachedListingToUnlisted(params: {
-  supabase: ReturnType<typeof createServiceClient>;
-  postId: string;
-  sellerUserId: string;
-}) {
-  const { supabase, postId, sellerUserId } = params;
-  const { error } = await supabase
-    .from('marketplace_assets')
-    .update({
-      status: 'unlisted',
-    })
-    .eq('post_id', postId)
-    .eq('seller_user_id', sellerUserId)
-    .eq('status', 'active');
-
-  if (error && !isMissingMarketplaceSchemaError(error)) {
-    throw error;
-  }
-}
-
-async function downgradePublishedBundleToDraft(params: {
-  supabase: ReturnType<typeof createServiceClient>;
-  postId: string;
-  ownerUserId: string;
-}) {
-  const { supabase, postId, ownerUserId } = params;
-  const { error } = await supabase
-    .from('post_resource_bundles')
-    .update({
-      status: 'draft',
-    })
-    .eq('post_id', postId)
-    .eq('owner_user_id', ownerUserId)
-    .eq('status', 'published');
-
-  if (error && !isMissingPostResourceBundlesSchemaError(error)) {
-    throw error;
-  }
-}
-
 async function loadOwnedPost(postId: string, userId: string): Promise<MutablePostRow | null> {
   const adminSupabase = createServiceClient();
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, title, description, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path'
+      'id, user_id, generation_id, visibility, title, description, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path, output_url, review_status'
     )
     .eq('id', postId)
     .eq('user_id', userId)
@@ -236,7 +196,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     };
 
     const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
-    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(body.resourceBundle);
+    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(body.resourceBundle, user.id);
     if (resourceBundleError) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
@@ -268,6 +228,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         : Object.prototype.hasOwnProperty.call(body, 'category') && isShowcaseItemCategory(body.category as string)
           ? body.category
           : post.category;
+    const nextTitle = Object.prototype.hasOwnProperty.call(body, 'title') ? normalizeText(body.title) : post.title;
 
     const updatePayload: Record<string, unknown> = {
       visibility: nextVisibility,
@@ -275,7 +236,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     };
 
     if (Object.prototype.hasOwnProperty.call(body, 'title')) {
-      updatePayload.title = normalizeText(body.title);
+      updatePayload.title = nextTitle;
     }
     if (Object.prototype.hasOwnProperty.call(body, 'description')) {
       updatePayload.description = normalizeText(body.description);
@@ -297,42 +258,33 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     }
 
     const adminSupabase = createServiceClient();
-    const { data: updatedPost, error: updateError } = await adminSupabase
-      .from('posts')
-      .update(updatePayload)
-      .eq('id', postId)
-      .eq('user_id', user.id)
-      .select('id, visibility')
-      .single();
+    const marketplaceQualityError = await getMarketplaceQualityErrorForPostBundle({
+      supabase: adminSupabase,
+      ownerUserId: user.id,
+      post: {
+        title: nextTitle,
+        body: nextBody,
+        visibility: nextVisibility,
+        archivedAt: post.archived_at,
+        reviewStatus: post.review_status ?? 'visible',
+        showcaseAssetPath: post.showcase_asset_path,
+        outputUrl: post.output_url,
+      },
+      bundle: hasResourceBundlePayload ? resourceBundle : null,
+    });
 
-    if (updateError || !updatedPost) {
-      console.error('Failed to update post:', updateError);
-      return NextResponse.json({ error: 'Failed to update post.' }, { status: 500 });
+    if (marketplaceQualityError) {
+      return NextResponse.json({ error: marketplaceQualityError }, { status: 400 });
     }
 
-    if (hasResourceBundlePayload) {
-      await savePostResourceBundle({
-        supabase: adminSupabase,
-        postId,
-        ownerUserId: user.id,
-        postTitle: normalizeText(updatePayload.title) ?? normalizeText(post.title),
-        postVisibility: updatedPost.visibility as ShowcaseVisibility,
-        bundle: resourceBundle,
-      });
-    }
-
-    if ((updatedPost.visibility as ShowcaseVisibility) !== 'public') {
-      await downgradePublishedBundleToDraft({
-        supabase: adminSupabase,
-        postId,
-        ownerUserId: user.id,
-      });
-      await downgradeAttachedListingToUnlisted({
-        supabase: adminSupabase,
-        postId,
-        sellerUserId: user.id,
-      });
-    }
+    const updatedPost = await updatePostWithResourceBundleAtomically({
+      supabase: adminSupabase,
+      postId,
+      ownerUserId: user.id,
+      patch: updatePayload,
+      hasBundlePayload: hasResourceBundlePayload,
+      bundle: resourceBundle,
+    });
 
     return NextResponse.json({
       success: true,
@@ -347,6 +299,12 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     });
   } catch (error) {
     console.error('Failed to update owner post:', error);
+    if (isMissingPostResourceBundlesSchemaError(error)) {
+      return NextResponse.json(
+        { error: 'Posts are working, but atomic unlock publishing is not enabled yet. Apply the latest Supabase migrations and try again.' },
+        { status: 500 }
+      );
+    }
     return NextResponse.json({ error: 'Failed to update post.' }, { status: 500 });
   }
 }

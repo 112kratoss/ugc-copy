@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AtSign, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus } from 'lucide-react';
+import { AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus } from 'lucide-react';
 
 import type { EditableCreatorProfile, ProfileFieldErrors, ProfileUpdatePayload } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
@@ -13,9 +13,12 @@ interface CreatorProfileCardProps {
   loadError: string | null;
   onProfileSaved?: (profile: EditableCreatorProfile) => void;
   isEmbedded?: boolean;
+  onboardingMode?: boolean;
 }
 
 const EMPTY_ERRORS: ProfileFieldErrors = {};
+const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_BIO_LENGTH = 280;
 
 function buildProfilePayload(
   form: EditableCreatorProfile,
@@ -41,6 +44,7 @@ export default function CreatorProfileCard({
   loadError,
   onProfileSaved,
   isEmbedded = false,
+  onboardingMode = false,
 }: CreatorProfileCardProps) {
   const [form, setForm] = useState<EditableCreatorProfile | null>(initialProfile);
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>(EMPTY_ERRORS);
@@ -53,9 +57,29 @@ export default function CreatorProfileCard({
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
 
+  const validateProfileImage = (file: File, field: 'avatarUrl' | 'coverUrl') => {
+    if (!file.type.startsWith('image/')) {
+      setFieldErrors((current) => ({
+        ...current,
+        [field]: 'Upload an image file.',
+      }));
+      return false;
+    }
+
+    if (file.size > MAX_PROFILE_IMAGE_BYTES) {
+      setFieldErrors((current) => ({
+        ...current,
+        [field]: 'Use an image smaller than 5MB.',
+      }));
+      return false;
+    }
+
+    return true;
+  };
+
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
+    if (file && validateProfileImage(file, 'avatarUrl')) {
       setAvatarFile(file);
       setAvatarPreview((current) => {
         if (current) {
@@ -70,7 +94,7 @@ export default function CreatorProfileCard({
 
   const handleCoverChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
+    if (file && validateProfileImage(file, 'coverUrl')) {
       setCoverFile(file);
       setCoverPreview((current) => {
         if (current) {
@@ -265,7 +289,7 @@ export default function CreatorProfileCard({
         return null;
       });
       setForm(nextProfile);
-      setSuccessMessage('Creator profile updated.');
+      setSuccessMessage(onboardingMode ? 'Creator profile saved. Your public profile is ready.' : 'Creator profile updated.');
       onProfileSaved?.(nextProfile);
     } catch (error) {
       await cleanupUploadedMedia();
@@ -302,7 +326,18 @@ export default function CreatorProfileCard({
     return null;
   }
 
-  const previewHref = form.username.trim().length > 0 ? `/creators/${form.username.trim().replace(/^@+/, '').toLowerCase()}` : null;
+  const normalizedUsername = form.username.trim().replace(/^@+/, '').toLowerCase();
+  const previewHref = normalizedUsername.length > 0 ? `/creators/${normalizedUsername}` : null;
+  const hasDisplayIdentity = Boolean(form.displayName.trim());
+  const hasProfileStory = Boolean(form.bio.trim());
+  const hasProfileMedia = Boolean(avatarPreview || coverPreview || form.avatarUrl || form.coverUrl);
+  const onboardingTasks = [
+    { label: 'Handle', done: Boolean(normalizedUsername) },
+    { label: 'Name', done: hasDisplayIdentity },
+    { label: 'Bio', done: hasProfileStory },
+    { label: 'Image', done: hasProfileMedia },
+  ];
+  const completedTaskCount = onboardingTasks.filter((task) => task.done).length;
 
   return (
     <section className="space-y-6">
@@ -340,7 +375,67 @@ export default function CreatorProfileCard({
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      {onboardingMode ? (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(300px,0.55fr)]">
+          <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/80">
+              <BadgeCheck className="h-4 w-4" />
+              Setup progress
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {onboardingTasks.map((task) => (
+                <span
+                  key={task.label}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
+                    task.done
+                      ? 'border-emerald-300/20 bg-emerald-500/10 text-emerald-50'
+                      : 'border-white/10 bg-white/[0.03] text-zinc-300'
+                  }`}
+                >
+                  <CheckCircle2 className={`h-3.5 w-3.5 ${task.done ? 'text-emerald-300' : 'text-zinc-500'}`} />
+                  {task.label}
+                </span>
+              ))}
+            </div>
+            <p className="mt-4 text-sm leading-7 text-zinc-400">
+              {completedTaskCount === onboardingTasks.length
+                ? 'Profile setup looks ready. Save it, then publish or share your first post.'
+                : 'Save the handle first. A name, short bio, and image make the public profile easier to trust.'}
+            </p>
+          </div>
+
+          <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(14,18,25,0.96),rgba(7,9,12,0.98))] p-5">
+            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Public preview</div>
+            <div className="mt-4 overflow-hidden rounded-[22px] border border-white/8 bg-black/35">
+              <div className="h-20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.28),transparent_42%),linear-gradient(135deg,rgba(16,185,129,0.16),rgba(59,130,246,0.1))]">
+                {(coverPreview || form.coverUrl) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={coverPreview || form.coverUrl} alt="" className="h-full w-full object-cover" />
+                ) : null}
+              </div>
+              <div className="px-4 pb-4">
+                <div className="-mt-7 h-14 w-14 overflow-hidden rounded-full border border-white/15 bg-zinc-950">
+                  {(avatarPreview || form.avatarUrl) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarPreview || form.avatarUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-zinc-500">
+                      <UserRound className="h-6 w-6" />
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3 text-sm font-semibold text-white">{form.displayName.trim() || 'Creator name'}</div>
+                <div className="mt-1 text-xs text-zinc-500">@{normalizedUsername || 'creator-name'}</div>
+                <p className="mt-3 line-clamp-2 text-xs leading-5 text-zinc-400">
+                  {form.bio.trim() || 'A short creator bio will appear here.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <form id="creator-profile-form" onSubmit={handleSubmit} className="space-y-6">
         {/* Profile Identity Section */}
         <div className="rounded-3xl border border-white/5 bg-zinc-900/40 p-6 backdrop-blur-md shadow-xl">
           <div className="mb-6 flex flex-col gap-1">
@@ -413,16 +508,24 @@ export default function CreatorProfileCard({
             <label className="block">
               <span className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                 <AtSign className="h-3.5 w-3.5" />
-                Username
+                Username <span className="text-sky-300">Required</span>
               </span>
               <input
                 type="text"
                 value={form.username || ''}
                 onChange={(event) => updateField('username', event.target.value)}
                 placeholder="creator-name"
+                required
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
                 autoComplete="off"
+                aria-invalid={Boolean(fieldErrors.username)}
               />
+              <p className="mt-2 text-xs leading-5 text-zinc-500">
+                {previewHref ? `Public URL: ${previewHref}` : 'Use 3-24 lowercase letters, numbers, or hyphens.'}
+              </p>
               {fieldErrors.username ? <p className="mt-2 text-xs text-red-300">{fieldErrors.username}</p> : null}
             </label>
 
@@ -463,8 +566,12 @@ export default function CreatorProfileCard({
                 onChange={(event) => updateField('bio', event.target.value)}
                 placeholder="What kind of UGC creator are you?"
                 rows={3}
+                maxLength={MAX_BIO_LENGTH}
                 className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
               />
+              <div className="mt-2 flex justify-end text-xs text-zinc-500">
+                {form.bio.length}/{MAX_BIO_LENGTH}
+              </div>
               {fieldErrors.bio ? <p className="mt-2 text-xs text-red-300">{fieldErrors.bio}</p> : null}
             </label>
           </div>
@@ -560,7 +667,7 @@ export default function CreatorProfileCard({
               {!formError && successMessage ? <p className="text-sm text-emerald-300">{successMessage}</p> : null}
               <button
                 type="submit"
-                disabled={isSaving}
+                disabled={isSaving || !normalizedUsername}
                 className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 px-8 py-3 text-sm font-semibold text-white shadow-[0_0_20px_-5px_rgba(168,85,247,0.5)] transition-all hover:scale-105 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
               >
                 {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

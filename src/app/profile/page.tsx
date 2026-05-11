@@ -1,23 +1,25 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft, ExternalLink, Sparkles, UserRound } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, CheckCircle2, ExternalLink, Sparkles, UserRound } from 'lucide-react';
 
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import ProfileShareButton from '@/app/components/ProfileShareButton';
 import { isE2EAuthBypassEnabled } from '@/lib/e2e-auth';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
-import { buildFallbackUsername, toEditableCreatorProfile } from '@/lib/profile';
+import { buildFallbackUsername, getAuthAvatarUrl, getCreatorDisplayName, toEditableCreatorProfile } from '@/lib/profile';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { buildProfileApiResponse, PROFILE_SELECT_FIELDS, type ProfileRow } from '@/lib/profile-server';
 
 function buildStarterProfile({
   userId,
   displayName,
+  avatarUrl,
   credits,
 }: {
   userId: string;
   displayName: string;
+  avatarUrl: string | null;
   credits: number | null;
 }): EditableCreatorProfile {
   return {
@@ -25,7 +27,7 @@ function buildStarterProfile({
     username: buildFallbackUsername(userId),
     displayName,
     bio: '',
-    avatarUrl: '',
+    avatarUrl: avatarUrl ?? '',
     coverUrl: '',
     websiteUrl: '',
     twitterHandle: '',
@@ -36,7 +38,16 @@ function buildStarterProfile({
   };
 }
 
-export default async function ProfilePage() {
+interface ProfilePageProps {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}
+
+function getParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function ProfilePage({ searchParams }: ProfilePageProps = {}) {
+  const resolvedSearchParams = searchParams ? await searchParams : {};
   const auth = await getServerAuthState();
 
   if (!auth.session?.user) {
@@ -54,7 +65,10 @@ export default async function ProfilePage() {
   const authDisplayName =
     typeof auth.session.user.user_metadata?.name === 'string'
       ? auth.session.user.user_metadata.name
-      : '';
+      : typeof auth.session.user.user_metadata?.full_name === 'string'
+        ? auth.session.user.user_metadata.full_name
+        : '';
+  const authAvatarUrl = getAuthAvatarUrl(auth.session.user.user_metadata);
   const initialProfile: EditableCreatorProfile | null = profile
     ? toEditableCreatorProfile(
         buildProfileApiResponse(profile as ProfileRow, auth.session.user.id) as ProfileApiResponse
@@ -62,7 +76,11 @@ export default async function ProfilePage() {
     : shouldUseStarterProfile
       ? buildStarterProfile({
           userId: auth.session.user.id,
-          displayName: authDisplayName,
+          displayName: getCreatorDisplayName({
+            displayName: authDisplayName,
+            email: auth.session.user.email ?? null,
+          }),
+          avatarUrl: authAvatarUrl,
           credits: auth.credits,
         })
       : null;
@@ -73,6 +91,24 @@ export default async function ProfilePage() {
     : null;
   const publicProfileDisplayName =
     profile?.display_name?.trim() || authDisplayName || publicProfileUsername;
+  const isFirstRunProfile = !publicProfileUsername || getParam(resolvedSearchParams.welcome) === '1';
+  const setupSteps = [
+    {
+      label: 'Claim handle',
+      done: Boolean(publicProfileUsername),
+      detail: publicProfileUsername ? `@${publicProfileUsername}` : 'Required for your public profile URL',
+    },
+    {
+      label: 'Add identity',
+      done: Boolean(initialProfile?.displayName?.trim() && initialProfile?.bio?.trim()),
+      detail: 'Name and short bio help buyers recognize your work',
+    },
+    {
+      label: 'Add proof',
+      done: Boolean(initialProfile?.avatarUrl || initialProfile?.coverUrl),
+      detail: 'Avatar or cover image makes the profile feel credible',
+    },
+  ];
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -131,10 +167,55 @@ export default async function ProfilePage() {
           </div>
         </div>
 
+        {isFirstRunProfile ? (
+          <section className="mb-8 rounded-[32px] border border-sky-400/15 bg-[linear-gradient(135deg,rgba(14,23,35,0.94),rgba(7,12,18,0.96))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.42)] sm:p-6">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="max-w-2xl">
+                <div className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-100">
+                  <BadgeCheck className="h-3.5 w-3.5" />
+                  Profile setup
+                </div>
+                <h2 className="mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                  Claim the identity your posts and unlocks will point to
+                </h2>
+                <p className="mt-3 max-w-xl text-sm leading-7 text-zinc-300">
+                  Start with the handle. The rest can improve over time, but the public URL should be ready before you share posts or sell unlocks.
+                </p>
+              </div>
+              <a
+                href="#creator-profile-form"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200"
+              >
+                Set up profile
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            </div>
+            <div className="mt-6 grid gap-3 md:grid-cols-3">
+              {setupSteps.map((step) => (
+                <div
+                  key={step.label}
+                  className={`rounded-[22px] border p-4 ${
+                    step.done
+                      ? 'border-emerald-300/20 bg-emerald-500/10'
+                      : 'border-white/8 bg-white/[0.03]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <CheckCircle2 className={`h-4 w-4 ${step.done ? 'text-emerald-300' : 'text-zinc-500'}`} />
+                    {step.label}
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-zinc-400">{step.detail}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <CreatorProfileCard
           initialProfile={initialProfile}
           isLoading={false}
           loadError={loadError}
+          onboardingMode={isFirstRunProfile}
         />
       </div>
     </div>

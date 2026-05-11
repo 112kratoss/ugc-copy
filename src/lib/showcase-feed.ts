@@ -17,6 +17,7 @@ import {
   createServiceClient,
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
+import { getPostResourceBundlePriceQuote } from '@/lib/post-resource-bundles-server';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -642,6 +643,7 @@ export async function getShowcaseFeedPage(options: {
   tool?: string | null;
   unlock?: ShowcaseUnlockFilter;
   resource?: ShowcaseResourceFilter;
+  countryCode?: string | null;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
   const adminSupabase = createServiceClient();
@@ -650,9 +652,10 @@ export async function getShowcaseFeedPage(options: {
   const unlockFilter = options.unlock ?? 'all';
   const resourceFilter = options.resource ?? 'all';
   const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
+  const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
 
-  if (!viewerUserId || baseFeed.items.length === 0) {
-    return baseFeed;
+  if (!viewerUserId || pricedFeed.items.length === 0) {
+    return pricedFeed;
   }
 
   let savedItems: Array<{ post_id?: string; generation_id?: string }> | null = null;
@@ -660,24 +663,24 @@ export async function getShowcaseFeedPage(options: {
     .from('post_saves')
     .select('post_id')
     .eq('user_id', viewerUserId)
-    .in('post_id', baseFeed.items.map((item) => item.id));
+    .in('post_id', pricedFeed.items.map((item) => item.id));
 
   if (error && isMissingPostsSchemaError(error)) {
     const legacySavedResult = await adminSupabase
       .from('showcase_saves')
       .select('generation_id')
       .eq('user_id', viewerUserId)
-      .in('generation_id', baseFeed.items.map((item) => item.generationId ?? item.id));
+      .in('generation_id', pricedFeed.items.map((item) => item.generationId ?? item.id));
 
     if (legacySavedResult.error) {
       console.error('Error fetching legacy showcase saved state for feed page:', legacySavedResult.error);
-      return baseFeed;
+      return pricedFeed;
     }
 
     savedItems = legacySavedResult.data as Array<{ generation_id: string }> | null;
   } else if (error) {
     console.error('Error fetching showcase saved state for feed page:', error);
-    return baseFeed;
+    return pricedFeed;
   } else {
     savedItems = postSavedItems as Array<{ post_id: string }> | null;
   }
@@ -687,7 +690,7 @@ export async function getShowcaseFeedPage(options: {
   );
   const remixEligibleBundleIds = Array.from(
     new Set(
-      baseFeed.items
+      pricedFeed.items
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
         .filter((bundleId): bundleId is string => Boolean(bundleId))
@@ -714,8 +717,8 @@ export async function getShowcaseFeedPage(options: {
   }
 
   return {
-    ...baseFeed,
-    items: baseFeed.items.map((item) => ({
+    ...pricedFeed,
+    items: pricedFeed.items.map((item) => ({
       ...item,
       isSaved: savedIdSet.has(item.id) || (item.generationId ? savedIdSet.has(item.generationId) : false),
       canRemix: item.canRemix || Boolean(
@@ -726,5 +729,40 @@ export async function getShowcaseFeedPage(options: {
         )
       ),
     })),
+  };
+}
+
+async function attachLocalizedAssetPrices(
+  feed: ShowcaseFeedPage,
+  countryCode?: string | null
+): Promise<ShowcaseFeedPage> {
+  const assets = feed.items
+    .map((item) => item.asset)
+    .filter((asset): asset is NonNullable<ShowcaseFeedItem['asset']> => Boolean(asset));
+
+  if (assets.length === 0) {
+    return feed;
+  }
+
+  const quoteByAssetId = new Map(
+    await Promise.all(
+      assets.map(async (asset) => [
+        asset.id,
+        await getPostResourceBundlePriceQuote(asset.priceUsdCents, countryCode),
+      ] as const)
+    )
+  );
+
+  return {
+    ...feed,
+    items: feed.items.map((item) => item.asset
+      ? {
+          ...item,
+          asset: {
+            ...item.asset,
+            priceQuote: quoteByAssetId.get(item.asset.id),
+          },
+        }
+      : item),
   };
 }

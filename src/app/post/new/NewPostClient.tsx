@@ -20,6 +20,7 @@ import {
 
 import { useAuth } from '@/app/components/AuthProvider';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { assessMarketplaceListingQuality } from '@/lib/marketplace-trust';
 import {
   formatUsdCents,
   getPostResourceKindLabel,
@@ -309,6 +310,26 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
   return selectedKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ');
 }
 
+function buildDefaultResourceSummary(selectedKinds: PostResourceKind[], mode: PostResourceBundleAccessMode): string {
+  if (mode === 'none') {
+    return '';
+  }
+
+  const kindSummary = selectedKinds.length > 0
+    ? getLockedSummary(selectedKinds).toLowerCase()
+    : 'reusable process';
+
+  return `Unlock the ${kindSummary} behind this public post.`;
+}
+
+function buildDefaultResourcePreview(selectedKinds: PostResourceKind[]): string {
+  if (selectedKinds.length === 0) {
+    return 'Includes reusable resources buyers can open after access.';
+  }
+
+  return `Includes ${getLockedSummary(selectedKinds).toLowerCase()} for reuse after access.`;
+}
+
 function getInitialResourceSelections(bundle: PostResourceBundleInput | null | undefined): Record<PostResourceKind, boolean> {
   const resources = bundle?.resources;
   return {
@@ -443,6 +464,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       ? initialResourceSelections
       : EMPTY_RESOURCE_SELECTIONS
   );
+  const [resourceSummary, setResourceSummary] = useState(initialBundle.summary ?? '');
+  const [resourcePreviewText, setResourcePreviewText] = useState(initialBundle.previewText ?? '');
   const [resourcePromptText, setResourcePromptText] = useState(initialBundle.resources?.promptText ?? '');
   const [resourceNotes, setResourceNotes] = useState(initialBundle.resources?.notesMarkdown ?? '');
   const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState(initialBundle.resources?.workflowShareUrl ?? '');
@@ -473,6 +496,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
+  const postSectionRef = useRef<HTMLDivElement | null>(null);
+  const storySectionRef = useRef<HTMLDivElement | null>(null);
+  const resourceSectionRef = useRef<HTMLDivElement | null>(null);
+  const publishSectionRef = useRef<HTMLDivElement | null>(null);
 
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   const inferredCategory = useMemo(() => inferCategory(file), [file]);
@@ -503,6 +530,114 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     (resourceSelections.files && attachments.length > 0) ||
     resourceSelections.remix
   );
+  const parsedResourcePriceUsd = Number.parseFloat(resourcePriceUsd.trim() || '0');
+  const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceUsd)
+    ? Math.round(parsedResourcePriceUsd * 100)
+    : 0;
+  const defaultResourceSummary = useMemo(
+    () => buildDefaultResourceSummary(selectedResourceKinds, resourceAccessMode),
+    [resourceAccessMode, selectedResourceKinds]
+  );
+  const defaultResourcePreview = useMemo(
+    () => buildDefaultResourcePreview(selectedResourceKinds),
+    [selectedResourceKinds]
+  );
+  const resourceBundleDraft = useMemo<PostResourceBundleInput | null>(() => {
+    if (resourceAccessMode === 'none') {
+      return null;
+    }
+
+    return {
+      accessMode: resourceAccessMode,
+      summary: resourceSummary.trim() || defaultResourceSummary,
+      previewText: resourcePreviewText.trim() || defaultResourcePreview,
+      priceUsdCents: resourceAccessMode === 'paid' ? resourcePriceUsdCents : 0,
+      resources: {
+        promptText: resourceSelections.prompt ? resourcePromptText.trim() || null : null,
+        notesMarkdown: resourceSelections.notes ? resourceNotes.trim() || null : null,
+        workflowShareUrl: resourceSelections.workflow ? resourceWorkflowUrl.trim() || null : null,
+        attachments: resourceSelections.files ? attachments : [],
+        allowRemix: resourceSelections.remix,
+      },
+    };
+  }, [
+    attachments,
+    defaultResourcePreview,
+    defaultResourceSummary,
+    resourceAccessMode,
+    resourceNotes,
+    resourcePreviewText,
+    resourcePriceUsdCents,
+    resourcePromptText,
+    resourceSelections,
+    resourceSummary,
+    resourceWorkflowUrl,
+  ]);
+  const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
+  const marketplaceAssessment = useMemo(() => (
+    resourceBundleDraft
+      ? assessMarketplaceListingQuality({
+          title: publicPostTitle,
+          summary: resourceBundleDraft.summary,
+          previewText: resourceBundleDraft.previewText,
+          accessMode: resourceBundleDraft.accessMode,
+          priceUsdCents: resourceBundleDraft.priceUsdCents,
+          resources: resourceBundleDraft.resources,
+          post: {
+            title: publicPostTitle,
+            body: trimmedBody,
+            visibility: effectiveVisibility,
+            archivedAt: initialPost?.archivedAt ?? null,
+            reviewStatus: 'visible',
+            hasMedia: hasMediaProof,
+          },
+          seller: {
+            name: 'Profile ready',
+          },
+        })
+      : { eligible: true, issues: [] }
+  ), [effectiveVisibility, hasMediaProof, initialPost?.archivedAt, publicPostTitle, resourceBundleDraft, trimmedBody]);
+  const completionChecklist = useMemo(() => [
+    {
+      label: 'Public proof',
+      complete: hasMediaProof || trimmedBody.length >= 24,
+      detail: hasMediaProof ? 'Media attached' : trimmedBody.length >= 24 ? 'Useful text proof' : 'Add media or a useful text post',
+    },
+    {
+      label: 'Public story',
+      complete: proofMode !== 'text' || trimmedBody.length > 0,
+      detail: trimmedBody ? 'Story included' : 'Write the visible post context',
+    },
+    {
+      label: 'Unlock contents',
+      complete: resourceAccessMode === 'none' || hasResourceContent,
+      detail: resourceAccessMode === 'none' ? 'No unlock selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add selected unlock content',
+    },
+    {
+      label: 'Marketplace preview',
+      complete: resourceAccessMode === 'none' || marketplaceAssessment.eligible,
+      detail: resourceAccessMode === 'none'
+        ? 'Standalone post'
+        : marketplaceAssessment.eligible
+          ? 'Ready for marketplace quality checks'
+          : marketplaceAssessment.issues[0]?.message ?? 'Improve the unlock preview',
+    },
+    {
+      label: 'Price and visibility',
+      complete: resourceAccessMode !== 'paid' || resourcePriceUsdCents >= 100,
+      detail: resourceAccessMode === 'paid' ? formatUsdCents(resourcePriceUsdCents) : effectiveVisibility,
+    },
+  ], [
+    effectiveVisibility,
+    hasMediaProof,
+    hasResourceContent,
+    marketplaceAssessment,
+    proofMode,
+    resourceAccessMode,
+    resourcePriceUsdCents,
+    selectedResourceKinds,
+    trimmedBody,
+  ]);
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
 
   useEffect(() => {
@@ -697,6 +832,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setError(null);
   };
 
+  const focusComposerSection = (section: 'post' | 'story' | 'resources' | 'publish') => {
+    const target = {
+      post: postSectionRef,
+      story: storySectionRef,
+      resources: resourceSectionRef,
+      publish: publishSectionRef,
+    }[section];
+
+    window.requestAnimationFrame(() => {
+      target.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      target.current?.focus({ preventScroll: true });
+    });
+  };
+
+  const stopWithError = (message: string, section: 'post' | 'story' | 'resources' | 'publish') => {
+    setError(message);
+    focusComposerSection(section);
+  };
+
   const updateResourceSelection = (kind: PostResourceKind) => {
     setResourceSelectionsTouched(true);
     setResourceSelections((current) => ({
@@ -800,65 +954,59 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (proofMode === 'media' && !hasMediaProof) {
-      setError(hasGeneratedProof ? 'We could not load the generated media. Try again from My Studio.' : 'Upload an image or video to start the post.');
+      stopWithError(hasGeneratedProof ? 'We could not load the generated media. Try again from My Studio.' : 'Upload an image or video to start the post.', 'post');
       return;
     }
 
     if (!trimmedBody && !hasMediaProof) {
-      setError('Add a story or media before publishing.');
+      stopWithError('Add a story or media before publishing.', 'story');
       return;
     }
 
     if (proofMode === 'text' && !trimmedBody) {
-      setError('Write the story before publishing a text post.');
+      stopWithError('Write the story before publishing a text post.', 'story');
       return;
     }
 
     if (file?.type.startsWith('audio/')) {
-      setError('Audio posts are not supported in the community feed yet.');
+      stopWithError('Audio posts are not supported in the community feed yet.', 'post');
       return;
     }
 
     if (file && !acceptsCategory(file, category)) {
-      setError('Choose a category that matches the file you uploaded.');
+      stopWithError('Choose a category that matches the file you uploaded.', 'post');
       return;
     }
 
     if (bodyCount > BODY_MAX_LENGTH) {
-      setError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`);
+      stopWithError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`, 'story');
       return;
     }
 
-    let resourceBundle: Record<string, unknown> | undefined;
+    let resourceBundle: PostResourceBundleInput | undefined;
     if (resourceAccessMode !== 'none') {
-      const parsedPrice = Number.parseFloat(resourcePriceUsd.trim() || '0');
-
       if (selectedResourceKinds.length === 0) {
-        setError('Choose at least one thing people will unlock.');
+        stopWithError('Choose at least one thing people will unlock.', 'resources');
         return;
       }
 
-      if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedPrice) || parsedPrice < 1)) {
-        setError('Paid unlocks must be priced at $1.00 or above.');
+      if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedResourcePriceUsd) || parsedResourcePriceUsd < 1)) {
+        stopWithError('Paid unlocks must be priced at $1.00 or above.', 'resources');
         return;
       }
 
       if (!hasResourceContent) {
-        setError('Add content for at least one selected unlock item before publishing.');
+        stopWithError('Add content for at least one selected unlock item before publishing.', 'resources');
         return;
       }
 
-      resourceBundle = {
-        accessMode: resourceAccessMode,
-        priceUsdCents: resourceAccessMode === 'paid' ? Math.round(parsedPrice * 100) : 0,
-        resources: {
-          promptText: resourceSelections.prompt ? resourcePromptText.trim() || null : null,
-          notesMarkdown: resourceSelections.notes ? resourceNotes.trim() || null : null,
-          workflowShareUrl: resourceSelections.workflow ? resourceWorkflowUrl.trim() || null : null,
-          attachments: resourceSelections.files ? attachments : [],
-          allowRemix: resourceSelections.remix,
-        },
-      };
+      if (!marketplaceAssessment.eligible) {
+        const firstIssue = marketplaceAssessment.issues[0];
+        stopWithError(`Improve this unlock before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
+        return;
+      }
+
+      resourceBundle = resourceBundleDraft ?? undefined;
     }
 
     try {
@@ -1089,7 +1237,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </div>
               ) : null}
 
-              <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.94),rgba(9,11,16,0.96))] p-5 sm:p-6">
+              <div
+                ref={postSectionRef}
+                tabIndex={-1}
+                className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.94),rgba(9,11,16,0.96))] p-5 outline-none sm:p-6"
+              >
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/75">Step 1</div>
@@ -1421,7 +1573,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 ) : null}
               </div>
 
-              <div className="rounded-[28px] border border-white/8 bg-black/20 p-5">
+              <div
+                ref={storySectionRef}
+                tabIndex={-1}
+                className="rounded-[28px] border border-white/8 bg-black/20 p-5 outline-none"
+              >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 2</div>
@@ -1558,7 +1714,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 )}
               </div>
 
-              <div id="resources" className="rounded-[28px] border border-emerald-500/15 bg-emerald-500/5 p-5">
+              <div
+                id="resources"
+                ref={resourceSectionRef}
+                tabIndex={-1}
+                className="rounded-[28px] border border-emerald-500/15 bg-emerald-500/5 p-5 outline-none"
+              >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Step 3</div>
@@ -1642,6 +1803,39 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           </button>
                         );
                       })}
+                    </div>
+
+                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Marketplace preview</div>
+                      <p className="mt-2 text-sm leading-6 text-zinc-400">
+                        This is the buyer-facing value statement shown before the locked prompt, workflow, files, notes, or remix access opens.
+                      </p>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Summary</span>
+                          <input
+                            value={resourceSummary}
+                            onChange={(event) => {
+                              setResourceSummary(event.target.value);
+                              resetFeedback();
+                            }}
+                            placeholder={defaultResourceSummary}
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Preview text</span>
+                          <input
+                            value={resourcePreviewText}
+                            onChange={(event) => {
+                              setResourcePreviewText(event.target.value);
+                              resetFeedback();
+                            }}
+                            placeholder={defaultResourcePreview}
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
+                          />
+                        </label>
+                      </div>
                     </div>
 
                     <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
@@ -1758,7 +1952,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           <div>
                             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Files / links</div>
                             <p className="mt-1 text-sm leading-6 text-zinc-400">
-                              Add gated workflow files or labeled links people should open after unlocking. Use this for workflow files, docs, presets, references, or source folders.
+                              Add gated workflow files or labeled links people should open after unlocking. Resource file uploads must be 50MB or smaller.
                             </p>
                           </div>
                           <button
@@ -1916,7 +2110,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </div>
               ) : null}
 
-              <div className="rounded-[28px] border border-white/8 bg-zinc-950/75 p-5">
+              <div
+                ref={publishSectionRef}
+                tabIndex={-1}
+                className="rounded-[28px] border border-white/8 bg-zinc-950/75 p-5 outline-none"
+              >
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 4</div>
                 <div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="max-w-xl">
@@ -2067,6 +2265,30 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           </section>
 
           <aside className="space-y-5">
+            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Publish checklist</div>
+              <div className="mt-4 space-y-3">
+                {completionChecklist.map((item) => (
+                  <div key={item.label} className="flex items-start gap-3 rounded-2xl border border-white/8 bg-black/25 p-3">
+                    <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
+                      item.complete
+                        ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-100'
+                        : 'border-white/10 bg-white/[0.04] text-zinc-500'
+                    }`}>
+                      {item.complete ? <Check className="h-4 w-4" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-white">{item.label}</div>
+                      <p className="mt-1 text-xs leading-5 text-zinc-400">{item.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-xs leading-5 text-zinc-500">
+                Creator profile identity is verified again on publish before marketplace listing.
+              </p>
+            </div>
+
             <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
               <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Fast path</div>
               <div className="mt-4 space-y-4">

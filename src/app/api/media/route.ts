@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
         const headers = new Headers();
         headers.set(
             'Content-Type',
-            data.type || (bucket === 'generated_images' ? 'image/jpeg' : bucket === 'generated_audio' ? 'audio/mpeg' : 'video/mp4')
+            data.type || (bucket === 'generated_images' ? 'image/jpeg' : bucket === 'generated_audio' ? 'audio/mpeg' : bucket === 'generation_inputs' ? 'application/octet-stream' : 'video/mp4')
         );
         headers.set('Content-Length', String(data.size));
         headers.set('Cache-Control', 'private, max-age=60');

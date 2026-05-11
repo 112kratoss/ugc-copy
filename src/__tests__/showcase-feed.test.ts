@@ -385,6 +385,12 @@ describe('showcase feed', () => {
       title: 'Hero workflow',
       accessMode: 'paid',
       priceUsdCents: 1900,
+      priceQuote: {
+        currency: 'USD',
+        amountSubunits: 1900,
+        formatted: '$19.00',
+        note: null,
+      },
       previewText: 'Unlock the exact prompt stack.',
       allowRemix: true,
     });

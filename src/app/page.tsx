@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { ArrowRight } from 'lucide-react';
 
 import { AuthProvider } from '@/app/components/AuthProvider';
@@ -67,14 +68,25 @@ const LATEST_MODELS = [
   },
 ] as const;
 
+async function getOptionalRequestCountryCode() {
+  try {
+    const headerStore = await headers();
+    return headerStore.get('x-vercel-ip-country');
+  } catch {
+    return null;
+  }
+}
+
 export default async function Home() {
   const auth = await getServerAuthState();
+  const countryCode = await getOptionalRequestCountryCode();
   const showcaseFeed = await getShowcaseFeedPage({
     category: 'all',
     sort: 'top-saves',
     offset: 0,
     limit: 12,
     viewerUserId: auth.session?.user?.id ?? null,
+    countryCode,
   });
   const mediaFeedItems = showcaseFeed.items.filter((item) => item.mediaUrl);
   const previewByTool = await loadCreatorToolPreviewMap({

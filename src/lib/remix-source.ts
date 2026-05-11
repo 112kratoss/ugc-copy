@@ -1,8 +1,9 @@
 import type { ImageElementDescriptor } from '@/lib/image-elements';
+import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 
 export type RemixResultMediaType = 'image' | 'video';
-export type RemixAssetKind = 'image' | 'video';
+export type RemixAssetKind = 'image' | 'video' | 'audio';
 
 export interface RemixMediaAssetDescriptor {
   kind: RemixAssetKind;
@@ -48,12 +49,15 @@ export interface RemixSourceBundle {
       startFrame: RemixResolvedAsset | null;
       endFrame: RemixResolvedAsset | null;
       elements: RemixResolvedImageElement[];
+      referenceVideos?: RemixResolvedAsset[];
+      referenceAudios?: RemixResolvedAsset[];
     };
     motion?: {
       characterImage: RemixResolvedAsset | null;
       referenceVideo: RemixResolvedAsset | null;
     };
   };
+  inputMedia?: GenerationInputMediaItem[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];
 }
@@ -67,7 +71,13 @@ export function normalizeRemixMediaAssetDescriptor(
   }
 
   const typedValue = value as Partial<RemixMediaAssetDescriptor>;
-  const kind = typedValue.kind === 'video' ? 'video' : typedValue.kind === 'image' ? 'image' : null;
+  const kind = typedValue.kind === 'audio'
+    ? 'audio'
+    : typedValue.kind === 'video'
+      ? 'video'
+      : typedValue.kind === 'image'
+        ? 'image'
+        : null;
   if (!kind || (expectedKind && kind !== expectedKind)) {
     return null;
   }
@@ -80,4 +90,3 @@ export function normalizeRemixMediaAssetDescriptor(
       typeof typedValue.sourceGenerationId === 'string' ? typedValue.sourceGenerationId : null,
   };
 }
-

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
@@ -59,6 +60,7 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
 export default async function ShowcasePage({ searchParams }: ShowcasePageProps) {
     const resolvedSearchParams = searchParams ? await searchParams : {};
     const auth = await getServerAuthState();
+    const headerStore = await headers();
     const category = normalizeShowcaseCategory(getFirstValue(resolvedSearchParams.category));
     const sort = normalizeShowcaseSort(getFirstValue(resolvedSearchParams.sort));
     const tool = getFirstValue(resolvedSearchParams.tool) ?? null;
@@ -79,6 +81,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         tool,
         unlock,
         resource,
+        countryCode: headerStore.get('x-vercel-ip-country'),
     });
 
     return (
