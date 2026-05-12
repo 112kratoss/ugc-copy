@@ -654,8 +654,16 @@ export async function getShowcaseFeedPage(options: {
   const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
   const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
 
-  if (!viewerUserId || pricedFeed.items.length === 0) {
-    return pricedFeed;
+  return attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
+}
+
+async function attachViewerStateToFeed(
+  feed: ShowcaseFeedPage,
+  viewerUserId: string | null,
+  adminSupabase: ReturnType<typeof createServiceClient>
+): Promise<ShowcaseFeedPage> {
+  if (!viewerUserId || feed.items.length === 0) {
+    return feed;
   }
 
   let savedItems: Array<{ post_id?: string; generation_id?: string }> | null = null;
@@ -663,24 +671,24 @@ export async function getShowcaseFeedPage(options: {
     .from('post_saves')
     .select('post_id')
     .eq('user_id', viewerUserId)
-    .in('post_id', pricedFeed.items.map((item) => item.id));
+    .in('post_id', feed.items.map((item) => item.id));
 
   if (error && isMissingPostsSchemaError(error)) {
     const legacySavedResult = await adminSupabase
       .from('showcase_saves')
       .select('generation_id')
       .eq('user_id', viewerUserId)
-      .in('generation_id', pricedFeed.items.map((item) => item.generationId ?? item.id));
+      .in('generation_id', feed.items.map((item) => item.generationId ?? item.id));
 
     if (legacySavedResult.error) {
       console.error('Error fetching legacy showcase saved state for feed page:', legacySavedResult.error);
-      return pricedFeed;
+      return feed;
     }
 
     savedItems = legacySavedResult.data as Array<{ generation_id: string }> | null;
   } else if (error) {
     console.error('Error fetching showcase saved state for feed page:', error);
-    return pricedFeed;
+    return feed;
   } else {
     savedItems = postSavedItems as Array<{ post_id: string }> | null;
   }
@@ -690,7 +698,7 @@ export async function getShowcaseFeedPage(options: {
   );
   const remixEligibleBundleIds = Array.from(
     new Set(
-      pricedFeed.items
+      feed.items
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
         .filter((bundleId): bundleId is string => Boolean(bundleId))
@@ -717,8 +725,8 @@ export async function getShowcaseFeedPage(options: {
   }
 
   return {
-    ...pricedFeed,
-    items: pricedFeed.items.map((item) => ({
+    ...feed,
+    items: feed.items.map((item) => ({
       ...item,
       isSaved: savedIdSet.has(item.id) || (item.generationId ? savedIdSet.has(item.generationId) : false),
       canRemix: item.canRemix || Boolean(
@@ -730,6 +738,77 @@ export async function getShowcaseFeedPage(options: {
       ),
     })),
   };
+}
+
+export async function getShowcaseFeedItemById(options: {
+  postId: string;
+  viewerUserId?: string | null;
+  countryCode?: string | null;
+}): Promise<ShowcaseFeedItem | null> {
+  const { postId, viewerUserId = null, countryCode = null } = options;
+  const adminSupabase = createServiceClient();
+  let result = await adminSupabase
+    .from('posts')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .eq('id', postId)
+    .eq('visibility', 'public')
+    .is('archived_at', null)
+    .maybeSingle();
+
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status/))) {
+    result = await adminSupabase
+      .from('posts')
+      .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
+      .eq('id', postId)
+      .eq('visibility', 'public')
+      .is('archived_at', null)
+      .maybeSingle();
+
+    if (!result.error && result.data) {
+      result = {
+        ...result,
+        data: {
+          ...(result.data as LegacyPostRow),
+          body: null,
+          post_format: normalizeLegacyPostFormat((result.data as LegacyPostRow).category),
+          source_tool_slug: slugifySourceTool((result.data as LegacyPostRow).source_tool),
+          review_status: 'visible',
+        },
+      };
+    }
+  }
+
+  if (result.error) {
+    if (isMissingPostsSchemaError(result.error)) {
+      return null;
+    }
+
+    console.error('Error fetching showcase post detail:', result.error);
+    throw result.error;
+  }
+
+  const row = result.data as PostRow | null;
+  if (!row) {
+    return null;
+  }
+
+  const [item] = await resolvePostRowsToFeedItems([row], adminSupabase);
+  if (!item) {
+    return null;
+  }
+
+  const pricedFeed = await attachLocalizedAssetPrices({
+    items: [item],
+    pageInfo: {
+      hasMore: false,
+      nextOffset: null,
+      limit: 1,
+      offset: 0,
+    },
+  }, countryCode);
+  const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
+
+  return hydratedFeed.items[0] ?? null;
 }
 
 async function attachLocalizedAssetPrices(
