@@ -105,7 +105,7 @@ describe('ProfilePage', () => {
       credits: 10,
     };
 
-    render(await ProfilePage());
+    render(await ProfilePage({}));
 
     expect(screen.getByTestId('creator-profile-card')).toHaveTextContent('persisted-name');
     expect(screen.getByRole('link', { name: /view public profile/i })).toHaveAttribute(
@@ -131,7 +131,7 @@ describe('ProfilePage', () => {
       credits: 10,
     };
 
-    render(await ProfilePage());
+    render(await ProfilePage({}));
 
     expect(await screen.findByText('creator-user1')).toBeInTheDocument();
     expect(screen.getByText(/profile setup/i)).toBeInTheDocument();
@@ -141,7 +141,7 @@ describe('ProfilePage', () => {
   it('renders a starter profile if the profile row is missing', async () => {
     profileState = null;
 
-    render(await ProfilePage());
+    render(await ProfilePage({}));
 
     expect(await screen.findByText('creator-user1')).toBeInTheDocument();
     expect(screen.queryByText(/profile not found/i)).not.toBeInTheDocument();

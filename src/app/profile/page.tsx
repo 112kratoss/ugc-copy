@@ -46,7 +46,7 @@ function getParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export default async function ProfilePage({ searchParams }: ProfilePageProps = {}) {
+export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const auth = await getServerAuthState();
 
