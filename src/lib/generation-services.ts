@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  buildElementHandle,
   compileImagePromptWithElements,
   compilePromptWithElements,
   findUnknownPromptHandles,
@@ -79,6 +80,15 @@ export interface ReferenceImageInput {
   url: string;
   handle?: string | null;
   displayName?: string;
+  storagePath?: string | null;
+  sourceGenerationId?: string | null;
+}
+
+export interface KlingVideoElementInput {
+  id?: string | null;
+  url: string;
+  handle?: string | null;
+  displayName?: string | null;
   storagePath?: string | null;
   sourceGenerationId?: string | null;
 }
@@ -236,6 +246,55 @@ function normalizeReferenceImageInputs(value: ReferenceImageInput[] | undefined)
       storagePath: string | null;
       sourceGenerationId: string | null;
     } => Boolean(reference));
+}
+
+function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | undefined) {
+  const usedHandles = new Set<string>();
+
+  return (value || [])
+    .map((element, index) => {
+      if (!element || typeof element !== 'object') {
+        return null;
+      }
+
+      const url = typeof element.url === 'string' ? element.url.trim() : '';
+      if (!url) {
+        return null;
+      }
+
+      const displayName = normalizeElementDisplayName(
+        typeof element.displayName === 'string' ? element.displayName : undefined,
+        index + 1
+      );
+      const normalizedHandle = normalizeReferenceHandle(element.handle);
+      const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
+        ? normalizedHandle
+        : buildElementHandle(displayName, usedHandles, index + 1);
+
+      if (normalizedHandle && handle === normalizedHandle) {
+        usedHandles.add(handle);
+      }
+
+      return {
+        id: typeof element.id === 'string' && element.id.trim() ? element.id : null,
+        url,
+        handle,
+        displayName,
+        storagePath: typeof element.storagePath === 'string' ? element.storagePath : null,
+        sourceGenerationId:
+          typeof element.sourceGenerationId === 'string'
+            ? element.sourceGenerationId
+            : null,
+      };
+    })
+    .filter((element): element is {
+      id: string | null;
+      url: string;
+      handle: string;
+      displayName: string;
+      storagePath: string | null;
+      sourceGenerationId: string | null;
+    } => Boolean(element));
 }
 
 async function resolveMediaUrls(
@@ -873,6 +932,7 @@ export async function startVideoGeneration(params: {
   imageUrls?: string[];
   referenceVideoUrls?: string[];
   referenceAudioUrls?: string[];
+  klingVideoElements?: KlingVideoElementInput[];
   isMultiShot?: boolean;
   multiPrompts?: VideoMultiPromptInput[];
   elements?: ImageElementDescriptor[];
@@ -901,6 +961,7 @@ export async function startVideoGeneration(params: {
     imageUrls = [],
     referenceVideoUrls = [],
     referenceAudioUrls = [],
+    klingVideoElements = [],
     isMultiShot = false,
     multiPrompts,
     elements = [],
@@ -928,6 +989,7 @@ export async function startVideoGeneration(params: {
   const rawPrompt = typeof prompt === 'string' ? prompt : '';
   const trimmedPrompt = rawPrompt.trim();
   const normalizedReferences = normalizeReferenceImageInputs(references);
+  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(klingVideoElements);
   const normalizedElements = normalizedReferences.length > 0
     ? normalizedReferences
       .filter((reference) => Boolean(reference.handle))
@@ -989,6 +1051,12 @@ export async function startVideoGeneration(params: {
   const resolvedReferenceAudioUrls = isSeedance2Family
     ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceAudioUrls))
     : [];
+  const resolvedKlingVideoElements = model === 'kling-3.0-video'
+    ? await Promise.all(normalizedKlingVideoElements.map(async (element) => ({
+        ...element,
+        url: await resolveStoredMediaUrl(supabase, element.url),
+      })))
+    : [];
   const resolvedElementImageUrls = normalizedReferences.length > 0
     ? resolvedReferenceImageUrls.filter((_url, index) => Boolean(normalizedReferences[index]?.handle))
     : await resolveMediaUrls(supabase, normalizeMediaUrlList(elementImageUrls));
@@ -1016,6 +1084,20 @@ export async function startVideoGeneration(params: {
   if (resolvedReferenceVideoUrls.length > 3) {
     throw new GenerationServiceError(
       'Seedance 2 supports up to 3 reference videos per run.',
+      400
+    );
+  }
+
+  if (normalizedKlingVideoElements.length > 0 && model !== 'kling-3.0-video') {
+    throw new GenerationServiceError(
+      'Kling video elements are only available for Kling 3.0 Cinematic.',
+      400
+    );
+  }
+
+  if (resolvedKlingVideoElements.length > 3) {
+    throw new GenerationServiceError(
+      'Kling 3.0 Video supports up to 3 named video elements per run.',
       400
     );
   }
@@ -1064,8 +1146,12 @@ export async function startVideoGeneration(params: {
   }
 
   const activePrompt = isMultiShot ? '' : trimmedPrompt;
+  const validPromptHandles = [
+    ...normalizedElements.map((element) => element.handle),
+    ...resolvedKlingVideoElements.map((element) => element.handle),
+  ];
   const unknownPromptHandles = !isMultiShot
-    ? findUnknownPromptHandles(activePrompt, normalizedElements.map((element) => element.handle))
+    ? findUnknownPromptHandles(activePrompt, validPromptHandles)
     : [];
   if (unknownPromptHandles.length > 0) {
     throw new GenerationServiceError(
@@ -1077,6 +1163,18 @@ export async function startVideoGeneration(params: {
   const compiledPrompt = normalizedElements.length > 0
     ? compilePromptWithElements(trimmedPrompt, normalizedElements, 'video')
     : trimmedPrompt;
+  if (isMultiShot && model === 'kling-3.0-video') {
+    const unknownShotHandles = normalizedMultiPrompts.flatMap((shot) =>
+      findUnknownPromptHandles(shot.prompt, validPromptHandles)
+    );
+    const uniqueUnknownShotHandles = Array.from(new Set(unknownShotHandles));
+    if (uniqueUnknownShotHandles.length > 0) {
+      throw new GenerationServiceError(
+        `Unknown element mention${uniqueUnknownShotHandles.length > 1 ? 's' : ''}: ${uniqueUnknownShotHandles.join(', ')}`,
+        400
+      );
+    }
+  }
   const hasAnySeedanceReference = isSeedance2Family && (
     totalReferenceImageCount > 0
     || frameImageUrls.length > 0
@@ -1157,6 +1255,14 @@ export async function startVideoGeneration(params: {
 
       if (frameImageUrls.length > 0) {
         input.image_urls = frameImageUrls;
+      }
+
+      if (resolvedKlingVideoElements.length > 0) {
+        input.kling_elements = resolvedKlingVideoElements.map((element) => ({
+          name: element.handle.replace(/^@/, ''),
+          description: element.displayName,
+          element_input_video_urls: [element.url],
+        }));
       }
 
       body = {
@@ -1296,6 +1402,18 @@ export async function startVideoGeneration(params: {
           ...(resolvedReferenceAudioUrls.length > 0
             ? { referenceAudioUrls: resolvedReferenceAudioUrls }
             : {}),
+          ...(resolvedKlingVideoElements.length > 0
+            ? {
+                klingVideoElements: resolvedKlingVideoElements.map((element) => ({
+                  id: element.id,
+                  url: element.url,
+                  handle: element.handle,
+                  displayName: element.displayName,
+                  storagePath: element.storagePath,
+                  sourceGenerationId: element.sourceGenerationId,
+                })),
+              }
+            : {}),
           ...(hasSeedanceAssetCollections(seedanceAssets)
             ? { seedanceAssets }
             : {}),
@@ -1360,6 +1478,25 @@ export async function startVideoGeneration(params: {
         sourceStoragePath: normalizedEndFrame?.storagePath ?? endImageUrl ?? null,
         sourceGenerationId: normalizedEndFrame?.sourceGenerationId ?? null,
         sortOrder: inputSortOrder++,
+      });
+    }
+
+    for (const [index, element] of resolvedKlingVideoElements.entries()) {
+      videoInputCandidates.push({
+        mediaType: 'video',
+        role: 'reference_video',
+        label: element.displayName,
+        sourceUrl: element.url,
+        sourceStoragePath: element.storagePath,
+        sourceGenerationId: element.sourceGenerationId,
+        sortOrder: inputSortOrder++,
+        metadata: {
+          id: element.id,
+          displayName: element.displayName,
+          handle: element.handle,
+          provider: 'kling',
+          elementIndex: index,
+        },
       });
     }
 

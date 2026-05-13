@@ -17,6 +17,7 @@ import {
   getNodeById,
   getNodeOutputUrl,
   getResolvedWorkflowImageReferences,
+  getResolvedWorkflowVideoReferences,
   inspectWorkflowNodeDependencies,
   isSeedance2VideoModel,
   isRunnableNode,
@@ -230,6 +231,36 @@ function getSeedanceReferenceCollections(
       audios: audioAssets,
     },
   };
+}
+
+function getKlingVideoElementPayload(
+  graph: WorkflowCanvasGraph,
+  nodeId: string
+) {
+  return getResolvedWorkflowVideoReferences(graph, nodeId)
+    .map((reference) => {
+      const sourceValue = reference.storagePath || reference.url;
+      if (!sourceValue) {
+        return null;
+      }
+
+      return {
+        id: reference.id,
+        url: sourceValue,
+        handle: reference.handle,
+        displayName: reference.displayName,
+        storagePath: reference.storagePath,
+        sourceGenerationId: reference.sourceGenerationId,
+      };
+    })
+    .filter((reference): reference is {
+      id: string;
+      url: string;
+      handle: string;
+      displayName: string;
+      storagePath: string | null;
+      sourceGenerationId: string | null;
+    } => Boolean(reference));
 }
 
 function buildBlockedError(message: string): RunnableExecutionResult {
@@ -565,6 +596,7 @@ async function executeRunnableNode(params: {
       return buildBlockedError('Video generator is missing a prompt input.');
     }
     const isSeedance2Family = isSeedance2VideoModel(data.model);
+    const isKlingVideoModel = data.model === 'kling-3.0-video';
     const elementPayload = isSeedance2Family
       ? getSeedanceReferenceCollections(graph, node.id)
       : {
@@ -573,6 +605,9 @@ async function executeRunnableNode(params: {
           referenceAudioUrls: [] as string[],
           seedanceAssets: null as SeedanceAssetCollections | null,
         };
+    const klingVideoElements = isKlingVideoModel
+      ? getKlingVideoElementPayload(graph, node.id)
+      : [];
     const result = await startVideoGeneration({
       supabase,
       userId,
@@ -584,6 +619,7 @@ async function executeRunnableNode(params: {
       elements: elementPayload.descriptors,
       referenceVideoUrls: elementPayload.referenceVideoUrls,
       referenceAudioUrls: elementPayload.referenceAudioUrls,
+      klingVideoElements,
       startImageUrl: inputs.startFrameUrl,
       endImageUrl: inputs.endFrameUrl,
       mode: data.mode,

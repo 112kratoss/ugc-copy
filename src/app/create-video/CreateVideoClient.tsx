@@ -43,12 +43,14 @@ import {
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import {
+    buildElementHandle,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
+    isValidElementHandle,
     normalizeElementDisplayName,
     reconcileElementDescriptors,
     replacePromptHandles,
@@ -82,6 +84,9 @@ interface MultiShot {
     prompt: string;
     duration: number;
 }
+
+const KLING_VIDEO_ELEMENT_LIMIT = 3;
+const KLING_VIDEO_ELEMENT_MAX_BYTES = 50 * 1024 * 1024;
 
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
     if (warnings.length === 0) {
@@ -137,6 +142,7 @@ interface VideoWorkflowSettings {
     endFrame?: RemixMediaAssetDescriptor;
     referenceVideoUrls?: string[];
     referenceAudioUrls?: string[];
+    klingVideoElements?: KlingVideoElementDescriptor[];
     seedanceAssets?: SeedanceAssetCollections;
 }
 
@@ -185,6 +191,48 @@ type SeedanceMediaReferenceSeed = {
     sourceGenerationId?: string | null;
     durationSeconds?: number | null;
     seedanceAsset?: Partial<SeedanceAssetMetadata>;
+};
+
+type KlingVideoElementDescriptor = {
+    id?: string | null;
+    url?: string | null;
+    handle?: string | null;
+    displayName?: string | null;
+    storagePath?: string | null;
+    sourceGenerationId?: string | null;
+};
+
+type KlingVideoElementDraft = {
+    id: string;
+    displayName: string;
+    handle: string;
+    file: File | null;
+    previewUrl: string;
+    providerUrl: string | null;
+    storagePath: string | null;
+    source: 'upload' | 'remix';
+    sourceGenerationId?: string | null;
+    durationSeconds?: number | null;
+};
+
+type KlingVideoElementSeed = {
+    id?: string | null;
+    displayName?: string | null;
+    handle?: string | null;
+    file: File | null;
+    previewUrl: string;
+    providerUrl?: string | null;
+    storagePath?: string | null;
+    source?: 'upload' | 'remix';
+    sourceGenerationId?: string | null;
+    durationSeconds?: number | null;
+};
+
+type PromptMentionCandidate = {
+    id: string;
+    displayName: string;
+    handle: string;
+    kind: 'image' | 'video';
 };
 
 function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
@@ -257,6 +305,51 @@ function hydrateSeedanceMediaReferences(
     }));
 }
 
+function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoElementDraft[] {
+    const usedHandles = new Set<string>();
+
+    return seeds.map((seed, index) => {
+        const displayName = normalizeElementDisplayName(
+            typeof seed.displayName === 'string' ? seed.displayName : undefined,
+            index + 1
+        );
+        const normalizedHandle = typeof seed.handle === 'string' && isValidElementHandle(seed.handle)
+            ? seed.handle
+            : null;
+        const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
+            ? normalizedHandle
+            : buildElementHandle(displayName, usedHandles, index + 1);
+
+        if (normalizedHandle && handle === normalizedHandle) {
+            usedHandles.add(handle);
+        }
+
+        return {
+            id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
+            displayName,
+            handle,
+            file: seed.file,
+            previewUrl: seed.previewUrl,
+            providerUrl: seed.providerUrl ?? null,
+            storagePath: seed.storagePath ?? null,
+            source: seed.source ?? 'upload',
+            sourceGenerationId: seed.sourceGenerationId ?? null,
+            durationSeconds: typeof seed.durationSeconds === 'number' ? seed.durationSeconds : null,
+        };
+    });
+}
+
+function isSupportedKlingVideoFile(file: File): boolean {
+    const normalizedType = file.type.toLowerCase();
+    const normalizedName = file.name.toLowerCase();
+    return (
+        normalizedType === 'video/mp4' ||
+        normalizedType === 'video/quicktime' ||
+        normalizedName.endsWith('.mp4') ||
+        normalizedName.endsWith('.mov')
+    );
+}
+
 async function readVideoDurationSeconds(file: File): Promise<number | null> {
     const previewUrl = URL.createObjectURL(file);
 
@@ -315,8 +408,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [elements, setElements] = useState<VideoElementDraft[]>([]);
     const [referenceVideos, setReferenceVideos] = useState<SeedanceMediaReferenceDraft[]>([]);
     const [referenceAudios, setReferenceAudios] = useState<SeedanceMediaReferenceDraft[]>([]);
+    const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
     const [referenceMode, setReferenceMode] = useState<'frames' | 'elements'>('frames');
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
+    const [klingVideoNameDrafts, setKlingVideoNameDrafts] = useState<Record<string, string>>({});
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
     const [startImageUrl, setStartImageUrl] = useState<string | null>(null);
     const [startFrameDescriptor, setStartFrameDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
@@ -348,13 +443,24 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const elementInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
     const referenceAudioInputRef = useRef<HTMLInputElement>(null);
+    const klingVideoInputRef = useRef<HTMLInputElement>(null);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const multiShotTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
     const elementsRef = useRef<VideoElementDraft[]>([]);
     const referenceVideosRef = useRef<SeedanceMediaReferenceDraft[]>([]);
     const referenceAudiosRef = useRef<SeedanceMediaReferenceDraft[]>([]);
+    const klingVideoElementsRef = useRef<KlingVideoElementDraft[]>([]);
     const [isDraggingElements, setIsDraggingElements] = useState(false);
+    const [isDraggingKlingVideos, setIsDraggingKlingVideos] = useState(false);
     const [activeSeedanceAssetKey, setActiveSeedanceAssetKey] = useState<string | null>(null);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
+        query: string;
+        replaceStart: number;
+        replaceEnd: number;
+    } | null>(null);
+    const [focusedShotId, setFocusedShotId] = useState<string | null>(null);
+    const [activeShotMentionQuery, setActiveShotMentionQuery] = useState<{
+        shotId: string;
         query: string;
         replaceStart: number;
         replaceEnd: number;
@@ -381,6 +487,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const videoModel = VIDEO_MODELS[selectedModel];
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
+    const isKlingVideoModel = selectedModel === 'kling-3.0-video';
     const revokeObjectUrl = (url: string | null) => {
         if (url?.startsWith('blob:')) {
             URL.revokeObjectURL(url);
@@ -397,6 +504,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const commitReferenceAudios = (nextReferences: SeedanceMediaReferenceDraft[]) => {
         referenceAudiosRef.current = nextReferences;
         setReferenceAudios(nextReferences);
+    };
+    const commitKlingVideoElements = (nextElements: KlingVideoElementDraft[]) => {
+        klingVideoElementsRef.current = nextElements;
+        setKlingVideoElements(nextElements);
     };
     const persistVideoElements = async (nextElements: VideoElementDraft[]) => {
         if (remixId) {
@@ -450,6 +561,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }))
         );
     };
+    const persistKlingVideoElements = async (nextElements: KlingVideoElementDraft[]) => {
+        if (remixId) {
+            return;
+        }
+
+        await setPersistedMediaRecords(
+            PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements,
+            nextElements
+                .filter((element) => element.file && element.source === 'upload')
+                .map((element) => ({
+                    id: element.id,
+                    displayName: element.displayName,
+                    durationSeconds: element.durationSeconds ?? null,
+                    file: element.file as File,
+                }))
+        );
+    };
     const persistSeedanceAssets = async (
         nextElements: VideoElementDraft[] = elementsRef.current,
         nextReferenceVideos: SeedanceMediaReferenceDraft[] = referenceVideosRef.current,
@@ -473,6 +601,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             ? caretIndex
             : (promptTextareaRef.current?.selectionStart ?? nextPrompt.length);
         setActiveMentionQuery(getMentionQueryAtCaret(nextPrompt, fallbackCaret));
+    };
+    const updateShotMentionState = (shotId: string, nextPrompt: string, caretIndex?: number) => {
+        const fallbackCaret = typeof caretIndex === 'number'
+            ? caretIndex
+            : (multiShotTextareaRefs.current[shotId]?.selectionStart ?? nextPrompt.length);
+        const mentionQuery = getMentionQueryAtCaret(nextPrompt, fallbackCaret);
+        setActiveShotMentionQuery(mentionQuery ? { shotId, ...mentionQuery } : null);
     };
     const currentMode = videoModel.modeOptions.length > 0 && videoModel.modeOptions.some((option) => option.value === mode)
         ? mode
@@ -498,17 +633,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (videoModel.provider === 'veo' ? videoModel.durations[0] : currentDuration);
+    const hasReferenceVideoForRun = referenceVideos.length > 0 || (isKlingVideoModel && klingVideoElements.length > 0);
     const estimatedCost = getVideoCost(selectedModel, {
         mode: currentMode,
         sound: currentSound,
         durationSeconds: totalDuration,
         resolution: currentResolution,
-        hasReferenceVideo: referenceVideos.length > 0,
+        hasReferenceVideo: hasReferenceVideoForRun,
     });
+    const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (isGrokVideoModel ? 0 : Number(Boolean(endImageUrl || endImageFile)));
     const estimatedReferenceCount =
         activeReferenceMode === 'elements'
             ? elements.length + referenceVideos.length + referenceAudios.length
-            : Number(Boolean(startImageUrl || startImageFile)) + (isGrokVideoModel ? 0 : Number(Boolean(endImageUrl || endImageFile)));
+            : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const estimatedGenerationTotalMs = estimateGenerationDurationMs({
         kind: 'video',
         model: selectedModel,
@@ -519,17 +656,53 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         shotCount: multiPrompts.length,
         referenceCount: estimatedReferenceCount,
         hasSound: currentSound,
-        hasReferenceVideo: referenceVideos.length > 0,
+        hasReferenceVideo: hasReferenceVideoForRun,
     });
     const insufficientCredits = userCredits !== null && userCredits < estimatedCost;
     const elementHandles = elements.map((element) => element.handle);
+    const klingVideoHandles = isKlingVideoModel ? klingVideoElements.map((element) => element.handle) : [];
+    const knownPromptHandles = [...elementHandles, ...klingVideoHandles];
     const knownElementMentions = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
-    const staleElementMentions = findUnknownPromptHandles(prompt, elementHandles);
+    const knownKlingVideoMentions = extractPromptHandles(prompt).filter((handle) => klingVideoHandles.includes(handle));
+    const staleElementMentions = findUnknownPromptHandles(prompt, knownPromptHandles);
+    const multiShotUnknownKlingVideoMentions = isKlingVideoModel && currentIsMultiShot
+        ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, klingVideoHandles))))
+        : [];
     const hasKnownElementMentions = knownElementMentions.length > 0;
+    const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
     const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
+    const promptMentionCandidates: PromptMentionCandidate[] = [
+        ...(canUseVideoElements
+            ? elements.map((element) => ({
+                id: element.id,
+                displayName: element.displayName,
+                handle: element.handle,
+                kind: 'image' as const,
+            }))
+            : []),
+        ...(isKlingVideoModel
+            ? klingVideoElements.map((element) => ({
+                id: element.id,
+                displayName: element.displayName,
+                handle: element.handle,
+                kind: 'video' as const,
+            }))
+            : []),
+    ];
     const mentionSuggestions = activeMentionQuery
-        ? elements.filter((element) => {
+        ? promptMentionCandidates.filter((candidate) => {
             const normalizedQuery = activeMentionQuery.query.toLowerCase();
+            if (!normalizedQuery) return true;
+
+            return (
+                candidate.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
+                candidate.displayName.toLowerCase().includes(normalizedQuery)
+            );
+        })
+        : [];
+    const shotMentionSuggestions = activeShotMentionQuery && isKlingVideoModel
+        ? klingVideoElements.filter((element) => {
+            const normalizedQuery = activeShotMentionQuery.query.toLowerCase();
             if (!normalizedQuery) return true;
 
             return (
@@ -538,6 +711,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             );
         })
         : [];
+    const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements && activeReferenceMode === 'elements';
     const showFramesEditor = !isSeedance2Family && activeReferenceMode === 'frames';
     const hiddenElementDraftCount = activeReferenceMode === 'frames' ? elements.length : 0;
@@ -545,7 +719,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         ? [startImageUrl, endImageUrl].filter(Boolean).length
         : 0;
     const showSavedElementNotice = !isSeedance2Family && !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
-    const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || hasKnownElementMentions);
+    const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
     const buildSinglePromptQualityContext = () => ({
         modelId: selectedModel,
         mode: currentMode,
@@ -559,9 +733,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         hasStartImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(startImageFile || startImageUrl),
         hasEndImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(endImageFile || endImageUrl),
         referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
-        hasReferenceVideo: referenceVideos.length > 0,
-        elementReferences: activeReferenceMode === 'elements'
-            ? elements.map((element) => ({
+        hasReferenceVideo: hasReferenceVideoForRun,
+        elementReferences: activeReferenceMode === 'elements' || klingVideoElements.length > 0
+            ? [
+                ...(activeReferenceMode === 'elements' ? elements : []),
+                ...(isKlingVideoModel ? klingVideoElements : []),
+            ].map((element) => ({
                 handle: element.handle,
                 displayName: element.displayName,
             }))
@@ -579,6 +756,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         shotCount: multiPrompts.length,
         hasStartImage: Boolean(startImageFile || startImageUrl),
         hasEndImage: Boolean(endImageFile || endImageUrl),
+        hasReferenceVideo: hasReferenceVideoForRun,
+        elementReferences: isKlingVideoModel && klingVideoElements.length > 0
+            ? klingVideoElements.map((element) => ({
+                handle: element.handle,
+                displayName: element.displayName,
+            }))
+            : undefined,
     });
 
     useEffect(() => {
@@ -599,6 +783,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             elementsRef.current.forEach((element) => revokeObjectUrl(element.previewUrl));
             referenceVideosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
             referenceAudiosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
+            klingVideoElementsRef.current.forEach((element) => revokeObjectUrl(element.previewUrl));
         };
     }, [startImageUrl, endImageUrl]);
 
@@ -613,6 +798,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     useEffect(() => {
         referenceAudiosRef.current = referenceAudios;
     }, [referenceAudios]);
+
+    useEffect(() => {
+        klingVideoElementsRef.current = klingVideoElements;
+    }, [klingVideoElements]);
 
     useEffect(() => {
         if (videoModel.modeOptions?.length) {
@@ -805,10 +994,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
                         }));
 
-                    commitReferenceVideos(hydrateSeedanceMediaReferences('Video', referenceVideoSeeds));
-                    commitReferenceAudios(hydrateSeedanceMediaReferences('Audio', referenceAudioSeeds));
+	                    commitReferenceVideos(hydrateSeedanceMediaReferences('Video', referenceVideoSeeds));
+	                    commitReferenceAudios(hydrateSeedanceMediaReferences('Audio', referenceAudioSeeds));
+	                    commitKlingVideoElements([]);
 
-                    setStartImageFile(null);
+	                    setStartImageFile(null);
                     setStartImageUrl(null);
                     setStartFrameDescriptor(null);
                     setEndImageFile(null);
@@ -817,11 +1007,45 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 } else {
                     const restoreMode = restoredVideoInputs?.referenceMode === 'elements' ? 'elements' : 'frames';
                     setReferenceMode(restoreMode);
-                    commitElements([]);
-                    commitReferenceVideos([]);
-                    commitReferenceAudios([]);
+	                    commitElements([]);
+	                    commitReferenceVideos([]);
+	                    commitReferenceAudios([]);
+	                    const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
+	                    const storedKlingVideoElements = Array.isArray(settings?.klingVideoElements)
+	                        ? settings.klingVideoElements
+	                        : [];
+	                    const klingVideoSeeds = nextModelId === 'kling-3.0-video'
+	                        ? (storedKlingVideoElements.length > 0
+	                            ? storedKlingVideoElements.flatMap((element, index) => {
+	                                const restoredReference = restoredReferenceVideos[index] ?? null;
+	                                const url = restoredReference?.url || element.url || null;
+	                                if (!url) return [];
 
-                    const restoredStartFrame = createRestoredRemixAssetState(
+	                                return [{
+	                                    id: element.id ?? null,
+	                                    displayName: element.displayName ?? restoredReference?.label ?? `Video element ${index + 1}`,
+	                                    handle: element.handle ?? null,
+	                                    file: null,
+	                                    previewUrl: url,
+	                                    providerUrl: url,
+	                                    storagePath: element.storagePath ?? restoredReference?.storagePath ?? null,
+	                                    source: 'remix' as const,
+	                                    sourceGenerationId: element.sourceGenerationId ?? restoredReference?.sourceGenerationId ?? null,
+	                                }];
+	                            })
+	                            : restoredReferenceVideos.flatMap((item, index) => item.url ? [{
+	                                displayName: item.label ?? `Video element ${index + 1}`,
+	                                file: null,
+	                                previewUrl: item.url,
+	                                providerUrl: item.url,
+	                                storagePath: item.storagePath ?? null,
+	                                source: 'remix' as const,
+	                                sourceGenerationId: item.sourceGenerationId ?? null,
+	                            }] : []))
+	                        : [];
+	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds));
+
+	                    const restoredStartFrame = createRestoredRemixAssetState(
                         restoredVideoInputs?.startFrame ?? null
                     );
                     const restoredEndFrame = createRestoredRemixAssetState(
@@ -865,15 +1089,25 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         const loadPersistedMedia = async () => {
             try {
-                const [savedStartImage, savedEndImage, savedElements, savedReferenceMode, savedReferenceVideos, savedReferenceAudios, savedSeedanceAssets] = await Promise.all([
-                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
-                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage),
-                    getPersistedImageElementRecords(PERSISTED_MEDIA_KEYS.createVideoElements),
-                    getPersistedValue<'frames' | 'elements'>(PERSISTED_MEDIA_KEYS.createVideoReferenceMode),
-                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos),
-                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios),
-                    getPersistedValue<SeedanceAssetCollections>(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets),
-                ]);
+	                const [
+	                    savedStartImage,
+	                    savedEndImage,
+	                    savedElements,
+	                    savedReferenceMode,
+	                    savedReferenceVideos,
+	                    savedReferenceAudios,
+	                    savedKlingVideoElements,
+	                    savedSeedanceAssets,
+	                ] = await Promise.all([
+	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
+	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage),
+	                    getPersistedImageElementRecords(PERSISTED_MEDIA_KEYS.createVideoElements),
+	                    getPersistedValue<'frames' | 'elements'>(PERSISTED_MEDIA_KEYS.createVideoReferenceMode),
+	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos),
+	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios),
+	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements),
+	                    getPersistedValue<SeedanceAssetCollections>(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets),
+	                ]);
 
                 if (!isMounted) return;
 
@@ -917,9 +1151,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     ));
                 }
 
-                if (savedReferenceAudios.length > 0) {
-                    commitReferenceAudios(hydrateSeedanceMediaReferences(
-                        'Audio',
+	                if (savedReferenceAudios.length > 0) {
+	                    commitReferenceAudios(hydrateSeedanceMediaReferences(
+	                        'Audio',
                         savedReferenceAudios.map((reference, index) => ({
                             id: reference.id,
                             displayName: reference.displayName,
@@ -927,9 +1161,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             previewUrl: '',
                             source: 'upload',
                             seedanceAsset: savedSeedanceAssets?.audios?.[index] ?? undefined,
-                        }))
-                    ));
-                }
+	                        }))
+	                    ));
+	                }
+
+	                if (savedKlingVideoElements.length > 0) {
+	                    commitKlingVideoElements(hydrateKlingVideoElements(
+	                        savedKlingVideoElements.map((element) => ({
+	                            id: element.id,
+	                            displayName: element.displayName,
+	                            durationSeconds: element.durationSeconds ?? null,
+	                            file: element.file,
+	                            previewUrl: URL.createObjectURL(element.file),
+	                            source: 'upload',
+	                        }))
+	                    ));
+	                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
             }
@@ -950,6 +1197,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const removeShot = (id: string) => {
         if (multiPrompts.length > 1) {
             setMultiPrompts(multiPrompts.filter((shot) => shot.id !== id));
+            if (focusedShotId === id) {
+                setFocusedShotId(null);
+            }
+            if (activeShotMentionQuery?.shotId === id) {
+                setActiveShotMentionQuery(null);
+            }
             setMultiPromptQualityWarnings((current) => {
                 const next = { ...current };
                 delete next[id];
@@ -965,6 +1218,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             delete next[id];
             return next;
         });
+    };
+
+    const handleShotPromptChange = (id: string, value: string, caretIndex?: number) => {
+        updateShot(id, 'prompt', value);
+        updateShotMentionState(id, value, caretIndex);
+    };
+
+    const syncShotPromptCaretState = (shot: MultiShot) => {
+        setFocusedShotId(shot.id);
+        updateShotMentionState(shot.id, shot.prompt);
     };
 
     const setReferenceModeWithPersistence = async (nextMode: 'frames' | 'elements') => {
@@ -1043,6 +1306,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
     };
 
+    const handleKlingVideoElementDrop = async (event: React.DragEvent) => {
+        event.preventDefault();
+        setIsDraggingKlingVideos(false);
+        if (event.dataTransfer.files?.length) {
+            await processKlingVideoElementFiles(event.dataTransfer.files);
+        }
+    };
+
     const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>, type: 'start' | 'end') => {
         const file = event.target.files?.[0];
         if (file && file.type.startsWith('image/')) {
@@ -1080,6 +1351,45 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
     };
 
+    const processKlingVideoElementFiles = async (files: FileList | File[]) => {
+        const selectedFiles = Array.from(files);
+        const validFiles = selectedFiles.filter((file) => (
+            isSupportedKlingVideoFile(file) && file.size <= KLING_VIDEO_ELEMENT_MAX_BYTES
+        ));
+
+        if (validFiles.length === 0) {
+            setError('Kling video elements support MP4 or MOV files up to 50MB.');
+            return;
+        }
+
+        const availableSlots = Math.max(0, KLING_VIDEO_ELEMENT_LIMIT - klingVideoElementsRef.current.length);
+        const filesToAdd = validFiles.slice(0, availableSlots);
+        if (filesToAdd.length === 0) {
+            setError(`Kling 3.0 Video supports up to ${KLING_VIDEO_ELEMENT_LIMIT} video elements.`);
+            return;
+        }
+
+        if (validFiles.length < selectedFiles.length) {
+            setError('Some clips were skipped. Kling video elements accept MP4 or MOV files up to 50MB.');
+        } else if (filesToAdd.length < validFiles.length) {
+            setError(`Only ${KLING_VIDEO_ELEMENT_LIMIT} Kling video elements can be attached for now.`);
+        } else {
+            setError(null);
+        }
+
+        const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
+            displayName: `Video element ${klingVideoElementsRef.current.length + index + 1}`,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload' as const,
+            durationSeconds: await readVideoDurationSeconds(file),
+        })));
+
+        const nextElements = hydrateKlingVideoElements([...klingVideoElementsRef.current, ...seeds]);
+        commitKlingVideoElements(nextElements);
+        await persistKlingVideoElements(nextElements);
+    };
+
     const processReferenceAudioFiles = async (files: FileList | File[]) => {
         const validFiles = Array.from(files).filter((file) => file.type.startsWith('audio/'));
         if (validFiles.length === 0) return;
@@ -1104,6 +1414,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const handleReferenceVideoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files?.length) {
             await processReferenceVideoFiles(event.target.files);
+            event.target.value = '';
+        }
+    };
+
+    const handleKlingVideoElementUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (event.target.files?.length) {
+            await processKlingVideoElementFiles(event.target.files);
             event.target.value = '';
         }
     };
@@ -1173,6 +1490,29 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
     };
 
+    const handleRemoveKlingVideoElement = async (elementId: string) => {
+        const currentElements = klingVideoElementsRef.current;
+        const removedElement = currentElements.find((element) => element.id === elementId);
+        if (removedElement) {
+            revokeObjectUrl(removedElement.previewUrl);
+        }
+
+        const nextElements = hydrateKlingVideoElements(
+            currentElements.filter((element) => element.id !== elementId)
+        );
+        setKlingVideoNameDrafts((prev) => {
+            if (!(elementId in prev)) {
+                return prev;
+            }
+
+            const nextDrafts = { ...prev };
+            delete nextDrafts[elementId];
+            return nextDrafts;
+        });
+        commitKlingVideoElements(nextElements);
+        await persistKlingVideoElements(nextElements);
+    };
+
     const handleRemoveReferenceAudio = async (referenceId: string) => {
         const nextReferences = referenceAudiosRef.current.filter((reference) => reference.id !== referenceId);
         commitReferenceAudios(nextReferences);
@@ -1205,8 +1545,45 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         requestAnimationFrame(() => updateMentionState(prompt));
     };
 
+    const handleKlingVideoElementRename = async (elementId: string, nextDisplayName: string) => {
+        const currentElements = klingVideoElementsRef.current;
+        const nextElements = hydrateKlingVideoElements(
+            currentElements.map((element) => (
+                element.id === elementId
+                    ? { ...element, displayName: nextDisplayName }
+                    : element
+            ))
+        );
+        const replacements = createElementHandleReplacementMap(currentElements, nextElements);
+
+        commitKlingVideoElements(nextElements);
+        await persistKlingVideoElements(nextElements);
+        if (replacements.size > 0) {
+            setPrompt((currentPrompt) => {
+                const nextPrompt = replacePromptHandles(currentPrompt, replacements);
+                requestAnimationFrame(() => updateMentionState(nextPrompt));
+                return nextPrompt;
+            });
+            setMultiPrompts((currentPrompts) => currentPrompts.map((shot) => ({
+                ...shot,
+                prompt: replacePromptHandles(shot.prompt, replacements),
+            })));
+            setActiveShotMentionQuery(null);
+            return;
+        }
+
+        requestAnimationFrame(() => updateMentionState(prompt));
+    };
+
     const handleElementDraftChange = (elementId: string, nextValue: string) => {
         setElementNameDrafts((prev) => ({
+            ...prev,
+            [elementId]: nextValue,
+        }));
+    };
+
+    const handleKlingVideoDraftChange = (elementId: string, nextValue: string) => {
+        setKlingVideoNameDrafts((prev) => ({
             ...prev,
             [elementId]: nextValue,
         }));
@@ -1233,6 +1610,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         await handleElementRename(elementId, trimmed);
     };
 
+    const commitKlingVideoDraft = async (elementId: string) => {
+        const draftValue = klingVideoNameDrafts[elementId];
+        if (draftValue === undefined) return;
+
+        const trimmed = draftValue.trim();
+        setKlingVideoNameDrafts((prev) => {
+            const nextDrafts = { ...prev };
+            delete nextDrafts[elementId];
+            return nextDrafts;
+        });
+
+        if (!trimmed) return;
+
+        const currentElement = klingVideoElementsRef.current.find((element) => element.id === elementId);
+        if (!currentElement || currentElement.displayName === trimmed) {
+            return;
+        }
+
+        await handleKlingVideoElementRename(elementId, trimmed);
+    };
+
     const handlePromptChange = (value: string, caretIndex?: number) => {
         setPrompt(value);
         setPromptQualityWarnings([]);
@@ -1243,7 +1641,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         updateMentionState(prompt);
     };
 
-    const handleInsertElementHandle = (handle: string) => {
+    const handleInsertPromptHandle = (handle: string, kind: 'image' | 'video') => {
         const textarea = promptTextareaRef.current;
         const selectionStart = textarea?.selectionStart ?? prompt.length;
         const selectionEnd = textarea?.selectionEnd ?? prompt.length;
@@ -1255,12 +1653,56 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             activeMentionQuery
         );
 
-        if (!currentIsMultiShot && canUseVideoElements && activeReferenceMode !== 'elements') {
+        if (kind === 'image' && !currentIsMultiShot && canUseVideoElements && activeReferenceMode !== 'elements') {
             void setReferenceModeWithPersistence('elements');
         }
 
         setPrompt(nextValue.prompt);
         setActiveMentionQuery(null);
+
+        requestAnimationFrame(() => {
+            textarea?.focus();
+            textarea?.setSelectionRange(nextValue.caretIndex, nextValue.caretIndex);
+        });
+    };
+
+    const handleInsertElementHandle = (handle: string) => {
+        handleInsertPromptHandle(handle, 'image');
+    };
+
+    const handleInsertKlingVideoHandle = (handle: string) => {
+        if (currentIsMultiShot) {
+            const targetShotId = focusedShotId || multiPrompts[0]?.id;
+            if (targetShotId) {
+                handleInsertShotHandle(targetShotId, handle);
+            }
+            return;
+        }
+
+        handleInsertPromptHandle(handle, 'video');
+    };
+
+    const handleInsertShotHandle = (shotId: string, handle: string) => {
+        const targetShot = multiPrompts.find((shot) => shot.id === shotId);
+        if (!targetShot) {
+            return;
+        }
+
+        const textarea = multiShotTextareaRefs.current[shotId];
+        const selectionStart = textarea?.selectionStart ?? targetShot.prompt.length;
+        const selectionEnd = textarea?.selectionEnd ?? targetShot.prompt.length;
+        const mentionQuery = activeShotMentionQuery?.shotId === shotId ? activeShotMentionQuery : null;
+        const nextValue = insertHandleIntoPrompt(
+            targetShot.prompt,
+            handle,
+            selectionStart,
+            selectionEnd,
+            mentionQuery
+        );
+
+        updateShot(shotId, 'prompt', nextValue.prompt);
+        setFocusedShotId(shotId);
+        setActiveShotMentionQuery(null);
 
         requestAnimationFrame(() => {
             textarea?.focus();
@@ -1372,6 +1814,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 assetType,
                 sourceUrl: upload.signedUrl,
             },
+        };
+    };
+
+    const ensureUploadedKlingVideoElement = async (
+        element: KlingVideoElementDraft
+    ): Promise<KlingVideoElementDraft> => {
+        if (!element.file) {
+            return element;
+        }
+
+        const upload = await uploadToSupabase(element.file);
+        return {
+            ...element,
+            providerUrl: upload.signedUrl,
+            storagePath: upload.storagePath,
         };
     };
 
@@ -1749,6 +2206,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
+        if (currentIsMultiShot && multiShotUnknownKlingVideoMentions.length > 0) {
+            setError(`Unknown element mention${multiShotUnknownKlingVideoMentions.length > 1 ? 's' : ''}: ${multiShotUnknownKlingVideoMentions.join(', ')}`);
+            return;
+        }
+
         if (!currentIsMultiShot && hasInactiveElementMentions) {
             setError(videoElementSupport.reason || 'Named elements are not available in this video mode.');
             return;
@@ -1756,6 +2218,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         if (!currentIsMultiShot && activeReferenceMode !== 'elements' && hasKnownElementMentions) {
             setError('Switch the reference mode to Elements to use @mentions in the video prompt.');
+            return;
+        }
+
+        if (isKlingVideoModel && klingVideoElements.length > KLING_VIDEO_ELEMENT_LIMIT) {
+            setError(`Kling 3.0 Video supports up to ${KLING_VIDEO_ELEMENT_LIMIT} video elements.`);
             return;
         }
 
@@ -1839,6 +2306,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             let elementImageUrls: string[] = [];
             const requestReferenceVideoUrls: string[] = [];
             const requestReferenceAudioUrls: string[] = [];
+            const requestKlingVideoElements: Array<{
+                id: string;
+                url: string;
+                handle: string;
+                displayName: string;
+                storagePath: string | null;
+                sourceGenerationId: string | null;
+            }> = [];
             const nextSeedanceAssets: SeedanceAssetCollections = {
                 images: [],
                 videos: [],
@@ -1944,6 +2419,39 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 nextSeedanceAssets.audios = uploadedReferences.map((item) => item.asset);
             }
 
+            if (isKlingVideoModel && klingVideoElements.length > 0) {
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: klingVideoElements.length === 1 ? 'Uploading 1 Kling video element' : `Uploading ${klingVideoElements.length} Kling video elements`,
+                    startedAtMs,
+                    estimatedTotalMs,
+                }));
+
+                const uploadedKlingElements = await Promise.all(klingVideoElements.map(async (element) => {
+                    const preparedElement = await ensureUploadedKlingVideoElement(element);
+                    const sourceUrl = preparedElement.providerUrl || preparedElement.previewUrl;
+                    if (!sourceUrl) {
+                        throw new Error(`Missing media for ${element.displayName}`);
+                    }
+
+                    return {
+                        ...preparedElement,
+                        requestUrl: preparedElement.storagePath || sourceUrl,
+                    };
+                }));
+
+                commitKlingVideoElements(uploadedKlingElements);
+                await persistKlingVideoElements(uploadedKlingElements);
+                requestKlingVideoElements.push(...uploadedKlingElements.map((element) => ({
+                    id: element.id,
+                    url: element.requestUrl,
+                    handle: element.handle,
+                    displayName: element.displayName,
+                    storagePath: element.storagePath ?? null,
+                    sourceGenerationId: element.sourceGenerationId ?? null,
+                })));
+            }
+
             if (activeReferenceMode === 'frames' && startImageFile) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
@@ -2001,6 +2509,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 elementImageUrls,
                 referenceVideoUrls: requestReferenceVideoUrls,
                 referenceAudioUrls: requestReferenceAudioUrls,
+                klingVideoElements: requestKlingVideoElements,
                 startImageUrl: startUrl,
                 endImageUrl: endUrl,
                 mode: currentMode,
@@ -2262,30 +2771,30 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         showWarnings={false}
                                     />
                                     <PromptQualityWarnings warnings={promptQualityWarnings} />
-                                    {(canUseVideoElements || elements.length > 0) && (
-                                        <div className="mb-4 mt-4 space-y-3">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                                    {isSeedance2Family ? 'Image references' : 'Named elements'}
-                                                </p>
-                                                <span className="text-xs text-zinc-500">
-                                                    Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
-                                                </span>
-                                            </div>
-                                            {elements.length > 0 ? (
-                                                <div className="flex flex-wrap gap-2">
-                                                    {elements.map((element) => (
-                                                        <button
-                                                            key={element.id}
-                                                            type="button"
-                                                            onClick={() => handleInsertElementHandle(element.handle)}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                        >
-                                                            <span className="text-zinc-400">{element.displayName}</span>
-                                                            <span className="text-sky-300">{element.handle}</span>
-                                                        </button>
-                                                    ))}
-                                                </div>
+	                                    {(canUseVideoElements || elements.length > 0 || promptMentionCandidates.length > 0) && (
+	                                        <div className="mb-4 mt-4 space-y-3">
+	                                            <div className="flex items-center justify-between gap-3">
+	                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+	                                                    {isKlingVideoModel ? 'Prompt references' : isSeedance2Family ? 'Image references' : 'Named elements'}
+	                                                </p>
+	                                                <span className="text-xs text-zinc-500">
+	                                                    Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
+	                                                </span>
+	                                            </div>
+	                                            {promptMentionCandidates.length > 0 ? (
+	                                                <div className="flex flex-wrap gap-2">
+	                                                    {promptMentionCandidates.map((candidate) => (
+	                                                        <button
+	                                                            key={`${candidate.kind}-${candidate.id}`}
+	                                                            type="button"
+	                                                            onClick={() => handleInsertPromptHandle(candidate.handle, candidate.kind)}
+	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+	                                                        >
+	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
+	                                                            <span className={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}>{candidate.handle}</span>
+	                                                        </button>
+	                                                    ))}
+	                                                </div>
                                             ) : (
                                                 <p className="text-sm text-zinc-500">
                                                     {isSeedance2Family
@@ -2311,10 +2820,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             <span className="text-right text-rose-300">
                                                 Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}: {staleElementMentions.join(', ')}
                                             </span>
-                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
-                                            <span className="text-right text-amber-300">
-                                                Switch reference mode to Elements to use {knownElementMentions.join(', ')}.
-                                            </span>
+	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
+	                                            <span className="text-right text-amber-300">
+	                                                Switch reference mode to Elements to use {knownElementMentions.join(', ')}.
+	                                            </span>
                                         ) : null}
                                     </div>
                                     {activeMentionQuery ? (
@@ -2322,13 +2831,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
                                                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                                        Insert element
-                                                    </p>
-                                                    <p className="mt-1 text-sm text-zinc-400">
-                                                        {mentionSuggestions.length > 0
-                                                            ? 'Pick an element to insert its @mention.'
-                                                            : 'No matching elements yet.'}
-                                                    </p>
+	                                                        Insert reference
+	                                                    </p>
+	                                                    <p className="mt-1 text-sm text-zinc-400">
+	                                                        {mentionSuggestions.length > 0
+	                                                            ? 'Pick a reference to insert its @mention.'
+	                                                            : 'No matching references yet.'}
+	                                                    </p>
                                                 </div>
                                                 {activeMentionQuery.query ? (
                                                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
@@ -2338,17 +2847,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             </div>
                                             {mentionSuggestions.length > 0 ? (
                                                 <div className="mt-3 flex flex-wrap gap-2">
-                                                    {mentionSuggestions.map((element) => (
-                                                        <button
-                                                            key={element.id}
-                                                            type="button"
-                                                            onClick={() => handleInsertElementHandle(element.handle)}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-                                                        >
-                                                            <span className="text-zinc-400">{element.displayName}</span>
-                                                            <span className="text-sky-300">{element.handle}</span>
-                                                        </button>
-                                                    ))}
+	                                                    {mentionSuggestions.map((candidate) => (
+	                                                        <button
+	                                                            key={`${candidate.kind}-${candidate.id}`}
+	                                                            type="button"
+	                                                            onClick={() => handleInsertPromptHandle(candidate.handle, candidate.kind)}
+	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+	                                                        >
+	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
+	                                                            <span className={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}>{candidate.handle}</span>
+	                                                        </button>
+	                                                    ))}
                                                 </div>
                                             ) : null}
                                         </div>
@@ -2435,13 +2944,54 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                     showWarnings={false}
                                                 />
                                                 <PromptQualityWarnings warnings={multiPromptQualityWarnings[shot.id] ?? []} />
-                                                <textarea
-                                                    value={shot.prompt}
-                                                    onChange={(event) => updateShot(shot.id, 'prompt', event.target.value)}
-                                                    placeholder={`Describe shot ${index + 1}...`}
-                                                    className="w-full bg-black/50 text-white rounded-2xl p-4 border border-white/10 focus:border-purple-500/50 outline-none resize-none min-h-[100px] text-sm mb-4"
-                                                />
-                                                <div className="flex items-center gap-3">
+	                                                <textarea
+	                                                    ref={(element) => {
+	                                                        multiShotTextareaRefs.current[shot.id] = element;
+	                                                    }}
+	                                                    value={shot.prompt}
+	                                                    onChange={(event) => handleShotPromptChange(shot.id, event.target.value, event.target.selectionStart ?? event.target.value.length)}
+	                                                    onFocus={() => {
+	                                                        setFocusedShotId(shot.id);
+	                                                        updateShotMentionState(shot.id, shot.prompt);
+	                                                    }}
+	                                                    onClick={() => syncShotPromptCaretState(shot)}
+	                                                    onKeyUp={() => syncShotPromptCaretState(shot)}
+	                                                    placeholder={`Describe shot ${index + 1}...`}
+	                                                    className="w-full bg-black/50 text-white rounded-2xl p-4 border border-white/10 focus:border-purple-500/50 outline-none resize-none min-h-[100px] text-sm mb-4"
+	                                                />
+	                                                {activeShotMentionQuery?.shotId === shot.id && isKlingVideoModel ? (
+	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
+	                                                        <div className="flex items-center justify-between gap-3">
+	                                                            <div>
+	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Insert video element</p>
+	                                                                <p className="mt-1 text-sm text-zinc-400">
+	                                                                    {shotMentionSuggestions.length > 0 ? 'Pick a Kling video handle for this shot.' : 'No matching video elements yet.'}
+	                                                                </p>
+	                                                            </div>
+	                                                            {activeShotMentionQuery.query ? (
+	                                                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
+	                                                                    @{activeShotMentionQuery.query}
+	                                                                </span>
+	                                                            ) : null}
+	                                                        </div>
+	                                                        {shotMentionSuggestions.length > 0 ? (
+	                                                            <div className="mt-3 flex flex-wrap gap-2">
+	                                                                {shotMentionSuggestions.map((element) => (
+	                                                                    <button
+	                                                                        key={element.id}
+	                                                                        type="button"
+	                                                                        onClick={() => handleInsertShotHandle(shot.id, element.handle)}
+	                                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+	                                                                    >
+	                                                                        <span className="text-zinc-400">{element.displayName}</span>
+	                                                                        <span className="text-emerald-300">{element.handle}</span>
+	                                                                    </button>
+	                                                                ))}
+	                                                            </div>
+	                                                        ) : null}
+	                                                    </div>
+	                                                ) : null}
+	                                                <div className="flex items-center gap-3">
                                                     <span className="text-xs text-zinc-500 font-medium">Duration (1-12s):</span>
                                                     <input
                                                         type="range"
@@ -2512,9 +3062,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             </motion.div>
                         )}
 
-                        {!currentIsMultiShot && canUseVideoElements && isSeedance2Family && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 16 }}
+	                        {!currentIsMultiShot && canUseVideoElements && isSeedance2Family && (
+	                            <motion.div
+	                                initial={{ opacity: 0, y: 16 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm"
                             >
@@ -2543,10 +3093,149 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <div className="mt-2 text-sm text-zinc-100">{referenceAudios.length}/3</div>
                                     </div>
                                 </div>
-                            </motion.div>
-                        )}
+	                            </motion.div>
+	                        )}
 
-                        {showSavedElementNotice && (
+	                        {showKlingVideoElementEditor && (
+	                            <motion.div
+	                                initial={{ opacity: 0, y: 16 }}
+	                                animate={{ opacity: 1, y: 0 }}
+	                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(16,22,20,0.96),rgba(7,10,9,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+	                            >
+	                                <div className="mb-4 flex items-start justify-between gap-3">
+	                                    <div>
+	                                        <h2 className="text-sm font-semibold text-white">Kling video elements</h2>
+	                                        <p className="mt-1 text-sm text-zinc-400">
+	                                            Add named clips and mention their @handles in the prompt or shot prompts.
+	                                        </p>
+	                                    </div>
+	                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
+	                                        {klingVideoElements.length}/{KLING_VIDEO_ELEMENT_LIMIT}
+	                                    </span>
+	                                </div>
+
+	                                <input
+	                                    ref={klingVideoInputRef}
+	                                    type="file"
+	                                    accept="video/mp4,video/quicktime,.mp4,.mov"
+	                                    multiple
+	                                    onChange={handleKlingVideoElementUpload}
+	                                    className="hidden"
+	                                />
+
+	                                {klingVideoElements.length > 0 ? (
+	                                    <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+	                                        {klingVideoElements.map((element) => (
+	                                            <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
+	                                                <div className="relative aspect-video bg-black">
+	                                                    <video
+	                                                        src={element.previewUrl || element.providerUrl || undefined}
+	                                                        className="h-full w-full object-cover"
+	                                                        controls
+	                                                        muted
+	                                                        playsInline
+	                                                    />
+	                                                    <button
+	                                                        type="button"
+	                                                        onClick={() => void handleRemoveKlingVideoElement(element.id)}
+	                                                        className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-1.5 text-white backdrop-blur-md transition hover:bg-red-500"
+	                                                    >
+	                                                        <X className="h-3 w-3" />
+	                                                    </button>
+	                                                </div>
+	                                                <div className="space-y-3 p-3">
+	                                                    <div>
+	                                                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+	                                                            Element name
+	                                                        </label>
+	                                                        <input
+	                                                            type="text"
+	                                                            value={klingVideoNameDrafts[element.id] ?? element.displayName}
+	                                                            onChange={(event) => handleKlingVideoDraftChange(element.id, event.target.value)}
+	                                                            onBlur={() => void commitKlingVideoDraft(element.id)}
+	                                                            onKeyDown={(event) => {
+	                                                                if (event.key === 'Enter') {
+	                                                                    event.preventDefault();
+	                                                                    void commitKlingVideoDraft(element.id);
+	                                                                    event.currentTarget.blur();
+	                                                                }
+
+	                                                                if (event.key === 'Escape') {
+	                                                                    setKlingVideoNameDrafts((prev) => {
+	                                                                        if (!(element.id in prev)) {
+	                                                                            return prev;
+	                                                                        }
+
+	                                                                        const nextDrafts = { ...prev };
+	                                                                        delete nextDrafts[element.id];
+	                                                                        return nextDrafts;
+	                                                                    });
+	                                                                    event.currentTarget.blur();
+	                                                                }
+	                                                            }}
+	                                                            className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-500/40"
+	                                                            placeholder="Rename video element"
+	                                                        />
+	                                                    </div>
+	                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
+	                                                        <span className="truncate text-xs font-semibold text-emerald-300">{element.handle}</span>
+	                                                        <div className="flex shrink-0 items-center gap-1.5">
+	                                                            <button
+	                                                                type="button"
+	                                                                onClick={() => {
+	                                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+	                                                                        void navigator.clipboard.writeText(element.handle);
+	                                                                    }
+	                                                                }}
+	                                                                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
+	                                                            >
+	                                                                Copy
+	                                                            </button>
+	                                                            <button
+	                                                                type="button"
+	                                                                onClick={() => handleInsertKlingVideoHandle(element.handle)}
+	                                                                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
+	                                                            >
+	                                                                Insert
+	                                                            </button>
+	                                                        </div>
+	                                                    </div>
+	                                                    <div className="text-xs text-zinc-500">
+	                                                        {typeof element.durationSeconds === 'number' ? `${element.durationSeconds.toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+	                                                    </div>
+	                                                </div>
+	                                            </div>
+	                                        ))}
+	                                    </div>
+	                                ) : null}
+
+	                                {klingVideoElements.length < KLING_VIDEO_ELEMENT_LIMIT ? (
+	                                    <label
+	                                        className={`group flex h-[120px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed bg-black/40 transition-all ${isDraggingKlingVideos
+	                                            ? 'border-emerald-400 bg-emerald-500/10 shadow-[0_0_30px_-5px_rgba(16,185,129,0.3)]'
+	                                            : 'border-zinc-700/50 hover:border-emerald-500/50 hover:bg-emerald-500/5'
+	                                            }`}
+	                                        onClick={() => klingVideoInputRef.current?.click()}
+	                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingKlingVideos(true); }}
+	                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingKlingVideos(false); }}
+	                                        onDrop={handleKlingVideoElementDrop}
+	                                    >
+	                                        <div className="flex flex-col items-center gap-2 text-zinc-500">
+	                                            <Video className={`h-6 w-6 transition-colors ${isDraggingKlingVideos ? 'text-emerald-400' : ''}`} />
+	                                            <span className="text-sm">{isDraggingKlingVideos ? 'Drop Kling video elements here' : 'Drop MP4/MOV clips or click'}</span>
+	                                            <span className="text-xs">1 clip per element, 50MB max</span>
+	                                        </div>
+	                                        <span className="sr-only">Upload Kling video elements</span>
+	                                    </label>
+	                                ) : (
+	                                    <p className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
+	                                        Kling video elements are capped at {KLING_VIDEO_ELEMENT_LIMIT} clips in this version.
+	                                    </p>
+	                                )}
+	                            </motion.div>
+	                        )}
+
+	                        {showSavedElementNotice && (
                             <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
                                 <p className="text-sm font-semibold text-white">Saved named elements are on standby</p>
                                 <p className="mt-2 text-sm leading-6 text-zinc-300">
@@ -3159,25 +3848,29 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                     <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Reference</div>
-                                        <div className="mt-1 text-zinc-200">
-                                            {currentIsMultiShot
-                                                ? 'Shot prompts'
-                                                : isSeedance2Family
-                                                    ? 'Unified references'
-                                                    : activeReferenceMode === 'elements'
-                                                        ? 'Named elements'
-                                                        : 'Frames'}
+	                                        <div className="mt-1 text-zinc-200">
+	                                            {currentIsMultiShot
+	                                                ? (isKlingVideoModel && klingVideoElements.length > 0 ? 'Shot prompts + Kling refs' : 'Shot prompts')
+	                                                : isSeedance2Family
+	                                                    ? 'Unified references'
+	                                                    : isKlingVideoModel && klingVideoElements.length > 0
+	                                                        ? 'Frames + Kling refs'
+	                                                    : activeReferenceMode === 'elements'
+	                                                        ? 'Named elements'
+	                                                        : 'Frames'}
                                         </div>
                                     </div>
                                     <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Inputs</div>
-                                        <div className="mt-1 text-zinc-200">
-                                            {currentIsMultiShot
-                                                ? `${multiPrompts.length} shot${multiPrompts.length === 1 ? '' : 's'}`
-                                                : isSeedance2Family
-                                                    ? `${elements.length + referenceVideos.length + referenceAudios.length} reference${elements.length + referenceVideos.length + referenceAudios.length === 1 ? '' : 's'}`
-                                                : activeReferenceMode === 'elements'
-                                                    ? `${elements.length} element${elements.length === 1 ? '' : 's'}`
+	                                        <div className="mt-1 text-zinc-200">
+	                                            {currentIsMultiShot
+	                                                ? `${multiPrompts.length} shot${multiPrompts.length === 1 ? '' : 's'}${isKlingVideoModel && klingVideoElements.length > 0 ? ` + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}` : ''}`
+	                                                : isSeedance2Family
+	                                                    ? `${elements.length + referenceVideos.length + referenceAudios.length} reference${elements.length + referenceVideos.length + referenceAudios.length === 1 ? '' : 's'}`
+	                                                : isKlingVideoModel
+	                                                    ? `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'} + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}`
+	                                                : activeReferenceMode === 'elements'
+	                                                    ? `${elements.length} element${elements.length === 1 ? '' : 's'}`
                                                     : `${[startImageUrl, endImageUrl].filter(Boolean).length} frame${[startImageUrl, endImageUrl].filter(Boolean).length === 1 ? '' : 's'}`}
                                         </div>
                                     </div>

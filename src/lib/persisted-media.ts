@@ -57,6 +57,7 @@ export const PERSISTED_MEDIA_KEYS = {
   createVideoEndImage: 'create-video:end-image',
   createVideoReferenceVideos: 'create-video:reference-videos',
   createVideoReferenceAudios: 'create-video:reference-audios',
+  createVideoKlingVideoElements: 'create-video:kling-video-elements',
   createVideoSeedanceAssets: 'create-video:seedance-assets',
 } as const;
 

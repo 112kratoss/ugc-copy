@@ -77,13 +77,40 @@ The `callBackUrl` parameter allows you to receive automatic notifications when y
   - `pro`: pro
 - **Default Value**: `"std"`
 
+#### kling_elements
+- **Type**: `array`
+- **Required**: No
+- **Description**: Named image or video elements that can be referenced from `prompt` or `multi_prompt[].prompt` with `@element_name` syntax.
+- **Shape**:
+  - `name`: element handle without `@`; must match the prompt mention.
+  - `description`: short label for the element.
+  - `element_input_urls`: image-element URLs. Use 2-4 JPG/PNG URLs, at least 300x300px, max 10MB each.
+  - `element_input_video_urls`: video-element URLs. Use exactly 1 MP4/MOV URL, max 50MB.
+- **Notes**:
+  - Use `kling_elements` for Kling 3.0 video references.
+  - Do not send Seedance-style `reference_video_urls` to Kling 3.0.
+  - Single-shot and multi-shot prompts can both mention these names.
+
 ### Request Example
 
 ```json
 {
   "model": "kling-3.0/video",
   "input": {
-    "mode": "std"
+    "prompt": "A dancer matches the timing of @motion_ref in a sunlit studio",
+    "mode": "std",
+    "duration": "5",
+    "aspect_ratio": "16:9",
+    "multi_shots": false,
+    "kling_elements": [
+      {
+        "name": "motion_ref",
+        "description": "Motion reference",
+        "element_input_video_urls": [
+          "https://your-cdn.com/motion-reference.mp4"
+        ]
+      }
+    ]
   }
 }
 ```
@@ -181,4 +208,3 @@ GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=281e5b0********************
 | 422 | Parameter validation failed |
 | 429 | Request rate limit exceeded |
 | 500 | Internal server error |
-

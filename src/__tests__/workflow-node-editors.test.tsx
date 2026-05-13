@@ -614,6 +614,43 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.getAllByText(/Audio refs/i).length).toBeGreaterThan(0);
   });
 
+  it('shows Kling video reference handles in the video node inspector', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const videoInput = createWorkflowNode('video-input', { x: 0, y: 120 });
+    const klingNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...videoInput,
+          data: normalizeNodeData('video-input', {
+            ...videoInput.data,
+            title: 'Motion ref',
+            videoUrl: 'https://example.com/reference.mp4',
+            storagePath: 'uploads/user-1/reference.mp4',
+          }),
+        },
+        {
+          ...klingNode,
+          data: normalizeNodeData('video-generate', {
+            ...klingNode.data,
+            model: 'kling-3.0-video',
+          }),
+        },
+      ],
+      edges: [
+        { id: 'prompt', source: promptNode.id, target: klingNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'video', source: videoInput.id, target: klingNode.id, sourceHandle: 'video', targetHandle: 'reference-video' },
+      ],
+    });
+
+    renderInteractiveInspector(graph, { selectedNodeId: klingNode.id });
+
+    expect(screen.getByText(/Kling video elements/i)).toBeInTheDocument();
+    expect(screen.getByText('@motion_ref')).toBeInTheDocument();
+    expect(screen.getAllByText(/1 connected/i).length).toBeGreaterThan(0);
+  });
+
   it('shows workflow-video limits and unsupported standalone feature messaging', () => {
     const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
     const imageInput = createWorkflowNode('image-input', { x: 0, y: 0 });

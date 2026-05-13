@@ -1493,6 +1493,18 @@ export interface WorkflowResolvedImageReference {
   legacy: boolean;
 }
 
+export interface WorkflowResolvedVideoReference {
+  id: string;
+  edgeId: string;
+  handle: string;
+  displayName: string;
+  url: string | null;
+  storagePath: string | null;
+  sourceGenerationId: string | null;
+  sourceNodeId: string | null;
+  sourceTitle: string | null;
+}
+
 export type WorkflowResolvedElementReference = WorkflowResolvedImageReference;
 
 export interface WorkflowNodeDependencyState {
@@ -1583,6 +1595,27 @@ function getWorkflowSourceReferenceHandle(
   return null;
 }
 
+function getWorkflowVideoReferenceStoragePath(sourceNode: WorkflowCanvasNode | undefined): string | null {
+  if (!sourceNode) {
+    return null;
+  }
+
+  if (sourceNode.type === 'video-input') {
+    const data = normalizeNodeData('video-input', sourceNode.data as Partial<WorkflowNodeData>) as VideoInputNodeData;
+    return data.storagePath || data.videoUrl;
+  }
+
+  return sourceNode.data.runState.outputUrl;
+}
+
+function getWorkflowVideoReferenceSourceGenerationId(sourceNode: WorkflowCanvasNode | undefined): string | null {
+  if (!sourceNode || sourceNode.type === 'video-input') {
+    return null;
+  }
+
+  return sourceNode.data.runState.generationId;
+}
+
 function areReferenceBindingsEqual(
   left: WorkflowReferenceBinding[],
   right: WorkflowReferenceBinding[]
@@ -1616,14 +1649,21 @@ function syncNodeReferenceBindings(
       .filter((handle): handle is string => Boolean(handle))
   );
   const referenceEdges = getIncomingEdges(graph, node.id)
-    .filter((edge) => getNormalizedIncomingTargetHandle(edge, node) === 'image-reference');
+    .filter((edge) => {
+      const normalizedHandle = getNormalizedIncomingTargetHandle(edge, node);
+      return normalizedHandle === 'image-reference'
+        || (node.type === 'video-generate' && (data as VideoGenerateNodeData).model === 'kling-3.0-video' && normalizedHandle === 'reference-video');
+    });
 
   const nextBindings = referenceEdges.map((edge, index) => {
     const existingBinding = existingBindings.get(edge.id);
     const normalizedExistingHandle = normalizeWorkflowReferenceHandle(existingBinding?.handle);
     const isLegacyNamedReference = edge.targetHandle === 'element-image';
+    const isKlingVideoReference = node.type === 'video-generate'
+      && (data as VideoGenerateNodeData).model === 'kling-3.0-video'
+      && getNormalizedIncomingTargetHandle(edge, node) === 'reference-video';
     const handle = normalizedExistingHandle ?? (
-      isLegacyNamedReference
+      isLegacyNamedReference || isKlingVideoReference
         ? buildElementHandle(
             getWorkflowElementSourceDisplayName(getNodeById(graph, edge.source), index + 1),
             reservedHandles,
@@ -1747,6 +1787,46 @@ export function getResolvedWorkflowImageReferences(
   return [...connectedReferences, ...legacyElements];
 }
 
+export function getResolvedWorkflowVideoReferences(
+  graph: WorkflowCanvasGraph,
+  nodeId: string
+): WorkflowResolvedVideoReference[] {
+  const node = getNodeById(graph, nodeId);
+  if (!node || node.type !== 'video-generate') {
+    return [];
+  }
+
+  const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
+  const bindingByEdgeId = new Map(data.referenceBindings.map((binding) => [binding.edgeId, binding]));
+  const usedHandles = new Set<string>();
+
+  return getIncomingEdges(graph, nodeId)
+    .filter((edge) => getNormalizedIncomingTargetHandle(edge, node) === 'reference-video')
+    .map((edge, index) => {
+      const sourceNode = getNodeById(graph, edge.source);
+      const displayName = getWorkflowElementSourceDisplayName(sourceNode, index + 1);
+      const bindingHandle = normalizeWorkflowReferenceHandle(bindingByEdgeId.get(edge.id)?.handle);
+      const handle = bindingHandle && !usedHandles.has(bindingHandle)
+        ? bindingHandle
+        : buildElementHandle(displayName, usedHandles, index + 1);
+      if (bindingHandle && handle === bindingHandle) {
+        usedHandles.add(handle);
+      }
+
+      return {
+        id: edge.id,
+        edgeId: edge.id,
+        handle,
+        displayName,
+        url: sourceNode ? getNodeOutputUrl(sourceNode) : null,
+        storagePath: getWorkflowVideoReferenceStoragePath(sourceNode),
+        sourceGenerationId: getWorkflowVideoReferenceSourceGenerationId(sourceNode),
+        sourceNodeId: sourceNode?.id ?? null,
+        sourceTitle: typeof sourceNode?.data.title === 'string' ? sourceNode.data.title : null,
+      } satisfies WorkflowResolvedVideoReference;
+    });
+}
+
 export function getResolvedWorkflowElementReferences(
   graph: WorkflowCanvasGraph,
   nodeId: string
@@ -1806,11 +1886,12 @@ function buildUnknownHandleIssueMessage(params: {
   mediumLabel: 'image' | 'video';
   referenceMode?: 'frames' | 'references';
   isMultiShot?: boolean;
+  multiShotReferencesEnabled?: boolean;
 }): string {
-  const { handles, validHandles, mediumLabel, referenceMode, isMultiShot } = params;
+  const { handles, validHandles, mediumLabel, referenceMode, isMultiShot, multiShotReferencesEnabled } = params;
   const handleLabel = handles.join(', ');
 
-  if (isMultiShot) {
+  if (isMultiShot && !multiShotReferencesEnabled) {
     return `Shot prompts mention ${handleLabel}, but multi-shot runs do not use named elements. Remove the @handles from the shot prompts.`;
   }
 
@@ -1864,7 +1945,7 @@ export function inspectWorkflowNodeCapabilities(
   const connectedImageReferences = resolvedImageReferences.filter((reference) => !reference.legacy);
   const handledReferences = resolvedImageReferences.filter((reference) => Boolean(reference.handle));
   const connectedHandledReferences = connectedImageReferences.filter((reference) => Boolean(reference.handle));
-  const handledReferenceHandles = handledReferences
+  let handledReferenceHandles = handledReferences
     .map((reference) => reference.handle)
     .filter((handle): handle is string => Boolean(handle));
 
@@ -1927,7 +2008,13 @@ export function inspectWorkflowNodeCapabilities(
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const model = VIDEO_MODELS[data.model];
     const isSeedance2Family = isSeedance2VideoModel(data.model);
+    const isKlingVideoModel = data.model === 'kling-3.0-video';
     const isGrokVideoModel = data.model === 'grok-imagine-video';
+    const connectedVideoReferences = isKlingVideoModel
+      ? getResolvedWorkflowVideoReferences(graph, node.id)
+      : [];
+    const handledVideoReferenceHandles = connectedVideoReferences.map((reference) => reference.handle);
+    handledReferenceHandles = [...handledReferenceHandles, ...handledVideoReferenceHandles];
     const videoElementSupport = getVideoElementSupport(data.model, {
       mode: data.mode,
       isMultiShot: data.isMultiShot,
@@ -1940,29 +2027,33 @@ export function inspectWorkflowNodeCapabilities(
     connectedElementCount = connectedHandledReferences.length;
     totalReferenceImageCount = referenceImageCount + legacyElementCount;
     const handledReferenceCount = connectedElementCount + legacyElementCount;
-    namedElementCount = handledReferenceCount;
-    namedElementLimit = videoElementSupport.maxElements;
+    namedElementCount = handledReferenceCount + handledVideoReferenceHandles.length;
+    namedElementLimit = isKlingVideoModel ? 3 : videoElementSupport.maxElements;
     activeReferenceMode = data.isMultiShot
-      ? 'frames'
+      ? (isKlingVideoModel && referenceVideoCount > 0 ? 'references' : 'frames')
       : isSeedance2Family
         ? (referenceImageCount > 0 || referenceVideoCount > 0 || referenceAudioCount > 0 ? 'references' : null)
-        : totalReferenceImageCount > 0
+        : totalReferenceImageCount > 0 || (isKlingVideoModel && referenceVideoCount > 0)
           ? 'references'
           : (startFrameCount > 0 || endFrameCount > 0 ? 'frames' : null);
     isMultiShot = data.isMultiShot;
     multiPromptCount = data.multiPrompts.length;
     referenceImageLimit = data.isMultiShot ? 0 : videoElementSupport.maxElements;
-    referenceVideoLimit = isSeedance2Family ? 3 : referenceVideoLimit;
+    referenceVideoLimit = (isSeedance2Family || isKlingVideoModel) ? 3 : referenceVideoLimit;
     referenceVideoDurationLimitSeconds = isSeedance2Family ? 15 : referenceVideoDurationLimitSeconds;
     unsupportedFeatureNotes = [
       isSeedance2Family
         ? 'Seedance 2 workflows use image, video, and audio references instead of start and end frames.'
+        : isKlingVideoModel
+          ? 'Kling 3.0 Video can use Start and End frames plus named video references connected through Video refs.'
         : 'Workflow video nodes use the graph-connected Start frame and End frame handles for new authoring.',
       data.isMultiShot
         ? 'Multi-shot owns its shot prompts locally and ignores any connected upstream prompt text.'
         : 'Single-shot video uses the shared upstream prompt text unless you switch into multi-shot.',
       isSeedance2Family
         ? 'Prepared image, video, and audio assets are preferred when available, but URL-based references still work.'
+        : isKlingVideoModel && referenceVideoCount > 0
+          ? 'Mention connected video references in prompts with their generated @handles.'
         : data.isMultiShot
           ? 'Multi-shot allows an optional start frame only. End frames stay disabled in this mode.'
           : totalReferenceImageCount > 0
@@ -2040,10 +2131,17 @@ export function inspectWorkflowNodeCapabilities(
       });
     }
 
-    if (isSeedance2Family && referenceVideoCount > 3) {
+    if ((isSeedance2Family || isKlingVideoModel) && referenceVideoCount > 3) {
       issues.push({
         code: 'too-many-reference-videos',
-        message: 'Seedance 2 supports at most 3 reference videos in a workflow node.',
+        message: `${model.displayName} supports at most 3 reference videos in a workflow node.`,
+      });
+    }
+
+    if (isKlingVideoModel && referenceAudioCount > 0) {
+      issues.push({
+        code: 'unsupported-elements-mode',
+        message: 'Kling 3.0 Video supports named video references, but audio references are only available on Seedance 2 models.',
       });
     }
 
@@ -2065,6 +2163,13 @@ export function inspectWorkflowNodeCapabilities(
       issues.push({
         code: 'missing-element-sources',
         message: 'A connected image reference does not have an image output yet. Run or upload the upstream image source before continuing.',
+      });
+    }
+
+    if (isKlingVideoModel && connectedVideoReferences.some((reference) => !reference.url)) {
+      issues.push({
+        code: 'missing-element-sources',
+        message: 'A connected video reference does not have a video output yet. Run or upload the upstream video source before continuing.',
       });
     }
 
@@ -2095,6 +2200,7 @@ export function inspectWorkflowNodeCapabilities(
           mediumLabel: 'video',
           referenceMode: activeReferenceMode ?? undefined,
           isMultiShot: data.isMultiShot,
+          multiShotReferencesEnabled: isKlingVideoModel && referenceVideoCount > 0,
         }),
       });
     }
@@ -2279,6 +2385,7 @@ export function validateWorkflowConnectionForGraph(params: {
   if (targetNode.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const isSeedance2Family = isSeedance2VideoModel(data.model);
+    const isKlingVideoModel = data.model === 'kling-3.0-video';
 
     if (normalizedTargetHandle === 'start-frame') {
       if (isSeedance2Family) {
@@ -2342,19 +2449,26 @@ export function validateWorkflowConnectionForGraph(params: {
       }
     }
 
-    if ((normalizedTargetHandle === 'reference-video' || normalizedTargetHandle === 'reference-audio') && !isSeedance2Family) {
+    if (normalizedTargetHandle === 'reference-video' && !isSeedance2Family && !isKlingVideoModel) {
       return {
         valid: false,
-        message: 'Reference videos and audio are available on Seedance 2 and Seedance 2 Fast only.',
+        message: 'Reference videos are available on Kling 3.0 Video, Seedance 2, and Seedance 2 Fast only.',
       };
     }
 
-    if (normalizedTargetHandle === 'reference-video' && isSeedance2Family) {
+    if (normalizedTargetHandle === 'reference-audio' && !isSeedance2Family) {
+      return {
+        valid: false,
+        message: 'Reference audio is available on Seedance 2 and Seedance 2 Fast only.',
+      };
+    }
+
+    if (normalizedTargetHandle === 'reference-video' && (isSeedance2Family || isKlingVideoModel)) {
       const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-video');
       if (currentCount >= 3) {
         return {
           valid: false,
-          message: 'Seedance 2 supports up to 3 reference videos per node.',
+          message: `${VIDEO_MODELS[data.model].displayName} supports up to 3 reference videos per node.`,
         };
       }
     }

@@ -54,6 +54,7 @@ import {
   getWorkflowNodeOutputHandles,
   inspectWorkflowNodeCapabilities,
   inspectWorkflowNodeDependencies,
+  getResolvedWorkflowVideoReferences,
   isSeedance2VideoModel,
   normalizeNodeData,
   resolveNodeInputs,
@@ -1535,6 +1536,7 @@ function CapabilityLimitsCard({
   if (node.type === 'video-generate') {
     const videoData = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const seedanceFamily = isSeedance2VideoModel(videoData.model);
+    const klingVideo = videoData.model === 'kling-3.0-video';
 
     rows.push({
       label: seedanceFamily ? 'Image refs' : 'Start frame',
@@ -1543,8 +1545,8 @@ function CapabilityLimitsCard({
         : `${capabilityValidation.startFrameCount}/1`,
     });
     rows.push({
-      label: seedanceFamily ? 'Video refs' : 'End frame',
-      value: seedanceFamily
+      label: seedanceFamily || klingVideo ? 'Video refs' : 'End frame',
+      value: seedanceFamily || klingVideo
         ? `${capabilityValidation.referenceVideoCount}/${capabilityValidation.referenceVideoLimit ?? 3}`
         : capabilityValidation.isMultiShot
           ? `${capabilityValidation.endFrameCount}/0`
@@ -1583,9 +1585,11 @@ function CapabilityLimitsCard({
       });
     }
     rows.push({
-      label: seedanceFamily ? 'Prepared assets' : 'Shot prompts',
+      label: seedanceFamily ? 'Prepared assets' : klingVideo ? 'Kling refs' : 'Shot prompts',
       value: seedanceFamily
         ? `${getSeedanceAssetSummaryItems(graph, node.id).filter((item) => item.prepared).length} ready`
+        : klingVideo
+          ? `${capabilityValidation.referenceVideoCount} connected`
         : capabilityValidation.isMultiShot
           ? `${capabilityValidation.multiPromptCount} active`
           : 'Single-shot',
@@ -1636,6 +1640,9 @@ function CapabilityLimitsCard({
                     const videoData = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
                     if (isSeedance2VideoModel(videoData.model)) {
                       return 'Seedance 2 uses connected image, video, and audio references. Prepared assets are preferred automatically when available.';
+                    }
+                    if (videoData.model === 'kling-3.0-video' && capabilityValidation.referenceVideoCount > 0) {
+                      return 'Kling 3.0 Video uses connected video references as named @handles while keeping Start and End frames available.';
                     }
                     return capabilityValidation.isMultiShot
                       ? 'Multi-shot video keeps prompts locally, allows an optional start frame, and does not use end frames.'
@@ -1706,6 +1713,7 @@ function NodeEditorContent({
   const videoGenerateNode = selectedKind === 'video-generate' ? node.data as VideoGenerateNodeData : null;
   const videoModel = videoGenerateNode ? VIDEO_MODELS[videoGenerateNode.model] : null;
   const isSeedance2Family = Boolean(videoGenerateNode && isSeedance2VideoModel(videoGenerateNode.model));
+  const isKlingVideoModel = Boolean(videoGenerateNode && videoGenerateNode.model === 'kling-3.0-video');
   const motionGenerateNode = selectedKind === 'motion-generate' ? node.data as MotionGenerateNodeData : null;
   const motionModel = motionGenerateNode ? MOTION_MODELS[motionGenerateNode.model] : null;
   const videoDurationRange = videoGenerateNode ? getVideoDurationRange(videoGenerateNode.model) : null;
@@ -1719,6 +1727,9 @@ function NodeEditorContent({
   const resolvedInputs = resolveNodeInputs(graph, node.id);
   const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
   const resolvedImageReferences = getResolvedWorkflowImageReferences(graph, node.id);
+  const resolvedVideoReferences = isKlingVideoModel
+    ? getResolvedWorkflowVideoReferences(graph, node.id)
+    : [];
   const promptMentionCandidates = selectedKind === 'text-input'
     ? getWorkflowPromptMentionCandidates(graph, node.id)
     : [];
@@ -2142,6 +2153,57 @@ function NodeEditorContent({
               checked={videoGenerateNode.fixedLens}
               onChange={(checked) => onUpdateNode(node.id, { ...node.data, fixedLens: checked } as Partial<WorkflowNodeData>)}
             />
+          )}
+          {isKlingVideoModel && (
+            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Kling video elements</div>
+                  <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                    Connected video refs become named Kling elements. Mention their @handles in the prompt or shot prompts.
+                  </p>
+                </div>
+                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-zinc-300">
+                  {capabilityValidation.referenceVideoCount}/3
+                </span>
+              </div>
+              {resolvedVideoReferences.length > 0 ? (
+                <div className="mt-4 space-y-3">
+                  {resolvedVideoReferences.map((reference) => (
+                    <div key={reference.edgeId} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-zinc-100">{reference.displayName}</span>
+                        <span className="text-xs text-zinc-500">{reference.url ? '1 connected' : 'Waiting for video'}</span>
+                      </div>
+                      <div className="mt-3 inline-flex rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-100">
+                        {reference.handle}
+                      </div>
+                      <label className="mt-3 block text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                        Handle
+                        <input
+                          value={reference.handle}
+                          onChange={(event) => {
+                            const nextBindings = [
+                              ...videoGenerateNode.referenceBindings.filter((binding) => binding.edgeId !== reference.edgeId),
+                              { edgeId: reference.edgeId, handle: event.target.value },
+                            ];
+                            onUpdateNode(node.id, {
+                              ...node.data,
+                              referenceBindings: nextBindings,
+                            } as Partial<WorkflowNodeData>);
+                          }}
+                          className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-sky-200 outline-none focus:border-sky-500/40"
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-4 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-400">
+                  Connect a video input or upstream video output to Video refs.
+                </p>
+              )}
+            </div>
           )}
           {isSeedance2Family ? (
             <>

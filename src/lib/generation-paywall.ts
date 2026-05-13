@@ -121,6 +121,7 @@ export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPre
   if (source.category === 'video' || source.category === 'ugc-ad') {
     return (
       countRecoverableDescriptors(workflowSettings.elements) > 0 ||
+      countRecoverableDescriptors(workflowSettings.klingVideoElements) > 0 ||
       hasRecoverableDescriptor(workflowSettings.startFrame, 'image') ||
       hasRecoverableDescriptor(workflowSettings.endFrame, 'image')
     );
@@ -176,6 +177,7 @@ function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<str
   const referenceVideoCount = Array.isArray(workflowSettings.referenceVideoUrls)
     ? workflowSettings.referenceVideoUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
     : 0;
+  const klingVideoElementCount = countRecoverableDescriptors(workflowSettings.klingVideoElements);
   const referenceAudioCount = Array.isArray(workflowSettings.referenceAudioUrls)
     ? workflowSettings.referenceAudioUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
     : 0;
@@ -225,7 +227,7 @@ function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<str
   const inputLabels = [
     formatListCount(frameCount, 'saved frame', 'saved frames'),
     formatListCount(namedReferenceCount, 'named reference', 'named references'),
-    formatListCount(referenceVideoCount, 'video reference', 'video references'),
+    formatListCount(referenceVideoCount + klingVideoElementCount, 'video reference', 'video references'),
     formatListCount(referenceAudioCount, 'audio reference', 'audio references'),
   ].filter((value): value is string => Boolean(value));
 

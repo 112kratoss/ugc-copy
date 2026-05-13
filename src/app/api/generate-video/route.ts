@@ -159,6 +159,7 @@ export async function POST(request: NextRequest) {
             elementImageUrls = [],
             referenceVideoUrls = [],
             referenceAudioUrls = [],
+            klingVideoElements = [],
             startImageUrl = null,
             endImageUrl = null,
             mode = 'std',
@@ -220,6 +221,7 @@ export async function POST(request: NextRequest) {
             elementImageUrls,
             referenceVideoUrls,
             referenceAudioUrls,
+            klingVideoElements,
             startImageUrl,
             endImageUrl,
             imageUrls: buildImageUrls(startImageUrl, endImageUrl),
@@ -306,13 +308,17 @@ export async function GET(request: NextRequest) {
             localGeneration?.workflow_settings && typeof localGeneration.workflow_settings === 'object'
                 ? localGeneration.workflow_settings as Record<string, unknown>
                 : null;
-        const referenceCount =
-            (Array.isArray(workflowSettings?.elements) ? workflowSettings.elements.length : 0) +
-            (Array.isArray(workflowSettings?.referenceVideoUrls) ? workflowSettings.referenceVideoUrls.length : 0) +
-            (Array.isArray(workflowSettings?.referenceAudioUrls) ? workflowSettings.referenceAudioUrls.length : 0) +
-            (workflowSettings?.startFrame ? 1 : 0) +
-            (workflowSettings?.endFrame ? 1 : 0);
-        const estimatedTotalMs = estimateGenerationDurationMs({
+	        const referenceCount =
+	            (Array.isArray(workflowSettings?.elements) ? workflowSettings.elements.length : 0) +
+	            (Array.isArray(workflowSettings?.referenceVideoUrls) ? workflowSettings.referenceVideoUrls.length : 0) +
+	            (Array.isArray(workflowSettings?.referenceAudioUrls) ? workflowSettings.referenceAudioUrls.length : 0) +
+	            (Array.isArray(workflowSettings?.klingVideoElements) ? workflowSettings.klingVideoElements.length : 0) +
+	            (workflowSettings?.startFrame ? 1 : 0) +
+	            (workflowSettings?.endFrame ? 1 : 0);
+	        const hasReferenceVideo =
+	            (Array.isArray(workflowSettings?.referenceVideoUrls) && workflowSettings.referenceVideoUrls.length > 0) ||
+	            (Array.isArray(workflowSettings?.klingVideoElements) && workflowSettings.klingVideoElements.length > 0);
+	        const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'video',
             model: selectedModel,
             mode: typeof workflowSettings?.mode === 'string' ? workflowSettings.mode : null,
@@ -326,8 +332,8 @@ export async function GET(request: NextRequest) {
             shotCount: Array.isArray(workflowSettings?.multiPrompts) ? workflowSettings.multiPrompts.length : null,
             referenceCount,
             hasSound: typeof workflowSettings?.sound === 'boolean' ? workflowSettings.sound : null,
-            hasReferenceVideo: Array.isArray(workflowSettings?.referenceVideoUrls) && workflowSettings.referenceVideoUrls.length > 0,
-        });
+	            hasReferenceVideo,
+	        });
         let status: 'processing' | 'waiting' | 'succeeded' | 'failed' = 'processing';
         let output: string | null = null;
         let error: string | null = null;

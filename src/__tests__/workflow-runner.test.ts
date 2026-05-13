@@ -5,6 +5,8 @@ import {
   createWorkflowNode,
   normalizeWorkflowGraph,
   type TextInputNodeData,
+  type VideoGenerateNodeData,
+  type VideoInputNodeData,
   type WorkflowCanvasGraph,
   type WorkflowCanvasRunStepRecord,
 } from '@/lib/workflow-canvas';
@@ -331,6 +333,62 @@ describe('workflow-runner recovery', () => {
       status: 'processing',
       generation_id: 'gen-video',
     });
+  });
+
+  it('passes connected Kling video references as named video elements when a queued video node resumes', async () => {
+    const state = createQueuedWorkflowState();
+    const referenceVideo = createWorkflowNode('video-input', { x: 260, y: 220 });
+    state.graph = normalizeWorkflowGraph({
+      ...state.graph,
+      nodes: [
+        ...state.graph.nodes.map((node) => {
+          if (node.id !== state.videoNodeId) return node;
+          const videoData = node.data as VideoGenerateNodeData;
+          return {
+            ...node,
+            data: {
+              ...videoData,
+              model: 'kling-3.0-video' as VideoGenerateNodeData['model'],
+            } satisfies VideoGenerateNodeData,
+          };
+        }),
+        {
+          ...referenceVideo,
+          data: {
+            ...(referenceVideo.data as VideoInputNodeData),
+            title: 'Motion ref',
+            videoUrl: 'uploads/user-1/motion-ref.mp4',
+            storagePath: 'uploads/user-1/motion-ref.mp4',
+          } satisfies VideoInputNodeData,
+        },
+      ],
+      edges: [
+        ...state.graph.edges,
+        createCanvasEdge(referenceVideo.id, 'video', state.videoNodeId, 'reference-video'),
+      ],
+    });
+    const supabase = createSupabaseMock(state);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    await getWorkflowRunDetails({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'kling-3.0-video',
+        klingVideoElements: [
+          expect.objectContaining({
+            url: 'uploads/user-1/motion-ref.mp4',
+            handle: '@motion_ref',
+            displayName: 'Motion ref',
+            storagePath: 'uploads/user-1/motion-ref.mp4',
+          }),
+        ],
+      })
+    );
   });
 
   it('dedupes concurrent recovery polls for the same run', async () => {
