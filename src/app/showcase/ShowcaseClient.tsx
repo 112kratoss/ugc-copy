@@ -143,6 +143,12 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
     return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
 }
 
+function setNonDefaultParam(params: URLSearchParams, key: string, value: string, defaultValue: string) {
+    if (value !== defaultValue) {
+        params.set(key, value);
+    }
+}
+
 export default function ShowcaseClient({
     initialFeed,
     initialCategory,
@@ -280,14 +286,14 @@ export default function ShowcaseClient({
 
         try {
             const params = new URLSearchParams({
-                category,
-                sort,
-                tool,
-                unlock,
-                resource,
                 offset: String(pageInfo.nextOffset),
                 limit: String(SHOWCASE_PAGE_SIZE),
             });
+            setNonDefaultParam(params, 'category', category, 'all');
+            setNonDefaultParam(params, 'sort', sort, 'recent');
+            setNonDefaultParam(params, 'tool', tool, 'all');
+            setNonDefaultParam(params, 'unlock', unlock, 'all');
+            setNonDefaultParam(params, 'resource', resource, 'all');
 
             const response = await fetch(`/api/showcase/feed?${params.toString()}`, session?.access_token ? {
                 headers: {
@@ -719,7 +725,7 @@ export default function ShowcaseClient({
                                                     </div>
                                                 ) : null}
                                                 <div className="mt-3">
-                                                    <CreatorIdentity creator={item.creator} compact />
+                                                    <CreatorIdentity creator={item.creator} compact prefetch={false} />
                                                 </div>
                                                 <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-zinc-400">
                                                     {getItemSummary(item)}
@@ -762,6 +768,7 @@ export default function ShowcaseClient({
                                                 {item.asset ? (
                                                     <Link
                                                         href={buildCommunityDetailPath(item.id, 'resources')}
+                                                        prefetch={false}
                                                         className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
                                                     >
                                                         <ShoppingBag className="h-4 w-4" />
@@ -833,6 +840,7 @@ export default function ShowcaseClient({
                         {selectedItem.asset ? (
                             <Link
                                 href={buildCommunityDetailPath(selectedItem.id, 'resources')}
+                                prefetch={false}
                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
                             >
                                 View unlock
@@ -840,6 +848,7 @@ export default function ShowcaseClient({
                         ) : null}
                         <Link
                             href={buildCommunityDetailPath(selectedItem.id)}
+                            prefetch={false}
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
                         >
                             Open page

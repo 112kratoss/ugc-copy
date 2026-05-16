@@ -431,6 +431,119 @@ export async function completeMobileMarketplaceUnlock({
   };
 }
 
+export async function unlockMarketplaceAssetWithCredits({
+  adminSupabase,
+  userId,
+  assetId,
+}: {
+  adminSupabase: SupabaseClient;
+  userId: string;
+  assetId: string;
+}): Promise<MobileCommerceSyncResult> {
+  const { data: asset, error: assetError } = await adminSupabase
+    .from('marketplace_assets')
+    .select('id, seller_user_id, price_usd_cents, status')
+    .eq('id', assetId)
+    .maybeSingle();
+
+  if (assetError) {
+    throw new MobileCommerceError('Failed to load marketplace unlock.', 500);
+  }
+
+  if (!asset || (asset.status !== 'active' && asset.status !== 'unlisted')) {
+    throw new MobileCommerceError('Marketplace unlock not found.', 404);
+  }
+
+  if (asset.seller_user_id === userId) {
+    throw new MobileCommerceError('You already own this listing.', 400);
+  }
+
+  if (asset.price_usd_cents <= 0) {
+    throw new MobileCommerceError('This listing does not require paid access.', 400);
+  }
+
+  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
+    .from('marketplace_purchases')
+    .select('asset_id')
+    .eq('asset_id', assetId)
+    .eq('buyer_user_id', userId)
+    .maybeSingle();
+
+  if (existingPurchaseError) {
+    throw new MobileCommerceError('Failed to check marketplace purchase history.', 500);
+  }
+
+  if (existingPurchase) {
+    return {
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId,
+      credits: await getProfileCredits(adminSupabase, userId),
+      alreadyProcessed: true,
+    };
+  }
+
+  const creditCost = asset.price_usd_cents;
+  const { data: remainingCredits, error: deductError } = await adminSupabase.rpc('deduct_credits', {
+    p_user_id: userId,
+    p_cost: creditCost,
+  });
+
+  if (deductError) {
+    throw new MobileCommerceError('Failed to deduct credits for this unlock.', 500);
+  }
+
+  if (typeof remainingCredits !== 'number' || remainingCredits < 0) {
+    throw new MobileCommerceError(`Insufficient credits. This unlock costs ${creditCost} credits.`, 402);
+  }
+
+  const externalOrderId = buildMobileExternalOrderId('revenuecat', `credits_asset_${asset.id}_${userId}`);
+
+  const refundCredits = async () => {
+    await adminSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: creditCost });
+  };
+
+  const { error: orderError } = await adminSupabase
+    .from('marketplace_orders')
+    .insert({
+      asset_id: asset.id,
+      buyer_user_id: userId,
+      razorpay_order_id: externalOrderId,
+      razorpay_payment_id: `credits_${asset.id}_${userId}`,
+      amount_subunits: asset.price_usd_cents,
+      currency: 'USD',
+      status: 'created',
+    });
+
+  if (orderError) {
+    await refundCredits();
+    throw new MobileCommerceError('Failed to record credit unlock.', 500);
+  }
+
+  const { data: completed, error: completionError } = await adminSupabase.rpc('complete_marketplace_purchase', {
+    p_razorpay_order_id: externalOrderId,
+    p_razorpay_payment_id: `credits_unlock_${asset.id}_${userId}`,
+  });
+
+  if (completionError) {
+    await refundCredits();
+    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
+  }
+
+  if (!completed) {
+    await refundCredits();
+    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
+  }
+
+  return {
+    success: true,
+    entitlement: 'marketplace_unlock',
+    assetId,
+    credits: await getProfileCredits(adminSupabase, userId),
+    alreadyProcessed: false,
+  };
+}
+
 export async function completeMobilePostResourceUnlock({
   adminSupabase,
   userId,
@@ -512,6 +625,119 @@ export async function completeMobilePostResourceUnlock({
     entitlement: 'post_resource_unlock',
     postId,
     alreadyProcessed: !completed,
+  };
+}
+
+export async function unlockPostResourceBundleWithCredits({
+  adminSupabase,
+  userId,
+  postId,
+}: {
+  adminSupabase: SupabaseClient;
+  userId: string;
+  postId: string;
+}): Promise<MobileCommerceSyncResult> {
+  const { data: bundle, error: bundleError } = await adminSupabase
+    .from('post_resource_bundles')
+    .select('id, post_id, owner_user_id, access_mode, status, price_usd_cents')
+    .eq('post_id', postId)
+    .maybeSingle();
+
+  if (bundleError) {
+    throw new MobileCommerceError('Failed to load post unlock.', 500);
+  }
+
+  if (!bundle || bundle.status !== 'published') {
+    throw new MobileCommerceError('Post unlock not found.', 404);
+  }
+
+  if (bundle.owner_user_id === userId) {
+    throw new MobileCommerceError('You already own this unlock.', 400);
+  }
+
+  if (bundle.access_mode !== 'paid' || bundle.price_usd_cents <= 0) {
+    throw new MobileCommerceError('This post unlock does not require paid access.', 400);
+  }
+
+  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
+    .from('post_resource_bundle_purchases')
+    .select('bundle_id')
+    .eq('bundle_id', bundle.id)
+    .eq('buyer_user_id', userId)
+    .maybeSingle();
+
+  if (existingPurchaseError) {
+    throw new MobileCommerceError('Failed to check post unlock purchase history.', 500);
+  }
+
+  if (existingPurchase) {
+    return {
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId,
+      credits: await getProfileCredits(adminSupabase, userId),
+      alreadyProcessed: true,
+    };
+  }
+
+  const creditCost = bundle.price_usd_cents;
+  const { data: remainingCredits, error: deductError } = await adminSupabase.rpc('deduct_credits', {
+    p_user_id: userId,
+    p_cost: creditCost,
+  });
+
+  if (deductError) {
+    throw new MobileCommerceError('Failed to deduct credits for this unlock.', 500);
+  }
+
+  if (typeof remainingCredits !== 'number' || remainingCredits < 0) {
+    throw new MobileCommerceError(`Insufficient credits. This unlock costs ${creditCost} credits.`, 402);
+  }
+
+  const externalOrderId = buildMobileExternalOrderId('revenuecat', `credits_bundle_${bundle.id}_${userId}`);
+
+  const refundCredits = async () => {
+    await adminSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: creditCost });
+  };
+
+  const { error: orderError } = await adminSupabase
+    .from('post_resource_bundle_orders')
+    .insert({
+      bundle_id: bundle.id,
+      buyer_user_id: userId,
+      razorpay_order_id: externalOrderId,
+      razorpay_payment_id: `credits_${bundle.id}_${userId}`,
+      amount_subunits: bundle.price_usd_cents,
+      currency: 'USD',
+      status: 'created',
+    });
+
+  if (orderError) {
+    await refundCredits();
+    throw new MobileCommerceError('Failed to record credit unlock.', 500);
+  }
+
+  const { data: completed, error: completionError } = await adminSupabase.rpc('complete_post_resource_bundle_purchase', {
+    p_razorpay_order_id: externalOrderId,
+    p_razorpay_payment_id: `credits_unlock_${bundle.id}_${userId}`,
+  });
+
+  if (completionError) {
+    await refundCredits();
+    throw new MobileCommerceError('Failed to unlock post resources.', 500);
+  }
+
+  if (!completed) {
+    await refundCredits();
+    throw new MobileCommerceError('Failed to unlock post resources.', 500);
+  }
+
+  return {
+    success: true,
+    entitlement: 'post_resource_unlock',
+    postId,
+    credits: await getProfileCredits(adminSupabase, userId),
+    alreadyProcessed: false,
   };
 }
 

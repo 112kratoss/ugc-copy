@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,27 @@ vi.mock('next/navigation', () => ({
   }),
   usePathname: () => '/showcase',
   useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...props
+  }: AnchorHTMLAttributes<HTMLAnchorElement> & {
+    href: string;
+    prefetch?: boolean;
+    children: ReactNode;
+  }) => (
+    <a
+      href={href}
+      data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+      {...props}
+    >
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock('@/app/components/AuthProvider', () => ({
@@ -142,5 +163,28 @@ describe('ShowcaseClient save actions', () => {
         name: /save campaign frame\. 4 saves/i,
       })).toHaveAttribute('aria-pressed', 'false');
     });
+  });
+
+  it('disables prefetching for community card detail and creator links', () => {
+    renderShowcase(createShowcaseItem({
+      asset: {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Campaign Frame Unlock',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        previewText: 'Prompt and workflow included.',
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+      },
+    }));
+
+    expect(screen.getByRole('link', { name: /creator name/i })).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /view unlock/i })).toHaveAttribute('data-prefetch', 'false');
+
+    fireEvent.click(screen.getByAltText('Campaign Frame'));
+
+    expect(screen.getAllByRole('link', { name: /view unlock/i }).at(-1)).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /open page/i })).toHaveAttribute('data-prefetch', 'false');
   });
 });

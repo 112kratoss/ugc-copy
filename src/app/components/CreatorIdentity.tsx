@@ -6,12 +6,14 @@ import type { ShowcaseCreator } from '@/lib/showcase';
 interface CreatorIdentityProps {
   creator: ShowcaseCreator;
   compact?: boolean;
+  prefetch?: boolean;
   usernamePrefix?: boolean;
 }
 
 export default function CreatorIdentity({
   creator,
   compact = false,
+  prefetch,
   usernamePrefix = true,
 }: CreatorIdentityProps) {
   const showSecondaryUsername =
@@ -54,7 +56,7 @@ export default function CreatorIdentity({
   }
 
   return (
-    <Link href={`/creators/${creator.username}`} className={className}>
+    <Link href={`/creators/${creator.username}`} prefetch={prefetch} className={className}>
       {content}
     </Link>
   );

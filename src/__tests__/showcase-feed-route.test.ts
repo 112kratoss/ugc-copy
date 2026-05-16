@@ -76,6 +76,24 @@ describe('/api/showcase/feed route', () => {
     });
   });
 
+  it('treats the all tool filter as the unfiltered community feed', async () => {
+    const { GET } = await import('@/app/api/showcase/feed/route');
+    const response = await GET(new NextRequest('http://localhost/api/showcase/feed?tool=all&offset=12'));
+
+    expect(response.status).toBe(200);
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
+      category: 'all',
+      sort: 'recent',
+      offset: 12,
+      limit: 12,
+      viewerUserId: null,
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
+      countryCode: null,
+    });
+  });
+
   it('disables shared caching for personalized feed requests', async () => {
     const { GET } = await import('@/app/api/showcase/feed/route');
     const response = await GET(

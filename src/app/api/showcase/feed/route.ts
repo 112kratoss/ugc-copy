@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
     try {
         const searchParams = request.nextUrl.searchParams;
         const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
+        const tool = searchParams.get('tool');
         let viewerUserId: string | null = null;
 
         if (request.headers.get('Authorization')) {
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
             offset: normalizeShowcaseOffset(searchParams.get('offset'), searchParams.get('page'), limit),
             limit,
             viewerUserId,
-            tool: searchParams.get('tool'),
+            tool: tool && tool !== 'all' ? tool : null,
             unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
             resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
             countryCode: request.headers.get('x-vercel-ip-country'),

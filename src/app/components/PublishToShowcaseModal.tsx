@@ -138,17 +138,20 @@ export default function PublishToShowcaseModal({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+        className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 px-4 py-6 backdrop-blur-sm sm:items-center sm:py-8"
       >
         <motion.div
           initial={{ scale: 0.95, y: 20 }}
           animate={{ scale: 1, y: 0 }}
           exit={{ scale: 0.95, y: 20 }}
           onClick={(event) => event.stopPropagation()}
-          className="w-full max-w-lg rounded-[30px] border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="publish-to-showcase-title"
+          className="max-h-[calc(100vh-3rem)] w-full max-w-lg overflow-y-auto rounded-[30px] border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
         >
           <div className="mb-6 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 text-xl font-bold text-white">
+            <h3 id="publish-to-showcase-title" className="flex items-center gap-2 text-xl font-bold text-white">
               {shareAfterPublish ? <Share2 className="h-5 w-5 text-emerald-300" /> : <Globe className="h-5 w-5 text-emerald-300" />}
               {shareAfterPublish ? 'Add to portfolio & share' : 'Add this creation to your portfolio'}
             </h3>

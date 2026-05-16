@@ -11,6 +11,10 @@ const qualityMigrationPath = path.resolve(
   process.cwd(),
   'supabase/migrations/20260509054316_marketplace_quality_search.sql'
 );
+const visibilityAmbiguityMigrationPath = path.resolve(
+  process.cwd(),
+  'supabase/migrations/20260516100000_fix_post_bundle_cleanup_column_qualification.sql'
+);
 
 describe('post system marketplace reliability migration', () => {
   it('adds transactional publish functions for posts and generation-backed posts', () => {
@@ -50,5 +54,20 @@ describe('post system marketplace reliability migration', () => {
     expect(migration).toContain("p_sort = 'price-high'");
     expect(migration).toContain('profiles.username');
     expect(migration).toContain('marketplace_resource_bundle_quality_issue');
+  });
+
+  it('qualifies post visibility references inside bundle transaction functions', () => {
+    const migration = fs.readFileSync(visibilityAmbiguityMigrationPath, 'utf8');
+
+    expect(migration).toContain('INSERT INTO public.posts AS target');
+    expect(migration).toContain('RETURNING target.id, target.visibility INTO v_result_post_id, v_result_visibility');
+    expect(migration).toContain("SET visibility = CASE WHEN v_patch ? 'visibility' THEN v_patch->>'visibility' ELSE target.visibility END");
+    expect(migration).toContain('RETURNING target.id, target.visibility, target.title INTO v_result_post_id, v_result_visibility, v_result_title');
+    expect(migration).toContain('UPDATE public.post_resource_bundles AS bundles');
+    expect(migration).toContain('WHERE bundles.post_id = v_result_post_id');
+    expect(migration).toContain('UPDATE public.marketplace_assets AS assets');
+    expect(migration).toContain('WHERE assets.post_id = v_result_post_id');
+    expect(migration).not.toContain('RETURNING id, visibility');
+    expect(migration).not.toContain('WHERE post_id = v_result_post_id');
   });
 });

@@ -88,7 +88,6 @@ export default async function Home() {
     viewerUserId: auth.session?.user?.id ?? null,
     countryCode,
   });
-  const mediaFeedItems = showcaseFeed.items.filter((item) => item.mediaUrl);
   const previewByTool = await loadCreatorToolPreviewMap({
     viewerUserId: auth.session?.user?.id ?? null,
     seedItems: showcaseFeed.items,
@@ -232,7 +231,7 @@ export default async function Home() {
             initialCredits={auth.credits}
             hasResolvedInitialState
           >
-                <HomeShowcasePreviewGrid items={mediaFeedItems} />
+            <HomeShowcasePreviewGrid items={showcaseFeed.items} />
           </AuthProvider>
         </section>
       </main>
