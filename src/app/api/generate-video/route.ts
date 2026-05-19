@@ -12,6 +12,7 @@ import {
 } from '@/lib/generation-timing';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
+import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -435,6 +436,24 @@ export async function GET(request: NextRequest) {
                     })
                     .eq('prediction_id', predictionId);
                 await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+            }
+        }
+
+        if (localGeneration?.id && localGeneration?.user_id) {
+            if (status === 'succeeded' && output) {
+                await notifyGenerationStatus(adminSupabase, {
+                    id: localGeneration.id,
+                    user_id: localGeneration.user_id,
+                    category: localGeneration.category,
+                    model: localGeneration.model,
+                }, 'succeeded');
+            } else if (status === 'failed') {
+                await notifyGenerationStatus(adminSupabase, {
+                    id: localGeneration.id,
+                    user_id: localGeneration.user_id,
+                    category: localGeneration.category,
+                    model: localGeneration.model,
+                }, 'failed');
             }
         }
 

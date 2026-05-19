@@ -45,6 +45,23 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
   useEffect(() => clearFollowStatusTimer, []);
 
+  const notifyFollowCreated = (accessToken: string, followingId: string) => {
+    if (typeof fetch !== 'function') {
+      return;
+    }
+
+    void fetch('/api/profile/follow/notify', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ followingId }),
+    }).catch((error) => {
+      console.error('Failed to notify creator follow', error);
+    });
+  };
+
   useEffect(() => {
     let isActive = true;
 
@@ -162,6 +179,8 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
         if (error) {
           throw error;
         }
+
+        notifyFollowCreated(session.access_token, profile.id);
       } else {
         const { error } = await supabase
           .from('follows')

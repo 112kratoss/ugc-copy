@@ -24,10 +24,12 @@ type PostVisibility = 'public' | 'unlisted' | 'private';
 
 export interface PostReferenceRow {
   id: string;
+  user_id: string | null;
   generation_id: string | null;
   visibility: PostVisibility;
   category: PostCategory;
   prompt: string | null;
+  title?: string | null;
   source_kind: RawShowcaseSourceKind;
 }
 
@@ -38,6 +40,7 @@ export interface PostMediaRow {
 
 interface LegacyGenerationReferenceRow {
   id: string;
+  user_id: string | null;
   is_public: boolean | null;
   status: string | null;
   category: string | null;
@@ -115,7 +118,7 @@ async function findLegacyGenerationReference(
 ): Promise<PostReferenceRow | null> {
   const { data, error } = await adminSupabase
     .from('generations')
-    .select('id, is_public, status, category, prompt')
+    .select('id, user_id, is_public, status, category, prompt')
     .eq('id', generationId)
     .maybeSingle();
 
@@ -131,6 +134,7 @@ async function findLegacyGenerationReference(
 
   return {
     id: row.id,
+    user_id: row.user_id ?? null,
     generation_id: row.id,
     visibility: row.is_public ? 'public' : 'private',
     category: normalizeLegacyCategory(row.category),
@@ -253,14 +257,14 @@ async function findPostReferenceByColumn(
 ): Promise<PostReferenceRow | null> {
   let result = await adminSupabase
     .from('posts')
-    .select('id, generation_id, visibility, category, prompt, source_kind')
+    .select('id, user_id, generation_id, visibility, category, prompt, title, source_kind')
     .eq(column, value)
     .maybeSingle();
 
   if (isMissingPostTextColumnsError(result.error)) {
     result = await adminSupabase
       .from('posts')
-      .select('id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind')
       .eq(column, value)
       .maybeSingle();
   }

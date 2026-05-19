@@ -1,5 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  notifyMarketplaceUnlockCompleted,
+  notifyMobileCreditPurchase,
+  notifyMobilePurchasesRestored,
+  notifyPostResourceUnlockCompleted,
+} from '@/lib/mobile-notifications';
 import { PRICING_PLAN_MAP, type PricingPlan } from '@/lib/pricing';
 
 export type MobilePurchaseProvider = 'app_store' | 'play_store' | 'revenuecat' | 'sandbox';
@@ -343,11 +349,21 @@ export async function completeMobileCreditPurchase({
     throw new MobileCommerceError('Failed to assign mobile credits.', 500);
   }
 
+  const credits = await getProfileCredits(adminSupabase, userId);
+  const alreadyProcessed = !rpcSuccess;
+  if (!alreadyProcessed) {
+    await notifyMobileCreditPurchase(adminSupabase, {
+      userId,
+      credits,
+      transactionId,
+    });
+  }
+
   return {
     success: true,
     entitlement: 'credits',
-    credits: await getProfileCredits(adminSupabase, userId),
-    alreadyProcessed: !rpcSuccess,
+    credits,
+    alreadyProcessed,
   };
 }
 
@@ -422,6 +438,13 @@ export async function completeMobileMarketplaceUnlock({
   if (completionError) {
     throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
   }
+
+  await notifyMarketplaceUnlockCompleted(adminSupabase, {
+    buyerUserId: userId,
+    sellerUserId: asset.seller_user_id,
+    assetId,
+    alreadyProcessed: !completed,
+  });
 
   return {
     success: true,
@@ -535,6 +558,13 @@ export async function unlockMarketplaceAssetWithCredits({
     throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
   }
 
+  await notifyMarketplaceUnlockCompleted(adminSupabase, {
+    buyerUserId: userId,
+    sellerUserId: asset.seller_user_id,
+    assetId,
+    alreadyProcessed: false,
+  });
+
   return {
     success: true,
     entitlement: 'marketplace_unlock',
@@ -619,6 +649,14 @@ export async function completeMobilePostResourceUnlock({
   if (completionError) {
     throw new MobileCommerceError('Failed to unlock post resources.', 500);
   }
+
+  await notifyPostResourceUnlockCompleted(adminSupabase, {
+    buyerUserId: userId,
+    ownerUserId: bundle.owner_user_id,
+    postId,
+    bundleId: bundle.id,
+    alreadyProcessed: !completed,
+  });
 
   return {
     success: true,
@@ -732,6 +770,14 @@ export async function unlockPostResourceBundleWithCredits({
     throw new MobileCommerceError('Failed to unlock post resources.', 500);
   }
 
+  await notifyPostResourceUnlockCompleted(adminSupabase, {
+    buyerUserId: userId,
+    ownerUserId: bundle.owner_user_id,
+    postId,
+    bundleId: bundle.id,
+    alreadyProcessed: false,
+  });
+
   return {
     success: true,
     entitlement: 'post_resource_unlock',
@@ -776,6 +822,8 @@ export async function restoreMobileEntitlements(adminSupabase: SupabaseClient, u
       }]
       : [];
   });
+
+  await notifyMobilePurchasesRestored(adminSupabase, userId);
 
   return {
     success: true,

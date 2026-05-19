@@ -5,6 +5,8 @@ import {
     findPublicPostReferenceByIdOrGenerationId,
     isMissingPostsSchemaError,
 } from '@/lib/posts-server';
+import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
+import { createServiceClient } from '@/lib/server-helpers';
 
 export async function POST(request: NextRequest) {
     try {
@@ -55,6 +57,15 @@ export async function POST(request: NextRequest) {
         if (rpcError) {
             console.error('Error toggling save:', rpcError);
             return NextResponse.json({ error: 'Failed to update save status' }, { status: 500 });
+        }
+
+        if (isSaved) {
+            await notifyPostSocialActivity(createServiceClient(), {
+                type: 'post_saved',
+                recipientUserId: post.user_id,
+                actorUserId: user.id,
+                postId: post.id,
+            });
         }
 
         return NextResponse.json({ 

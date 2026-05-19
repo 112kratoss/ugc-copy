@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { recordPostShareEvent } from '@/lib/post-share-events';
+import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import {
+  createServiceClient,
   createUserClient,
 } from '@/lib/server-helpers';
 import {
@@ -50,6 +52,15 @@ export async function POST(request: NextRequest) {
       channel,
       actorUserId,
     });
+
+    if (actorUserId) {
+      await notifyPostSocialActivity(createServiceClient(), {
+        type: 'post_shared',
+        recipientUserId: post.user_id,
+        actorUserId,
+        postId: post.id,
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

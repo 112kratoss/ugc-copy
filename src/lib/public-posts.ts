@@ -154,7 +154,7 @@ export async function getPostReferenceForShowcaseId(
 
     const { data: legacyPost, error: legacyError } = await adminSupabase
       .from('posts')
-      .select('id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind')
       .eq('generation_id', id)
       .maybeSingle();
 
@@ -176,6 +176,7 @@ export async function getPostReferenceForShowcaseId(
 
     return {
       id: generation.id,
+      user_id: generation.creator.id,
       generation_id: generation.id,
       visibility: 'public',
       category: generation.category,

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
+import { createServiceClient } from '@/lib/server-helpers';
 
 function getRedirectPathForCategory(category: string | null | undefined): string {
     switch (category) {
@@ -65,6 +67,13 @@ export async function POST(request: NextRequest) {
         if (generationError || !generation) {
             return NextResponse.json({ error: 'Linked generation not found' }, { status: 404 });
         }
+
+        await notifyPostSocialActivity(createServiceClient(), {
+            type: 'post_remixed',
+            recipientUserId: post.user_id,
+            actorUserId: user.id,
+            postId: post.id,
+        });
 
         return NextResponse.json({ 
             success: true, 
