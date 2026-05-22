@@ -41,6 +41,7 @@ interface PostResourceBundlePanelProps {
   summary: string;
   previewText: string;
   priceLabel: string;
+  priceUsdCents: number;
   priceNote: string | null;
   isFree: boolean;
   viewerCanAccess: boolean;
@@ -75,6 +76,7 @@ export default function PostResourceBundlePanel({
   summary,
   previewText,
   priceLabel,
+  priceUsdCents,
   priceNote,
   isFree,
   viewerCanAccess,
@@ -85,10 +87,10 @@ export default function PostResourceBundlePanel({
   initialResources,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, credits, updateCredits } = useAuth();
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
-  const [isWorking, setIsWorking] = useState(false);
+  const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,6 +128,11 @@ export default function PostResourceBundlePanel({
 
     return isFree ? 'Open the full unlock for free.' : `Open the full unlock for ${priceLabel}.`;
   }, [hasAccess, isFree, priceLabel, viewerIsOwner]);
+  const creditCost = Math.max(0, priceUsdCents);
+  const formattedCreditCost = creditCost.toLocaleString();
+  const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
+  const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
+  const isAnyActionWorking = workingAction !== null;
 
   const copyText = async (value: string, successMessage: string) => {
     try {
@@ -172,7 +179,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('free');
       setFeedback(null);
       setError(null);
 
@@ -192,7 +199,7 @@ export default function PostResourceBundlePanel({
     } catch (unlockError) {
       setError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -202,7 +209,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('razorpay');
       setFeedback(null);
       setError(null);
 
@@ -277,7 +284,48 @@ export default function PostResourceBundlePanel({
     } catch (checkoutError) {
       setError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
+    }
+  };
+
+  const unlockWithCredits = async () => {
+    if (!ensureAuthenticated()) {
+      return;
+    }
+
+    if (hasKnownInsufficientCredits) {
+      setError(`This unlock costs ${formattedCreditCost} credits. Add credits to continue.`);
+      setFeedback(null);
+      return;
+    }
+
+    try {
+      setWorkingAction('credits');
+      setFeedback(null);
+      setError(null);
+
+      const response = await fetch(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data.error || 'Failed to unlock with credits.');
+      }
+
+      if (typeof data.credits === 'number') {
+        updateCredits(data.credits);
+      }
+
+      await fetchLatestBundle();
+      setFeedback(data.alreadyProcessed ? 'This unlock was already available on your account.' : 'Unlocked with credits.');
+    } catch (unlockError) {
+      setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
+    } finally {
+      setWorkingAction(null);
     }
   };
 
@@ -287,7 +335,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('file');
       setFeedback(null);
       setError(null);
 
@@ -309,7 +357,7 @@ export default function PostResourceBundlePanel({
     } catch (fileError) {
       setError(fileError instanceof Error ? fileError.message : 'Failed to open resource file.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -392,16 +440,59 @@ export default function PostResourceBundlePanel({
           </span>
         </div>
 
-        {!hasAccess && !viewerIsOwner ? (
+        {!hasAccess && !viewerIsOwner && isFree ? (
           <button
             type="button"
-            onClick={() => void (isFree ? unlockFree() : startCheckout())}
-            disabled={isWorking}
+            onClick={() => void unlockFree()}
+            disabled={isAnyActionWorking}
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            {isFree ? 'Open free unlock' : `Unlock for ${priceLabel}`}
+            {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+            Open free unlock
           </button>
+        ) : null}
+
+        {!hasAccess && !viewerIsOwner && !isFree ? (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => void startCheckout()}
+              disabled={isAnyActionWorking}
+              className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/30 bg-emerald-300 px-4 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <span className="inline-flex items-center gap-2">
+                {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                Pay with Razorpay
+              </span>
+              <span className="text-xs font-medium text-slate-800">Razorpay: {priceLabel}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void unlockWithCredits()}
+              disabled={isAnyActionWorking || hasKnownInsufficientCredits}
+              className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-center text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              <span className="inline-flex items-center gap-2">
+                {workingAction === 'credits' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Unlock with credits
+              </span>
+              <span className="text-xs font-medium text-zinc-300">Credit cost: {formattedCreditCost} credits</span>
+            </button>
+          </div>
+        ) : null}
+
+        {!hasAccess && !viewerIsOwner && !isFree ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+            <span>
+              {formattedCreditBalance ? `${formattedCreditBalance} credits available` : 'Sign in to see your credit balance'}
+            </span>
+            {hasKnownInsufficientCredits ? (
+              <a href="/pricing" className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline">
+                Buy credits
+              </a>
+            ) : null}
+          </div>
         ) : null}
 
         {feedback ? (
@@ -430,7 +521,7 @@ export default function PostResourceBundlePanel({
           <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Access</div>
             <p className="mt-2 text-sm leading-6 text-zinc-200">
-              {isFree ? 'Instant access after login.' : 'Secure Razorpay checkout with instant access after payment.'}
+              {isFree ? 'Instant access after login.' : 'Pay with Razorpay or spend credits for instant access.'}
             </p>
           </div>
           <div className="rounded-2xl border border-white/8 bg-black/25 p-4">

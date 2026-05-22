@@ -121,8 +121,12 @@ vi.mock('@/lib/server-helpers', () => ({
           : [{
               post_id: post.id,
               visibility: post.visibility,
-              bundle_id: 'bundle-1',
-              bundle_status: 'published',
+              bundle_id: (args.p_bundle as { accessMode?: string })?.accessMode && (args.p_bundle as { accessMode?: string }).accessMode !== 'none'
+                ? 'bundle-1'
+                : null,
+              bundle_status: (args.p_bundle as { accessMode?: string })?.accessMode && (args.p_bundle as { accessMode?: string }).accessMode !== 'none'
+                ? post.visibility === 'public' ? 'published' : 'draft'
+                : null,
             }],
         error: bundleUpsertError,
       });
@@ -357,6 +361,40 @@ describe('/api/posts route', () => {
     expect(payload.error).toMatch(/improve this unlock before publishing/i);
     expect(payload.error).toMatch(/placeholder listing title/i);
     expect(insertPayloads).toHaveLength(0);
+  });
+
+  it('saves private unlock posts as draft bundles without marketplace quality gating', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('title', 'Helpful launch proof');
+    formData.set('body', 'A useful draft proof post that is not ready for marketplace discovery.');
+    formData.set('visibility', 'private');
+    formData.set(
+      'resourceBundle',
+      JSON.stringify({
+        accessMode: 'paid',
+        summary: 'A reusable launch prompt for a proof-led product hook.',
+        previewText: 'Includes the prompt structure and CTA guidance buyers can reuse.',
+        priceUsdCents: 500,
+        resources: {
+          promptText: 'Use a before and after hook with one product proof frame and a short CTA.',
+          attachments: [],
+          allowRemix: false,
+        },
+      })
+    );
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(insertPayloads[0]).toMatchObject({
+      visibility: 'private',
+    });
+    expect(payload.visibility).toBe('private');
+    expect(payload.resourceBundleStatus).toBe('draft');
+    expect(payload.resourceBundlePath).toBe(`/post/${payload.postId}/edit#resources`);
   });
 
   it('surfaces a clear migration error when post resource bundles are not enabled yet', async () => {

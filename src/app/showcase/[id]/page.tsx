@@ -183,6 +183,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
       summary={bundle.summary}
       previewText={bundle.previewText}
       priceLabel={bundle.priceQuote.formatted}
+      priceUsdCents={bundle.priceUsdCents}
       priceNote={bundle.priceQuote.note}
       isFree={bundle.accessMode === 'free'}
       viewerCanAccess={bundle.viewerCanAccess}

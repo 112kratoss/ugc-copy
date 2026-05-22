@@ -62,6 +62,11 @@ type BundleAuditRow = {
   allow_remix: boolean;
 };
 
+type BundleStatusRow = {
+  access_mode: 'none' | 'free' | 'paid';
+  status: 'draft' | 'published';
+};
+
 function normalizeText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -135,6 +140,22 @@ async function loadOwnedPost(postId: string, userId: string): Promise<MutablePos
   return (data as MutablePostRow | null) ?? null;
 }
 
+async function loadOwnedBundleStatus(postId: string, userId: string): Promise<BundleStatusRow | null> {
+  const adminSupabase = createServiceClient();
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundles')
+    .select('access_mode, status')
+    .eq('post_id', postId)
+    .eq('owner_user_id', userId)
+    .maybeSingle();
+
+  if (error && !isMissingPostResourceBundlesSchemaError(error)) {
+    throw error;
+  }
+
+  return (data as BundleStatusRow | null) ?? null;
+}
+
 export async function GET(request: NextRequest, context: RouteContext) {
   const { postId } = await context.params;
   const supabase = createUserClient(request);
@@ -183,6 +204,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     if (!post) {
       return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
     }
+    const existingBundle = await loadOwnedBundleStatus(postId, user.id);
 
     const body = (await request.json()) as {
       title?: unknown;
@@ -217,10 +239,20 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Text posts need a note or tip to save.' }, { status: 400 });
     }
 
-    const nextVisibility =
-      (hasResourceBundlePayload && resourceBundle?.accessMode && resourceBundle.accessMode !== 'none'
-        ? 'public'
-        : normalizeVisibility(body.visibility)) ?? post.visibility;
+    const nextVisibility = normalizeVisibility(body.visibility) ?? post.visibility;
+
+    if (
+      nextVisibility === 'public' &&
+      !hasResourceBundlePayload &&
+      existingBundle &&
+      existingBundle.access_mode !== 'none' &&
+      existingBundle.status === 'draft'
+    ) {
+      return NextResponse.json(
+        { error: 'This post already has a draft unlock. Please resubmit the unlock payload when publishing so we can validate and publish it together.' },
+        { status: 400 }
+      );
+    }
 
     const nextCategory =
       post.post_format === 'text'
@@ -258,20 +290,22 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     }
 
     const adminSupabase = createServiceClient();
-    const marketplaceQualityError = await getMarketplaceQualityErrorForPostBundle({
-      supabase: adminSupabase,
-      ownerUserId: user.id,
-      post: {
-        title: nextTitle,
-        body: nextBody,
-        visibility: nextVisibility,
-        archivedAt: post.archived_at,
-        reviewStatus: post.review_status ?? 'visible',
-        showcaseAssetPath: post.showcase_asset_path,
-        outputUrl: post.output_url,
-      },
-      bundle: hasResourceBundlePayload ? resourceBundle : null,
-    });
+    const marketplaceQualityError = nextVisibility === 'public'
+      ? await getMarketplaceQualityErrorForPostBundle({
+          supabase: adminSupabase,
+          ownerUserId: user.id,
+          post: {
+            title: nextTitle,
+            body: nextBody,
+            visibility: nextVisibility,
+            archivedAt: post.archived_at,
+            reviewStatus: post.review_status ?? 'visible',
+            showcaseAssetPath: post.showcase_asset_path,
+            outputUrl: post.output_url,
+          },
+          bundle: hasResourceBundlePayload ? resourceBundle : null,
+        })
+      : null;
 
     if (marketplaceQualityError) {
       return NextResponse.json({ error: marketplaceQualityError }, { status: 400 });
@@ -293,9 +327,10 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       showcasePath: updatedPost.visibility === 'private' ? null : `/showcase/${postId}`,
       ownerPath: `/post/${postId}/edit`,
       resourceBundlePath:
-        updatedPost.visibility === 'private'
+        updatedPost.bundleStatus === 'draft' || updatedPost.visibility === 'private'
           ? `/post/${postId}/edit#resources`
           : `/showcase/${postId}#resources`,
+      resourceBundleStatus: updatedPost.bundleStatus,
     });
   } catch (error) {
     console.error('Failed to update owner post:', error);

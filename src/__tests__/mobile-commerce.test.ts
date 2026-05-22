@@ -6,6 +6,7 @@ import {
   buildMobileExternalOrderId,
   completeMobileCreditPurchase,
   normalizeMobileCommercePayload,
+  restoreMobileEntitlements,
   verifyMobilePurchase,
 } from '@/lib/mobile-commerce';
 
@@ -13,6 +14,7 @@ const userId = '11111111-1111-1111-1111-111111111111';
 
 function createCreditSupabase(options: {
   credits?: number;
+  duplicateInsertForOrderId?: string;
   transactions?: Array<{
     id: string;
     user_id: string;
@@ -69,12 +71,27 @@ function createCreditSupabase(options: {
             ...query,
             insert(values: Record<string, unknown>) {
               const transaction = {
-                id: 'txn-mobile',
+                id: `txn-mobile-${transactions.length + 1}`,
                 user_id: values.user_id as string,
                 razorpay_order_id: values.razorpay_order_id as string,
                 credits: values.credits as number,
                 status: values.status as string,
               };
+              if (options.duplicateInsertForOrderId === transaction.razorpay_order_id) {
+                transactions.push(transaction);
+                return {
+                  select() {
+                    return {
+                      async single() {
+                        return {
+                          data: null,
+                          error: { code: '23505', message: 'duplicate key value violates unique constraint' },
+                        };
+                      },
+                    };
+                  },
+                };
+              }
               transactions.push(transaction);
               return {
                 select() {
@@ -83,6 +100,30 @@ function createCreditSupabase(options: {
                       return { data: transaction, error: null };
                     },
                   };
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'marketplace_purchases') {
+          return {
+            select() {
+              return {
+                eq() {
+                  return { data: [], error: null };
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'post_resource_bundle_purchases') {
+          return {
+            select() {
+              return {
+                eq() {
+                  return { data: [], error: null };
                 },
               };
             },
@@ -192,6 +233,33 @@ describe('mobile commerce helpers', () => {
     });
   });
 
+  it('rejects RevenueCat purchases without a stable transaction identifier', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              store: 'app_store',
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
   it('completes credit purchases once and returns the updated balance', async () => {
     const fakeSupabase = createCreditSupabase({ credits: 100 });
 
@@ -235,5 +303,108 @@ describe('mobile commerce helpers', () => {
       alreadyProcessed: true,
     });
     expect(fakeSupabase.rpcCalls).toHaveLength(0);
+  });
+
+  it('recovers when a duplicate mobile transaction insert already created the order', async () => {
+    const externalOrderId = buildMobileExternalOrderId('app_store', '1000000123456790');
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      duplicateInsertForOrderId: externalOrderId,
+    });
+
+    await expect(completeMobileCreditPurchase({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      productId: 'magicbooklet.credits.starter',
+      provider: 'app_store',
+      transactionId: '1000000123456790',
+    })).resolves.toMatchObject({
+      success: true,
+      entitlement: 'credits',
+      credits: 600,
+      alreadyProcessed: false,
+    });
+    expect(fakeSupabase.transactions).toHaveLength(1);
+    expect(fakeSupabase.rpcCalls).toHaveLength(1);
+  });
+
+  it('restores unprocessed RevenueCat credit purchases and reports already processed purchases', async () => {
+    const existingExternalOrderId = buildMobileExternalOrderId('app_store', '1000000123456791');
+    const fakeSupabase = createCreditSupabase({
+      credits: 600,
+      transactions: [{
+        id: 'txn-existing',
+        user_id: userId,
+        razorpay_order_id: existingExternalOrderId,
+        credits: 500,
+        status: 'success',
+      }],
+    });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.starter': [
+            {
+              id: 'rc-new',
+              store: 'app_store',
+              store_transaction_id: '1000000123456792',
+              purchase_date: '2026-05-13T12:00:00Z',
+            },
+            {
+              id: 'rc-existing',
+              store: 'app_store',
+              store_transaction_id: '1000000123456791',
+              purchase_date: '2026-05-12T12:00:00Z',
+            },
+          ],
+          'magicbooklet.credits.pro': [
+            {
+              id: 'rc-refunded',
+              store: 'play_store',
+              store_transaction_id: 'GPA.1234',
+              purchase_date: '2026-05-11T12:00:00Z',
+              refunded_at: '2026-05-12T12:00:00Z',
+            },
+          ],
+          'magicbooklet.unlock.asset-1': [
+            {
+              id: 'rc-unknown',
+              store: 'app_store',
+              store_transaction_id: 'unknown-1',
+              purchase_date: '2026-05-10T12:00:00Z',
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(restoreMobileEntitlements(fakeSupabase.client, userId, {
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      success: true,
+      credits: 1100,
+      restoredCreditPurchases: 1,
+      alreadyProcessedCreditPurchases: 1,
+      entitlements: expect.arrayContaining([
+        expect.objectContaining({ entitlement: 'credits', alreadyProcessed: false }),
+        expect.objectContaining({ entitlement: 'credits', alreadyProcessed: true }),
+      ]),
+    });
+    expect(fakeSupabase.transactions).toHaveLength(2);
+  });
+
+  it('fails restore reconciliation clearly when RevenueCat verification is not configured', async () => {
+    const fakeSupabase = createCreditSupabase({ credits: 100 });
+
+    await expect(restoreMobileEntitlements(fakeSupabase.client, userId, {
+      revenueCatApiKey: '',
+    })).rejects.toMatchObject({
+      status: 500,
+      message: 'Mobile receipt verification is not configured.',
+    });
   });
 });

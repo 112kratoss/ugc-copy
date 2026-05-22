@@ -3,7 +3,7 @@
 import Script from 'next/script';
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Copy, ExternalLink, Loader2, ShoppingCart } from 'lucide-react';
+import { Copy, ExternalLink, Loader2, ShoppingCart, Sparkles } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { getCurrentInternalPath } from '@/lib/share';
@@ -21,6 +21,7 @@ interface PostResourceBundleActionsProps {
   postId: string;
   title: string;
   priceLabel: string;
+  priceUsdCents: number;
   priceNote: string | null;
   isFree: boolean;
   viewerCanAccess: boolean;
@@ -34,6 +35,7 @@ export default function PostResourceBundleActions({
   postId,
   title,
   priceLabel,
+  priceUsdCents,
   priceNote,
   isFree,
   viewerCanAccess,
@@ -43,8 +45,8 @@ export default function PostResourceBundleActions({
   workflowShareUrl,
 }: PostResourceBundleActionsProps) {
   const router = useRouter();
-  const { session } = useAuth();
-  const [isWorking, setIsWorking] = useState(false);
+  const { session, credits, updateCredits } = useAuth();
+  const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +61,11 @@ export default function PostResourceBundleActions({
 
     return isFree ? 'Open the prompt, remix access, and workflow notes for free.' : `Open the full unlock for ${priceLabel}.`;
   }, [isFree, priceLabel, viewerCanAccess, viewerIsOwner]);
+  const creditCost = Math.max(0, priceUsdCents);
+  const formattedCreditCost = creditCost.toLocaleString();
+  const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
+  const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
+  const isAnyActionWorking = workingAction !== null;
 
   const copyText = async (value: string, successMessage: string) => {
     try {
@@ -78,7 +85,7 @@ export default function PostResourceBundleActions({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('free');
       setFeedback(null);
       setError(null);
 
@@ -98,7 +105,7 @@ export default function PostResourceBundleActions({
     } catch (unlockError) {
       setError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -109,7 +116,7 @@ export default function PostResourceBundleActions({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('razorpay');
       setFeedback(null);
       setError(null);
 
@@ -184,7 +191,49 @@ export default function PostResourceBundleActions({
     } catch (checkoutError) {
       setError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
+    }
+  };
+
+  const unlockWithCredits = async () => {
+    if (!session?.access_token) {
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}#resources`))}`);
+      return;
+    }
+
+    if (hasKnownInsufficientCredits) {
+      setError(`This unlock costs ${formattedCreditCost} credits. Add credits to continue.`);
+      setFeedback(null);
+      return;
+    }
+
+    try {
+      setWorkingAction('credits');
+      setFeedback(null);
+      setError(null);
+
+      const response = await fetch(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data.error || 'Failed to unlock with credits.');
+      }
+
+      if (typeof data.credits === 'number') {
+        updateCredits(data.credits);
+      }
+
+      setFeedback(data.alreadyProcessed ? 'This unlock was already available on your account.' : 'Unlocked with credits.');
+      router.refresh();
+    } catch (unlockError) {
+      setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
+    } finally {
+      setWorkingAction(null);
     }
   };
 
@@ -200,16 +249,59 @@ export default function PostResourceBundleActions({
       ) : null}
 
       <div className="mt-5 flex flex-col gap-3">
-        {!viewerCanAccess && !viewerIsOwner ? (
+        {!viewerCanAccess && !viewerIsOwner && isFree ? (
           <button
             type="button"
-            onClick={() => void (isFree ? unlockFree() : startCheckout())}
-            disabled={isWorking}
+            onClick={() => void unlockFree()}
+            disabled={isAnyActionWorking}
             className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            {isFree ? 'Open free unlock' : 'Unlock'}
+            {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+            Open free unlock
           </button>
+        ) : null}
+
+        {!viewerCanAccess && !viewerIsOwner && !isFree ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void startCheckout()}
+                disabled={isAnyActionWorking}
+                className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/30 bg-emerald-300 px-4 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                <span className="inline-flex items-center gap-2">
+                  {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                  Pay with Razorpay
+                </span>
+                <span className="text-xs font-medium text-slate-800">Razorpay: {priceLabel}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void unlockWithCredits()}
+                disabled={isAnyActionWorking || hasKnownInsufficientCredits}
+                className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-center text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
+              >
+                <span className="inline-flex items-center gap-2">
+                  {workingAction === 'credits' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  Unlock with credits
+                </span>
+                <span className="text-xs font-medium text-zinc-300">Credit cost: {formattedCreditCost} credits</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+              <span>
+                {formattedCreditBalance ? `${formattedCreditBalance} credits available` : 'Sign in to see your credit balance'}
+              </span>
+              {hasKnownInsufficientCredits ? (
+                <a href="/pricing" className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline">
+                  Buy credits
+                </a>
+              ) : null}
+            </div>
+          </>
         ) : null}
 
         {viewerCanAccess && promptText ? (

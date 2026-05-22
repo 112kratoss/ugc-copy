@@ -337,23 +337,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
 
-    const visibility = resourceBundle?.accessMode && resourceBundle.accessMode !== 'none'
-      ? 'public'
-      : requestedVisibility;
+    const visibility = requestedVisibility;
 
-    const marketplaceQualityError = await getMarketplaceQualityErrorForPostBundle({
-      supabase: adminSupabase,
-      ownerUserId: user.id,
-      post: {
-        title,
-        body,
-        visibility,
-        archivedAt: null,
-        reviewStatus: 'visible',
-        hasMedia: Boolean(file || uploadedMedia),
-      },
-      bundle: resourceBundle,
-    });
+    const marketplaceQualityError = visibility === 'public'
+      ? await getMarketplaceQualityErrorForPostBundle({
+          supabase: adminSupabase,
+          ownerUserId: user.id,
+          post: {
+            title,
+            body,
+            visibility,
+            archivedAt: null,
+            reviewStatus: 'visible',
+            hasMedia: Boolean(file || uploadedMedia),
+          },
+          bundle: resourceBundle,
+        })
+      : null;
 
     if (marketplaceQualityError) {
       return NextResponse.json({ error: marketplaceQualityError }, { status: 400 });
@@ -479,9 +479,10 @@ export async function POST(request: NextRequest) {
       showcasePath: post.visibility === 'private' ? null : `/showcase/${post.postId}`,
       ownerPath: `/post/${post.postId}/edit`,
       resourceBundlePath:
-        post.visibility === 'private'
+        post.bundleStatus === 'draft' || post.visibility === 'private'
           ? `/post/${post.postId}/edit#resources`
           : `/showcase/${post.postId}#resources`,
+      resourceBundleStatus: post.bundleStatus,
     });
   } catch (error) {
     console.error('External post creation failed:', error);

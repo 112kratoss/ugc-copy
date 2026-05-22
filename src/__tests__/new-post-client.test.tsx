@@ -51,15 +51,78 @@ describe('NewPostClient', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps optional details hidden until the user asks for them', () => {
+  it('puts the public post hierarchy in the main composer path', () => {
+    render(<NewPostClient />);
+
+    expect(screen.getByRole('heading', { name: /create post/i })).toBeInTheDocument();
+    expect(screen.getByText(/share the result first/i)).toBeInTheDocument();
+
+    const titleInput = screen.getByRole('textbox', { name: /^title/i });
+    const captionInput = screen.getByRole('textbox', { name: /caption/i });
+    const proofHeading = screen.getByRole('heading', { name: /^proof$/i });
+    const mediaToggle = screen.getByRole('button', { name: /^media$/i });
+
+    expect(titleInput).toBeInTheDocument();
+    expect(captionInput).toBeInTheDocument();
+    expect(
+      titleInput.compareDocumentPosition(proofHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      titleInput.compareDocumentPosition(mediaToggle) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      titleInput.compareDocumentPosition(captionInput) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('keeps the minimal composer chrome quiet and focused', () => {
+    render(<NewPostClient />);
+
+    expect(screen.queryByText(/community post composer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/one post, one optional unlock/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /browse unlocks/i })).not.toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: /^media$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^text$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add media/i })).toBeInTheDocument();
+
+    const checklist = screen.getByLabelText(/publish checklist/i);
+    expect(checklist).toHaveTextContent(/proof added/i);
+    expect(checklist).toHaveTextContent(/story ready/i);
+    expect(checklist).toHaveTextContent(/unlock optional/i);
+  });
+
+  it('keeps optional description hidden until the user asks for it', () => {
     render(<NewPostClient />);
 
     expect(screen.queryByPlaceholderText(/optional: give the post a short one-line setup/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /add details \(optional\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add feed description/i }));
 
     expect(screen.getByPlaceholderText(/optional: give the post a short one-line setup/i)).toBeInTheDocument();
-    expect(screen.getByText(/buyer preview/i)).toBeInTheDocument();
+  });
+
+  it('shows section-local validation feedback near the failing composer section', () => {
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(/upload an image or video/i);
+    expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'post');
+  });
+
+  it('keeps custom source tool suggestions inside the composer instead of using a native datalist', () => {
+    render(<NewPostClient />);
+
+    const customSourceToolInput = screen.getByRole('combobox', { name: /custom source tool/i });
+    fireEvent.focus(customSourceToolInput);
+    fireEvent.change(customSourceToolInput, { target: { value: 'Ru' } });
+
+    const sourceToolSuggestions = screen.getByRole('listbox', { name: /source tool suggestions/i });
+    expect(sourceToolSuggestions).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Runway' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Higgsfield' })).not.toBeInTheDocument();
   });
 
   it('reveals only the selected resource sections and submits a resource bundle', async () => {
@@ -70,29 +133,30 @@ describe('NewPostClient', () => {
         showcasePath: '/showcase/post-1',
         resourceBundlePath: '/showcase/post-1#resources',
         visibility: 'public',
+        resourceBundleStatus: 'published',
       }),
     });
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /share a tip/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.change(screen.getByPlaceholderText(/share the tactic, lesson, or idea/i), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /add free unlock/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^free unlock$/i }));
 
-    expect(screen.getByText(/what does the unlock include/i)).toBeInTheDocument();
+    expect(screen.getByText(/custom package contents/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/https:\/\//i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^workflow \/ setup$/i }));
     fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i), {
-      target: { value: 'Use a before/after hook and keep the CTA visible in frame.' },
+      target: { value: 'Use a before\/after hook and keep the CTA visible in frame.' },
     });
     fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
       target: { value: 'https://ugc.example.com/workflow' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /publish post \+ unlock/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -117,27 +181,29 @@ describe('NewPostClient', () => {
     );
   });
 
-  it('forces resource posts to publish publicly and serializes structured links', async () => {
+  it('keeps visibility choices available for paid unlock drafts and serializes structured links', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         postId: 'post-2',
-        showcasePath: '/showcase/post-2',
-        resourceBundlePath: '/showcase/post-2#resources',
-        visibility: 'public',
+        showcasePath: null,
+        ownerPath: '/post/post-2/edit',
+        resourceBundlePath: '/post/post-2/edit#resources',
+        visibility: 'private',
+        resourceBundleStatus: 'draft',
       }),
     });
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /share a tip/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.change(screen.getByPlaceholderText(/share the tactic, lesson, or idea/i), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /add paid unlock/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^paid unlock$/i }));
 
-    expect(screen.getByText(/public post required/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^private$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/public post required/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^private$/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /files \/ links/i }));
     fireEvent.change(screen.getByPlaceholderText(/label 1/i), {
@@ -149,7 +215,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByDisplayValue('9'), {
       target: { value: '12' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save draft/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -158,7 +224,7 @@ describe('NewPostClient', () => {
     const request = fetchMock.mock.calls[0][1] as { body: FormData };
     const resourceBundle = JSON.parse(String(request.body.get('resourceBundle')));
 
-    expect(String(request.body.get('visibility'))).toBe('public');
+    expect(String(request.body.get('visibility'))).toBe('private');
     expect(resourceBundle).toMatchObject({
       accessMode: 'paid',
       priceUsdCents: 1200,
@@ -171,6 +237,10 @@ describe('NewPostClient', () => {
         ],
       },
     });
+    expect(await screen.findByRole('link', { name: /continue editing/i })).toHaveAttribute(
+      'href',
+      '/post/post-2/edit'
+    );
   });
 
   it('uploads media to Supabase before posting metadata to the API', async () => {
@@ -181,6 +251,7 @@ describe('NewPostClient', () => {
         showcasePath: '/showcase/post-3',
         resourceBundlePath: null,
         visibility: 'public',
+        resourceBundleStatus: null,
       }),
     });
 
@@ -247,6 +318,7 @@ describe('NewPostClient', () => {
           showcasePath: '/showcase/post-paywall-1',
           resourceBundlePath: '/showcase/post-paywall-1#resources',
           visibility: 'public',
+          resourceBundleStatus: 'published',
         }),
       });
 
@@ -262,7 +334,7 @@ describe('NewPostClient', () => {
       expect(priceInput).toHaveFocus();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
+    fireEvent.click(screen.getByRole('button', { name: /publish post \+ unlock/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -351,7 +423,7 @@ describe('NewPostClient', () => {
 
     expect(screen.getByRole('heading', { name: /manage the unlock behind this post/i })).toBeInTheDocument();
     expect(screen.getAllByText(/you came from my studio/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/public post required/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/this unlock will save as a draft/i).length).toBeGreaterThan(0);
 
     const priceInput = screen.getByRole('textbox', { name: /price/i });
     await waitFor(() => {

@@ -70,6 +70,12 @@ interface RevenueCatResponse {
   } | null;
 }
 
+interface RestorableMobileCreditPurchase {
+  productId: string;
+  provider: Exclude<MobilePurchaseProvider, 'sandbox'>;
+  transactionId: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -192,6 +198,78 @@ export function findRevenueCatPurchase(
   return latestPurchase(validPurchases);
 }
 
+export async function fetchRevenueCatSubscriber({
+  userId,
+  fetcher = fetch,
+  revenueCatApiKey = process.env.REVENUECAT_SECRET_API_KEY ?? process.env.REVENUECAT_REST_API_KEY,
+}: {
+  userId: string;
+  fetcher?: typeof fetch;
+  revenueCatApiKey?: string;
+}): Promise<RevenueCatResponse> {
+  if (!revenueCatApiKey) {
+    throw new MobileCommerceError('Mobile receipt verification is not configured.', 500);
+  }
+
+  const response = await fetcher(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`, {
+    headers: {
+      Authorization: `Bearer ${revenueCatApiKey}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new MobileCommerceError('Unable to verify mobile purchase.', 502);
+  }
+
+  return response.json() as Promise<RevenueCatResponse>;
+}
+
+function revenueCatStoreProvider(store: string | null | undefined): RestorableMobileCreditPurchase['provider'] {
+  return store === 'app_store' || store === 'play_store' ? store : 'revenuecat';
+}
+
+function revenueCatPurchaseTransactionId(productId: string, purchase: RevenueCatPurchase) {
+  const explicitId = String(purchase.store_transaction_id ?? purchase.id ?? '').trim();
+  if (explicitId) {
+    return explicitId;
+  }
+
+  const purchaseDate = String(purchase.purchase_date ?? '').trim();
+  return purchaseDate ? `${productId}_${purchaseDate}` : null;
+}
+
+export function listRestorableMobileCreditPurchases(response: RevenueCatResponse): RestorableMobileCreditPurchase[] {
+  const subscriber = response.subscriber ?? response.value?.subscriber ?? null;
+  const nonSubscriptions = subscriber?.non_subscriptions ?? {};
+  const purchases: RestorableMobileCreditPurchase[] = [];
+
+  for (const [productId, productPurchases] of Object.entries(nonSubscriptions)) {
+    if (!resolveMobileCreditProduct(productId)) {
+      continue;
+    }
+
+    for (const purchase of productPurchases ?? []) {
+      if (purchase.refunded_at) {
+        continue;
+      }
+
+      const transactionId = revenueCatPurchaseTransactionId(productId, purchase);
+      if (!transactionId) {
+        continue;
+      }
+
+      purchases.push({
+        productId,
+        provider: revenueCatStoreProvider(purchase.store),
+        transactionId,
+      });
+    }
+  }
+
+  return purchases;
+}
+
 export function buildMobileExternalOrderId(provider: MobilePurchaseProvider, transactionId: string) {
   const safeTransactionId = transactionId.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 160);
   return `mobile_${provider}_${safeTransactionId}`;
@@ -227,30 +305,16 @@ export async function verifyMobilePurchase({
     };
   }
 
-  if (!revenueCatApiKey) {
-    throw new MobileCommerceError('Mobile receipt verification is not configured.', 500);
-  }
-
-  const response = await fetcher(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`, {
-    headers: {
-      Authorization: `Bearer ${revenueCatApiKey}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new MobileCommerceError('Unable to verify mobile purchase.', 502);
-  }
-
-  const body = await response.json() as RevenueCatResponse;
+  const body = await fetchRevenueCatSubscriber({ userId, fetcher, revenueCatApiKey });
   const purchase = findRevenueCatPurchase(body, productId, provider, transactionId);
   if (!purchase) {
     throw new MobileCommerceError('Mobile purchase receipt is invalid or not owned by this user.', 400);
   }
 
-  const verifiedTransactionId =
-    String(purchase.store_transaction_id ?? purchase.id ?? transactionId ?? '').trim()
-    || `${productId}_${purchase.purchase_date ?? Date.now()}`;
+  const verifiedTransactionId = revenueCatPurchaseTransactionId(productId, purchase) ?? normalizeOptionalString(transactionId);
+  if (!verifiedTransactionId) {
+    throw new MobileCommerceError('Mobile purchase receipt is invalid or not owned by this user.', 400);
+  }
 
   return {
     provider: purchase.store === 'app_store' || purchase.store === 'play_store' ? purchase.store : provider,
@@ -273,6 +337,25 @@ async function getProfileCredits(adminSupabase: SupabaseClient, userId: string) 
   return typeof data?.credits === 'number' ? data.credits : null;
 }
 
+async function getMobileCreditTransaction(adminSupabase: SupabaseClient, userId: string, externalOrderId: string) {
+  const { data, error } = await adminSupabase
+    .from('transactions')
+    .select('id, credits, status')
+    .eq('razorpay_order_id', externalOrderId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new MobileCommerceError('Failed to check mobile credit purchase.', 500);
+  }
+
+  return data;
+}
+
+function isDuplicateInsertError(error: unknown) {
+  return isRecord(error) && error.code === '23505';
+}
+
 export async function completeMobileCreditPurchase({
   adminSupabase,
   userId,
@@ -292,16 +375,7 @@ export async function completeMobileCreditPurchase({
   }
 
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
-  const { data: existing, error: existingError } = await adminSupabase
-    .from('transactions')
-    .select('id, credits, status')
-    .eq('razorpay_order_id', externalOrderId)
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  if (existingError) {
-    throw new MobileCommerceError('Failed to check mobile credit purchase.', 500);
-  }
+  const existing = await getMobileCreditTransaction(adminSupabase, userId, externalOrderId);
 
   if (existing?.status === 'success') {
     return {
@@ -328,10 +402,16 @@ export async function completeMobileCreditPurchase({
       .single();
 
     if (insertError) {
-      throw new MobileCommerceError('Failed to record mobile credit purchase.', 500);
-    }
+      if (isDuplicateInsertError(insertError)) {
+        transaction = await getMobileCreditTransaction(adminSupabase, userId, externalOrderId);
+      }
 
-    transaction = insertedTransaction;
+      if (!transaction) {
+        throw new MobileCommerceError('Failed to record mobile credit purchase.', 500);
+      }
+    } else {
+      transaction = insertedTransaction;
+    }
   }
 
   if (!transaction) {
@@ -787,7 +867,39 @@ export async function unlockPostResourceBundleWithCredits({
   };
 }
 
-export async function restoreMobileEntitlements(adminSupabase: SupabaseClient, userId: string) {
+export async function restoreMobileEntitlements(
+  adminSupabase: SupabaseClient,
+  userId: string,
+  options: {
+    fetcher?: typeof fetch;
+    revenueCatApiKey?: string;
+  } = {}
+) {
+  const revenueCatResponse = await fetchRevenueCatSubscriber({
+    userId,
+    fetcher: options.fetcher,
+    revenueCatApiKey: options.revenueCatApiKey,
+  });
+  const creditResults: MobileCommerceSyncResult[] = [];
+  let restoredCreditPurchases = 0;
+  let alreadyProcessedCreditPurchases = 0;
+
+  for (const purchase of listRestorableMobileCreditPurchases(revenueCatResponse)) {
+    const result = await completeMobileCreditPurchase({
+      adminSupabase,
+      userId,
+      productId: purchase.productId,
+      provider: purchase.provider,
+      transactionId: purchase.transactionId,
+    });
+    creditResults.push(result);
+    if (result.alreadyProcessed) {
+      alreadyProcessedCreditPurchases += 1;
+    } else {
+      restoredCreditPurchases += 1;
+    }
+  }
+
   const [credits, marketplacePurchases, bundlePurchases] = await Promise.all([
     getProfileCredits(adminSupabase, userId),
     adminSupabase
@@ -828,6 +940,8 @@ export async function restoreMobileEntitlements(adminSupabase: SupabaseClient, u
   return {
     success: true,
     credits,
-    entitlements: [...marketplaceEntitlements, ...postEntitlements],
+    restoredCreditPurchases,
+    alreadyProcessedCreditPurchases,
+    entitlements: [...creditResults, ...marketplaceEntitlements, ...postEntitlements],
   };
 }

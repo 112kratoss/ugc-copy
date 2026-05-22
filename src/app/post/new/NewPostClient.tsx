@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
-  ArrowRight,
   BadgePlus,
   BookText,
   Check,
@@ -46,6 +45,12 @@ interface CreatedPostState {
   resourceBundlePath: string | null;
   visibility: PostVisibility;
   resourceAccessMode: PostResourceBundleAccessMode;
+  resourceBundleStatus: 'draft' | 'published' | null;
+}
+
+interface ComposerError {
+  section: 'post' | 'story' | 'resources' | 'publish';
+  message: string;
 }
 
 interface AttachmentRow {
@@ -71,7 +76,6 @@ interface GenerationDraft {
 }
 
 const BODY_MAX_LENGTH = 2000;
-const STEP_ORDER = ['Post', 'Story', 'Unlock', 'Publish'] as const;
 
 const CATEGORY_OPTIONS: Array<{
   value: Exclude<PostCategory, 'text'>;
@@ -455,17 +459,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [body, setBody] = useState(initialPost?.body ?? '');
   const [sourceTool, setSourceTool] = useState(initialPost?.sourceTool ?? '');
   const [sourceToolSlug, setSourceToolSlug] = useState(initialPost?.sourceToolSlug ?? '');
+  const [isSourceToolSuggestionsOpen, setIsSourceToolSuggestionsOpen] = useState(false);
   const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
   const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>(initialCategory);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost));
+  const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost?.description));
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(
     Object.values(initialResourceSelections).some(Boolean)
       ? initialResourceSelections
       : EMPTY_RESOURCE_SELECTIONS
   );
-  const [resourceSummary, setResourceSummary] = useState(initialBundle.summary ?? '');
-  const [resourcePreviewText, setResourcePreviewText] = useState(initialBundle.previewText ?? '');
+  const [resourceSummary] = useState(initialBundle.summary ?? '');
+  const [resourcePreviewText] = useState(initialBundle.previewText ?? '');
   const [resourcePromptText, setResourcePromptText] = useState(initialBundle.resources?.promptText ?? '');
   const [resourceNotes, setResourceNotes] = useState(initialBundle.resources?.notesMarkdown ?? '');
   const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState(initialBundle.resources?.workflowShareUrl ?? '');
@@ -476,7 +481,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [resourceNotesTouched, setResourceNotesTouched] = useState(false);
   const [didApplyGenerationPaywallPrefill, setDidApplyGenerationPaywallPrefill] = useState(false);
   const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ComposerError | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
   const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(() =>
@@ -496,6 +501,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  const sourceToolInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
   const storySectionRef = useRef<HTMLDivElement | null>(null);
   const resourceSectionRef = useRef<HTMLDivElement | null>(null);
@@ -513,12 +520,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const bodyCount = body.length;
   const hasMediaProof = proofMode === 'media' && (Boolean(file) || hasGeneratedProof || Boolean(existingProofUrl));
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
-  const effectiveVisibility = resourceAccessMode === 'none' ? visibility : 'public';
+  const effectiveVisibility = visibility;
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
   const normalizedSourceTool = useMemo(
     () => normalizeSourceToolInput({ label: sourceTool, slug: sourceToolSlug }),
     [sourceTool, sourceToolSlug]
   );
+  const filteredSourceToolSuggestions = useMemo(() => {
+    const normalizedQuery = sourceTool.trim().toLowerCase();
+
+    return CURATED_SOURCE_TOOLS.filter((toolOption) => (
+      normalizedQuery.length === 0 || toolOption.label.toLowerCase().includes(normalizedQuery)
+    ));
+  }, [sourceTool]);
+  const shouldShowSourceToolSuggestions = isSourceToolSuggestionsOpen && filteredSourceToolSuggestions.length > 0;
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   const shouldFocusPriceInput =
@@ -574,8 +589,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resourceWorkflowUrl,
   ]);
   const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
+  const shouldRunMarketplaceQuality = resourceAccessMode !== 'none' && effectiveVisibility === 'public';
   const marketplaceAssessment = useMemo(() => (
-    resourceBundleDraft
+    resourceBundleDraft && shouldRunMarketplaceQuality
       ? assessMarketplaceListingQuality({
           title: publicPostTitle,
           summary: resourceBundleDraft.summary,
@@ -596,45 +612,28 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           },
         })
       : { eligible: true, issues: [] }
-  ), [effectiveVisibility, hasMediaProof, initialPost?.archivedAt, publicPostTitle, resourceBundleDraft, trimmedBody]);
+  ), [effectiveVisibility, hasMediaProof, initialPost?.archivedAt, publicPostTitle, resourceBundleDraft, shouldRunMarketplaceQuality, trimmedBody]);
   const completionChecklist = useMemo(() => [
     {
-      label: 'Public proof',
+      label: 'Proof added',
       complete: hasMediaProof || trimmedBody.length >= 24,
-      detail: hasMediaProof ? 'Media attached' : trimmedBody.length >= 24 ? 'Useful text proof' : 'Add media or a useful text post',
+      detail: hasMediaProof ? 'Media is attached' : trimmedBody.length >= 24 ? 'Text proof is ready' : 'Add media or switch to text',
     },
     {
-      label: 'Public story',
+      label: 'Story ready',
       complete: proofMode !== 'text' || trimmedBody.length > 0,
-      detail: trimmedBody ? 'Story included' : 'Write the visible post context',
+      detail: trimmedBody ? (proofMode === 'text' ? 'Post body is included' : 'Caption is included') : 'Add a short visible post',
     },
     {
-      label: 'Unlock contents',
+      label: 'Unlock optional',
       complete: resourceAccessMode === 'none' || hasResourceContent,
-      detail: resourceAccessMode === 'none' ? 'No unlock selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add selected unlock content',
-    },
-    {
-      label: 'Marketplace preview',
-      complete: resourceAccessMode === 'none' || marketplaceAssessment.eligible,
-      detail: resourceAccessMode === 'none'
-        ? 'Standalone post'
-        : marketplaceAssessment.eligible
-          ? 'Ready for marketplace quality checks'
-          : marketplaceAssessment.issues[0]?.message ?? 'Improve the unlock preview',
-    },
-    {
-      label: 'Price and visibility',
-      complete: resourceAccessMode !== 'paid' || resourcePriceUsdCents >= 100,
-      detail: resourceAccessMode === 'paid' ? formatUsdCents(resourcePriceUsdCents) : effectiveVisibility,
+      detail: resourceAccessMode === 'none' ? 'No unlock selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
     },
   ], [
-    effectiveVisibility,
     hasMediaProof,
     hasResourceContent,
-    marketplaceAssessment,
     proofMode,
     resourceAccessMode,
-    resourcePriceUsdCents,
     selectedResourceKinds,
     trimmedBody,
   ]);
@@ -665,8 +664,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     if (resourceAccessMode === 'none') {
       return;
     }
-
-    setVisibility('public');
 
     if (!Object.values(resourceSelections).some(Boolean)) {
       setResourceSelections((current) => ({
@@ -847,8 +844,27 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const stopWithError = (message: string, section: 'post' | 'story' | 'resources' | 'publish') => {
-    setError(message);
+    setError({ section, message });
     focusComposerSection(section);
+  };
+
+  const renderSectionError = (section: ComposerError['section']) => {
+    if (!error || error.section !== section) {
+      return null;
+    }
+
+    return (
+      <div role="alert" className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+        {error.message}
+      </div>
+    );
+  };
+
+  const applySourceToolSelection = (toolOption: { label: string; slug: string }) => {
+    setSourceTool(toolOption.label);
+    setSourceToolSlug(toolOption.slug);
+    setIsSourceToolSuggestionsOpen(false);
+    resetFeedback();
   };
 
   const updateResourceSelection = (kind: PostResourceKind) => {
@@ -912,7 +928,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         )
       );
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : 'Failed to upload resource file.');
+      setError({
+        section: 'resources',
+        message: uploadError instanceof Error ? uploadError.message : 'Failed to upload resource file.',
+      });
       setResourceAttachmentRows((current) =>
         current.map((row) => row.id === id ? { ...row, isUploading: false } : row)
       );
@@ -1000,7 +1019,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         return;
       }
 
-      if (!marketplaceAssessment.eligible) {
+      if (shouldRunMarketplaceQuality && !marketplaceAssessment.eligible) {
         const firstIssue = marketplaceAssessment.issues[0];
         stopWithError(`Improve this unlock before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
         return;
@@ -1045,6 +1064,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
           resourceAccessMode,
+          resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
+            ? data.resourceBundleStatus
+            : null,
         }, { redirect: true });
 
         return;
@@ -1081,6 +1103,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
           resourceAccessMode,
+          resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
+            ? data.resourceBundleStatus
+            : null,
         });
 
         return;
@@ -1126,9 +1151,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
         visibility: data.visibility as PostVisibility,
         resourceAccessMode,
+        resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
+          ? data.resourceBundleStatus
+          : null,
       }, { redirect: true });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Failed to publish post.');
+      setError({
+        section: 'publish',
+        message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -1137,7 +1168,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const createdPostHasResources = createdPost ? createdPost.resourceAccessMode !== 'none' : false;
   const selectedVisibilityOption = VISIBILITY_OPTIONS.find((option) => option.value === effectiveVisibility) ?? VISIBILITY_OPTIONS[0];
   const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
-  const primaryPostLabel = createdPost?.showcasePath ? 'View post' : 'Open editor';
+  const primaryPostLabel = createdPost?.resourceBundleStatus === 'draft'
+    ? 'Continue editing'
+    : createdPost?.showcasePath
+      ? 'View post'
+      : 'Open editor';
+  const primaryActionLabel = effectiveVisibility !== 'public'
+    ? 'Save draft'
+    : resourceAccessMode === 'none'
+      ? isEditMode ? 'Save changes' : 'Share post'
+      : 'Publish post + unlock';
   const backHref = isEditMode || entrySurface === 'creations' ? '/creations' : '/showcase';
   const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to studio' : 'Back to community';
 
@@ -1185,49 +1225,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           {backLabel}
         </Link>
 
-        <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_420px]">
+        <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1fr)_280px]">
           <section className="rounded-[32px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
-            <div className="mb-6 flex flex-col gap-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Community post composer</div>
-                  <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                    {isCreationPaywallManagementIntent
-                      ? 'Manage the unlock behind this post'
-                      : isEditMode
-                      ? 'Update the post and its unlock'
-                      : isGeneratedPaywallIntent
-                        ? 'Set the price for this creation'
-                        : 'Share a media or text post'}
-                  </h1>
-                  <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300">
-                    {isCreationPaywallManagementIntent
-                      ? 'You came from My Studio. The media stays attached while you adjust the unlock, update the price, or remove the paid layer here.'
-                      : isEditMode
-                      ? 'Edit the public story, adjust visibility, and keep the post and attached unlock aligned in one place.'
-                      : isGeneratedPaywallIntent
-                        ? 'The media is already attached. We will preload the saved prompt, reusable setup notes, and remix access when available so you can price the unlock and publish.'
-                        : 'Start with the public post: upload media from any creator tool or write a text tip. If there is reusable value behind it, attach an optional free or paid unlock later.'}
-                  </p>
-                </div>
-                <div className="hidden rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100 sm:inline-flex">
-                  {isCreationPaywallManagementIntent ? 'From My Studio' : isEditMode ? 'Owner editor' : 'Post first, unlock optional'}
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-4">
-                {STEP_ORDER.map((step, index) => (
-                  <div
-                    key={step}
-                    className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3"
-                  >
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Step {index + 1}
-                    </div>
-                    <div className="mt-2 text-sm font-semibold text-white">{step}</div>
-                  </div>
-                ))}
-              </div>
+            <div className="mb-6">
+              <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                {isCreationPaywallManagementIntent
+                  ? 'Manage the unlock behind this post'
+                  : isEditMode
+                    ? 'Update post'
+                    : 'Create post'}
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300">
+                {isCreationPaywallManagementIntent
+                  ? 'You came from My Studio. The media stays attached while you update the unlock, price, and visibility around this post.'
+                  : isGeneratedPaywallIntent
+                    ? 'The media is already attached. Saved prompt and setup details will appear here when they are available.'
+                    : isEditMode
+                      ? 'Update the public story first, then adjust the optional unlock and visibility around it.'
+                      : 'Share the result first. Add an unlock only if there is reusable value behind it.'}
+              </p>
             </div>
 
             <form id="post-composer-form" className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
@@ -1240,12 +1256,30 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               <div
                 ref={postSectionRef}
                 tabIndex={-1}
-                className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.94),rgba(9,11,16,0.96))] p-5 outline-none sm:p-6"
+                data-composer-section="post"
+                className="rounded-3xl border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.82),rgba(9,11,16,0.9))] p-5 outline-none sm:p-6"
               >
-                <div className="flex items-center justify-between gap-3">
+                <label className="block">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</div>
+                  <input
+                    value={title}
+                    onChange={(event) => {
+                      setTitle(event.target.value);
+                      resetFeedback();
+                    }}
+                    placeholder={proofMode === 'text' ? 'Optional title, or let us derive one' : 'Give your post a clear title'}
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                  />
+                  <p className="mt-2 text-xs leading-5 text-zinc-500">
+                    Recommended for feed scanning and buyer trust.
+                  </p>
+                </label>
+
+                {renderSectionError('post')}
+
+                <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-t border-white/8 pt-5">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/75">Step 1</div>
-                    <h2 className="mt-2 text-xl font-semibold text-white">Choose media or text</h2>
+                    <h2 className="text-xl font-semibold text-white">Proof</h2>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
                       {isEditMode
                         ? 'The post is already attached. This editor keeps the public media fixed while you update the story, visibility, and unlock around it.'
@@ -1254,80 +1288,44 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           : 'Start with media when you have a result to show, or text when you want to share a tip, note, or lesson.'}
                     </p>
                   </div>
-                  <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
-                    {stepBadgeLabel}
-                  </div>
+                  {!hasGeneratedProof && !isEditMode ? (
+                    <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProofMode('media');
+                          resetFeedback();
+                        }}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          proofMode === 'media'
+                            ? 'bg-sky-300 text-slate-950'
+                            : 'text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        Media
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProofMode('text');
+                          setFile(null);
+                          resetFeedback();
+                        }}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          proofMode === 'text'
+                            ? 'bg-sky-300 text-slate-950'
+                            : 'text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        Text
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
+                      {stepBadgeLabel}
+                    </div>
+                  )}
                 </div>
-
-                {!hasGeneratedProof && !isEditMode ? (
-                  <div className="mt-5 grid gap-3 lg:grid-cols-3">
-                    {([
-                      {
-                        value: 'media',
-                        label: 'Share media I made',
-                        description: 'Upload media from magicbooklet, Higgsfield, Freepik, Runway, or any other tool.',
-                        icon: UploadCloud,
-                      },
-                      {
-                        value: 'text',
-                        label: 'Share a tip',
-                        description: 'Post a lesson, tactic, or observation without attaching media.',
-                        icon: BookText,
-                      },
-                      {
-                        value: 'sell',
-                        label: 'Sell the process',
-                        description: 'Start with media and prepare a paid prompt, workflow, file, or remix unlock.',
-                        icon: BadgePlus,
-                      },
-                    ] as const).map((option) => {
-                      const Icon = option.icon;
-                      const active = option.value === 'sell'
-                        ? proofMode === 'media' && resourceAccessMode === 'paid'
-                        : proofMode === option.value;
-
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => {
-                            if (option.value === 'text') {
-                              setProofMode('text');
-                              setFile(null);
-                              setResourceAccessMode('none');
-                            } else if (option.value === 'sell') {
-                              setProofMode('media');
-                              setResourceAccessMode('paid');
-                              setResourceSelections((current) => ({
-                                ...current,
-                                prompt: true,
-                                workflow: true,
-                              }));
-                            } else {
-                              setProofMode('media');
-                            }
-                            resetFeedback();
-                          }}
-                          className={`rounded-[24px] border px-4 py-4 text-left transition ${
-                            active
-                              ? 'border-sky-400/40 bg-sky-400/10 shadow-[0_12px_30px_rgba(56,189,248,0.12)]'
-                              : 'border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-black/30 text-sky-100">
-                              <Icon className="h-5 w-5" />
-                            </div>
-                            <div>
-                              <div className="text-sm font-semibold text-white">{option.label}</div>
-                              <p className="mt-1 text-xs leading-5 text-zinc-400">{option.description}</p>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
 
                 {proofMode === 'media' ? (
                   <div className="mt-5">
@@ -1421,7 +1419,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         </div>
                       </div>
                     ) : (
-                      <label className="block rounded-[28px] border border-dashed border-white/14 bg-white/[0.02] p-5 transition hover:border-white/20 hover:bg-white/[0.03]">
+                      <div className="rounded-3xl border border-dashed border-white/14 bg-white/[0.02] p-5 transition hover:border-white/20 hover:bg-white/[0.03]">
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-4">
                             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-400/10 text-sky-100">
@@ -1434,13 +1432,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               </p>
                             </div>
                           </div>
-                          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-medium text-zinc-300">
-                            <BadgePlus className="h-3.5 w-3.5" />
-                            JPG, PNG, MP4, MOV
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => mediaInputRef.current?.click()}
+                            className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-200"
+                          >
+                            <BadgePlus className="h-4 w-4" />
+                            Add media
+                          </button>
                         </div>
 
                         <input
+                          ref={mediaInputRef}
                           type="file"
                           accept="image/*,video/*"
                           className="sr-only"
@@ -1478,10 +1481,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               <p className="mt-4 max-w-sm text-sm leading-6 text-zinc-400">
                                 Drop in the result first, then decide whether this stays a simple community post or includes an optional unlock.
                               </p>
+                              <p className="mt-3 text-xs font-medium text-zinc-500">JPG, PNG, MP4, MOV</p>
                             </div>
                           )}
                         </div>
-                      </label>
+                      </div>
                     )}
                   </div>
                 ) : (
@@ -1499,89 +1503,17 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     </div>
                   </div>
                 )}
-
-                {proofMode === 'media' && !hasGeneratedProof ? (
-                  <div className="mt-5 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Made with</div>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                          Tag the source tool now so buyers can scan the feed by Higgsfield, Freepik, Runway, Midjourney, Kling, Sora, Veo, or your own custom tool.
-                        </p>
-                      </div>
-                      <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
-                        {normalizedSourceTool.label || 'Choose tool'}
-                      </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {CURATED_SOURCE_TOOLS.map((toolOption) => (
-                        <button
-                          key={toolOption.slug}
-                          type="button"
-                          onClick={() => {
-                            setSourceTool(toolOption.label);
-                            setSourceToolSlug(toolOption.slug);
-                            resetFeedback();
-                          }}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                            normalizedSourceTool.slug === toolOption.slug
-                              ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                              : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                          }`}
-                        >
-                          {toolOption.label}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSourceToolSlug('');
-                          resetFeedback();
-                        }}
-                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                          sourceTool && !normalizedSourceTool.slug
-                            ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                            : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                        }`}
-                      >
-                        Custom
-                      </button>
-                    </div>
-                    <input
-                      value={sourceTool}
-                      onChange={(event) => {
-                        setSourceTool(event.target.value);
-                        setSourceToolSlug('');
-                        resetFeedback();
-                      }}
-                      placeholder="Runway, Midjourney, CapCut..."
-                      list="source-tool-options"
-                      className="mt-3 w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                    />
-                    <datalist id="source-tool-options">
-                      <option value="magicbooklet" />
-                      <option value="Higgsfield" />
-                      <option value="Freepik" />
-                      <option value="Runway" />
-                      <option value="Midjourney" />
-                      <option value="Kling" />
-                      <option value="Sora" />
-                      <option value="Veo" />
-                      <option value="CapCut" />
-                    </datalist>
-                  </div>
-                ) : null}
               </div>
 
               <div
                 ref={storySectionRef}
                 tabIndex={-1}
-                className="rounded-[28px] border border-white/8 bg-black/20 p-5 outline-none"
+                data-composer-section="story"
+                className="rounded-3xl border border-white/8 bg-black/20 p-5 outline-none"
               >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 2</div>
-                    <h2 className="mt-2 text-lg font-semibold text-white">Write the public post</h2>
+                    <h2 className="text-lg font-semibold text-white">Story</h2>
                     <p className="mt-2 text-sm leading-6 text-zinc-400">
                       This is what everyone sees in the community before any prompt, workflow, file, or remix access unlocks.
                     </p>
@@ -1591,14 +1523,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     onClick={() => setIsDetailsOpen((current) => !current)}
                     className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                   >
-                    {isDetailsOpen ? 'Hide details' : 'Add details (optional)'}
+                    {isDetailsOpen ? 'Hide description' : 'Add feed description'}
                   </button>
                 </div>
+
+                {renderSectionError('story')}
 
                 <label className="mt-5 block">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      {proofMode === 'text' ? 'Story' : 'Caption / story'}
+                      {proofMode === 'text' ? 'Post body' : 'Caption'}
                     </span>
                     <span className={`text-xs ${bodyCount > BODY_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}>
                       {bodyCount}/{BODY_MAX_LENGTH}
@@ -1621,109 +1555,195 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </label>
 
                 {isDetailsOpen ? (
-                  <div className="mt-5 space-y-5">
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</div>
-                        <input
-                          value={title}
-                          onChange={(event) => {
-                            setTitle(event.target.value);
-                            resetFeedback();
-                          }}
-                          placeholder={proofMode === 'text' ? 'Optional title, or let us derive one' : 'Spring product reveal'}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                        />
-                      </label>
+                  <label className="mt-5 block">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Feed description</div>
+                    <textarea
+                      value={description}
+                      onChange={(event) => {
+                        setDescription(event.target.value);
+                        resetFeedback();
+                      }}
+                      placeholder="Optional: give the post a short one-line setup for feeds and previews."
+                      rows={3}
+                      className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                    />
+                  </label>
+                ) : null}
 
-                      {proofMode === 'media' ? (
-                        <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                            {hasGeneratedProof ? 'Source' : 'Source tool'}
-                          </div>
-                          <div className="mt-3 inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100">
-                            {hasGeneratedProof ? 'Created in magicbooklet' : normalizedSourceTool.label || 'Choose in Step 1'}
-                          </div>
-                          {!hasGeneratedProof ? (
-                            <p className="mt-2 text-xs leading-5 text-zinc-500">
-                              Tool selection lives in Step 1 so the feed and buyer filters stay accurate.
+                {proofMode === 'media' ? (
+                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                    {!hasGeneratedProof ? (
+                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
+                            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                              Tag the tool so people can understand how this result was made.
                             </p>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                            Post type
                           </div>
-                          <div className="mt-3 inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100">
-                            Text only
+                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
+                            {normalizedSourceTool.label || 'Choose tool'}
                           </div>
                         </div>
-                      )}
-                    </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {CURATED_SOURCE_TOOLS.map((toolOption) => (
+                            <button
+                              key={toolOption.slug}
+                              type="button"
+                              onClick={() => {
+                                applySourceToolSelection(toolOption);
+                              }}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                                normalizedSourceTool.slug === toolOption.slug
+                                  ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                              }`}
+                            >
+                              {toolOption.label}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSourceToolSlug('');
+                              setIsSourceToolSuggestionsOpen(true);
+                              sourceToolInputRef.current?.focus();
+                              resetFeedback();
+                            }}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                              sourceTool && !normalizedSourceTool.slug
+                                ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                            }`}
+                          >
+                            Custom
+                          </button>
+                        </div>
+                        <label
+                          className="mt-3 block"
+                          onBlur={(event) => {
+                            const nextFocusedElement = event.relatedTarget;
+                            if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
+                              return;
+                            }
 
-                    <label className="block">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Description</div>
-                      <textarea
-                        value={description}
+                            setIsSourceToolSuggestionsOpen(false);
+                          }}
+                        >
+                          <span className="sr-only">Custom source tool</span>
+                          <input
+                            ref={sourceToolInputRef}
+                            role="combobox"
+                            aria-label="Custom source tool"
+                            aria-autocomplete="list"
+                            aria-controls="source-tool-suggestions"
+                            aria-expanded={shouldShowSourceToolSuggestions}
+                            value={sourceTool}
+                            onChange={(event) => {
+                              setSourceTool(event.target.value);
+                              setSourceToolSlug('');
+                              setIsSourceToolSuggestionsOpen(true);
+                              resetFeedback();
+                            }}
+                            onFocus={() => {
+                              setIsSourceToolSuggestionsOpen(true);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Escape') {
+                                setIsSourceToolSuggestionsOpen(false);
+                              }
+                            }}
+                            placeholder="Runway, Midjourney, CapCut..."
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                          />
+                          {shouldShowSourceToolSuggestions ? (
+                            <div
+                              id="source-tool-suggestions"
+                              role="listbox"
+                              aria-label="Source tool suggestions"
+                              className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/95 p-2 shadow-[0_20px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+                            >
+                              {filteredSourceToolSuggestions.map((toolOption) => {
+                                const selected = normalizedSourceTool.slug === toolOption.slug;
+
+                                return (
+                                  <button
+                                    key={toolOption.slug}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                    }}
+                                    onClick={() => {
+                                      applySourceToolSelection(toolOption);
+                                    }}
+                                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
+                                      selected
+                                        ? 'bg-sky-400/15 text-sky-50'
+                                        : 'text-zinc-200 hover:bg-white/[0.06] hover:text-white'
+                                    }`}
+                                  >
+                                    <span>{toolOption.label}</span>
+                                    {selected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
+                        <div className="mt-3 inline-flex rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-medium text-zinc-100">
+                          Created in magicbooklet
+                        </div>
+                      </div>
+                    )}
+
+                    <label className="block rounded-[24px] border border-white/8 bg-black/30 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
+                      <select
+                        value={category}
                         onChange={(event) => {
-                          setDescription(event.target.value);
+                          setCategory(event.target.value as Exclude<PostCategory, 'text'>);
                           resetFeedback();
                         }}
-                        placeholder="Optional: give the post a short one-line setup for feeds and previews."
-                        rows={3}
-                        className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                      />
+                        disabled={hasGeneratedProof}
+                        className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {CATEGORY_OPTIONS.map((option) => (
+                          <option
+                            key={option.value}
+                            value={option.value}
+                            disabled={file ? !acceptsCategory(file, option.value) : false}
+                            className="bg-zinc-950 text-white"
+                          >
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-zinc-500">
+                        {hasGeneratedProof
+                          ? 'Generated media keeps its category automatically.'
+                          : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
+                      </p>
                     </label>
-
-                    {proofMode === 'media' ? (
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
-                        <select
-                          value={category}
-                          onChange={(event) => {
-                            setCategory(event.target.value as Exclude<PostCategory, 'text'>);
-                            resetFeedback();
-                          }}
-                          disabled={hasGeneratedProof}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
-                        >
-                          {CATEGORY_OPTIONS.map((option) => (
-                            <option
-                              key={option.value}
-                              value={option.value}
-                              disabled={file ? !acceptsCategory(file, option.value) : false}
-                              className="bg-zinc-950 text-white"
-                            >
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">
-                          {hasGeneratedProof
-                            ? 'Generated media keeps its category automatically.'
-                            : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
-                        </p>
-                      </label>
-                    ) : null}
                   </div>
-                ) : (
-                  <p className="mt-4 text-sm leading-6 text-zinc-400">
-                    Title, description, source tool, and category tuning all stay optional until they actually help this post travel further.
-                  </p>
-                )}
+                ) : null}
               </div>
 
               <div
                 id="resources"
                 ref={resourceSectionRef}
                 tabIndex={-1}
-                className="rounded-[28px] border border-emerald-500/15 bg-emerald-500/5 p-5 outline-none"
+                data-composer-section="resources"
+                className="rounded-3xl border border-emerald-500/15 bg-emerald-500/5 p-5 outline-none"
               >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Step 3</div>
-                    <h2 className="mt-2 text-lg font-semibold text-white">Optional unlock</h2>
+                    <h2 className="text-lg font-semibold text-white">Unlock</h2>
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
                       Attach prompts, workflows, files, notes, or remix access if this post has reusable value.
                     </p>
@@ -1747,101 +1767,47 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   </div>
                 ) : null}
 
-                {resourceAccessMode === 'none' ? (
-                  <div className="mt-5 rounded-[26px] border border-white/8 bg-black/25 p-4">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                      <p className="max-w-2xl text-sm leading-6 text-zinc-300">
-                        Keep the post simple by default. Add an unlock only when there is a reusable prompt, workflow, file, note, or remix path worth sharing.
-                      </p>
-                      <div className="flex flex-wrap gap-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setResourceAccessMode('free');
-                            resetFeedback();
-                          }}
-                          className="inline-flex items-center justify-center rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/15"
-                        >
-                          Add free unlock
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setResourceAccessMode('paid');
-                            resetFeedback();
-                          }}
-                          className="inline-flex items-center justify-center rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200"
-                        >
-                          Add paid unlock
-                        </button>
-                      </div>
-                    </div>
+                {resourceAccessMode !== 'none' && effectiveVisibility !== 'public' ? (
+                  <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
+                    This unlock will save as a draft until the post is public.
                   </div>
                 ) : null}
 
-                {resourceAccessMode !== 'none' ? (
+                {renderSectionError('resources')}
+
+                <div className="mt-5 inline-flex rounded-full border border-white/10 bg-black/30 p-1">
+                  {RESOURCE_ACCESS_OPTIONS.map((option) => {
+                    const active = resourceAccessMode === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setResourceAccessMode(option.value);
+                          resetFeedback();
+                        }}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          active
+                            ? 'bg-emerald-300 text-emerald-950'
+                            : 'text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        {option.value === 'none' ? 'No unlock' : option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {resourceAccessMode === 'none' ? (
+                  <p className="mt-4 text-sm leading-6 text-zinc-300">
+                    Keep the post simple by default. Add an unlock only when there is a reusable prompt, workflow, file, note, or remix path worth sharing.
+                  </p>
+                ) : (
                   <div className="mt-5 space-y-5">
-                    <div className="flex flex-wrap gap-2">
-                      {RESOURCE_ACCESS_OPTIONS.map((option) => {
-                        const active = resourceAccessMode === option.value;
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => {
-                              setResourceAccessMode(option.value);
-                              resetFeedback();
-                            }}
-                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                              active
-                                ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
-                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
-                            }`}
-                          >
-                            {active ? <Check className="h-4 w-4" /> : null}
-                            {option.value === 'none' ? 'No unlock' : option.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-
                     <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Marketplace preview</div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Custom package contents</div>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">
-                        This is the buyer-facing value statement shown before the locked prompt, workflow, files, notes, or remix access opens.
-                      </p>
-                      <div className="mt-4 grid gap-3 md:grid-cols-2">
-                        <label className="block">
-                          <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Summary</span>
-                          <input
-                            value={resourceSummary}
-                            onChange={(event) => {
-                              setResourceSummary(event.target.value);
-                              resetFeedback();
-                            }}
-                            placeholder={defaultResourceSummary}
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Preview text</span>
-                          <input
-                            value={resourcePreviewText}
-                            onChange={(event) => {
-                              setResourcePreviewText(event.target.value);
-                              resetFeedback();
-                            }}
-                            placeholder={defaultResourcePreview}
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                          />
-                        </label>
-                      </div>
-                    </div>
-
-                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Unlock templates</div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-400">
-                        Start from the buyer shape, then edit the fields that open below.
+                        Select only the reusable pieces people should reveal after choosing this unlock.
                       </p>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {UNLOCK_TEMPLATES.map((template) => {
@@ -1866,14 +1832,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           );
                         })}
                       </div>
-                    </div>
-
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">What does the unlock include?</div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-400">
-                        Select only the reusable pieces people should reveal after choosing this unlock.
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <div className="mt-4 flex flex-wrap gap-2">
                         {RESOURCE_KIND_OPTIONS.map((option) => {
                           const active = resourceSelections[option.value];
 
@@ -2026,43 +1985,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       </div>
                     ) : null}
 
-                    <div className={`grid gap-4 ${resourceAccessMode === 'paid' ? 'md:grid-cols-[minmax(0,220px)_1fr]' : ''}`}>
-                      {resourceAccessMode === 'paid' ? (
-                        <label className="block">
-                          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
-                          <input
-                            ref={priceInputRef}
-                            value={resourcePriceUsd}
-                            onChange={(event) => {
-                              setResourcePriceUsd(event.target.value);
-                              resetFeedback();
-                            }}
-                            placeholder="9"
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                          />
-                          <p className="mt-2 text-xs leading-5 text-zinc-500">Choose any price at or above $1.00.</p>
-                        </label>
-                      ) : null}
-
-                      <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Visibility</div>
-                        <p className="mt-3 text-sm leading-6 text-zinc-300">
-                          Posts with unlocks are public so others can discover the result first.
-                        </p>
-                        <div className="mt-3 inline-flex rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
-                          Public post required
-                        </div>
-                      </div>
-                    </div>
+                    {resourceAccessMode === 'paid' ? (
+                      <label className="block">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
+                        <input
+                          ref={priceInputRef}
+                          value={resourcePriceUsd}
+                          onChange={(event) => {
+                            setResourcePriceUsd(event.target.value);
+                            resetFeedback();
+                          }}
+                          placeholder="9"
+                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
+                        />
+                        <p className="mt-2 text-xs leading-5 text-zinc-500">Choose any price at or above $1.00.</p>
+                      </label>
+                    ) : null}
                   </div>
-                ) : null}
+                )}
               </div>
-
-              {error ? (
-                <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                  {error}
-                </div>
-              ) : null}
 
               {createdPost ? (
                 <div className="rounded-[28px] border border-emerald-500/20 bg-emerald-500/10 p-5">
@@ -2070,9 +2011,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     <div className="text-sm font-semibold text-white">
                       {isEditMode
                         ? 'Changes saved'
-                        : createdPostHasResources
-                          ? 'Post published with an unlock'
-                          : 'Post published'}
+                        : createdPost.resourceBundleStatus === 'draft'
+                          ? 'Draft saved with an unlock'
+                          : createdPostHasResources
+                            ? 'Post published with an unlock'
+                            : 'Post published'}
                     </div>
                     <div className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
                       {createdPost.visibility}
@@ -2083,11 +2026,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       ? createdPost.visibility === 'private'
                         ? 'Your changes are saved in the owner editor. This post is not publicly visible right now.'
                         : 'The post has been updated and the latest version is ready.'
-                      : createdPostHasResources
-                        ? 'The post is public and the unlockable process is ready on the same page.'
-                        : createdPost.visibility === 'public'
-                          ? 'Your post is live.'
-                          : 'Your post is saved with limited visibility.'}
+                      : createdPost.resourceBundleStatus === 'draft'
+                        ? 'The public post and unlock are saved for you. Make the post public when you are ready to list the unlock.'
+                        : createdPostHasResources
+                          ? 'The post is public and the unlockable process is ready on the same page.'
+                          : createdPost.visibility === 'public'
+                            ? 'Your post is live.'
+                            : 'Your post is saved with limited visibility.'}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-3">
                     {primaryPostPath ? (
@@ -2113,163 +2058,89 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               <div
                 ref={publishSectionRef}
                 tabIndex={-1}
-                className="rounded-[28px] border border-white/8 bg-zinc-950/75 p-5 outline-none"
+                data-composer-section="publish"
+                className="rounded-3xl border border-white/8 bg-zinc-950/75 p-5 outline-none"
               >
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 4</div>
-                <div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="max-w-xl">
-                    <h2 className="text-lg font-semibold text-white">Review the public post and unlock</h2>
-                    <p className="mt-2 text-sm leading-6 text-zinc-400">{selectedVisibilityOption.description}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      type="submit"
-                      disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                      className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
-                    >
-                      {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-                      {isEditMode ? 'Save changes' : 'Share post'}
-                    </button>
-                    <Link
-                      href={isEditMode ? '/creations' : '/showcase'}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                    >
-                      {isEditMode ? 'Back to studio' : 'Back to community'}
-                    </Link>
-                  </div>
-                </div>
-
-                <div className="mt-5 rounded-[24px] border border-emerald-400/15 bg-emerald-500/5 p-4">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/75">Buyer preview</div>
-                      <h3 className="mt-2 text-base font-semibold text-white">
-                        {title.trim() || (proofMode === 'text' ? 'Untitled tip' : 'Untitled media post')}
-                      </h3>
-                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                        {trimmedBody
-                          ? trimmedBody.slice(0, 180)
-                          : proofMode === 'media'
-                            ? `${normalizedSourceTool.label ? `Made with ${normalizedSourceTool.label}. ` : ''}Public media is visible before any unlock.`
-                            : 'Public tip is visible before any unlock.'}
-                      </p>
-                    </div>
-                    <div className="shrink-0 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1.5 text-sm font-semibold text-emerald-50">
-                      {resourceAccessMode === 'none'
-                        ? 'No unlock'
-                        : resourceAccessMode === 'free'
-                          ? 'Free unlock'
-                          : `Paid unlock · ${formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}`}
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Unlock kinds</div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedResourceKinds.length > 0 ? selectedResourceKinds.map((kind) => (
-                          <span
-                            key={kind}
-                            className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-zinc-200"
-                          >
-                            {getPostResourceKindLabel(kind)}
-                          </span>
-                        )) : (
-                          <span className="text-sm text-zinc-400">Nothing for buyers to unlock.</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">What remains locked</div>
-                      <p className="mt-3 text-sm leading-6 text-zinc-300">
-                        {resourceAccessMode === 'none'
-                          ? 'The public post stands alone.'
-                          : selectedResourceKinds.length > 0
-                            ? `${getLockedSummary(selectedResourceKinds)} reveal after access.`
-                            : 'Choose a template or kind to define the locked layer.'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className={`mt-5 grid gap-4 ${resourceAccessMode === 'paid' ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
-                  <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Public</div>
-                    <div className="mt-3 text-sm font-semibold text-white">
-                      {proofMode === 'media' ? 'Media post' : 'Text post'}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {effectiveVisibility === 'public' ? 'Public post' : selectedVisibilityOption.label}
-                      {title.trim() ? `, ${title.trim()}` : ''}
-                      {trimmedBody ? ', story included' : ''}
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Publish</h2>
+                    <p className="mt-2 text-sm leading-6 text-zinc-400">
+                      Choose who can see this post. Non-public unlocks stay draft-only.
                     </p>
                   </div>
-
-                  <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Unlock</div>
-                    <div className="mt-3 text-sm font-semibold text-white">
-                      {resourceAccessMode === 'none'
-                        ? 'No unlock'
-                        : resourceAccessMode === 'free'
-                          ? 'Free unlock'
-                          : getLockedSummary(selectedResourceKinds)}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {resourceAccessMode === 'none'
-                        ? 'This post stands alone.'
-                        : selectedResourceKinds.length > 0
-                          ? getLockedSummary(selectedResourceKinds)
-                          : 'People unlock the reusable process directly from the post page.'}
-                    </p>
+                  <div className="shrink-0 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold text-zinc-300">
+                    {resourceAccessMode === 'none'
+                      ? selectedVisibilityOption.label
+                      : resourceAccessMode === 'paid'
+                        ? `${selectedVisibilityOption.label} · paid unlock`
+                        : `${selectedVisibilityOption.label} · free unlock`}
                   </div>
-
-                  {resourceAccessMode === 'paid' ? (
-                    <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Price</div>
-                      <div className="mt-3 text-sm font-semibold text-white">
-                        {formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-300">
-                        Buyers pay once to reveal the full unlock.
-                      </p>
-                    </div>
-                  ) : null}
                 </div>
 
-                {resourceAccessMode === 'none' ? (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                {renderSectionError('publish')}
+
+                <div className="mt-5">
+                  <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Visibility</div>
+                  <div className="grid gap-2 sm:grid-cols-3">
                     {VISIBILITY_OPTIONS.map((option) => {
                       const active = visibility === option.value;
+                      const description = resourceAccessMode === 'none'
+                        ? option.description
+                        : option.value === 'public'
+                          ? 'Publishes the post and makes a complete unlock buyer-facing.'
+                          : option.value === 'unlisted'
+                            ? 'Saves the post by direct link and keeps the unlock as a draft.'
+                            : 'Saves everything as an owner-only draft.';
+
                       return (
                         <button
                           key={option.value}
                           type="button"
+                          aria-label={option.label}
                           onClick={() => {
                             setVisibility(option.value);
                             resetFeedback();
                           }}
-                          className={`rounded-[24px] border p-4 text-left transition ${
+                          className={`rounded-2xl border px-4 py-3 text-left transition ${
                             active
                               ? 'border-emerald-300/35 bg-emerald-400/12 text-white'
                               : 'border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/20 hover:bg-white/[0.04] hover:text-white'
                           }`}
                         >
                           <div className="text-sm font-semibold">{option.label}</div>
-                          <p className="mt-2 text-xs leading-5 text-zinc-400">{option.description}</p>
+                          <p className="mt-2 text-xs leading-5 text-zinc-400">{description}</p>
                         </button>
                       );
                     })}
                   </div>
-                ) : null}
+                </div>
+
+                <div className="mt-5 flex flex-wrap justify-end gap-3 border-t border-white/8 pt-5">
+                  <Link
+                    href={isEditMode ? '/creations' : '/showcase'}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                  >
+                    {isEditMode ? 'Back to studio' : 'Back to community'}
+                  </Link>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                    className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
+                    {primaryActionLabel}
+                  </button>
+                </div>
               </div>
             </form>
           </section>
 
-          <aside className="space-y-5">
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+          <aside aria-label="Publish checklist" className="lg:sticky lg:top-24">
+            <div className="rounded-3xl border border-white/8 bg-zinc-900/60 p-5 shadow-[0_20px_50px_rgba(0,0,0,0.28)] backdrop-blur-sm">
               <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Publish checklist</div>
               <div className="mt-4 space-y-3">
                 {completionChecklist.map((item) => (
-                  <div key={item.label} className="flex items-start gap-3 rounded-2xl border border-white/8 bg-black/25 p-3">
+                  <div key={item.label} className="flex items-start gap-3">
                     <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
                       item.complete
                         ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-100'
@@ -2284,46 +2155,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   </div>
                 ))}
               </div>
-              <p className="mt-4 text-xs leading-5 text-zinc-500">
-                Creator profile identity is verified again on publish before marketplace listing.
-              </p>
             </div>
-
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Fast path</div>
-              <div className="mt-4 space-y-4">
-                {[
-                  'Start with the public post: upload a result, keep the generated media, or publish a creator tip.',
-                  'Write only the context people should see before they decide to unlock anything.',
-                  isGeneratedPaywallIntent
-                    ? 'When the media came from magicbooklet, we preload the saved prompt and reusable setup so you can price the unlock first.'
-                    : 'If this post has reusable value, choose a free or paid unlock and reveal only the sections you actually need.',
-                ].map((step, index) => (
-                  <div key={step} className="flex items-start gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-sm font-semibold text-white">
-                      {index + 1}
-                    </div>
-                    <p className="pt-1 text-sm leading-6 text-zinc-300">{step}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">What people unlock</div>
-              <h2 className="mt-3 text-xl font-semibold text-white">One post, one optional unlock</h2>
-              <p className="mt-3 text-sm leading-7 text-zinc-300">
-                The post stays public. If the prompt, workflow, files, notes, or remix access should unlock later, attach them here and buyers will access everything directly on the post page.
-              </p>
-              <Link
-                href="/marketplace"
-                className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
-              >
-                Browse unlocks
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </div>
-
           </aside>
         </div>
       </div>

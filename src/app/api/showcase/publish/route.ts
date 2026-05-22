@@ -16,7 +16,6 @@ import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showc
 import {
     validatePostResourceBundleInput,
     type PostResourceBundleInput,
-    type PostResourceBundleAccessMode,
 } from '@/lib/post-resource-bundles';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
@@ -174,7 +173,6 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Cannot publish a generation that has not succeeded' }, { status: 400 });
         }
 
-        const resourceAccessMode = requestBody.resourceBundle?.accessMode as PostResourceBundleAccessMode | undefined;
         const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
         const resourceBundleValidationError = hasResourceBundlePayload
             ? validatePostResourceBundleInput(requestBody.resourceBundle ?? null, { ownerUserId: user.id })
@@ -183,9 +181,8 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: resourceBundleValidationError }, { status: 400 });
         }
         const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !hasResourceBundlePayload;
-        const shouldForcePublic = resourceAccessMode === 'free' || resourceAccessMode === 'paid';
         const requestedVisibility = normalizeRequestedVisibility(requestBody.visibility, isPublic);
-        const effectiveVisibility = shouldForcePublic ? 'public' : requestedVisibility;
+        const effectiveVisibility = requestedVisibility;
         const shouldExposePost = effectiveVisibility !== 'private';
         const effectiveIsPublic = effectiveVisibility === 'public';
         const effectiveShareInputMediaForRemix = effectiveIsPublic && requestBody.shareInputMediaForRemix === true;
@@ -210,20 +207,22 @@ export async function POST(request: NextRequest) {
             ?? deriveTitleFromBody(normalizedBody)
             ?? null;
 
-        const marketplaceQualityError = await getMarketplaceQualityErrorForPostBundle({
-            supabase: adminSupabase,
-            ownerUserId: user.id,
-            post: {
-                title: resolvedTitle,
-                body: normalizedBody,
-                visibility: effectiveVisibility,
-                archivedAt: null,
-                reviewStatus: 'visible',
-                outputUrl: generation.output_url,
-                hasMedia: Boolean(generation.output_url),
-            },
-            bundle: hasResourceBundlePayload ? requestBody.resourceBundle ?? null : null,
-        });
+        const marketplaceQualityError = effectiveVisibility === 'public'
+            ? await getMarketplaceQualityErrorForPostBundle({
+                supabase: adminSupabase,
+                ownerUserId: user.id,
+                post: {
+                    title: resolvedTitle,
+                    body: normalizedBody,
+                    visibility: effectiveVisibility,
+                    archivedAt: null,
+                    reviewStatus: 'visible',
+                    outputUrl: generation.output_url,
+                    hasMedia: Boolean(generation.output_url),
+                },
+                bundle: hasResourceBundlePayload ? requestBody.resourceBundle ?? null : null,
+            })
+            : null;
 
         if (marketplaceQualityError) {
             return NextResponse.json({ error: marketplaceQualityError }, { status: 400 });
@@ -261,6 +260,7 @@ export async function POST(request: NextRequest) {
         }
 
         let postId: string | null = null;
+        let resourceBundleStatus: 'draft' | 'published' | null = null;
         const postPayload = {
             user_id: generation.user_id,
             visibility: effectiveVisibility,
@@ -289,6 +289,7 @@ export async function POST(request: NextRequest) {
                 hasBundlePayload: hasResourceBundlePayload,
             });
             postId = publishResult.postId;
+            resourceBundleStatus = publishResult.bundleStatus;
         } catch (postError) {
             if (hasShowcaseAssetColumn && nextShowcaseAssetPath && nextShowcaseAssetPath !== generation.showcase_asset_path) {
                 void adminSupabase.storage
@@ -327,16 +328,17 @@ export async function POST(request: NextRequest) {
             showcasePath: postId && effectiveVisibility !== 'private' ? `/showcase/${postId}` : null,
             ownerPath: postId ? `/post/${postId}/edit` : null,
             resourceBundlePath: postId
-                ? effectiveVisibility === 'private'
+                ? resourceBundleStatus === 'draft' || effectiveVisibility === 'private'
                     ? `/post/${postId}/edit#resources`
                     : `/showcase/${postId}#resources`
                 : null,
+            resourceBundleStatus,
             message:
                 effectiveVisibility === 'public'
                     ? 'Successfully published to showcase'
                     : effectiveVisibility === 'unlisted'
                         ? 'Saved as an unlisted post'
-                        : 'Successfully removed from showcase',
+                        : 'Saved as a private post',
         });
     } catch (error) {
         console.error('Publish error:', error);

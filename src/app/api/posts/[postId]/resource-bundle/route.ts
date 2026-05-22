@@ -68,20 +68,22 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
-  const marketplaceQualityError = await getMarketplaceQualityErrorForPostBundle({
-    supabase: createServiceClient(),
-    ownerUserId: user.id,
-    post: {
-      title: typeof post.title === 'string' ? post.title : null,
-      body: typeof post.body === 'string' ? post.body : null,
-      visibility: typeof post.visibility === 'string' ? post.visibility : null,
-      archivedAt: typeof post.archived_at === 'string' ? post.archived_at : null,
-      reviewStatus: typeof post.review_status === 'string' ? post.review_status : 'visible',
-      showcaseAssetPath: typeof post.showcase_asset_path === 'string' ? post.showcase_asset_path : null,
-      outputUrl: typeof post.output_url === 'string' ? post.output_url : null,
-    },
-    bundle: body.resourceBundle ?? null,
-  });
+  const marketplaceQualityError = post.visibility === 'public'
+    ? await getMarketplaceQualityErrorForPostBundle({
+        supabase: createServiceClient(),
+        ownerUserId: user.id,
+        post: {
+          title: typeof post.title === 'string' ? post.title : null,
+          body: typeof post.body === 'string' ? post.body : null,
+          visibility: typeof post.visibility === 'string' ? post.visibility : null,
+          archivedAt: typeof post.archived_at === 'string' ? post.archived_at : null,
+          reviewStatus: typeof post.review_status === 'string' ? post.review_status : 'visible',
+          showcaseAssetPath: typeof post.showcase_asset_path === 'string' ? post.showcase_asset_path : null,
+          outputUrl: typeof post.output_url === 'string' ? post.output_url : null,
+        },
+        bundle: body.resourceBundle ?? null,
+      })
+    : null;
 
   if (marketplaceQualityError) {
     return NextResponse.json({ error: marketplaceQualityError }, { status: 400 });
