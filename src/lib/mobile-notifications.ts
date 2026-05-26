@@ -44,6 +44,23 @@ export interface MobileNotificationRecord {
 }
 
 type NotificationRow = Record<string, unknown>;
+type DeliveryRow = NotificationRow;
+type ExpoReceipt = {
+  status?: unknown;
+  message?: unknown;
+  details?: unknown;
+};
+
+type ExpoPushSendResult =
+  | {
+    status: 'ok';
+    id: string | null;
+  }
+  | {
+    status: 'error';
+    message: string;
+    details: Record<string, unknown> | null;
+  };
 
 const DEFAULT_PREFERENCES: MobileNotificationPreferences = {
   pushEnabled: true,
@@ -118,6 +135,45 @@ function rowNumber(row: NotificationRow, key: string, fallback = 0) {
 function rowBoolean(row: NotificationRow, key: string, fallback = false) {
   const value = row[key];
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function isDeviceNotRegistered(details: unknown) {
+  return isRecord(details) && details.error === 'DeviceNotRegistered';
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  return fallback;
+}
+
+function toProviderErrorDetails(error: unknown) {
+  if (error instanceof MobileNotificationError) {
+    return {
+      name: error.name,
+      status: error.status,
+      message: error.message,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  return null;
+}
+
+function chunkValues<T>(values: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
 }
 
 export function normalizeMobilePushTokenPayload(body: unknown): NormalizedMobilePushTokenPayload {
@@ -220,7 +276,7 @@ export async function sendExpoPushNotification({
   body: string;
   data: Record<string, string | number | boolean | null>;
   fetcher?: typeof fetch;
-}) {
+}): Promise<ExpoPushSendResult> {
   const response = await fetcher('https://exp.host/--/api/v2/push/send', {
     method: 'POST',
     headers: {
@@ -310,7 +366,7 @@ async function sendMobilePushForNotification(
 ) {
   const { data, error } = await adminSupabase
     .from('mobile_push_tokens')
-    .select('id, expo_push_token')
+    .select('id, expo_push_token, platform')
     .eq('user_id', notification.userId)
     .eq('is_active', true);
 
@@ -318,43 +374,111 @@ async function sendMobilePushForNotification(
     throw new MobileNotificationError('Failed to load mobile push tokens.', 500);
   }
 
-  const tokens = (data ?? []) as Array<{ id?: string | null; expo_push_token?: string | null }>;
+  const tokens = (data ?? []) as Array<{
+    id?: string | null;
+    expo_push_token?: string | null;
+    platform?: string | null;
+  }>;
   if (tokens.length === 0) {
     return;
   }
 
   let firstTicketId: string | null = null;
   let firstError: string | null = null;
+  const pushedAt = new Date().toISOString();
+
+  async function recordDeliveryAttempt(values: Record<string, unknown>) {
+    const { error: insertError } = await adminSupabase
+      .from('mobile_push_deliveries')
+      .insert(values);
+
+    if (insertError) {
+      throw new MobileNotificationError('Failed to store mobile push delivery.', 500);
+    }
+  }
 
   for (const token of tokens) {
     if (!token.expo_push_token) {
       continue;
     }
 
-    const result = await sendExpoPushNotification({
-      expoPushToken: token.expo_push_token,
-      title: notification.title,
-      body: notification.body,
-      data: {
-        notificationId: notification.id,
-        type: notification.type,
-        category: notification.category,
-        deepLink: notification.deepLink,
-      },
-    });
+    let result: ExpoPushSendResult;
+    try {
+      result = await sendExpoPushNotification({
+        expoPushToken: token.expo_push_token,
+        title: notification.title,
+        body: notification.body,
+        data: {
+          notificationId: notification.id,
+          type: notification.type,
+          category: notification.category,
+          deepLink: notification.deepLink,
+        },
+      });
+    } catch (error) {
+      const providerMessage = getErrorMessage(error, 'Expo push send failed before the provider accepted the notification.');
+      firstError ??= providerMessage;
+
+      await recordDeliveryAttempt({
+        notification_id: notification.id,
+        user_id: notification.userId,
+        token_id: token.id ?? null,
+        expo_push_token: token.expo_push_token,
+        platform: token.platform === 'android' ? 'android' : 'ios',
+        send_status: 'error',
+        receipt_status: 'error',
+        receipt_checked_at: pushedAt,
+        receipt_message: 'Push send failed before a receipt was created.',
+        provider_message: providerMessage,
+        provider_details: toProviderErrorDetails(error),
+        attempt_count: 1,
+        last_attempt_at: pushedAt,
+      });
+      continue;
+    }
 
     if (result.status === 'ok') {
       firstTicketId ??= result.id ?? null;
+      await recordDeliveryAttempt({
+        notification_id: notification.id,
+        user_id: notification.userId,
+        token_id: token.id ?? null,
+        expo_push_token: token.expo_push_token,
+        platform: token.platform === 'android' ? 'android' : 'ios',
+        push_ticket_id: result.id ?? null,
+        send_status: 'sent',
+        receipt_status: 'pending',
+        attempt_count: 1,
+        sent_at: pushedAt,
+        last_attempt_at: pushedAt,
+      });
       continue;
     }
 
     firstError ??= result.message;
-    if (isRecord(result.details) && result.details.error === 'DeviceNotRegistered' && token.id) {
+    await recordDeliveryAttempt({
+      notification_id: notification.id,
+      user_id: notification.userId,
+      token_id: token.id ?? null,
+      expo_push_token: token.expo_push_token,
+      platform: token.platform === 'android' ? 'android' : 'ios',
+      send_status: 'error',
+      receipt_status: 'error',
+      receipt_checked_at: pushedAt,
+      receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
+      receipt_message: result.message,
+      provider_message: result.message,
+      provider_details: isRecord(result.details) ? result.details : null,
+      attempt_count: 1,
+      last_attempt_at: pushedAt,
+    });
+
+    if (isDeviceNotRegistered(result.details) && token.id) {
       await adminSupabase
         .from('mobile_push_tokens')
         .update({
           is_active: false,
-          disabled_at: new Date().toISOString(),
+          disabled_at: pushedAt,
         })
         .eq('id', token.id);
     }
@@ -363,11 +487,154 @@ async function sendMobilePushForNotification(
   await adminSupabase
     .from('mobile_notifications')
     .update({
-      pushed_at: new Date().toISOString(),
+      pushed_at: pushedAt,
       push_ticket_id: firstTicketId,
       push_error: firstError,
     })
     .eq('id', notification.id);
+}
+
+async function fetchExpoPushReceipts(
+  ticketIds: string[],
+  fetcher: typeof fetch
+): Promise<Record<string, ExpoReceipt>> {
+  const response = await fetcher('https://exp.host/--/api/v2/push/getReceipts', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Accept-Encoding': 'gzip, deflate',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ids: ticketIds }),
+  });
+
+  const payload = await response.json().catch(() => null) as {
+    data?: unknown;
+  } | null;
+
+  if (!response.ok) {
+    throw new MobileNotificationError('Expo push receipts request failed.', 502);
+  }
+
+  if (!isRecord(payload?.data)) {
+    throw new MobileNotificationError('Expo push receipts response was invalid.', 502);
+  }
+
+  return payload.data as Record<string, ExpoReceipt>;
+}
+
+export async function processPendingMobilePushReceipts(
+  adminSupabase: SupabaseClient,
+  {
+    fetcher = fetch,
+    now = new Date(),
+  }: {
+    fetcher?: typeof fetch;
+    now?: Date;
+  } = {}
+) {
+  const nowIso = now.toISOString();
+  const staleThreshold = now.getTime() - (30 * 60 * 60 * 1000);
+  const { data, error } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .select('id, token_id, push_ticket_id, receipt_status, sent_at')
+    .eq('receipt_status', 'pending');
+
+  if (error) {
+    throw new MobileNotificationError('Failed to load mobile push deliveries.', 500);
+  }
+
+  const deliveries = (data ?? []) as DeliveryRow[];
+  const staleDeliveries = deliveries.filter((delivery) => {
+    const sentAt = rowString(delivery, 'sent_at');
+    const timestamp = sentAt ? Date.parse(sentAt) : Number.NaN;
+    return !rowString(delivery, 'push_ticket_id') || !Number.isFinite(timestamp) || timestamp < staleThreshold;
+  });
+  const activeDeliveries = deliveries.filter((delivery) => !staleDeliveries.includes(delivery));
+
+  let staleCount = 0;
+  for (const delivery of staleDeliveries) {
+    const deliveryId = rowString(delivery, 'id');
+    if (!deliveryId) {
+      continue;
+    }
+
+    staleCount += 1;
+    await adminSupabase
+      .from('mobile_push_deliveries')
+      .update({
+        receipt_status: 'stale',
+        receipt_checked_at: nowIso,
+        receipt_message: 'Receipt unavailable after 30 hours.',
+      })
+      .eq('id', deliveryId);
+  }
+
+  let updatedCount = 0;
+  let disabledTokenCount = 0;
+  const receiptLookups = chunkValues(
+    activeDeliveries
+      .map((delivery) => rowString(delivery, 'push_ticket_id'))
+      .filter((ticketId): ticketId is string => Boolean(ticketId)),
+    100
+  );
+  const receiptsByTicketId: Record<string, ExpoReceipt> = {};
+
+  for (const ticketBatch of receiptLookups) {
+    const nextReceipts = await fetchExpoPushReceipts(ticketBatch, fetcher);
+    Object.assign(receiptsByTicketId, nextReceipts);
+  }
+
+  for (const delivery of activeDeliveries) {
+    const deliveryId = rowString(delivery, 'id');
+    const tokenId = rowString(delivery, 'token_id');
+    const ticketId = rowString(delivery, 'push_ticket_id');
+
+    if (!deliveryId || !ticketId) {
+      continue;
+    }
+
+    const receipt = receiptsByTicketId[ticketId];
+    if (!isRecord(receipt)) {
+      continue;
+    }
+
+    updatedCount += 1;
+    const receiptDetails = isRecord(receipt.details) ? receipt.details : null;
+    const receiptStatus = receipt.status === 'ok' ? 'ok' : 'error';
+    const receiptMessage = normalizeOptionalString(receipt.message)
+      ?? (receiptStatus === 'ok' ? 'Delivered to push provider.' : 'Expo receipt reported a delivery error.');
+    const receiptErrorCode = receiptDetails ? normalizeOptionalString(receiptDetails.error) : null;
+
+    await adminSupabase
+      .from('mobile_push_deliveries')
+      .update({
+        receipt_status: receiptStatus,
+        receipt_checked_at: nowIso,
+        receipt_error_code: receiptErrorCode,
+        receipt_message: receiptMessage,
+        provider_details: receiptDetails,
+      })
+      .eq('id', deliveryId);
+
+    if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
+      disabledTokenCount += 1;
+      await adminSupabase
+        .from('mobile_push_tokens')
+        .update({
+          is_active: false,
+          disabled_at: nowIso,
+        })
+        .eq('id', tokenId);
+    }
+  }
+
+  return {
+    checkedCount: deliveries.length,
+    updatedCount,
+    staleCount,
+    disabledTokenCount,
+  };
 }
 
 export async function createMobileNotification({

@@ -22,6 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = normalizeMobilePushTokenPayload(await request.json());
+    const nowIso = new Date().toISOString();
     const { error } = await supabase
       .from('mobile_push_tokens')
       .upsert({
@@ -32,11 +33,28 @@ export async function POST(request: NextRequest) {
         app_version: payload.appVersion,
         is_active: true,
         disabled_at: null,
-        last_seen_at: new Date().toISOString(),
+        last_seen_at: nowIso,
       }, { onConflict: 'user_id,expo_push_token' });
 
     if (error) {
       throw new MobileNotificationError('Failed to register mobile push token.', 500);
+    }
+
+    if (payload.deviceId) {
+      const { error: deactivateError } = await supabase
+        .from('mobile_push_tokens')
+        .update({
+          is_active: false,
+          disabled_at: nowIso,
+        })
+        .eq('user_id', user.id)
+        .eq('device_id', payload.deviceId)
+        .eq('is_active', true)
+        .neq('expo_push_token', payload.expoPushToken);
+
+      if (deactivateError) {
+        throw new MobileNotificationError('Failed to deactivate stale mobile push tokens.', 500);
+      }
     }
 
     await ensureMobileNotificationPreferences(supabase, user.id);

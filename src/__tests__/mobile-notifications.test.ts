@@ -1,13 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MobileNotificationError,
   buildMobileNotificationDeepLink,
+  createMobileNotification,
   normalizeMobilePushTokenPayload,
+  processPendingMobilePushReceipts,
   sendExpoPushNotification,
 } from '@/lib/mobile-notifications';
 
 describe('mobile notifications', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('normalizes Expo push token registration payloads', () => {
     expect(normalizeMobilePushTokenPayload({
       expoPushToken: ' ExponentPushToken[abc123] ',
@@ -81,5 +87,347 @@ describe('mobile notifications', () => {
       .toBe('/viewer?source=showcase-feed&initialId=post-1');
     expect(buildMobileNotificationDeepLink({ kind: 'notifications' }))
       .toBe('/studio');
+  });
+
+  it('processes Expo receipts and disables unregistered push tokens', async () => {
+    const deliveryRows = [
+      {
+        id: 'delivery-1',
+        token_id: 'token-1',
+        push_ticket_id: 'ticket-1',
+        receipt_status: 'pending',
+        sent_at: '2026-05-26T00:00:00.000Z',
+      },
+    ];
+    const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+    const tokenUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+
+    const adminSupabase = {
+      from(table: string) {
+        if (table === 'mobile_push_deliveries') {
+          return {
+            select() {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('receipt_status');
+                  expect(value).toBe('pending');
+                  return Promise.resolve({ data: deliveryRows, error: null });
+                },
+              };
+            },
+            update(values: Record<string, unknown>) {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('id');
+                  deliveryUpdates.push({ id: String(value), values });
+                  return Promise.resolve({ error: null });
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'mobile_push_tokens') {
+          return {
+            update(values: Record<string, unknown>) {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('id');
+                  tokenUpdates.push({ id: String(value), values });
+                  return Promise.resolve({ error: null });
+                },
+              };
+            },
+          };
+        }
+
+        throw new Error(`Unexpected table ${table}`);
+      },
+    };
+
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({
+        data: {
+          'ticket-1': {
+            status: 'error',
+            message: 'Device is no longer registered',
+            details: {
+              error: 'DeviceNotRegistered',
+            },
+          },
+        },
+      }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      })
+    );
+
+    await expect(processPendingMobilePushReceipts(
+      adminSupabase as never,
+      {
+        fetcher: fetcher as unknown as typeof fetch,
+        now: new Date('2026-05-26T12:00:00.000Z'),
+      }
+    )).resolves.toMatchObject({
+      checkedCount: 1,
+      staleCount: 0,
+      updatedCount: 1,
+      disabledTokenCount: 1,
+    });
+
+    expect(fetcher).toHaveBeenCalledWith('https://exp.host/--/api/v2/push/getReceipts', expect.objectContaining({
+      method: 'POST',
+    }));
+    expect(deliveryUpdates).toEqual([
+      expect.objectContaining({
+        id: 'delivery-1',
+        values: expect.objectContaining({
+          receipt_status: 'error',
+          receipt_error_code: 'DeviceNotRegistered',
+          receipt_message: 'Device is no longer registered',
+        }),
+      }),
+    ]);
+    expect(tokenUpdates).toEqual([
+      expect.objectContaining({
+        id: 'token-1',
+        values: expect.objectContaining({
+          is_active: false,
+        }),
+      }),
+    ]);
+  });
+
+  it('records delivery errors when the Expo send call throws before a receipt is created', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('network down');
+    }));
+
+    const deliveryInserts: Array<Record<string, unknown>> = [];
+    const notificationUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+
+    const adminSupabase = {
+      from(table: string) {
+        if (table === 'mobile_notifications') {
+          return {
+            insert(values: Record<string, unknown>) {
+              return {
+                select() {
+                  return {
+                    async single() {
+                      return {
+                        data: {
+                          id: 'notification-1',
+                          user_id: 'user-1',
+                          actor_user_id: null,
+                          type: values.type,
+                          category: values.category,
+                          title: values.title,
+                          body: values.body,
+                          deep_link: values.deep_link,
+                          object_type: values.object_type,
+                          object_id: values.object_id,
+                          event_count: 1,
+                          is_read: false,
+                          created_at: '2026-05-26T10:00:00.000Z',
+                          updated_at: '2026-05-26T10:00:00.000Z',
+                        },
+                        error: null,
+                      };
+                    },
+                  };
+                },
+              };
+            },
+            update(values: Record<string, unknown>) {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('id');
+                  notificationUpdates.push({ id: String(value), values });
+                  return Promise.resolve({ error: null });
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'mobile_notification_preferences') {
+          return {
+            select() {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('user_id');
+                  expect(value).toBe('user-1');
+                  return {
+                    maybeSingle() {
+                      return Promise.resolve({
+                        data: {
+                          push_enabled: true,
+                          generation_enabled: true,
+                          commerce_enabled: true,
+                          social_enabled: true,
+                        },
+                        error: null,
+                      });
+                    },
+                  };
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'mobile_push_tokens') {
+          return {
+            select() {
+              const filters: Record<string, unknown> = {};
+              const query = {
+                error: null,
+                data: [
+                  {
+                    id: 'token-1',
+                    expo_push_token: 'ExponentPushToken[token123]',
+                    platform: 'ios',
+                  },
+                ],
+                eq(column: string, value: unknown) {
+                  filters[column] = value;
+                  return query;
+                },
+              };
+              return query;
+            },
+          };
+        }
+
+        if (table === 'mobile_push_deliveries') {
+          return {
+            async insert(values: Record<string, unknown>) {
+              deliveryInserts.push(values);
+              return { error: null };
+            },
+          };
+        }
+
+        throw new Error(`Unexpected table ${table}`);
+      },
+    };
+
+    await expect(createMobileNotification({
+      adminSupabase: adminSupabase as never,
+      userId: 'user-1',
+      type: 'generation_succeeded',
+      category: 'generation',
+      title: 'Render ready',
+      body: 'Open it in the app.',
+      deepLink: '/viewer?source=studio-creations&initialId=gen-1',
+      objectType: 'generation',
+      objectId: 'gen-1',
+    })).resolves.toMatchObject({
+      id: 'notification-1',
+      title: 'Render ready',
+    });
+
+    expect(deliveryInserts).toEqual([
+      expect.objectContaining({
+        notification_id: 'notification-1',
+        user_id: 'user-1',
+        token_id: 'token-1',
+        expo_push_token: 'ExponentPushToken[token123]',
+        platform: 'ios',
+        send_status: 'error',
+        receipt_status: 'error',
+        receipt_message: 'Push send failed before a receipt was created.',
+        provider_message: 'network down',
+        provider_details: {
+          name: 'Error',
+          message: 'network down',
+        },
+        attempt_count: 1,
+      }),
+    ]);
+    expect(notificationUpdates).toEqual([
+      expect.objectContaining({
+        id: 'notification-1',
+        values: expect.objectContaining({
+          push_ticket_id: null,
+          push_error: 'network down',
+          pushed_at: expect.any(String),
+        }),
+      }),
+    ]);
+  });
+
+  it('keeps pending receipts active until they are older than 30 hours', async () => {
+    const deliveryRows = [
+      {
+        id: 'delivery-1',
+        token_id: 'token-1',
+        push_ticket_id: 'ticket-1',
+        receipt_status: 'pending',
+        sent_at: '2026-05-25T07:00:00.000Z',
+      },
+    ];
+    const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+
+    const adminSupabase = {
+      from(table: string) {
+        if (table === 'mobile_push_deliveries') {
+          return {
+            select() {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('receipt_status');
+                  expect(value).toBe('pending');
+                  return Promise.resolve({ data: deliveryRows, error: null });
+                },
+              };
+            },
+            update(values: Record<string, unknown>) {
+              return {
+                eq(column: string, value: unknown) {
+                  expect(column).toBe('id');
+                  deliveryUpdates.push({ id: String(value), values });
+                  return Promise.resolve({ error: null });
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'mobile_push_tokens') {
+          return {
+            update() {
+              throw new Error('Unexpected token deactivation');
+            },
+          };
+        }
+
+        throw new Error(`Unexpected table ${table}`);
+      },
+    };
+
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ data: {} }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      })
+    );
+
+    await expect(processPendingMobilePushReceipts(
+      adminSupabase as never,
+      {
+        fetcher: fetcher as unknown as typeof fetch,
+        now: new Date('2026-05-26T12:00:00.000Z'),
+      }
+    )).resolves.toMatchObject({
+      checkedCount: 1,
+      updatedCount: 0,
+      staleCount: 0,
+      disabledTokenCount: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(deliveryUpdates).toEqual([]);
   });
 });
