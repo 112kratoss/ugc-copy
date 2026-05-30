@@ -3,8 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
@@ -22,7 +21,6 @@ import {
     type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
 import {
-    formatUnlockCountLabel,
     getBundleAccessLabel,
     getPostResourceKindLabel,
     isPostResourceKind,
@@ -507,14 +505,8 @@ export default function ShowcaseClient({
                     </div>
                   ) : null}
 
-                  <AnimatePresence initial={false}>
-                    {isFilterPanelOpen ? (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="overflow-hidden"
-                        >
+                  {isFilterPanelOpen ? (
+                        <div className="overflow-hidden">
                             <div className="mt-4 grid gap-4 border-t border-white/8 pt-4 lg:grid-cols-3">
                                 <div>
                                     <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Tool</div>
@@ -582,9 +574,8 @@ export default function ShowcaseClient({
                                     </div>
                                 </div>
                             </div>
-                        </motion.div>
-                    ) : null}
-                  </AnimatePresence>
+                        </div>
+                  ) : null}
                 </div>
 
                 {isLoadingInitialFeed ? (
@@ -603,195 +594,181 @@ export default function ShowcaseClient({
                     </div>
                 ) : (
                     <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                        <AnimatePresence>
-                            {items.map((item, index) => (
-                                <motion.div
-                                    key={item.id}
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: index * 0.05 }}
-                                    className="group relative bg-[#09090b] border border-white/[0.04] rounded-[1.5rem] overflow-hidden hover:border-purple-500/40 hover:shadow-[0_8px_30px_rgba(0,0,0,0.3)] transition-all break-inside-avoid mb-6"
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={() => openPreview(item)}
-                                        className="relative bg-black overflow-hidden block w-full text-left"
+                            {items.map((item) => {
+                                const resourceKinds = getItemResourceKinds(item);
+                                const isSaved = savedItemIds.has(item.id);
+
+                                return (
+                                    <div
+                                        key={item.id}
+                                        className="break-inside-avoid mb-6 flex flex-col"
                                     >
-                                        {item.postFormat === 'text' ? (
-                                            <TextPostPreviewCard
-                                                title={item.title}
-                                                summary={getItemSummary(item)}
-                                                sourceLabel={item.sourceTool || item.model}
-                                                dateLabel={new Date(item.createdAt).toLocaleDateString('en-US', {
-                                                    month: 'short',
-                                                    day: 'numeric',
-                                                })}
-                                                saveCount={item.saveCount}
-                                                remixCount={item.remixCount}
-                                                unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
-                                                resourceKinds={getItemResourceKinds(item)}
-                                                className="rounded-none border-0 border-b border-white/8 shadow-none"
-                                            />
-                                        ) : item.mediaKind === 'video' && item.mediaUrl ? (
-                                            <video
-                                                ref={(node) => registerPreviewVideo(item.id, node)}
-                                                src={item.mediaUrl}
-                                                muted
-                                                loop
-                                                playsInline
-                                                preload="metadata"
-                                                className="w-full h-auto block object-cover transition-transform duration-500 group-hover:scale-105"
-                                                onLoadedData={(event) => {
-                                                    primePreviewVideoFrame(event.currentTarget);
-                                                }}
-                                                onMouseEnter={(event) => {
-                                                    if (event.currentTarget.readyState === 0) {
-                                                        event.currentTarget.load();
-                                                    }
-                                                    void event.currentTarget.play().catch(() => {});
-                                                }}
-                                                onMouseLeave={(event) => {
-                                                    event.currentTarget.pause();
-                                                    primePreviewVideoFrame(event.currentTarget);
-                                                }}
-                                            />
-                                        ) : item.mediaUrl ? (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img
-                                                src={item.mediaUrl}
-                                                alt={item.title}
-                                                className="w-full h-auto block object-cover transition-transform duration-500 group-hover:scale-105"
-                                            />
-                                        ) : (
-                                            <div className="flex min-h-[280px] items-center justify-center bg-zinc-950 text-zinc-500">
-                                                <BookText className="h-10 w-10" />
-                                            </div>
-                                        )}
-
-                                        {item.postFormat !== 'text' ? (
-                                            <div className="absolute top-3 left-3 px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-xs font-medium border border-white/10 flex items-center gap-1.5">
-                                                {item.category === 'video' ? <Video className="w-3.5 h-3.5" /> :
-                                                    item.category === 'motion' ? <Users className="w-3.5 h-3.5" /> :
-                                                        item.category === 'text' ? <BookText className="w-3.5 h-3.5" /> :
-                                                            <ImageIcon className="w-3.5 h-3.5" />}
-                                                <span className="capitalize">{item.category}</span>
-                                            </div>
-                                        ) : null}
-
-                                        {item.postFormat !== 'text' && item.sourceKind === 'external' && item.sourceTool ? (
-                                            <div className="absolute right-3 top-3 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[11px] font-medium text-zinc-100 backdrop-blur-md">
-                                                {item.sourceTool}
-                                            </div>
-                                        ) : null}
-
-                                        {item.postFormat !== 'text' ? (
-                                            <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
-                                            </div>
-                                        ) : null}
-                                    </button>
-
-                                    <div className="p-4 bg-zinc-900 border-t border-zinc-800">
-                                        <div className="mb-4 flex items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                                {(() => {
-                                                    const resourceKinds = getItemResourceKinds(item);
-
-                                                    return (
-                                                        <>
-                                                <h3 className="font-medium text-white line-clamp-1">{item.title}</h3>
-                                                {item.asset ? (
-                                                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
-                                                        <ShoppingBag className="h-3.5 w-3.5" />
-                                                        {getAssetAccessLabel(item.asset)}
-                                                    </div>
-                                                ) : null}
-                                                {item.asset?.salesCount ? (
-                                                    <div className="ml-2 mt-2 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-200">
-                                                        <ShieldCheck className="h-3.5 w-3.5 text-emerald-200" />
-                                                        {formatUnlockCountLabel(item.asset.accessMode, item.asset.salesCount)}
-                                                    </div>
-                                                ) : null}
-                                                {resourceKinds.length > 0 ? (
-                                                    <div className="mt-2 flex flex-wrap gap-1.5">
-                                                        {resourceKinds.map((kind) => (
-                                                            <span
-                                                                key={`${item.id}-${kind}`}
-                                                                className="rounded-full border border-white/10 bg-white/[0.035] px-2 py-1 text-[11px] font-medium text-zinc-300"
-                                                            >
-                                                                {getPostResourceKindLabel(kind)}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                ) : null}
-                                                <div className="mt-3">
-                                                    <CreatorIdentity creator={item.creator} compact prefetch={false} />
-                                                </div>
-                                                <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-zinc-400">
-                                                    {getItemSummary(item)}
-                                                </p>
-                                                        </>
-                                                    );
-                                                })()}
-                                            </div>
-                                            <span className="shrink-0 text-xs text-zinc-500">
-                                                {new Date(item.createdAt).toLocaleDateString('en-US', {
-                                                    month: 'short',
-                                                    day: 'numeric',
-                                                })}
-                                            </span>
-                                        </div>
-
-                                        <div className="flex items-center justify-between gap-3">
+                                        {/* Pinterest Style Card Frame */}
+                                        <div className="group relative overflow-hidden rounded-[1.5rem] bg-[#09090b] border border-white/[0.04] hover:border-purple-500/30 hover:shadow-[0_12px_40px_rgba(0,0,0,0.65)] transition-all duration-300">
                                             <button
                                                 type="button"
-                                                onClick={() => void toggleSave(item.id)}
-                                                disabled={savingItemIds.has(item.id)}
-                                                aria-pressed={savedItemIds.has(item.id)}
-                                                aria-busy={savingItemIds.has(item.id)}
-                                                aria-label={`${savedItemIds.has(item.id) ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
-                                                className="flex items-center gap-2 text-zinc-400 transition-colors hover:text-pink-400 disabled:cursor-not-allowed disabled:opacity-70"
+                                                onClick={() => openPreview(item)}
+                                                className="relative bg-black overflow-hidden block w-full text-left"
                                             >
-                                                <Heart className={`w-5 h-5 ${savedItemIds.has(item.id) ? 'fill-pink-500 text-pink-500' : ''}`} />
-                                                <span className="text-sm font-medium">{item.saveCount}</span>
+                                                {item.postFormat === 'text' ? (
+                                                    <TextPostPreviewCard
+                                                        title={item.title}
+                                                        summary={getItemSummary(item)}
+                                                        sourceLabel={item.sourceTool || item.model}
+                                                        dateLabel={new Date(item.createdAt).toLocaleDateString('en-US', {
+                                                            month: 'short',
+                                                            day: 'numeric',
+                                                        })}
+                                                        saveCount={item.saveCount}
+                                                        remixCount={item.remixCount}
+                                                        unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
+                                                        resourceKinds={getItemResourceKinds(item)}
+                                                        className="rounded-none border-0 shadow-none"
+                                                    />
+                                                ) : item.mediaKind === 'video' && item.mediaUrl ? (
+                                                    <video
+                                                        ref={(node) => registerPreviewVideo(item.id, node)}
+                                                        src={item.mediaUrl}
+                                                        muted
+                                                        loop
+                                                        playsInline
+                                                        preload="metadata"
+                                                        className="w-full h-auto block object-cover"
+                                                        onLoadedData={(event) => {
+                                                            primePreviewVideoFrame(event.currentTarget);
+                                                        }}
+                                                    />
+                                                ) : item.mediaUrl ? (
+                                                    // eslint-disable-next-line @next/next/no-img-element
+                                                    <img
+                                                        src={item.mediaUrl}
+                                                        alt={item.title}
+                                                        className="w-full h-auto block object-cover"
+                                                    />
+                                                ) : (
+                                                    <div className="flex min-h-[240px] items-center justify-center bg-zinc-950 text-zinc-500">
+                                                        <BookText className="h-10 w-10" />
+                                                    </div>
+                                                )}
                                             </button>
 
-                                            <div className="flex items-center gap-2">
-                                                <PublicShareButton
-                                                    generationId={item.id}
-                                                    title={item.title}
-                                                    description={item.body || item.prompt}
-                                                    sourceSurface="showcase"
-                                                    accessToken={session?.access_token ?? null}
-                                                    className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
-                                                />
-                                                {item.asset ? (
-                                                    <Link
-                                                        href={buildCommunityDetailPath(item.id, 'resources')}
-                                                        prefetch={false}
-                                                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
-                                                    >
-                                                        <ShoppingBag className="h-4 w-4" />
-                                                        View unlock
-                                                    </Link>
-                                                ) : null}
-                                                {item.canRemix ? (
+                                            {/* Hover State Controls Overlay (Pinterest Style) */}
+                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 flex flex-col justify-between p-4">
+                                                <div className="flex justify-between items-start pointer-events-auto">
+                                                    {item.postFormat !== 'text' ? (
+                                                        <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
+                                                            <span className="capitalize">{item.category}</span>
+                                                        </div>
+                                                    ) : <div />}
+
+                                                    {/* Pinterest-style Red Save Button */}
                                                     <button
                                                         type="button"
-                                                        onClick={() => handleRemix(item.id)}
-                                                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            void toggleSave(item.id);
+                                                        }}
+                                                        disabled={savingItemIds.has(item.id)}
+                                                        aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
+                                                        aria-pressed={isSaved}
+                                                        aria-busy={savingItemIds.has(item.id)}
+                                                        className={`px-4 py-2 rounded-full text-xs font-bold transition-all duration-200 shadow-md ${
+                                                            isSaved
+                                                                ? 'bg-zinc-800 text-white border border-white/10 hover:bg-zinc-700'
+                                                                : 'bg-[#e60023] hover:bg-[#ad081b] text-white'
+                                                        }`}
                                                     >
-                                                        <Wand2 className="w-4 h-4" />
-                                                        Remix
-                                                        <span className="bg-purple-800/50 px-1.5 py-0.5 rounded text-xs ml-1">{item.remixCount}</span>
+                                                        {isSaved ? 'Saved' : 'Save'}
                                                     </button>
-                                                ) : null}
+                                                </div>
+
+                                                <div className="flex items-center justify-end gap-2 pointer-events-auto">
+                                                    <PublicShareButton
+                                                        generationId={item.id}
+                                                        title={item.title}
+                                                        description={item.body || item.prompt}
+                                                        sourceSurface="showcase"
+                                                        accessToken={session?.access_token ?? null}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-black hover:bg-white transition-all shadow-md"
+                                                    />
+
+                                                    {item.asset ? (
+                                                        <Link
+                                                            href={buildCommunityDetailPath(item.id, 'resources')}
+                                                            prefetch={false}
+                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/90 text-white hover:bg-emerald-500 transition-all shadow-md"
+                                                            title="View unlock"
+                                                        >
+                                                            <ShoppingBag className="h-4.5 w-4.5" />
+                                                        </Link>
+                                                    ) : null}
+
+                                                    {item.canRemix ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                void handleRemix(item.id);
+                                                            }}
+                                                            className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-full text-xs font-bold transition-all shadow-md"
+                                                        >
+                                                            <Wand2 className="w-3.5 h-3.5" />
+                                                            <span>Remix</span>
+                                                            {item.remixCount > 0 ? (
+                                                                <span className="bg-purple-800/40 px-1 py-0.5 rounded-full text-[10px]">{item.remixCount}</span>
+                                                            ) : null}
+                                                        </button>
+                                                    ) : null}
+                                                </div>
                                             </div>
                                         </div>
+
+                                        {/* Pinterest Style Meta Details Under the Card */}
+                                        <div className="mt-3 px-1.5 flex flex-col gap-1.5">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <h3 className="font-semibold text-zinc-100 text-sm leading-snug line-clamp-1 flex-1">
+                                                    {item.title}
+                                                </h3>
+                                                <span className="text-[10px] text-zinc-500 font-semibold whitespace-nowrap mt-0.5">
+                                                    {new Date(item.createdAt).toLocaleDateString('en-US', {
+                                                        month: 'short',
+                                                        day: 'numeric',
+                                                    })}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <CreatorIdentity creator={item.creator} compact prefetch={false} />
+                                                </div>
+                                                <div className="flex items-center gap-1 text-zinc-500 text-[11px] font-semibold">
+                                                    <Heart className={`w-3.5 h-3.5 ${isSaved ? 'fill-pink-500 text-pink-500' : ''}`} />
+                                                    <span>{item.saveCount}</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Unlock and Resource Badges */}
+                                            {(item.asset || resourceKinds.length > 0) && (
+                                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                                    {item.asset ? (
+                                                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/10 bg-emerald-500/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                                                            {getAssetAccessLabel(item.asset)}
+                                                        </span>
+                                                    ) : null}
+                                                    {resourceKinds.map((kind) => (
+                                                        <span
+                                                            key={`${item.id}-${kind}`}
+                                                            className="rounded-full border border-white/5 bg-white/[0.02] px-2 py-0.5 text-[10px] font-bold tracking-wider text-zinc-400 uppercase"
+                                                        >
+                                                            {getPostResourceKindLabel(kind)}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
-                                </motion.div>
-                            ))}
-                        </AnimatePresence>
+                                );
+                            })}
                     </div>
                 )}
 
