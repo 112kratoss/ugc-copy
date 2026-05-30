@@ -660,26 +660,6 @@ export default function ShowcaseClient({
                                                             <span className="capitalize">{item.category}</span>
                                                         </div>
                                                     ) : <div />}
-
-                                                    {/* Pinterest-style Red Save Button */}
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            void toggleSave(item.id);
-                                                        }}
-                                                        disabled={savingItemIds.has(item.id)}
-                                                        aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
-                                                        aria-pressed={isSaved}
-                                                        aria-busy={savingItemIds.has(item.id)}
-                                                        className={`px-4 py-2 rounded-full text-xs font-bold transition-all duration-200 shadow-md ${
-                                                            isSaved
-                                                                ? 'bg-zinc-800 text-white border border-white/10 hover:bg-zinc-700'
-                                                                : 'bg-[#e60023] hover:bg-[#ad081b] text-white'
-                                                        }`}
-                                                    >
-                                                        {isSaved ? 'Saved' : 'Save'}
-                                                    </button>
                                                 </div>
 
                                                 <div className="flex items-center justify-end gap-2 pointer-events-auto">
@@ -689,6 +669,7 @@ export default function ShowcaseClient({
                                                         description={item.body || item.prompt}
                                                         sourceSurface="showcase"
                                                         accessToken={session?.access_token ?? null}
+                                                        iconOnly
                                                         className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-black hover:bg-white transition-all shadow-md"
                                                     />
 
@@ -703,22 +684,25 @@ export default function ShowcaseClient({
                                                         </Link>
                                                     ) : null}
 
-                                                    {item.canRemix ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                void handleRemix(item.id);
-                                                            }}
-                                                            className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-full text-xs font-bold transition-all shadow-md"
-                                                        >
-                                                            <Wand2 className="w-3.5 h-3.5" />
-                                                            <span>Remix</span>
-                                                            {item.remixCount > 0 ? (
-                                                                <span className="bg-purple-800/40 px-1 py-0.5 rounded-full text-[10px]">{item.remixCount}</span>
-                                                            ) : null}
-                                                        </button>
-                                                    ) : null}
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            void toggleSave(item.id);
+                                                        }}
+                                                        disabled={savingItemIds.has(item.id)}
+                                                        aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
+                                                        aria-pressed={isSaved}
+                                                        aria-busy={savingItemIds.has(item.id)}
+                                                        className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-all shadow-md ${
+                                                            isSaved
+                                                                ? 'bg-rose-600 text-white hover:bg-rose-700'
+                                                                : 'bg-white/90 text-black hover:bg-white'
+                                                        }`}
+                                                        title={isSaved ? 'Remove save' : 'Save'}
+                                                    >
+                                                        <Heart className={`h-4 w-4 ${isSaved ? 'fill-current' : ''}`} />
+                                                    </button>
                                                 </div>
                                             </div>
                                         </div>
