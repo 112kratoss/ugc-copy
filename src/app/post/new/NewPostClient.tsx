@@ -1851,6 +1851,169 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   />
                 </label>
 
+                {proofMode === 'media' ? (
+                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                    {!hasGeneratedProof ? (
+                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
+                            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                              Tag the tool so people can understand how this result was made.
+                            </p>
+                          </div>
+                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
+                            {normalizedSourceTool.label || 'Choose tool'}
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {CURATED_SOURCE_TOOLS.map((toolOption) => (
+                            <button
+                              key={toolOption.slug}
+                              type="button"
+                              onClick={() => {
+                                applySourceToolSelection(toolOption);
+                              }}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                                normalizedSourceTool.slug === toolOption.slug
+                                  ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                              }`}
+                            >
+                              {toolOption.label}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSourceToolSlug('');
+                              setIsSourceToolSuggestionsOpen(true);
+                              sourceToolInputRef.current?.focus();
+                              resetFeedback();
+                            }}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                              sourceTool && !normalizedSourceTool.slug
+                                ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                            }`}
+                          >
+                            Custom
+                          </button>
+                        </div>
+                        <label
+                          className="mt-3 block"
+                          onBlur={(event) => {
+                            const nextFocusedElement = event.relatedTarget;
+                            if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
+                              return;
+                            }
+
+                            setIsSourceToolSuggestionsOpen(false);
+                          }}
+                        >
+                          <span className="sr-only">Custom source tool</span>
+                          <input
+                            ref={sourceToolInputRef}
+                            role="combobox"
+                            aria-label="Custom source tool"
+                            aria-autocomplete="list"
+                            aria-controls="source-tool-suggestions"
+                            aria-expanded={shouldShowSourceToolSuggestions}
+                            value={sourceTool}
+                            onChange={(event) => {
+                              setSourceTool(event.target.value);
+                              setSourceToolSlug('');
+                              setIsSourceToolSuggestionsOpen(true);
+                              resetFeedback();
+                            }}
+                            onFocus={() => {
+                              setIsSourceToolSuggestionsOpen(true);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Escape') {
+                                setIsSourceToolSuggestionsOpen(false);
+                              }
+                            }}
+                            placeholder="Runway, Midjourney, CapCut..."
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                          />
+                          {shouldShowSourceToolSuggestions ? (
+                            <div
+                              id="source-tool-suggestions"
+                              role="listbox"
+                              aria-label="Source tool suggestions"
+                              className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/95 p-2 shadow-[0_20px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+                            >
+                              {filteredSourceToolSuggestions.map((toolOption) => {
+                                const selected = normalizedSourceTool.slug === toolOption.slug;
+
+                                return (
+                                  <button
+                                    key={toolOption.slug}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                    }}
+                                    onClick={() => {
+                                      applySourceToolSelection(toolOption);
+                                    }}
+                                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
+                                      selected
+                                        ? 'bg-sky-400/15 text-sky-50'
+                                        : 'text-zinc-200 hover:bg-white/[0.06] hover:text-white'
+                                    }`}
+                                  >
+                                    <span>{toolOption.label}</span>
+                                    {selected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
+                        <div className="mt-3 inline-flex rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-medium text-zinc-100">
+                          Created in magicbooklet
+                        </div>
+                      </div>
+                    )}
+
+                    <label className="block rounded-[24px] border border-white/8 bg-black/30 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
+                      <select
+                        value={category}
+                        onChange={(event) => {
+                          setCategory(event.target.value as Exclude<PostCategory, 'text'>);
+                          resetFeedback();
+                        }}
+                        disabled={hasGeneratedProof}
+                        className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {CATEGORY_OPTIONS.map((option) => (
+                          <option
+                            key={option.value}
+                            value={option.value}
+                            disabled={file ? !acceptsCategory(file, option.value) : false}
+                            className="bg-zinc-950 text-white"
+                          >
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-zinc-500">
+                        {hasGeneratedProof
+                          ? 'Generated media keeps its category automatically.'
+                          : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
+                      </p>
+                    </label>
+                  </div>
+                ) : null}
+
                 {renderSectionError('post')}
 
                 <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-t border-white/8 pt-5">
@@ -2163,169 +2326,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                     />
                   </label>
-                ) : null}
-
-                {proofMode === 'media' ? (
-                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                    {!hasGeneratedProof ? (
-                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
-                            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                              Tag the tool so people can understand how this result was made.
-                            </p>
-                          </div>
-                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
-                            {normalizedSourceTool.label || 'Choose tool'}
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {CURATED_SOURCE_TOOLS.map((toolOption) => (
-                            <button
-                              key={toolOption.slug}
-                              type="button"
-                              onClick={() => {
-                                applySourceToolSelection(toolOption);
-                              }}
-                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                                normalizedSourceTool.slug === toolOption.slug
-                                  ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                              }`}
-                            >
-                              {toolOption.label}
-                            </button>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSourceToolSlug('');
-                              setIsSourceToolSuggestionsOpen(true);
-                              sourceToolInputRef.current?.focus();
-                              resetFeedback();
-                            }}
-                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                              sourceTool && !normalizedSourceTool.slug
-                                ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                            }`}
-                          >
-                            Custom
-                          </button>
-                        </div>
-                        <label
-                          className="mt-3 block"
-                          onBlur={(event) => {
-                            const nextFocusedElement = event.relatedTarget;
-                            if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
-                              return;
-                            }
-
-                            setIsSourceToolSuggestionsOpen(false);
-                          }}
-                        >
-                          <span className="sr-only">Custom source tool</span>
-                          <input
-                            ref={sourceToolInputRef}
-                            role="combobox"
-                            aria-label="Custom source tool"
-                            aria-autocomplete="list"
-                            aria-controls="source-tool-suggestions"
-                            aria-expanded={shouldShowSourceToolSuggestions}
-                            value={sourceTool}
-                            onChange={(event) => {
-                              setSourceTool(event.target.value);
-                              setSourceToolSlug('');
-                              setIsSourceToolSuggestionsOpen(true);
-                              resetFeedback();
-                            }}
-                            onFocus={() => {
-                              setIsSourceToolSuggestionsOpen(true);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Escape') {
-                                setIsSourceToolSuggestionsOpen(false);
-                              }
-                            }}
-                            placeholder="Runway, Midjourney, CapCut..."
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                          />
-                          {shouldShowSourceToolSuggestions ? (
-                            <div
-                              id="source-tool-suggestions"
-                              role="listbox"
-                              aria-label="Source tool suggestions"
-                              className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/95 p-2 shadow-[0_20px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl"
-                            >
-                              {filteredSourceToolSuggestions.map((toolOption) => {
-                                const selected = normalizedSourceTool.slug === toolOption.slug;
-
-                                return (
-                                  <button
-                                    key={toolOption.slug}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    onMouseDown={(event) => {
-                                      event.preventDefault();
-                                    }}
-                                    onClick={() => {
-                                      applySourceToolSelection(toolOption);
-                                    }}
-                                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
-                                      selected
-                                        ? 'bg-sky-400/15 text-sky-50'
-                                        : 'text-zinc-200 hover:bg-white/[0.06] hover:text-white'
-                                    }`}
-                                  >
-                                    <span>{toolOption.label}</span>
-                                    {selected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : null}
-                        </label>
-                      </div>
-                    ) : (
-                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
-                        <div className="mt-3 inline-flex rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-medium text-zinc-100">
-                          Created in magicbooklet
-                        </div>
-                      </div>
-                    )}
-
-                    <label className="block rounded-[24px] border border-white/8 bg-black/30 p-4">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
-                      <select
-                        value={category}
-                        onChange={(event) => {
-                          setCategory(event.target.value as Exclude<PostCategory, 'text'>);
-                          resetFeedback();
-                        }}
-                        disabled={hasGeneratedProof}
-                        className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        {CATEGORY_OPTIONS.map((option) => (
-                          <option
-                            key={option.value}
-                            value={option.value}
-                            disabled={file ? !acceptsCategory(file, option.value) : false}
-                            className="bg-zinc-950 text-white"
-                          >
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-2 text-xs leading-5 text-zinc-500">
-                        {hasGeneratedProof
-                          ? 'Generated media keeps its category automatically.'
-                          : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
-                      </p>
-                    </label>
-                  </div>
                 ) : null}
               </div>
 
