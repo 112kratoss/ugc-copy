@@ -1,0 +1,132 @@
+import {
+  Bell,
+  Home,
+  Layers3,
+  Sparkles,
+  Store,
+  UserRound,
+  Users,
+  Workflow,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+export interface AppNavItem {
+  id: 'home' | 'create' | 'studio' | 'showcase' | 'marketplace' | 'workflow' | 'profile' | 'alerts';
+  label: string;
+  shortLabel: string;
+  href: string;
+  description: string;
+  icon: LucideIcon;
+  prefetch?: false;
+  match: (pathname: string) => boolean;
+}
+
+const isExactOrChild = (pathname: string, href: string) =>
+  pathname === href || pathname.startsWith(`${href}/`);
+
+export const APP_NAV_ITEMS: AppNavItem[] = [
+  {
+    id: 'home',
+    label: 'Home',
+    shortLabel: 'Home',
+    href: '/',
+    description: 'Dashboard and recent creative context',
+    icon: Home,
+    match: (pathname) => pathname === '/',
+  },
+  {
+    id: 'create',
+    label: 'Create',
+    shortLabel: 'Create',
+    href: '/create',
+    description: 'Launch image, video, motion, and workflow tools',
+    icon: Sparkles,
+    match: (pathname) =>
+      isExactOrChild(pathname, '/create') ||
+      pathname.startsWith('/create-image') ||
+      pathname.startsWith('/create-video') ||
+      pathname.startsWith('/create-motion'),
+  },
+  {
+    id: 'studio',
+    label: 'Studio',
+    shortLabel: 'Studio',
+    href: '/creations',
+    description: 'Your generations, posts, and media library',
+    icon: Layers3,
+    match: (pathname) => isExactOrChild(pathname, '/creations'),
+  },
+  {
+    id: 'showcase',
+    label: 'Feed',
+    shortLabel: 'Feed',
+    href: '/showcase',
+    description: 'Community inspiration and remixable posts',
+    icon: Users,
+    match: (pathname) =>
+      isExactOrChild(pathname, '/showcase') ||
+      isExactOrChild(pathname, '/creators') ||
+      isExactOrChild(pathname, '/post'),
+  },
+  {
+    id: 'marketplace',
+    label: 'Marketplace',
+    shortLabel: 'Market',
+    href: '/marketplace',
+    description: 'Unlock prompts, resources, and creator assets',
+    icon: Store,
+    match: (pathname) => isExactOrChild(pathname, '/marketplace'),
+  },
+  {
+    id: 'workflow',
+    label: 'Workflow Canvas',
+    shortLabel: 'Flow',
+    href: '/create-workflow',
+    description: 'Build reusable prompt and generation systems',
+    icon: Workflow,
+    prefetch: false,
+    match: (pathname) =>
+      isExactOrChild(pathname, '/create-workflow') ||
+      isExactOrChild(pathname, '/ai-workflow-builder') ||
+      isExactOrChild(pathname, '/workflow-canvases'),
+  },
+  {
+    id: 'alerts',
+    label: 'Alerts',
+    shortLabel: 'Alerts',
+    href: '/notifications',
+    description: 'Your generation results, updates, and community activity',
+    icon: Bell,
+    match: (pathname) => isExactOrChild(pathname, '/notifications'),
+  },
+  {
+    id: 'profile',
+    label: 'Profile',
+    shortLabel: 'You',
+    href: '/profile',
+    description: 'Account, creator identity, and settings',
+    icon: UserRound,
+    match: (pathname) => isExactOrChild(pathname, '/profile'),
+  },
+];
+
+export function getActiveAppNavItem(pathname: string) {
+  return APP_NAV_ITEMS.find((item) => item.match(pathname)) ?? null;
+}
+
+export function getAppShellTitle(pathname: string) {
+  if (pathname.startsWith('/pricing')) return 'Pricing';
+  if (pathname.startsWith('/blog')) return 'Blog';
+  if (pathname.startsWith('/contact')) return 'Contact';
+  if (pathname.startsWith('/login')) return 'Sign in';
+  if (pathname.startsWith('/signup')) return 'Sign up';
+  if (pathname.startsWith('/post/new')) return 'Share Post';
+  if (pathname.startsWith('/marketplace/sell')) return 'Seller';
+  if (pathname.startsWith('/notifications')) return 'Alerts';
+
+  return getActiveAppNavItem(pathname)?.label ?? 'Workspace';
+}
+
+export function isMinimalAppChromePath(pathname: string) {
+  return pathname === '/auth' || pathname.startsWith('/auth/');
+}
