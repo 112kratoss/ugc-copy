@@ -131,27 +131,6 @@ const VISIBILITY_OPTIONS: Array<{
   },
 ];
 
-const RESOURCE_ACCESS_OPTIONS: Array<{
-  value: PostResourceBundleAccessMode;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: 'none',
-    label: 'No unlock',
-    description: 'Share the public result or tip without an unlock.',
-  },
-  {
-    value: 'free',
-    label: 'Free unlock',
-    description: 'Let people reveal the prompt, notes, files, workflow, or remix access for free.',
-  },
-  {
-    value: 'paid',
-    label: 'Paid unlock',
-    description: 'Charge for the reusable process behind this post.',
-  },
-];
 
 const RESOURCE_KIND_OPTIONS: Array<{
   value: PostResourceKind;
@@ -205,37 +184,6 @@ const RESOURCE_SECTION_KIND_OPTIONS: Array<{
   { value: 'other', label: 'Other' },
 ];
 
-const UNLOCK_TEMPLATES: Array<{
-  label: string;
-  description: string;
-  kinds: PostResourceKind[];
-}> = [
-  {
-    label: 'Prompt only',
-    description: 'Sell or share the exact prompt behind the post.',
-    kinds: ['prompt'],
-  },
-  {
-    label: 'Workflow link',
-    description: 'Gate a reusable setup link or workflow URL.',
-    kinds: ['workflow'],
-  },
-  {
-    label: 'Workflow file',
-    description: 'Gate workflow files, presets, source files, or references.',
-    kinds: ['files'],
-  },
-  {
-    label: 'Notes / guide',
-    description: 'Gate a written guide, settings, or process notes.',
-    kinds: ['notes'],
-  },
-  {
-    label: 'Prompt + workflow',
-    description: 'Bundle the prompt with the workflow or setup path.',
-    kinds: ['prompt', 'workflow'],
-  },
-];
 
 const EMPTY_RESOURCE_SELECTIONS: Record<PostResourceKind, boolean> = {
   prompt: false,
@@ -1342,21 +1290,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetFeedback();
   };
 
-  const applyUnlockTemplate = (templateKinds: PostResourceKind[]) => {
-    const nextSelections = { ...EMPTY_RESOURCE_SELECTIONS };
-    templateKinds.forEach((kind) => {
-      nextSelections[kind] = true;
-    });
-
-    setResourceSelections(nextSelections);
-    setResourceSelectionsTouched(true);
-
-    if (templateKinds.includes('files') && resourceAttachmentRows.length === 0) {
-      setResourceAttachmentRows([createAttachmentRow()]);
-    }
-
-    resetFeedback();
-  };
 
   const updateAttachmentRow = (
     id: string,
@@ -2437,82 +2370,112 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {renderSectionError('resources')}
 
-                <div className="mt-5 inline-flex rounded-full border border-white/10 bg-black/30 p-1">
-                  {RESOURCE_ACCESS_OPTIONS.map((option) => {
-                    const active = resourceAccessMode === option.value;
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => {
-                          setResourceAccessMode(option.value);
-                          resetFeedback();
-                        }}
-                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                          active
-                            ? 'bg-emerald-300 text-emerald-950'
-                            : 'text-zinc-300 hover:text-white'
-                        }`}
-                      >
-                        {option.value === 'none' ? 'No unlock' : option.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                <label className="mt-4 flex items-center gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={resourceAccessMode !== 'none'}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      if (checked) {
+                        setResourceAccessMode('free');
+                        setResourceSelections((prev) => {
+                          const hasAny = Object.values(prev).some(Boolean);
+                          return hasAny ? prev : { ...prev, prompt: true };
+                        });
+                      } else {
+                        setResourceAccessMode('none');
+                      }
+                      resetFeedback();
+                    }}
+                    className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
+                  />
+                  <span className="text-sm font-semibold text-white">Add references & unlockable resources</span>
+                </label>
 
-                {resourceAccessMode === 'none' ? (
-                  <p className="mt-4 text-xs text-zinc-500">
-                    Add resources below only if you want to share a reusable setup with your post.
-                  </p>
-                ) : (
+                {resourceAccessMode !== 'none' && (
                   <div className="mt-5 space-y-5">
-                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Add what you used</div>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {UNLOCK_TEMPLATES.map((template) => {
-                          const active =
-                            template.kinds.every((kind) => resourceSelections[kind]) &&
-                            selectedResourceKinds.length === template.kinds.length;
+                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-4">
+                      {/* Access Mode and Pricing */}
+                      <div className="flex flex-wrap items-center gap-4 sm:justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Access Mode:</span>
+                          <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
+                            {([
+                              { value: 'free', label: 'Free' },
+                              { value: 'paid', label: 'Paid ($)' }
+                            ] as const).map((mode) => {
+                              const active = (resourceAccessMode === 'paid' ? 'paid' : 'free') === mode.value;
+                              return (
+                                <button
+                                  key={mode.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setResourceAccessMode(mode.value);
+                                    resetFeedback();
+                                  }}
+                                  className={`rounded-full px-4 py-1 text-xs font-semibold transition ${
+                                    active
+                                      ? 'bg-emerald-300 text-emerald-950'
+                                      : 'text-zinc-300 hover:text-white'
+                                  }`}
+                                >
+                                  {mode.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
 
-                          return (
-                            <button
-                              key={template.label}
-                              type="button"
-                              onClick={() => applyUnlockTemplate(template.kinds)}
-                              className={`rounded-[18px] border p-3 text-left transition ${
-                                active
-                                  ? 'border-emerald-300/35 bg-emerald-400/15 text-white'
-                                  : 'border-white/10 bg-white/[0.025] text-zinc-300 hover:border-white/20 hover:bg-white/[0.05] hover:text-white'
-                              }`}
-                            >
-                              <div className="text-sm font-semibold">{template.label}</div>
-                              <p className="mt-1 text-xs leading-5 text-zinc-500">{template.description}</p>
-                            </button>
-                          );
-                        })}
+                        {resourceAccessMode === 'paid' ? (
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price:</span>
+                            <div className="relative inline-flex items-center">
+                              <span className="absolute left-3 text-xs text-zinc-500">$</span>
+                              <input
+                                ref={priceInputRef}
+                                type="text"
+                                aria-label="Price"
+                                placeholder="9"
+                                value={resourcePriceUsd}
+                                onChange={(event) => {
+                                  setResourcePriceUsd(event.target.value);
+                                  resetFeedback();
+                                }}
+                                className="w-20 rounded-full border border-white/10 bg-white/[0.03] pl-6 pr-3 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40"
+                              />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {RESOURCE_KIND_OPTIONS.map((option) => {
-                          const active = resourceSelections[option.value];
 
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => updateResourceSelection(option.value)}
-                              title={option.description}
-                              className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                                active
-                                  ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
-                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
-                              }`}
-                            >
-                              {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
-                              {option.label}
-                            </button>
-                          );
-                        })}
+                      {/* Resource Kind Selection */}
+                      <div className="border-t border-white/5 pt-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500 mb-3">Resource Types to Include</div>
+                        <div className="flex flex-wrap gap-2">
+                          {RESOURCE_KIND_OPTIONS.map((option) => {
+                            const active = resourceSelections[option.value];
+
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => updateResourceSelection(option.value)}
+                                title={option.description}
+                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                                  active
+                                    ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
+                                    : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
+                                }`}
+                              >
+                                {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
+                                {option.label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
+
+                      {/* Section Layout Option */}
                       <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
                         <span className="text-xs text-zinc-500">Need section-based structure?</span>
                         <button
@@ -2912,22 +2875,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       </div>
                     ) : null}
 
-                    {resourceAccessMode === 'paid' ? (
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
-                        <input
-                          ref={priceInputRef}
-                          value={resourcePriceUsd}
-                          onChange={(event) => {
-                            setResourcePriceUsd(event.target.value);
-                            resetFeedback();
-                          }}
-                          placeholder="9"
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                        />
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">Choose any price at or above $1.00.</p>
-                      </label>
-                    ) : null}
+                    {/* Price field has been moved to the top Access Mode area */}
                   </div>
                 )}
               </div>

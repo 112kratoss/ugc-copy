@@ -55,7 +55,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     expect(screen.getByRole('heading', { name: /create post/i })).toBeInTheDocument();
-    expect(screen.getByText(/share the result first/i)).toBeInTheDocument();
+    expect(screen.getByText(/Share your work/i)).toBeInTheDocument();
 
     const titleInput = screen.getByRole('textbox', { name: /^title/i });
     const captionInput = screen.getByRole('textbox', { name: /caption/i });
@@ -140,12 +140,12 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/share the tactic, lesson, or idea/i), {
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^free unlock$/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
 
-    expect(screen.getByText(/custom package contents/i)).toBeInTheDocument();
+    expect(screen.getByText(/resource types to include/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/https:\/\//i)).not.toBeInTheDocument();
 
@@ -197,10 +197,11 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/share the tactic, lesson, or idea/i), {
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^paid unlock$/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^paid \(\$\)$/i }));
 
     expect(screen.queryByText(/public post required/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^private$/i }));
@@ -241,6 +242,71 @@ describe('NewPostClient', () => {
       'href',
       '/post/post-2/edit'
     );
+  });
+
+  it('serializes optional resource sections and section-scoped items', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        postId: 'post-sectioned-1',
+        showcasePath: '/showcase/post-sectioned-1',
+        resourceBundlePath: '/showcase/post-sectioned-1#resources',
+        visibility: 'public',
+        resourceBundleStatus: 'published',
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+      target: { value: 'A compact breakdown for a multi-part creative.' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Enable section layout/i }));
+
+    fireEvent.change(screen.getByLabelText(/section title 1/i), {
+      target: { value: 'Hook' },
+    });
+    fireEvent.change(screen.getByLabelText(/section kind 1/i), {
+      target: { value: 'scene' },
+    });
+    fireEvent.change(screen.getByLabelText(/section prompt 1/i), {
+      target: { value: 'Open with the before state, then reveal the product.' },
+    });
+    fireEvent.change(screen.getByLabelText(/section notes 1/i), {
+      target: { value: 'Keep this first section under seven seconds.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /publish post \+ unlock/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const request = fetchMock.mock.calls[0][1] as { body: FormData };
+    const resourceBundle = JSON.parse(String(request.body.get('resourceBundle')));
+    const [section] = resourceBundle.resources.sections;
+
+    expect(section).toMatchObject({
+      title: 'Hook',
+      kind: 'scene',
+      description: null,
+      sortOrder: 0,
+    });
+    expect(resourceBundle.resources.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'prompt',
+        title: 'Hook prompt',
+        textContent: 'Open with the before state, then reveal the product.',
+        sectionId: section.id,
+      }),
+      expect.objectContaining({
+        type: 'note',
+        title: 'Hook notes',
+        textContent: 'Keep this first section under seven seconds.',
+        sectionId: section.id,
+      }),
+    ]));
   });
 
   it('uploads media to Supabase before posting metadata to the API', async () => {
