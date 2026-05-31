@@ -25,6 +25,10 @@ const mobileCorsHeaders = {
   Vary: 'Origin, Access-Control-Request-Headers, Access-Control-Request-Method',
 };
 
+export function isRootAuthCodeRedirect(request: NextRequest) {
+  return request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('code');
+}
+
 export function isMobileCorsPath(pathname: string) {
   return mobileCorsPathPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
@@ -37,6 +41,12 @@ function applyMobileCorsHeaders(response: NextResponse) {
 }
 
 export function proxy(request: NextRequest) {
+  if (isRootAuthCodeRedirect(request)) {
+    const callbackUrl = request.nextUrl.clone();
+    callbackUrl.pathname = '/auth/callback';
+    return NextResponse.redirect(callbackUrl);
+  }
+
   if (!isMobileCorsPath(request.nextUrl.pathname)) {
     return NextResponse.next();
   }
@@ -52,5 +62,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: '/api/:path*',
+  matcher: ['/', '/api/:path*'],
 };
