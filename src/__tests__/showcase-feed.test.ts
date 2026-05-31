@@ -385,8 +385,31 @@ describe('showcase feed', () => {
       title: 'Hero workflow',
       accessMode: 'paid',
       priceUsdCents: 1900,
+      priceQuote: {
+        currency: 'USD',
+        amountSubunits: 1900,
+        formatted: '$19.00',
+        note: null,
+      },
       previewText: 'Unlock the exact prompt stack.',
       allowRemix: true,
+      resourceItems: [{
+        type: 'remix_access',
+        role: 'primary',
+        sectionId: null,
+        title: 'Remix access',
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'direct_remix',
+      }],
+      resourceSections: [],
     });
   });
 

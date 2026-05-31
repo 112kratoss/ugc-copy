@@ -28,12 +28,21 @@ vi.mock('@/lib/supabase', () => ({
 
 describe('pricing page currency storage', () => {
   const fetchMock = vi.fn();
+  const defaultNavigatorLanguages = Array.from(window.navigator.languages);
+
+  function stubNavigatorLanguages(languages: string[]) {
+    Object.defineProperty(window.navigator, 'languages', {
+      configurable: true,
+      value: languages,
+    });
+  }
 
   beforeEach(() => {
     vi.resetModules();
     fetchMock.mockReset();
     routerPushMock.mockReset();
     window.localStorage.clear();
+    stubNavigatorLanguages(defaultNavigatorLanguages);
 
     fetchMock.mockResolvedValue(
       new Response(
@@ -57,6 +66,7 @@ describe('pricing page currency storage', () => {
   });
 
   afterEach(() => {
+    stubNavigatorLanguages(defaultNavigatorLanguages);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -64,8 +74,8 @@ describe('pricing page currency storage', () => {
   it('loads the currency preference from the legacy emptybooklet key and rewrites future changes to the new key', async () => {
     window.localStorage.setItem('emptybooklet_currency', 'EUR');
 
-    const { default: PricingPage } = await import('@/app/pricing/page');
-    render(<PricingPage />);
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
 
     const select = await screen.findByLabelText('Currency');
 
@@ -83,8 +93,61 @@ describe('pricing page currency storage', () => {
   it('loads the currency preference from the legacy ugc key when the newer keys are absent', async () => {
     window.localStorage.setItem('ugc_currency', 'USD');
 
-    const { default: PricingPage } = await import('@/app/pricing/page');
-    render(<PricingPage />);
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    const select = await screen.findByLabelText('Currency');
+
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe('USD');
+    });
+  });
+
+  it('defaults to INR for detected India visitors even when the browser locale is US English', async () => {
+    stubNavigatorLanguages(['en-US']);
+
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    const select = await screen.findByLabelText('Currency');
+
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe('INR');
+    });
+  });
+
+  it('keeps the current manual currency preference over detected India', async () => {
+    window.localStorage.setItem('magicbooklet_currency', 'USD');
+    stubNavigatorLanguages(['en-IN']);
+
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    const select = await screen.findByLabelText('Currency');
+
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe('USD');
+    });
+  });
+
+  it('falls back to navigator locale when the country header is unavailable', async () => {
+    stubNavigatorLanguages(['en-IN']);
+
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient />);
+
+    const select = await screen.findByLabelText('Currency');
+
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe('INR');
+    });
+  });
+
+  it('falls back to USD for US browser locale when the country header is unavailable', async () => {
+    stubNavigatorLanguages(['en-US']);
+
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient />);
 
     const select = await screen.findByLabelText('Currency');
 

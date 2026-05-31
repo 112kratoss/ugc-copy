@@ -5,9 +5,13 @@ import {
   getPostResourceBundleDetailByPostId,
   type PostResourceBundleDetail,
 } from '@/lib/post-resource-bundles-server';
+import {
+  resolvePostRemixCapability,
+  type PostRemixCapability,
+  type PostRemixTarget,
+} from '@/lib/post-resource-bundles';
 import { getPublicGenerationDetail } from '@/lib/public-generations';
 import {
-  canRemixPost,
   deriveTitleFromBody,
   getPostMediaKind,
   isMissingPostTextColumnsError,
@@ -82,6 +86,8 @@ export interface PublicPostDetail {
   creator: ShowcaseCreator;
   resourceBundle: PostResourceBundleDetail | null;
   canRemix: boolean;
+  remixCapability: PostRemixCapability;
+  remixTarget: PostRemixTarget;
 }
 
 async function fetchPublicPostRow(
@@ -154,7 +160,7 @@ export async function getPostReferenceForShowcaseId(
 
     const { data: legacyPost, error: legacyError } = await adminSupabase
       .from('posts')
-      .select('id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind')
       .eq('generation_id', id)
       .maybeSingle();
 
@@ -176,6 +182,7 @@ export async function getPostReferenceForShowcaseId(
 
     return {
       id: generation.id,
+      user_id: generation.creator.id,
       generation_id: generation.id,
       visibility: 'public',
       category: generation.category,
@@ -232,6 +239,8 @@ export async function getPublicPostDetail(
       creator: generation.creator,
       resourceBundle: null,
       canRemix: true,
+      remixCapability: 'public',
+      remixTarget: generation.category === 'video' ? 'video' : 'image',
     };
   }
 
@@ -306,6 +315,35 @@ export async function getPublicPostDetail(
     (row.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation');
   const description = row.description?.trim() || '';
 
+  const remix = resolvePostRemixCapability({
+    generationId: row.generation_id,
+    postFormat: row.post_format,
+    category: row.category,
+    sourceKind: normalizeShowcaseSourceKind(row.source_kind),
+    resourceBundle: resourceBundle
+      ? {
+          viewerCanAccess: resourceBundle.viewerCanAccess,
+          allowRemix: resourceBundle.allowRemix,
+          items: resourceBundle.resources?.items ?? resourceBundle.lockedPreview.itemPreviews.map((item) => ({
+            type: item.type,
+            role: item.role,
+            sectionId: item.sectionId ?? null,
+            title: item.title,
+            description: null,
+            textContent: null,
+            externalUrl: null,
+            storagePath: null,
+            contentType: item.contentType ?? null,
+            sizeBytes: item.sizeBytes ?? null,
+            workflowSnapshot: null,
+            sortOrder: 0,
+            isPrimary: false,
+            remixUse: item.remixUse,
+          })),
+        }
+      : null,
+  });
+
   return {
     id: row.id,
     generationId: row.generation_id,
@@ -328,7 +366,9 @@ export async function getPublicPostDetail(
     sourceTool: row.source_tool,
     creator,
     resourceBundle,
-    canRemix: canRemixPost(row.generation_id) && (!resourceBundle?.allowRemix || resourceBundle.viewerCanAccess),
+    canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
+    remixCapability: remix.capability,
+    remixTarget: remix.target,
   };
 }
 

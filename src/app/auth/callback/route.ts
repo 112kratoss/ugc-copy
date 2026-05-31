@@ -2,11 +2,23 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
+function getSafeNextPath(value: string | null) {
+    if (!value) {
+        return '/profile?welcome=1'
+    }
+
+    if (value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')) {
+        return value
+    }
+
+    return '/profile?welcome=1'
+}
+
 export async function GET(request: Request) {
     const { searchParams, origin } = new URL(request.url)
     const code = searchParams.get('code')
     // if "next" is in param, use it as the redirect URL
-    const next = searchParams.get('next') ?? '/'
+    const next = getSafeNextPath(searchParams.get('next'))
 
     if (code) {
         const cookieStore = await cookies()

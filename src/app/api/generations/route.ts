@@ -6,7 +6,12 @@ import {
     loadGenerationInputMediaMap,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { buildMediaProxyUrl, createServiceClient, getStoredMediaLocation } from '@/lib/server-helpers';
+import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+
+type GenerationRow = {
+    output_url: string | null;
+    showcase_asset_path?: string | null;
+};
 
 type LinkedPostRow = {
     id: string;
@@ -26,14 +31,17 @@ function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }
 
-function getPersistedOutputUrls(workflowSettings: Record<string, unknown> | null): string[] {
+async function getPersistedOutputUrls(
+    workflowSettings: Record<string, unknown> | null,
+    adminSupabase: ReturnType<typeof createServiceClient>
+): Promise<string[]> {
     const outputs = workflowSettings?.outputs;
     if (!Array.isArray(outputs)) {
         return [];
     }
 
-    return outputs
-        .map((output) => {
+    const urls = await Promise.all(
+        outputs.map(async (output) => {
             if (!output || typeof output !== 'object') {
                 return null;
             }
@@ -43,12 +51,34 @@ function getPersistedOutputUrls(workflowSettings: Record<string, unknown> | null
                 return null;
             }
 
-            const storedLocation = getStoredMediaLocation(storagePath);
-            return storedLocation
-                ? buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath)
-                : storagePath;
+            return resolveStoredMediaUrl(adminSupabase, storagePath);
         })
-        .filter((url): url is string => Boolean(url));
+    );
+
+    return urls.filter((url): url is string => Boolean(url));
+}
+
+function resolveShowcaseAssetUrl(
+    adminSupabase: ReturnType<typeof createServiceClient>,
+    showcaseAssetPath: string
+): string {
+    const { data } = adminSupabase.storage.from('showcase_media').getPublicUrl(showcaseAssetPath);
+    return data.publicUrl;
+}
+
+async function resolveGenerationOutputUrl(
+    adminSupabase: ReturnType<typeof createServiceClient>,
+    generation: GenerationRow
+): Promise<string | null> {
+    if (generation.showcase_asset_path) {
+        return resolveShowcaseAssetUrl(adminSupabase, generation.showcase_asset_path);
+    }
+
+    if (!generation.output_url) {
+        return null;
+    }
+
+    return resolveStoredMediaUrl(adminSupabase, generation.output_url);
 }
 
 export async function GET(request: NextRequest) {
@@ -138,12 +168,12 @@ export async function GET(request: NextRequest) {
         const inputMediaMap = await loadGenerationInputMediaMap({
             supabase: adminSupabase,
             generationIds,
-            urlMode: 'proxy',
+            urlMode: 'signed',
         });
 
         const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
             const workflowSettings = getWorkflowSettings(generation.workflow_settings);
-            const outputUrls = getPersistedOutputUrls(workflowSettings);
+            const outputUrls = await getPersistedOutputUrls(workflowSettings, adminSupabase);
             const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
             const inputMedia = durableInputMedia.length > 0
                 ? durableInputMedia
@@ -160,23 +190,9 @@ export async function GET(request: NextRequest) {
                 prompt: generation.prompt,
                 workflowSettings,
             });
+            const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation);
 
-            if (!generation.output_url) {
-                const rest = withoutWorkflowSettings(generation);
-                return {
-                    ...rest,
-                    ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
-                    input_media: inputMedia,
-                    paywallPrefill,
-                    linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
-                    linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
-                    linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,
-                    linked_post_archived_at: linkedPostMap.get(generation.id)?.archived_at ?? null,
-                };
-            }
-
-            const storedLocation = getStoredMediaLocation(generation.output_url);
-            if (!storedLocation) {
+            if (!outputUrl) {
                 const rest = withoutWorkflowSettings(generation);
                 return {
                     ...rest,
@@ -193,7 +209,7 @@ export async function GET(request: NextRequest) {
             const rest = withoutWorkflowSettings(generation);
             return {
                 ...rest,
-                output_url: buildMediaProxyUrl(storedLocation.bucket, storedLocation.filePath),
+                output_url: outputUrl,
                 ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                 input_media: inputMedia,
                 paywallPrefill,

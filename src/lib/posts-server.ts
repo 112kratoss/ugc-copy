@@ -6,6 +6,8 @@ import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers
 import {
   getPostResourceKinds,
   normalizePostResourceAttachments,
+  normalizePostResourceItems,
+  normalizePostResourceSections,
   type PostResourceBundleResources,
 } from '@/lib/post-resource-bundles';
 import {
@@ -24,10 +26,12 @@ type PostVisibility = 'public' | 'unlisted' | 'private';
 
 export interface PostReferenceRow {
   id: string;
+  user_id: string | null;
   generation_id: string | null;
   visibility: PostVisibility;
   category: PostCategory;
   prompt: string | null;
+  title?: string | null;
   source_kind: RawShowcaseSourceKind;
 }
 
@@ -38,6 +42,7 @@ export interface PostMediaRow {
 
 interface LegacyGenerationReferenceRow {
   id: string;
+  user_id: string | null;
   is_public: boolean | null;
   status: string | null;
   category: string | null;
@@ -115,7 +120,7 @@ async function findLegacyGenerationReference(
 ): Promise<PostReferenceRow | null> {
   const { data, error } = await adminSupabase
     .from('generations')
-    .select('id, is_public, status, category, prompt')
+    .select('id, user_id, is_public, status, category, prompt')
     .eq('id', generationId)
     .maybeSingle();
 
@@ -131,6 +136,7 @@ async function findLegacyGenerationReference(
 
   return {
     id: row.id,
+    user_id: row.user_id ?? null,
     generation_id: row.id,
     visibility: row.is_public ? 'public' : 'private',
     category: normalizeLegacyCategory(row.category),
@@ -177,6 +183,20 @@ export function isMissingPostSourceToolSlugColumnError(error: unknown): boolean 
   return code === '42703' && message.includes('source_tool_slug');
 }
 
+export function isMissingPostReviewStatusColumnError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return code === '42703' && message.includes('review_status');
+}
+
+export function isMissingPostResourceItemsColumnError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return code === '42703' && (message.includes('resource_items') || message.includes('resource_sections'));
+}
+
 export function isMissingMarketplaceSchemaError(error: unknown): boolean {
   const message = getErrorMessage(error);
   const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
@@ -204,7 +224,11 @@ export function isMissingPostResourceBundlesSchemaError(error: unknown): boolean
         message.includes('public.post_resource_bundle_purchases')
       )) ||
     message.includes("Could not find the table 'public.post_resource_bundles'") ||
-    message.includes('complete_post_resource_bundle_purchase')
+    message.includes('complete_post_resource_bundle_purchase') ||
+    message.includes('upsert_post_with_resource_bundle') ||
+    message.includes('update_post_with_resource_bundle') ||
+    message.includes('publish_generation_post_with_resource_bundle') ||
+    message.includes('list_marketplace_resource_bundles')
   );
 }
 
@@ -242,14 +266,14 @@ async function findPostReferenceByColumn(
 ): Promise<PostReferenceRow | null> {
   let result = await adminSupabase
     .from('posts')
-    .select('id, generation_id, visibility, category, prompt, source_kind')
+    .select('id, user_id, generation_id, visibility, category, prompt, title, source_kind')
     .eq(column, value)
     .maybeSingle();
 
   if (isMissingPostTextColumnsError(result.error)) {
     result = await adminSupabase
       .from('posts')
-      .select('id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind')
       .eq(column, value)
       .maybeSingle();
   }
@@ -302,15 +326,27 @@ export async function getMarketplaceAssetSummaryMap(
     return new Map();
   }
 
-  const bundleResult = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, title, access_mode, price_usd_cents, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, sales_count, status')
-    .in('post_id', postIds)
-    .eq('status', 'published');
+  const bundleSelectWithItems =
+    'id, post_id, title, access_mode, price_usd_cents, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, sales_count, status';
+  const bundleSelectLegacy =
+    'id, post_id, title, access_mode, price_usd_cents, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, sales_count, status';
+  const loadBundles = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .in('post_id', postIds)
+      .eq('status', 'published');
+
+  let bundleResult = await loadBundles(bundleSelectWithItems);
+  if (isMissingPostResourceItemsColumnError(bundleResult.error)) {
+    bundleResult = await loadBundles(bundleSelectLegacy);
+  }
 
   if (!bundleResult.error) {
+    const bundleRows = (bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>;
+
     return new Map(
-      (bundleResult.data ?? [])
+      bundleRows
         .filter((row) =>
           typeof row.id === 'string' &&
           typeof row.post_id === 'string' &&
@@ -320,29 +356,37 @@ export async function getMarketplaceAssetSummaryMap(
         )
         .map((row) => {
           const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
-          const resourceKinds = getPostResourceKinds({
+          const legacyResources: Partial<PostResourceBundleResources> = {
             promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
             notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
             workflowShareUrl: typeof row.workflow_share_url === 'string' ? row.workflow_share_url : null,
             workflowSnapshot: row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
             attachments: normalizePostResourceAttachments(row.attachments),
             allowRemix: Boolean(row.allow_remix),
+            sections: normalizePostResourceSections((row as { resource_sections?: unknown }).resource_sections),
+          };
+          const resourceItems = normalizePostResourceItems((row as { resource_items?: unknown }).resource_items, legacyResources);
+          const resourceKinds = getPostResourceKinds({
+            ...legacyResources,
+            items: resourceItems,
           });
 
           return [
-          row.post_id as string,
-          {
-            id: row.id as string,
-            postId: row.post_id as string,
-            title: row.title as string,
-            accessMode: row.access_mode as ShowcaseAssetSummary['accessMode'],
-            priceUsdCents: row.price_usd_cents as number,
-            previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
-            allowRemix: Boolean(row.allow_remix),
-            ...(salesCount > 0 ? { salesCount } : {}),
-            ...(resourceKinds.some((kind) => kind !== 'remix') ? { resourceKinds } : {}),
-          } satisfies ShowcaseAssetSummary,
-        ] as const;
+            row.post_id as string,
+            {
+              id: row.id as string,
+              postId: row.post_id as string,
+              title: row.title as string,
+              accessMode: row.access_mode as ShowcaseAssetSummary['accessMode'],
+              priceUsdCents: row.price_usd_cents as number,
+              previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
+              allowRemix: Boolean(row.allow_remix || resourceItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
+              ...(salesCount > 0 ? { salesCount } : {}),
+              ...(resourceKinds.some((kind) => kind !== 'remix') ? { resourceKinds } : {}),
+              resourceSections: legacyResources.sections,
+              resourceItems,
+            } satisfies ShowcaseAssetSummary,
+          ] as const;
         })
     );
   }

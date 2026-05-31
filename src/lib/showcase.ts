@@ -1,3 +1,12 @@
+import type {
+    MarketplacePriceQuote,
+    PostRemixCapability,
+    PostRemixTarget,
+    PostResourceItem,
+    PostResourceItemCounts,
+    PostResourceSection,
+} from '@/lib/post-resource-bundles';
+
 export const SHOWCASE_PAGE_SIZE = 12;
 
 export type ShowcaseCategory = 'all' | 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
@@ -32,10 +41,14 @@ export interface ShowcaseAssetSummary {
     title: string;
     accessMode: ShowcaseResourceAccessMode;
     priceUsdCents: number;
+    priceQuote?: MarketplacePriceQuote;
     previewText: string;
     allowRemix: boolean;
     salesCount?: number;
     resourceKinds?: string[];
+    resourceSections?: PostResourceSection[];
+    resourceItems?: PostResourceItem[];
+    itemCounts?: PostResourceItemCounts;
 }
 
 export interface ShowcaseFeedItem {
@@ -59,6 +72,8 @@ export interface ShowcaseFeedItem {
     generationId: string | null;
     asset: ShowcaseAssetSummary | null;
     canRemix: boolean;
+    remixCapability?: PostRemixCapability;
+    remixTarget?: PostRemixTarget;
 }
 
 export interface ShowcaseFeedPageInfo {

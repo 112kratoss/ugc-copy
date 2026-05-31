@@ -10,6 +10,7 @@ import {
   Link2,
   LockKeyhole,
   Loader2,
+  ShieldCheck,
   ShoppingCart,
   Sparkles,
 } from 'lucide-react';
@@ -17,10 +18,16 @@ import {
 import { useAuth } from '@/app/components/AuthProvider';
 import {
   describePostResourceKinds,
+  formatPostResourceBundleCountSummary,
+  formatUnlockCountLabel,
+  getPostResourceItemTypeLabel,
   getPostResourceKindLabel,
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
+  type PostResourceItem,
+  type PostResourceItemType,
   type PostResourceKind,
+  type PostResourceSection,
 } from '@/lib/post-resource-bundles';
 import { getCurrentInternalPath } from '@/lib/share';
 
@@ -39,6 +46,7 @@ interface PostResourceBundlePanelProps {
   summary: string;
   previewText: string;
   priceLabel: string;
+  priceUsdCents: number;
   priceNote: string | null;
   isFree: boolean;
   viewerCanAccess: boolean;
@@ -52,6 +60,8 @@ interface PostResourceBundlePanelProps {
     workflowShareUrl: string | null;
     attachments: PostResourceAttachment[];
     allowRemix: boolean;
+    sections?: PostResourceSection[];
+    items?: PostResourceItem[];
   } | null;
 }
 
@@ -64,7 +74,62 @@ interface BundleRefreshPayload {
     workflowShareUrl: string | null;
     attachments: PostResourceAttachment[];
     allowRemix: boolean;
+    sections?: PostResourceSection[];
+    items?: PostResourceItem[];
   } | null;
+}
+
+const RESOURCE_ITEM_GROUP_ORDER: PostResourceItemType[] = [
+  'prompt',
+  'workflow',
+  'reference_image',
+  'source_file',
+  'preset',
+  'settings',
+  'note',
+  'external_link',
+  'remix_access',
+];
+
+function groupResourceItems(items: PostResourceItem[]) {
+  return RESOURCE_ITEM_GROUP_ORDER
+    .map((type) => ({
+      type,
+      items: items.filter((item) => item.type === type),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function groupResourceItemsBySection(items: PostResourceItem[], sections: PostResourceSection[]) {
+  const globalItems = items.filter((item) => !item.sectionId);
+  const globalGroup = globalItems.length > 0
+    ? [{
+        id: 'global',
+        title: 'Full post resources',
+        description: null as string | null,
+        items: globalItems,
+      }]
+    : [];
+
+  const sectionGroups = sections
+    .map((section) => ({
+      id: section.id,
+      title: section.title,
+      description: section.description,
+      items: items.filter((item) => item.sectionId === section.id),
+    }))
+    .filter((group) => group.items.length > 0);
+
+  return [...globalGroup, ...sectionGroups];
+}
+
+function getResourceItemGroupTitle(type: PostResourceItemType, count: number) {
+  const label = getPostResourceItemTypeLabel(type, count);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function formatResourceItemRole(role: string) {
+  return role.replace(/_/g, ' ');
 }
 
 export default function PostResourceBundlePanel({
@@ -73,6 +138,7 @@ export default function PostResourceBundlePanel({
   summary,
   previewText,
   priceLabel,
+  priceUsdCents,
   priceNote,
   isFree,
   viewerCanAccess,
@@ -83,10 +149,10 @@ export default function PostResourceBundlePanel({
   initialResources,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, credits, updateCredits } = useAuth();
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
-  const [isWorking, setIsWorking] = useState(false);
+  const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,6 +164,10 @@ export default function PostResourceBundlePanel({
     lockedPreview ?? {
       resourceKinds,
       attachmentPreviews: [],
+      itemCounts: {},
+      itemPreviews: [],
+      sectionCount: 0,
+      sectionPreviews: [],
       hasPrompt: resourceKinds.includes('prompt'),
       hasNotes: resourceKinds.includes('notes'),
       hasWorkflow: resourceKinds.includes('workflow'),
@@ -105,6 +175,28 @@ export default function PostResourceBundlePanel({
       updatedAt: null,
     }
   ), [lockedPreview, resourceKinds]);
+  const isPromptOnlyUnlock =
+    preview.resourceKinds.length === 1 &&
+    preview.resourceKinds[0] === 'prompt' &&
+    preview.hasPrompt &&
+    !preview.hasWorkflow &&
+    !preview.hasNotes &&
+    !preview.hasRemix &&
+    preview.attachmentPreviews.length === 0;
+  const bundleCountSummary = useMemo(
+    () => formatPostResourceBundleCountSummary(preview),
+    [preview]
+  );
+  const groupedResourceItems = useMemo(
+    () => groupResourceItems(resources?.items ?? []),
+    [resources?.items]
+  );
+  const groupedSectionResources = useMemo(
+    () => groupResourceItemsBySection(resources?.items ?? [], resources?.sections ?? []),
+    [resources?.items, resources?.sections]
+  );
+  const hasSectionedResourceItems = (resources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
+  const hasStructuredResourceItems = groupedResourceItems.length > 0;
   const accessLabel = useMemo(() => {
     if (viewerIsOwner) {
       return 'You own this unlock.';
@@ -116,6 +208,11 @@ export default function PostResourceBundlePanel({
 
     return isFree ? 'Open the full unlock for free.' : `Open the full unlock for ${priceLabel}.`;
   }, [hasAccess, isFree, priceLabel, viewerIsOwner]);
+  const creditCost = Math.max(0, priceUsdCents);
+  const formattedCreditCost = creditCost.toLocaleString();
+  const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
+  const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
+  const isAnyActionWorking = workingAction !== null;
 
   const copyText = async (value: string, successMessage: string) => {
     try {
@@ -162,7 +259,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('free');
       setFeedback(null);
       setError(null);
 
@@ -182,7 +279,7 @@ export default function PostResourceBundlePanel({
     } catch (unlockError) {
       setError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -192,7 +289,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('razorpay');
       setFeedback(null);
       setError(null);
 
@@ -267,7 +364,48 @@ export default function PostResourceBundlePanel({
     } catch (checkoutError) {
       setError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
+    }
+  };
+
+  const unlockWithCredits = async () => {
+    if (!ensureAuthenticated()) {
+      return;
+    }
+
+    if (hasKnownInsufficientCredits) {
+      setError(`This unlock costs ${formattedCreditCost} credits. Add credits to continue.`);
+      setFeedback(null);
+      return;
+    }
+
+    try {
+      setWorkingAction('credits');
+      setFeedback(null);
+      setError(null);
+
+      const response = await fetch(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data.error || 'Failed to unlock with credits.');
+      }
+
+      if (typeof data.credits === 'number') {
+        updateCredits(data.credits);
+      }
+
+      await fetchLatestBundle();
+      setFeedback(data.alreadyProcessed ? 'This unlock was already available on your account.' : 'Unlocked with credits.');
+    } catch (unlockError) {
+      setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
+    } finally {
+      setWorkingAction(null);
     }
   };
 
@@ -277,7 +415,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
-      setIsWorking(true);
+      setWorkingAction('file');
       setFeedback(null);
       setError(null);
 
@@ -299,7 +437,7 @@ export default function PostResourceBundlePanel({
     } catch (fileError) {
       setError(fileError instanceof Error ? fileError.message : 'Failed to open resource file.');
     } finally {
-      setIsWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -310,6 +448,9 @@ export default function PostResourceBundlePanel({
         year: 'numeric',
       })
     : null;
+  const includedResourceLabel = preview.resourceKinds.length > 0
+    ? bundleCountSummary || preview.resourceKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ')
+    : 'Reusable resources';
 
   const formatFileSize = (sizeBytes: number | null | undefined) => {
     if (!sizeBytes) {
@@ -370,7 +511,7 @@ export default function PostResourceBundlePanel({
         </div>
 
         <div className="mt-4 flex flex-wrap gap-3 text-xs text-zinc-400">
-          <span>{salesCount} sold</span>
+          <span>{formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}</span>
           {priceNote ? <span>{priceNote}</span> : null}
           <span>
             {hasAccess || viewerIsOwner
@@ -379,16 +520,59 @@ export default function PostResourceBundlePanel({
           </span>
         </div>
 
-        {!hasAccess && !viewerIsOwner ? (
+        {!hasAccess && !viewerIsOwner && isFree ? (
           <button
             type="button"
-            onClick={() => void (isFree ? unlockFree() : startCheckout())}
-            disabled={isWorking}
+            onClick={() => void unlockFree()}
+            disabled={isAnyActionWorking}
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            {isFree ? 'Open free unlock' : `Unlock for ${priceLabel}`}
+            {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+            Open free unlock
           </button>
+        ) : null}
+
+        {!hasAccess && !viewerIsOwner && !isFree ? (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => void startCheckout()}
+              disabled={isAnyActionWorking}
+              className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/30 bg-emerald-300 px-4 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <span className="inline-flex items-center gap-2">
+                {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                Pay with Razorpay
+              </span>
+              <span className="text-xs font-medium text-slate-800">Razorpay: {priceLabel}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void unlockWithCredits()}
+              disabled={isAnyActionWorking || hasKnownInsufficientCredits}
+              className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-center text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              <span className="inline-flex items-center gap-2">
+                {workingAction === 'credits' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Unlock with credits
+              </span>
+              <span className="text-xs font-medium text-zinc-300">Credit cost: {formattedCreditCost} credits</span>
+            </button>
+          </div>
+        ) : null}
+
+        {!hasAccess && !viewerIsOwner && !isFree ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+            <span>
+              {formattedCreditBalance ? `${formattedCreditBalance} credits available` : 'Sign in to see your credit balance'}
+            </span>
+            {hasKnownInsufficientCredits ? (
+              <a href="/pricing" className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline">
+                Buy credits
+              </a>
+            ) : null}
+          </div>
         ) : null}
 
         {feedback ? (
@@ -404,72 +588,306 @@ export default function PostResourceBundlePanel({
         ) : null}
       </div>
 
+      <div className="mt-5 rounded-[24px] border border-sky-300/12 bg-sky-500/[0.06] p-5">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
+          <ShieldCheck className="h-4 w-4" />
+          Buyer trust
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included after unlock</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-200">{includedResourceLabel}</p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Access</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-200">
+              {isFree ? 'Instant access after login.' : 'Pay with Razorpay or spend credits for instant access.'}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Terms</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-300">
+              Digital unlocks are final sale. Use for personal or commercial creation; do not resell, redistribute, or claim the raw bundle as your own.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Proof</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-300">
+              {formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}
+              {formattedUpdatedAt ? ` · Updated ${formattedUpdatedAt}` : ''}
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className="mt-5 rounded-[24px] border border-white/8 bg-black/30 p-5">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
           {hasAccess || viewerIsOwner ? <FileText className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
           {hasAccess || viewerIsOwner ? 'Included resources' : 'Preview before access'}
         </div>
-        <p className="mt-3 text-sm leading-7 text-zinc-400">
-          Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {preview.resourceKinds.length > 0 ? preview.resourceKinds.map((kind) => (
-                <span
-                  key={kind}
-                  className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-50"
-                >
-                  {getPostResourceKindLabel(kind)}
+        {isPromptOnlyUnlock ? (
+          <>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-50">
+                Prompt
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-sm font-medium text-zinc-200">
+                {viewerIsOwner ? 'Owner access' : hasAccess ? 'Unlocked' : 'Locked'}
+              </span>
+              {formattedUpdatedAt ? (
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-sm text-zinc-400">
+                  Updated {formattedUpdatedAt}
                 </span>
-              )) : (
-                <span className="text-sm text-zinc-400">Reusable unlock metadata</span>
-              )}
+              ) : null}
             </div>
-          </div>
-          <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Locked until access</div>
-            <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
-              {preview.hasPrompt ? <div>Prompt text</div> : null}
-              {preview.hasWorkflow ? <div>Workflow link or snapshot</div> : null}
-              {preview.hasNotes ? <div>Notes or guide</div> : null}
-              {preview.hasRemix ? <div>Remix access</div> : null}
-              {preview.attachmentPreviews.length > 0 ? <div>{preview.attachmentPreviews.length} file/link attachment{preview.attachmentPreviews.length === 1 ? '' : 's'}</div> : null}
-              {formattedUpdatedAt ? <div className="text-zinc-500">Updated {formattedUpdatedAt}</div> : null}
+            <p className="mt-3 text-sm leading-7 text-zinc-400">
+              {hasAccess || viewerIsOwner
+                ? 'The prompt is available below.'
+                : 'The prompt text stays locked until this unlock is opened.'}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-3 text-sm leading-7 text-zinc-400">
+              Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.
+            </p>
+            {bundleCountSummary ? (
+              <div className="mt-4 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-50">
+                Includes {bundleCountSummary}
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {preview.resourceKinds.length > 0 ? preview.resourceKinds.map((kind) => (
+                    <span
+                      key={kind}
+                      className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-50"
+                    >
+                      {getPostResourceKindLabel(kind)}
+                    </span>
+                  )) : (
+                    <span className="text-sm text-zinc-400">Reusable unlock metadata</span>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Locked until access</div>
+                <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
+                  {preview.hasPrompt ? <div>Prompt text</div> : null}
+                  {preview.hasWorkflow ? <div>Workflow link or snapshot</div> : null}
+                  {preview.hasNotes ? <div>Notes or guide</div> : null}
+                  {preview.hasRemix ? <div>Remix access</div> : null}
+                  {bundleCountSummary ? <div>Structured bundle: {bundleCountSummary}</div> : null}
+                  {preview.attachmentPreviews.length > 0 ? <div>{preview.attachmentPreviews.length} file/link attachment{preview.attachmentPreviews.length === 1 ? '' : 's'}</div> : null}
+                  {formattedUpdatedAt ? <div className="text-zinc-500">Updated {formattedUpdatedAt}</div> : null}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {preview.attachmentPreviews.length > 0 ? (
-          <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Attachment preview</div>
-            <div className="mt-3 space-y-2">
-              {preview.attachmentPreviews.map((attachment, index) => {
-                const meta = [
-                  attachment.kind === 'file' ? 'File' : 'Link',
-                  attachment.contentType,
-                  formatFileSize(attachment.sizeBytes),
-                ].filter(Boolean).join(' · ');
+            {preview.attachmentPreviews.length > 0 ? (
+              <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Attachment preview</div>
+                <div className="mt-3 space-y-2">
+                  {preview.attachmentPreviews.map((attachment, index) => {
+                    const meta = [
+                      attachment.kind === 'file' ? 'File' : 'Link',
+                      attachment.contentType,
+                      formatFileSize(attachment.sizeBytes),
+                    ].filter(Boolean).join(' · ');
 
-                return (
-                  <div
-                    key={`${attachment.label}-${index}`}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/25 px-3 py-2"
-                  >
-                    <span className="min-w-0 truncate text-sm font-medium text-zinc-100">{attachment.label}</span>
-                    {meta ? <span className="shrink-0 text-xs text-zinc-500">{meta}</span> : null}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
+                    return (
+                      <div
+                        key={`${attachment.label}-${index}`}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/25 px-3 py-2"
+                      >
+                        <span className="min-w-0 truncate text-sm font-medium text-zinc-100">{attachment.label}</span>
+                        {meta ? <span className="shrink-0 text-xs text-zinc-500">{meta}</span> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
       {hasAccess || viewerIsOwner ? (
         <div className="mt-6 space-y-5">
-          {resources?.promptText ? (
+          {hasStructuredResourceItems ? (
+            hasSectionedResourceItems ? (
+              <>
+                {groupedSectionResources.map((sectionGroup) => (
+                  <div key={sectionGroup.id} className="rounded-[24px] border border-white/8 bg-black/30 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                          Resource section
+                        </div>
+                        <h3 className="mt-2 text-base font-semibold text-white">{sectionGroup.title}</h3>
+                        {sectionGroup.description ? (
+                          <p className="mt-1 text-sm leading-6 text-zinc-400">{sectionGroup.description}</p>
+                        ) : null}
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-zinc-300">
+                        {sectionGroup.items.length} item{sectionGroup.items.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 space-y-4">
+                      {groupResourceItems(sectionGroup.items).map((group) => (
+                        <div key={`${sectionGroup.id}:${group.type}`} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                            {getResourceItemGroupTitle(group.type, group.items.length)}
+                          </div>
+                          <div className="mt-3 space-y-3">
+                            {group.items.map((item, index) => {
+                              const key = `${sectionGroup.id}:${item.type}:${item.title}:${index}`;
+                              const meta = [
+                                formatResourceItemRole(item.role),
+                                item.contentType,
+                                formatFileSize(item.sizeBytes),
+                                item.remixUse !== 'none' ? formatResourceItemRole(item.remixUse) : null,
+                              ].filter(Boolean).join(' · ');
+
+                              return (
+                                <div key={key} className="rounded-2xl border border-white/8 bg-black/25 p-4">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-semibold text-white">{item.title}</div>
+                                      {item.description ? (
+                                        <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
+                                      ) : null}
+                                      {meta ? <p className="mt-1 text-xs capitalize text-zinc-500">{meta}</p> : null}
+                                    </div>
+                                    {item.textContent ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void copyText(item.textContent ?? '', `${item.title} copied to clipboard.`)}
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                      >
+                                        <Copy className="h-3.5 w-3.5" />
+                                        Copy
+                                      </button>
+                                    ) : null}
+                                  </div>
+
+                                  {item.textContent ? (
+                                    <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">{item.textContent}</pre>
+                                  ) : null}
+
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {item.externalUrl ? (
+                                      <a
+                                        href={item.externalUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                      >
+                                        <ExternalLink className="h-4 w-4" />
+                                        Open link
+                                      </a>
+                                    ) : null}
+                                    {item.storagePath ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void openResourceFile(item.storagePath ?? '')}
+                                        className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                                      >
+                                        <ExternalLink className="h-4 w-4" />
+                                        Open file
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+              {groupedResourceItems.map((group) => (
+                <div key={group.type} className="rounded-[24px] border border-white/8 bg-black/30 p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                    {getResourceItemGroupTitle(group.type, group.items.length)}
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {group.items.map((item, index) => {
+                      const key = `${item.type}:${item.title}:${index}`;
+                      const meta = [
+                        formatResourceItemRole(item.role),
+                        item.contentType,
+                        formatFileSize(item.sizeBytes),
+                        item.remixUse !== 'none' ? formatResourceItemRole(item.remixUse) : null,
+                      ].filter(Boolean).join(' · ');
+
+                      return (
+                        <div key={key} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-white">{item.title}</div>
+                              {item.description ? (
+                                <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
+                              ) : null}
+                              {meta ? <p className="mt-1 text-xs capitalize text-zinc-500">{meta}</p> : null}
+                            </div>
+                            {item.textContent ? (
+                              <button
+                                type="button"
+                                onClick={() => void copyText(item.textContent ?? '', `${item.title} copied to clipboard.`)}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Copy
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {item.textContent ? (
+                            <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">{item.textContent}</pre>
+                          ) : null}
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {item.externalUrl ? (
+                              <a
+                                href={item.externalUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                Open link
+                              </a>
+                            ) : null}
+                            {item.storagePath ? (
+                              <button
+                                type="button"
+                                onClick={() => void openResourceFile(item.storagePath ?? '')}
+                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                Open file
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              </>
+            )
+          ) : null}
+
+          {!hasStructuredResourceItems && resources?.promptText ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
@@ -485,10 +903,15 @@ export default function PostResourceBundlePanel({
               <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
                 {resources.promptText}
               </pre>
+              {viewerIsOwner ? (
+                <p className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-50/85">
+                  Owner preview. Buyers must unlock before seeing this.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
-          {resources?.notesMarkdown ? (
+          {!hasStructuredResourceItems && resources?.notesMarkdown ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
@@ -507,7 +930,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.workflowShareUrl ? (
+          {!hasStructuredResourceItems && resources?.workflowShareUrl ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                 <Link2 className="h-4 w-4" />
@@ -525,7 +948,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.attachments.length ? (
+          {!hasStructuredResourceItems && resources?.attachments.length ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Files and links</div>
               <div className="mt-3 flex flex-wrap gap-3">
@@ -557,7 +980,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.allowRemix ? (
+          {!hasStructuredResourceItems && resources?.allowRemix ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                 <Sparkles className="h-4 w-4" />
@@ -571,7 +994,9 @@ export default function PostResourceBundlePanel({
         </div>
       ) : (
         <div className="mt-6 rounded-[24px] border border-white/8 bg-black/30 p-5 text-sm leading-7 text-zinc-300">
-          The public post stays visible. Prompt text, workflow links, notes, files, and optional remix access reveal here after unlock.
+          {isPromptOnlyUnlock
+            ? 'The prompt appears here after this unlock is opened.'
+            : 'The public post stays visible. Prompt text, workflow links, notes, files, and optional remix access reveal here after unlock.'}
         </div>
       )}
     </div>

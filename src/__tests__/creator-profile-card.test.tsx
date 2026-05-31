@@ -132,8 +132,133 @@ describe('CreatorProfileCard', () => {
       '/api/profile',
       expect.objectContaining({ method: 'PATCH' })
     );
+    const validationBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    const patchBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(validationBody).not.toHaveProperty('location');
+    expect(validationBody).not.toHaveProperty('websiteUrl');
+    expect(patchBody).not.toHaveProperty('location');
+    expect(patchBody).not.toHaveProperty('websiteUrl');
     expect(onProfileSaved).toHaveBeenCalled();
     expect(screen.getByRole('link', { name: /preview profile/i })).toHaveAttribute('href', '/creators/updated-name');
+  });
+
+  it('shows first-run setup progress when used for onboarding', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={{
+          ...profile,
+          username: 'starter-name',
+          displayName: '',
+          bio: '',
+          avatarUrl: '',
+        }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+      />
+    );
+
+    expect(screen.getByText(/setup progress/i)).toBeInTheDocument();
+    expect(screen.getByText(/public preview/i)).toBeInTheDocument();
+    expect(screen.getByText(/save the handle first/i)).toBeInTheDocument();
+  });
+
+  it('keeps onboarding profile setup focused on identity and common social handles', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+      />
+    );
+
+    expect(screen.queryByText(/^Location$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Website URL$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Social Links' })).toBeInTheDocument();
+    expect(screen.getByText(/^X \(Twitter\) Handle$/i)).toBeInTheDocument();
+  });
+
+  it('uses the avatar image itself for drag and scroll cropping', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(['avatar'], 'avatar.png', { type: 'image/png' });
+
+    fireEvent.change(fileInputs[0], {
+      target: { files: [file] },
+    });
+
+    const cropControl = screen.getByRole('button', {
+      name: /drag avatar image to position the face\. scroll to zoom\./i,
+    });
+    const cropPreview = screen.getByAltText('Cropped avatar preview');
+
+    expect(screen.queryByText(/^Zoom$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Fine tune X$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Fine tune Y$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /smart portrait/i })).not.toBeInTheDocument();
+    expect(cropPreview).toHaveStyle('transform: scale(1.35)');
+
+    fireEvent.wheel(cropControl, { deltaY: -120 });
+
+    expect(cropPreview).toHaveStyle('transform: scale(1.43)');
+  });
+
+  it('uses the cover banner itself for drag and scroll cropping', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(['cover'], 'cover.png', { type: 'image/png' });
+
+    fireEvent.change(fileInputs[1], {
+      target: { files: [file] },
+    });
+
+    const cropControl = screen.getByRole('button', {
+      name: /drag cover image to position it\. scroll to zoom\./i,
+    });
+    const cropPreview = screen.getByAltText('Cover preview');
+
+    expect(screen.queryByText(/^Fine tune X$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Fine tune Y$/i)).not.toBeInTheDocument();
+    expect(cropPreview).toHaveStyle('transform: scale(1)');
+
+    fireEvent.wheel(cropControl, { deltaY: -120 });
+
+    expect(cropPreview).toHaveStyle('transform: scale(1.08)');
+  });
+
+  it('rejects non-image profile uploads before save', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(['not-an-image'], 'avatar.pdf', { type: 'application/pdf' });
+
+    fireEvent.change(fileInputs[0], {
+      target: { files: [file] },
+    });
+
+    expect(screen.getByText(/upload an image file/i)).toBeInTheDocument();
+    expect(supabaseMocks.upload).not.toHaveBeenCalled();
   });
 
   it('shows validation errors from the validate endpoint without uploading files', async () => {

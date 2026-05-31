@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
-import { ArrowLeft, BarChart3, Eye, Heart, Share2, ShoppingBag, Tag, Wand2 } from 'lucide-react';
+import { ArrowLeft, BarChart3, BookText, Eye, Heart, Share2, ShoppingBag, Tag, Wand2 } from 'lucide-react';
 
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import { recordPostShareEvent } from '@/lib/post-share-events';
@@ -14,7 +14,7 @@ import {
 import { createMetadata } from '@/lib/seo';
 import { buildShowcaseDetailPath, getShowcaseReturnContext } from '@/lib/share';
 import { getServerAuthState } from '@/lib/supabase-server';
-import { getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
+import { formatUnlockCountLabel, getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
@@ -45,6 +45,10 @@ function formatPostDate(value: string): string {
     day: 'numeric',
     year: 'numeric',
   }).format(new Date(value));
+}
+
+function normalizeComparableText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function getPostTypeLabel({
@@ -155,18 +159,49 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     mediaKind: detail.mediaKind,
     postFormat: detail.postFormat,
   });
+  const isTextOnlyPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
   const sourceToolLabel = detail.sourceTool || (detail.model !== 'external' ? detail.model : null);
   const publicPostFallback = [
     detail.sourceTool ? `Made with ${detail.sourceTool}` : null,
     `${detail.category === 'text' ? 'Tip' : detail.category} by ${detail.creator.name}`,
     bundle ? `${previewKindSummary} unlock attached` : null,
   ].filter(Boolean).join(' · ');
+  const publicText = detail.body || publicPostFallback || detail.description || detail.title;
+  const shouldRenderTextNoteTitle =
+    isTextOnlyPost &&
+    normalizeComparableText(detail.title) !== normalizeComparableText(publicText);
   const statItems = [
     { singular: 'Save', plural: 'Saves', value: detail.saveCount, icon: Heart, color: 'text-pink-300' },
     { singular: 'Remix', plural: 'Remixes', value: detail.remixCount, icon: Wand2, color: 'text-purple-300' },
     { singular: 'Share', plural: 'Shares', value: detail.shareCount, icon: BarChart3, color: 'text-blue-300' },
     { singular: 'Visit', plural: 'Visits', value: detail.shareVisitCount, icon: Eye, color: 'text-emerald-300' },
   ].filter((item) => item.value > 0);
+  const resourceBundlePanel = bundle ? (
+    <PostResourceBundlePanel
+      postId={detail.id}
+      title={bundle.title}
+      summary={bundle.summary}
+      previewText={bundle.previewText}
+      priceLabel={bundle.priceQuote.formatted}
+      priceUsdCents={bundle.priceUsdCents}
+      priceNote={bundle.priceQuote.note}
+      isFree={bundle.accessMode === 'free'}
+      viewerCanAccess={bundle.viewerCanAccess}
+      viewerIsOwner={bundle.viewerIsOwner}
+      resourceKinds={bundle.resourceKinds}
+      lockedPreview={bundle.lockedPreview}
+      salesCount={bundle.salesCount}
+      initialResources={bundle.resources
+        ? {
+            promptText: bundle.resources.promptText,
+            notesMarkdown: bundle.resources.notesMarkdown,
+            workflowShareUrl: bundle.resources.workflowShareUrl,
+            attachments: bundle.resources.attachments,
+            allowRemix: bundle.resources.allowRemix,
+          }
+        : null}
+    />
+  ) : null;
 
   return (
     <div className="min-h-screen bg-black py-8 text-white">
@@ -190,37 +225,75 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
           </div>
         </div>
 
-        <div className="grid gap-8 xl:grid-cols-[minmax(0,1.2fr)_420px]">
-          <section className="overflow-hidden rounded-[32px] border border-white/8 bg-zinc-950/70 p-4 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
-            <div className="overflow-hidden rounded-[24px] border border-white/5 bg-black/70">
-              {detail.mediaKind === 'image' && detail.mediaUrl ? (
+        <div className="grid items-start gap-8 xl:grid-cols-[minmax(0,1.2fr)_420px]">
+          <section className={isTextOnlyPost
+            ? 'space-y-6'
+            : 'overflow-hidden rounded-[32px] border border-white/8 bg-zinc-950/70 p-4 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6'}
+          >
+            {isTextOnlyPost ? (
+              <>
+                <article
+                  data-testid="text-detail-note"
+                  className="mx-auto max-w-4xl rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_34%),linear-gradient(180deg,rgba(13,13,18,0.98),rgba(6,6,9,0.98))] p-6 shadow-[0_22px_80px_-58px_rgba(56,189,248,0.75)] sm:p-8"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-100">
+                      <BookText className="h-3.5 w-3.5" />
+                      Tip / note
+                    </span>
+                    {sourceToolLabel ? (
+                      <span className="rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs font-medium text-zinc-200">
+                        {sourceToolLabel}
+                      </span>
+                    ) : null}
+                    <span className="rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs font-medium text-zinc-200">
+                      {formatPostDate(detail.createdAt)}
+                    </span>
+                  </div>
+
+                  {shouldRenderTextNoteTitle ? (
+                    <h2 className="mt-6 max-w-3xl text-3xl font-semibold tracking-tight text-white">
+                      {detail.title}
+                    </h2>
+                  ) : null}
+
+                  <div className="mt-6 max-w-3xl whitespace-pre-wrap text-base leading-8 text-zinc-100 sm:text-lg sm:leading-9">
+                    {publicText}
+                  </div>
+                </article>
+                {resourceBundlePanel}
+              </>
+            ) : (
+              <div data-testid="media-detail-frame" className="overflow-hidden rounded-[24px] border border-white/5 bg-black/70">
+                {detail.mediaKind === 'image' && detail.mediaUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={detail.mediaUrl}
-                  alt={detail.title}
-                  className="block max-h-[76vh] w-full object-contain"
-                />
-              ) : detail.mediaKind === 'video' && detail.mediaUrl ? (
-                <video
-                  src={detail.mediaUrl}
-                  controls
-                  autoPlay
-                  loop
-                  playsInline
-                  preload="metadata"
-                  className="block max-h-[76vh] w-full object-contain"
-                />
-              ) : (
-                <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">
-                  <article className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-zinc-950/85 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-                    <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tip / Note</div>
-                    <div className="mt-6 whitespace-pre-wrap text-lg leading-9 text-zinc-100">
-                      {detail.body || publicPostFallback}
-                    </div>
-                  </article>
-                </div>
-              )}
-            </div>
+                  <img
+                    src={detail.mediaUrl}
+                    alt={detail.title}
+                    className="block max-h-[76vh] w-full object-contain"
+                  />
+                ) : detail.mediaKind === 'video' && detail.mediaUrl ? (
+                  <video
+                    src={detail.mediaUrl}
+                    controls
+                    autoPlay
+                    loop
+                    playsInline
+                    preload="metadata"
+                    className="block max-h-[76vh] w-full object-contain"
+                  />
+                ) : (
+                  <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">
+                    <article className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-zinc-950/85 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+                      <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tip / Note</div>
+                      <div className="mt-6 whitespace-pre-wrap text-lg leading-9 text-zinc-100">
+                        {detail.body || publicPostFallback}
+                      </div>
+                    </article>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
 
           <aside className="space-y-6">
@@ -258,6 +331,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
               ) : null}
               {bundle ? (
                 <Link
+                  data-testid="unlock-summary-link"
                   href="#resources"
                   className="mt-6 block rounded-[26px] border border-emerald-400/20 bg-emerald-500/10 p-4 text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
                 >
@@ -267,15 +341,13 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                       {bundle.accessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
                     </span>
                     <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-emerald-50/80">
-                      {bundle.salesCount} sold
+                      {formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}
                     </span>
                   </div>
                   <div className="mt-4 text-lg font-semibold">
-                    {bundle.viewerCanAccess || bundle.viewerIsOwner
-                      ? 'Open included unlock'
-                      : bundle.accessMode === 'free'
-                        ? 'Open free unlock'
-                        : `Unlock for ${bundle.priceQuote.formatted}`}
+                    {bundle.accessMode === 'free'
+                      ? 'Free unlock available'
+                      : `${bundle.priceQuote.formatted} unlock available`}
                   </div>
                   <p className="mt-2 text-sm leading-6 text-emerald-50/80">
                     {previewKindSummary} included. The public post stays visible; reusable parts open after verified access.
@@ -291,7 +363,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                     ))}
                   </div>
                   <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-slate-950">
-                    View unlock
+                    View unlock details
                     <ShoppingBag className="h-4 w-4" />
                   </div>
                 </Link>
@@ -332,8 +404,8 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
               </div>
             ) : null}
 
-            {detail.body ? (
-              <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+            {detail.body && !isTextOnlyPost ? (
+              <div data-testid="post-body-panel" className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                   {detail.postFormat === 'mixed' ? 'Note' : 'Post'}
                 </div>
@@ -354,31 +426,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
               </div>
             ) : null}
 
-            {bundle ? (
-              <PostResourceBundlePanel
-                postId={detail.id}
-                title={bundle.title}
-                summary={bundle.summary}
-                previewText={bundle.previewText}
-                priceLabel={bundle.priceQuote.formatted}
-                priceNote={bundle.priceQuote.note}
-                isFree={bundle.accessMode === 'free'}
-                viewerCanAccess={bundle.viewerCanAccess}
-                viewerIsOwner={bundle.viewerIsOwner}
-                resourceKinds={bundle.resourceKinds}
-                lockedPreview={bundle.lockedPreview}
-                salesCount={bundle.salesCount}
-                initialResources={bundle.resources
-                  ? {
-                      promptText: bundle.resources.promptText,
-                      notesMarkdown: bundle.resources.notesMarkdown,
-                      workflowShareUrl: bundle.resources.workflowShareUrl,
-                      attachments: bundle.resources.attachments,
-                      allowRemix: bundle.resources.allowRemix,
-                    }
-                  : null}
-              />
-            ) : null}
+            {!isTextOnlyPost ? resourceBundlePanel : null}
 
             <ReportPostButton
               postId={detail.id}

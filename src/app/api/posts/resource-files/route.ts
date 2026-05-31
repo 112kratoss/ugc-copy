@@ -7,12 +7,69 @@ import type { PostResourceAttachment } from '@/lib/post-resource-bundles';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+const ALLOWED_RESOURCE_FILE_EXTENSIONS = new Set([
+  '.json',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.csv',
+  '.yaml',
+  '.yml',
+  '.pdf',
+  '.zip',
+  '.gz',
+  '.workflow',
+]);
+const ALLOWED_RESOURCE_FILE_TYPES = new Set([
+  'application/json',
+  'application/pdf',
+  'application/gzip',
+  'application/x-gzip',
+  'application/zip',
+  'application/x-zip-compressed',
+  'text/csv',
+  'text/markdown',
+  'text/plain',
+  'text/yaml',
+]);
+const BLOCKED_RESOURCE_FILE_EXTENSIONS = new Set([
+  '.app',
+  '.bat',
+  '.cmd',
+  '.com',
+  '.dmg',
+  '.exe',
+  '.html',
+  '.htm',
+  '.js',
+  '.mjs',
+  '.pkg',
+  '.ps1',
+  '.scr',
+  '.sh',
+  '.svg',
+]);
 
 function sanitizeFileName(fileName: string): string {
   const extension = path.extname(fileName).toLowerCase();
   const stem = path.basename(fileName, extension).toLowerCase();
   const safeStem = stem.replace(/[^a-z0-9-_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'resource';
   return `${safeStem}${extension || '.bin'}`;
+}
+
+function isAllowedResourceFile(file: File): boolean {
+  const extension = path.extname(file.name).toLowerCase();
+  const contentType = file.type.toLowerCase();
+
+  if (BLOCKED_RESOURCE_FILE_EXTENSIONS.has(extension)) {
+    return false;
+  }
+
+  if (contentType && ALLOWED_RESOURCE_FILE_TYPES.has(contentType)) {
+    return true;
+  }
+
+  return ALLOWED_RESOURCE_FILE_EXTENSIONS.has(extension);
 }
 
 export async function POST(request: NextRequest) {
@@ -36,6 +93,12 @@ export async function POST(request: NextRequest) {
 
   if (file.size > MAX_FILE_SIZE_BYTES) {
     return NextResponse.json({ error: 'Resource files must be 50MB or smaller.' }, { status: 400 });
+  }
+
+  if (!isAllowedResourceFile(file)) {
+    return NextResponse.json({
+      error: 'Upload a safe workflow or resource file: JSON, text, markdown, CSV, YAML, PDF, ZIP, or workflow export.',
+    }, { status: 400 });
   }
 
   const safeName = sanitizeFileName(file.name);

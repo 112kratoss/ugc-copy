@@ -375,6 +375,71 @@ describe('/api/generate-video route', () => {
     });
   });
 
+  it('passes Kling video elements through to the provider payload', async () => {
+    let providerBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ code: 200, data: { taskId: 'task-kling-elements' } }),
+        };
+      })
+    );
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-video',
+          prompt: 'Use @motion_ref as the physical timing reference.',
+          duration: 5,
+          aspectRatio: '16:9',
+          mode: 'std',
+          klingVideoElements: [
+            {
+              url: 'asset-video-1',
+              handle: '@motion_ref',
+              displayName: 'Motion ref',
+              storagePath: null,
+              sourceGenerationId: null,
+            },
+          ],
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(providerBody).toMatchObject({
+      model: 'kling-3.0/video',
+      input: {
+        prompt: 'Use @motion_ref as the physical timing reference.',
+        kling_elements: [
+          {
+            name: 'motion_ref',
+            description: 'Motion ref',
+            element_input_video_urls: ['asset-video-1'],
+          },
+        ],
+      },
+    });
+    expect(currentSupabaseMock.inserts[0].workflow_settings).toMatchObject({
+      klingVideoElements: [
+        expect.objectContaining({
+          handle: '@motion_ref',
+          displayName: 'Motion ref',
+        }),
+      ],
+    });
+  });
+
   it('returns provider-backed timing for waiting video generations', async () => {
     currentSupabaseMock = createSupabaseMock(null, {
       id: 'gen-video-1',

@@ -75,6 +75,7 @@ const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'referenceImageUrls',
   'referenceVideoUrls',
   'referenceAudioUrls',
+  'klingVideoElements',
   'seedanceAssets',
   'characterImage',
   'referenceVideo',

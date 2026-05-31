@@ -193,4 +193,12 @@ describe('HomeShowcasePreviewGrid', () => {
     expect(screen.getByText('Free unlock')).toBeInTheDocument();
     expect(screen.queryByText('No media preview')).not.toBeInTheDocument();
   });
+
+  it('lazy-loads media images in the homepage inspiration grid', () => {
+    render(<HomeShowcasePreviewGrid items={[createShowcaseItem()]} />);
+
+    const image = screen.getByRole('img', { name: 'Campaign Frame' });
+    expect(image).toHaveAttribute('loading', 'lazy');
+    expect(image).toHaveAttribute('decoding', 'async');
+  });
 });

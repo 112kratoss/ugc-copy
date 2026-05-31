@@ -7,13 +7,22 @@ import Home from '@/app/page';
 
 const getServerAuthStateMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
+const homeShowcasePreviewGridMock = vi.fn(({
+  items,
+}: {
+  items: unknown[];
+  initialSession?: unknown;
+  initialCredits?: unknown;
+}) => (
+  <div data-testid="home-showcase-preview-grid" data-count={items.length} />
+));
 
 vi.mock('@/app/components/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('@/app/components/HomeShowcasePreviewGrid', () => ({
-  default: () => <div data-testid="home-showcase-preview-grid" />,
+vi.mock('@/app/components/DeferredHomeShowcasePreviewGrid', () => ({
+  default: (props: { items: unknown[] }) => homeShowcasePreviewGridMock(props),
 }));
 
 vi.mock('@/app/components/HoverVideo', () => ({
@@ -58,6 +67,7 @@ function expectCardToUseSingleLink({
 
 describe('creator tool card links', () => {
   beforeEach(() => {
+    homeShowcasePreviewGridMock.mockClear();
     const imageItem = {
       id: 'image-1',
       mediaUrl: 'https://example.com/image.jpg',
@@ -200,6 +210,65 @@ describe('creator tool card links', () => {
     const videoCardLink = screen.getByText('Create Video').closest('a');
     expect(within(videoCardLink as HTMLAnchorElement).getByTestId('hover-video')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /launchpad/i })).toHaveAttribute('href', '/create');
+  });
+
+  it('passes text-only showcase posts into the home inspiration grid', async () => {
+    const textItem = {
+      id: 'text-1',
+      mediaUrl: null,
+      mediaKind: null,
+      model: 'manual',
+      title: 'Prompt strategy note',
+      prompt: '',
+      body: 'Lead with the product benefit before adding cinematic style words.',
+      category: 'text' as const,
+      postFormat: 'text' as const,
+      saveCount: 6,
+      remixCount: 0,
+      createdAt: '2026-04-01T00:00:00.000Z',
+      creator: {
+        id: 'creator-4',
+        username: 'creator-four',
+        name: 'Creator Four',
+        avatar: null,
+      },
+      isSaved: false,
+      sourceKind: 'manual' as const,
+      sourceTool: null,
+      generationId: null,
+      asset: null,
+      canRemix: false,
+    };
+
+    getShowcaseFeedPageMock.mockImplementation(async (options?: { category?: string }) => {
+      const category = options?.category ?? 'all';
+      return category === 'all' ? { items: [textItem] } : { items: [] };
+    });
+
+    render(await Home());
+
+    expect(screen.getByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '1');
+    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
+      items: [textItem],
+    });
+  });
+
+  it('loads homepage showcase content without blocking on server auth', async () => {
+    getServerAuthStateMock.mockImplementation(() => {
+      throw new Error('Home should not read server auth for cacheable public content');
+    });
+
+    render(await Home());
+
+    expect(getServerAuthStateMock).not.toHaveBeenCalled();
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      viewerUserId: null,
+      countryCode: null,
+    }));
+    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
+      initialSession: null,
+      initialCredits: null,
+    });
   });
 
   it('uses one full-card link for each creator path on the launchpad page', async () => {

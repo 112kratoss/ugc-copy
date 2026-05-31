@@ -17,6 +17,7 @@ interface PublicShareButtonProps {
   disabled?: boolean;
   disabledReason?: string;
   onShared?: () => void;
+  iconOnly?: boolean;
 }
 
 export default function PublicShareButton({
@@ -30,6 +31,7 @@ export default function PublicShareButton({
   disabled = false,
   disabledReason,
   onShared,
+  iconOnly = false,
 }: PublicShareButtonProps) {
   const {
     state,
@@ -61,7 +63,8 @@ export default function PublicShareButton({
         }}
         disabled={disabled || isLoading}
         aria-busy={isLoading}
-        title={disabledReason}
+        aria-label={iconOnly ? resolvedLabel : undefined}
+        title={disabledReason || (iconOnly ? resolvedLabel : undefined)}
         className={className}
       >
         {state === 'loading' ? (
@@ -71,7 +74,7 @@ export default function PublicShareButton({
         ) : (
           <Share2 className="h-4 w-4" />
         )}
-        <span>{resolvedLabel}</span>
+        {!iconOnly && <span>{resolvedLabel}</span>}
       </button>
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {statusMessage}

@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,27 @@ vi.mock('next/navigation', () => ({
   }),
   usePathname: () => '/showcase',
   useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...props
+  }: AnchorHTMLAttributes<HTMLAnchorElement> & {
+    href: string;
+    prefetch?: boolean;
+    children: ReactNode;
+  }) => (
+    <a
+      href={href}
+      data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+      {...props}
+    >
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock('@/app/components/AuthProvider', () => ({
@@ -142,5 +163,75 @@ describe('ShowcaseClient save actions', () => {
         name: /save campaign frame\. 4 saves/i,
       })).toHaveAttribute('aria-pressed', 'false');
     });
+  });
+
+  it('hydrates saved state after the signed-in client loads cached public feed items', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => ['post-1'],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ success: true }),
+      };
+    }));
+
+    renderShowcase(createShowcaseItem({ isSaved: false }));
+
+    expect(screen.getByRole('button', {
+      name: /save campaign frame\. 4 saves/i,
+    })).toHaveAttribute('aria-pressed', 'false');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: /remove save from campaign frame\. 4 saves/i,
+      })).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/showcase/saved-state?ids=post-1%2Cgen-1', expect.objectContaining({
+      headers: expect.objectContaining({
+        Authorization: 'Bearer test-token',
+      }),
+    }));
+  });
+
+  it('disables prefetching for community card detail and creator links', () => {
+    renderShowcase(createShowcaseItem({
+      asset: {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Campaign Frame Unlock',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        previewText: 'Prompt and workflow included.',
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+      },
+    }));
+
+    expect(screen.getByRole('link', { name: /creator name/i })).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /view unlock/i })).toHaveAttribute('data-prefetch', 'false');
+
+    fireEvent.click(screen.getByAltText('Campaign Frame'));
+
+    expect(screen.getAllByRole('link', { name: /view unlock/i }).at(-1)).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /open page/i })).toHaveAttribute('data-prefetch', 'false');
+  });
+
+  it('lazy-loads image previews in the public showcase grid', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => [],
+    })));
+
+    renderShowcase(createShowcaseItem());
+
+    const image = screen.getByRole('img', { name: 'Campaign Frame' });
+    expect(image).toHaveAttribute('loading', 'lazy');
+    expect(image).toHaveAttribute('decoding', 'async');
   });
 });

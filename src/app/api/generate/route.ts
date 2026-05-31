@@ -10,6 +10,7 @@ import {
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
 import { persistGenerationInputMedia } from '@/lib/generation-input-media';
+import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
@@ -441,6 +442,24 @@ export async function GET(request: NextRequest) {
 
             // Refund credits for async failure (idempotent)
             await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+        }
+
+        if (localGeneration?.id && localGeneration?.user_id) {
+            if (status === 'succeeded' && output) {
+                await notifyGenerationStatus(adminSupabase, {
+                    id: localGeneration.id,
+                    user_id: localGeneration.user_id,
+                    category: localGeneration.category,
+                    model: localGeneration.model,
+                }, 'succeeded');
+            } else if (status === 'failed') {
+                await notifyGenerationStatus(adminSupabase, {
+                    id: localGeneration.id,
+                    user_id: localGeneration.user_id,
+                    category: localGeneration.category,
+                    model: localGeneration.model,
+                }, 'failed');
+            }
         }
 
         return NextResponse.json({

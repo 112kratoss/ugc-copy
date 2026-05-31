@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
@@ -26,6 +27,7 @@ import {
   isPostResourceKind,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { createMetadata } from '@/lib/seo';
 import { CreatorContentTabs } from './CreatorContentTabs';
@@ -33,6 +35,7 @@ import { ProfileActions } from './ProfileActions';
 
 type CreatorPageProps = {
   params: Promise<{ username: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type CreatorItem = CreatorProfilePageData['items'][number];
@@ -57,6 +60,17 @@ function getItemResourceKinds(item: CreatorItem): PostResourceKind[] {
   return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
 }
 
+function getAssetAccessLabel(asset: NonNullable<CreatorItem['asset']>): string {
+  if (asset.priceQuote) {
+    return formatBundleAccessLabel({
+      accessMode: asset.accessMode,
+      priceQuote: asset.priceQuote,
+    });
+  }
+
+  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+}
+
 function getItemSummary(item: CreatorItem) {
   const publicText = item.body?.trim() || item.prompt?.trim();
   if (publicText) {
@@ -68,7 +82,7 @@ function getItemSummary(item: CreatorItem) {
   const unlockSummary = item.asset
     ? resourceKinds.length > 0
       ? describePostResourceKinds(resourceKinds)
-      : `${getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents)} attached.`
+      : `${getAssetAccessLabel(item.asset)} attached.`
     : 'Public portfolio piece.';
 
   return [
@@ -98,7 +112,7 @@ function FeaturedPreview({ item }: { item: CreatorItem }) {
         dateLabel={formatPortfolioDate(item.createdAt)}
         saveCount={item.saveCount}
         remixCount={item.remixCount}
-        unlockLabel={item.asset ? getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents) : null}
+        unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
         resourceKinds={resourceKinds}
         className="border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_38%),linear-gradient(180deg,rgba(12,12,17,0.98),rgba(5,5,8,0.98))] shadow-none"
         titleClassName="text-xl sm:text-2xl"
@@ -160,9 +174,23 @@ export async function generateMetadata({ params }: CreatorPageProps): Promise<Me
   });
 }
 
-export default async function CreatorPage({ params }: CreatorPageProps) {
+function getParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeProfileLimit(value: string | undefined): number {
+  const parsed = value ? Number.parseInt(value, 10) : 24;
+  return Number.isFinite(parsed) ? Math.min(96, Math.max(24, parsed)) : 24;
+}
+
+export default async function CreatorPage({ params, searchParams }: CreatorPageProps) {
   const { username } = await params;
-  const data = await getCreatorProfilePageData(username);
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const headerStore = await headers();
+  const data = await getCreatorProfilePageData(username, {
+    limit: normalizeProfileLimit(getParam(resolvedSearchParams.limit)),
+    countryCode: headerStore.get('x-vercel-ip-country'),
+  });
 
   if (!data) {
     notFound();
@@ -372,7 +400,7 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
                   {featuredItem.asset ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100">
                       <ShoppingBag className="h-3.5 w-3.5" />
-                      {getBundleAccessLabel(featuredItem.asset.accessMode, featuredItem.asset.priceUsdCents)}
+                      {getAssetAccessLabel(featuredItem.asset)}
                     </span>
                   ) : null}
                 </div>
@@ -406,7 +434,12 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
           </section>
         )}
 
-        <CreatorContentTabs items={data.items} tools={data.stats.toolsUsed} />
+        <CreatorContentTabs
+          items={data.items}
+          tools={data.stats.toolsUsed}
+          profilePath={profilePath}
+          pageInfo={data.pageInfo}
+        />
       </div>
     </div>
   );

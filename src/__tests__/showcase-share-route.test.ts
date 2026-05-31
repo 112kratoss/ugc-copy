@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const recordPostShareEventMock = vi.fn(async (_payload?: unknown) => undefined);
+const notifyPostSocialActivityMock = vi.fn(async (_client?: unknown, _payload?: unknown) => undefined);
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const createUserClientMock = vi.fn();
+const createServiceClientMock = vi.fn(() => ({ service: true }));
 
 vi.mock('@/lib/post-share-events', () => ({
   recordPostShareEvent: (payload: unknown) => recordPostShareEventMock(payload),
@@ -13,16 +15,23 @@ vi.mock('@/lib/posts-server', () => ({
     findPublicPostReferenceByIdOrGenerationIdMock(id),
 }));
 
+vi.mock('@/lib/mobile-notifications', () => ({
+  notifyPostSocialActivity: (client: unknown, payload: unknown) => notifyPostSocialActivityMock(client, payload),
+}));
+
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
+  createServiceClient: () => createServiceClientMock(),
 }));
 
 describe('/api/showcase/share route', () => {
   beforeEach(() => {
     vi.resetModules();
     recordPostShareEventMock.mockClear();
+    notifyPostSocialActivityMock.mockClear();
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     createUserClientMock.mockReset();
+    createServiceClientMock.mockClear();
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -40,6 +49,7 @@ describe('/api/showcase/share route', () => {
     findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue({
       id: 'post-1',
       generation_id: 'gen-1',
+      user_id: 'creator-1',
       visibility: 'public',
       category: 'image',
       prompt: 'Prompt',
@@ -71,6 +81,12 @@ describe('/api/showcase/share route', () => {
       sourceSurface: 'showcase',
       channel: 'copy-link',
       actorUserId: 'user-1',
+    });
+    expect(notifyPostSocialActivityMock).toHaveBeenCalledWith({ service: true }, {
+      type: 'post_shared',
+      recipientUserId: 'creator-1',
+      actorUserId: 'user-1',
+      postId: 'post-1',
     });
   });
 

@@ -38,14 +38,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 
   const attachment = detail.resources.attachments.find((item) => item.kind === 'file' && item.storagePath === requestedPath);
-  if (!attachment) {
+  const resourceItem = detail.resources.items?.find((item) => item.storagePath === requestedPath) ?? null;
+  if (!attachment && !resourceItem) {
     return NextResponse.json({ error: 'Resource file not found on this unlock.' }, { status: 404 });
   }
 
   const { data, error } = await adminSupabase.storage
     .from(RESOURCE_FILES_BUCKET)
     .createSignedUrl(requestedPath, 600, {
-      download: attachment.label,
+      download: attachment?.label ?? resourceItem?.title ?? 'Resource file',
     });
 
   if (error || !data?.signedUrl) {

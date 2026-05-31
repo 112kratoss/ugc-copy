@@ -4,6 +4,7 @@ type GenerationRow = {
   id: string;
   user_id: string;
   output_url: string | null;
+  showcase_asset_path?: string | null;
   status: string;
   created_at: string;
   completed_at?: string | null;
@@ -190,12 +191,19 @@ vi.mock('@/lib/server-helpers', () => ({
             data: { signedUrl: `https://signed.example.com/${bucket}/${filePath}` },
             error: null,
           }),
+          getPublicUrl: (filePath: string) => ({
+            data: { publicUrl: `https://public.example.com/${bucket}/${filePath}` },
+          }),
         };
       },
     },
   }),
   buildMediaProxyUrl: (bucket: string, filePath: string) => `https://proxy.example.com/${bucket}/${filePath}`,
   getStoredMediaLocation: (outputUrl: string) => {
+    if (outputUrl.startsWith('http')) {
+      return null;
+    }
+
     const normalized = outputUrl.replace(/^\/+/, '');
     const slashIndex = normalized.indexOf('/');
 
@@ -207,6 +215,20 @@ vi.mock('@/lib/server-helpers', () => ({
       bucket: normalized.slice(0, slashIndex),
       filePath: normalized.slice(slashIndex + 1),
     };
+  },
+  resolveStoredMediaUrl: async (_supabase: unknown, outputUrl: string) => {
+    if (outputUrl.startsWith('http')) {
+      return outputUrl;
+    }
+
+    const normalized = outputUrl.replace(/^\/+/, '');
+    const slashIndex = normalized.indexOf('/');
+
+    if (slashIndex === -1) {
+      return outputUrl;
+    }
+
+    return `https://signed.example.com/${normalized.slice(0, slashIndex)}/${normalized.slice(slashIndex + 1)}`;
   },
 }));
 
@@ -220,6 +242,7 @@ describe('/api/generations route', () => {
         id: 'gen-1',
         user_id: 'user-1',
         output_url: 'generated_images/user-1/output.jpg',
+        showcase_asset_path: null,
         status: 'processing',
         created_at: '2026-03-24T11:00:00.000Z',
         completed_at: null,
@@ -279,7 +302,7 @@ describe('/api/generations route', () => {
       generationIds: ['gen-1'],
     });
     expect(data.generations[0].status).toBe('succeeded');
-    expect(data.generations[0].output_url).toBe('https://proxy.example.com/generated_images/user-1/output.jpg');
+    expect(data.generations[0].output_url).toBe('https://signed.example.com/generated_images/user-1/output.jpg');
     expect(data.generations[0].title).toBe('Launch still');
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
     expect(data.generations[0].prompt).toBe('A creator-style product image with warm natural light.');
@@ -306,6 +329,7 @@ describe('/api/generations route', () => {
         id: 'gen-grok-1',
         user_id: 'user-1',
         output_url: 'generated_images/user-1/grok-0.jpg',
+        showcase_asset_path: null,
         status: 'succeeded',
         created_at: '2026-03-24T11:00:00.000Z',
         completed_at: '2026-03-24T11:01:00.000Z',
@@ -338,10 +362,88 @@ describe('/api/generations route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
-    expect(data.generations[0].output_url).toBe('https://proxy.example.com/generated_images/user-1/grok-0.jpg');
+    expect(data.generations[0].output_url).toBe('https://signed.example.com/generated_images/user-1/grok-0.jpg');
     expect(data.generations[0].output_urls).toEqual([
-      'https://proxy.example.com/generated_images/user-1/grok-0.jpg',
-      'https://proxy.example.com/generated_images/user-1/grok-1.jpg',
+      'https://signed.example.com/generated_images/user-1/grok-0.jpg',
+      'https://signed.example.com/generated_images/user-1/grok-1.jpg',
+    ]);
+    expect(data.generations[0].workflow_settings).toBeUndefined();
+  });
+
+  it('prefers durable showcase assets over expired provider URLs', async () => {
+    generationsState = [
+      {
+        id: 'gen-published-1',
+        user_id: 'user-1',
+        output_url: 'https://tempfile.example.com/expired.jpg',
+        showcase_asset_path: 'showcase/gen-published-1/expired.jpg',
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        duration: null,
+        cost: 4,
+        model: 'nano-banana-2',
+        category: 'image',
+        is_public: false,
+        title: 'Published image',
+        description: null,
+        prompt: 'A durable published preview.',
+        workflow_settings: null,
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].output_url).toBe('https://public.example.com/showcase_media/showcase/gen-published-1/expired.jpg');
+    expect(data.generations[0].workflow_settings).toBeUndefined();
+  });
+
+  it('returns durable input media when snapshots exist', async () => {
+    inputMediaState = [
+      {
+        id: 'input-1',
+        generation_id: 'gen-1',
+        user_id: 'user-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Hero bottle',
+        storage_path: 'generation_inputs/user-1/gen-1/00-reference-image.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: { handle: '@hero' },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].input_media).toEqual([
+      expect.objectContaining({
+        id: 'input-1',
+        label: 'Hero bottle',
+        mediaType: 'image',
+        role: 'reference_image',
+        url: 'https://signed.example.com/generation_inputs/user-1/gen-1/00-reference-image.png',
+      }),
     ]);
     expect(data.generations[0].workflow_settings).toBeUndefined();
   });
@@ -380,7 +482,7 @@ describe('/api/generations route', () => {
         label: 'Hero bottle',
         mediaType: 'image',
         role: 'reference_image',
-        url: '/api/media?bucket=generation_inputs&path=user-1%2Fgen-1%2F00-reference-image.png',
+        url: 'https://signed.example.com/generation_inputs/user-1/gen-1/00-reference-image.png',
       }),
     ]);
     expect(data.generations[0].workflow_settings).toBeUndefined();

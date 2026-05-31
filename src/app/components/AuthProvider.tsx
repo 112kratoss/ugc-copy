@@ -6,7 +6,13 @@ import type { Session, User } from '@supabase/supabase-js';
 import {
     getClientE2EAuthState,
 } from '@/lib/e2e-auth';
-import { supabase } from '@/lib/supabase';
+
+type BrowserSupabaseClient = typeof import('@/lib/supabase')['supabase'];
+
+type IdleWindow = Window & {
+    requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+    cancelIdleCallback?: (handle: number) => void;
+};
 
 interface AuthContextValue {
     session: Session | null;
@@ -18,6 +24,27 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+async function getBrowserSupabase(): Promise<BrowserSupabaseClient> {
+    const { supabase } = await import('@/lib/supabase');
+    return supabase;
+}
+
+function scheduleIdle(callback: () => void, timeout = 1500) {
+    if (typeof window === 'undefined') {
+        return undefined;
+    }
+
+    const idleWindow = window as IdleWindow;
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+        const idleId = idleWindow.requestIdleCallback(callback, { timeout });
+        return () => idleWindow.cancelIdleCallback?.(idleId);
+    }
+
+    const timeoutId = idleWindow.setTimeout(callback, Math.min(timeout, 900));
+    return () => idleWindow.clearTimeout(timeoutId);
+}
 
 export function AuthProvider({
     children,
@@ -41,8 +68,11 @@ export function AuthProvider({
         }
 
         let isActive = true;
+        let unsubscribeAuthState: (() => void) | null = null;
+        let cancelDeferredSubscription: (() => void) | undefined;
 
         const syncSessionState = async (nextSession?: Session | null) => {
+            const supabase = await getBrowserSupabase();
             const resolvedSession =
                 nextSession !== undefined
                     ? nextSession
@@ -78,9 +108,25 @@ export function AuthProvider({
             void syncSessionState();
         }
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-            void syncSessionState(nextSession);
-        });
+        const subscribeToAuthChanges = async () => {
+            const supabase = await getBrowserSupabase();
+            if (!isActive || unsubscribeAuthState) {
+                return;
+            }
+
+            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+                void syncSessionState(nextSession);
+            });
+            unsubscribeAuthState = () => subscription.unsubscribe();
+        };
+
+        if (hasResolvedInitialState) {
+            cancelDeferredSubscription = scheduleIdle(() => {
+                void subscribeToAuthChanges();
+            });
+        } else {
+            void subscribeToAuthChanges();
+        }
 
         const handleCreditsUpdated = (event: Event) => {
             const customEvent = event as CustomEvent<{ credits?: number | null }>;
@@ -97,13 +143,15 @@ export function AuthProvider({
 
         return () => {
             isActive = false;
-            subscription.unsubscribe();
+            cancelDeferredSubscription?.();
+            unsubscribeAuthState?.();
             window.removeEventListener('credits_updated', handleCreditsUpdated);
         };
     }, [clientE2EAuth, hasResolvedInitialState]);
 
     const refreshSessionState = async () => {
         setIsLoading(true);
+        const supabase = await getBrowserSupabase();
         const { data: { session: nextSession } } = await supabase.auth.getSession();
         setSession(nextSession ?? null);
 

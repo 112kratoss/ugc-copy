@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
-  ArrowRight,
   BadgePlus,
   BookText,
   Check,
@@ -20,6 +19,7 @@ import {
 
 import { useAuth } from '@/app/components/AuthProvider';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { assessMarketplaceListingQuality } from '@/lib/marketplace-trust';
 import {
   formatUsdCents,
   getPostResourceKindLabel,
@@ -27,7 +27,13 @@ import {
   type PostResourceAttachment,
   type PostResourceBundleInput,
   type PostResourceBundleAccessMode,
+  type PostResourceItem,
+  type PostResourceItemRole,
+  type PostResourceItemType,
+  type PostResourceRemixUse,
   type PostResourceKind,
+  type PostResourceSection,
+  type PostResourceSectionKind,
 } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
 import { CURATED_SOURCE_TOOLS, normalizeSourceToolInput } from '@/lib/source-tools';
@@ -45,6 +51,12 @@ interface CreatedPostState {
   resourceBundlePath: string | null;
   visibility: PostVisibility;
   resourceAccessMode: PostResourceBundleAccessMode;
+  resourceBundleStatus: 'draft' | 'published' | null;
+}
+
+interface ComposerError {
+  section: 'post' | 'story' | 'resources' | 'publish';
+  message: string;
 }
 
 interface AttachmentRow {
@@ -55,7 +67,22 @@ interface AttachmentRow {
   storagePath: string;
   contentType: string;
   sizeBytes: number | null;
+  resourceType: PostResourceItemType;
+  role: PostResourceItemRole;
+  remixUse: PostResourceRemixUse;
   isUploading?: boolean;
+}
+
+interface ResourceSectionRow {
+  id: string;
+  title: string;
+  kind: PostResourceSectionKind;
+  description: string;
+  promptText: string;
+  workflowShareUrl: string;
+  notesMarkdown: string;
+  attachments: AttachmentRow[];
+  allowRemix: boolean;
 }
 
 interface GenerationDraft {
@@ -70,7 +97,6 @@ interface GenerationDraft {
 }
 
 const BODY_MAX_LENGTH = 2000;
-const STEP_ORDER = ['Post', 'Story', 'Unlock', 'Publish'] as const;
 
 const CATEGORY_OPTIONS: Array<{
   value: Exclude<PostCategory, 'text'>;
@@ -105,27 +131,6 @@ const VISIBILITY_OPTIONS: Array<{
   },
 ];
 
-const RESOURCE_ACCESS_OPTIONS: Array<{
-  value: PostResourceBundleAccessMode;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: 'none',
-    label: 'No unlock',
-    description: 'Share the public result or tip without an unlock.',
-  },
-  {
-    value: 'free',
-    label: 'Free unlock',
-    description: 'Let people reveal the prompt, notes, files, workflow, or remix access for free.',
-  },
-  {
-    value: 'paid',
-    label: 'Paid unlock',
-    description: 'Charge for the reusable process behind this post.',
-  },
-];
 
 const RESOURCE_KIND_OPTIONS: Array<{
   value: PostResourceKind;
@@ -139,37 +144,46 @@ const RESOURCE_KIND_OPTIONS: Array<{
   { value: 'remix', label: 'Remix access', description: 'Require an unlock before someone can remix.' },
 ];
 
-const UNLOCK_TEMPLATES: Array<{
+const RESOURCE_ITEM_TYPE_OPTIONS: Array<{
+  value: PostResourceItemType;
   label: string;
-  description: string;
-  kinds: PostResourceKind[];
 }> = [
-  {
-    label: 'Prompt only',
-    description: 'Sell or share the exact prompt behind the post.',
-    kinds: ['prompt'],
-  },
-  {
-    label: 'Workflow link',
-    description: 'Gate a reusable setup link or workflow URL.',
-    kinds: ['workflow'],
-  },
-  {
-    label: 'Workflow file',
-    description: 'Gate workflow files, presets, source files, or references.',
-    kinds: ['files'],
-  },
-  {
-    label: 'Notes / guide',
-    description: 'Gate a written guide, settings, or process notes.',
-    kinds: ['notes'],
-  },
-  {
-    label: 'Prompt + workflow',
-    description: 'Bundle the prompt with the workflow or setup path.',
-    kinds: ['prompt', 'workflow'],
-  },
+  { value: 'reference_image', label: 'Reference image' },
+  { value: 'workflow', label: 'Workflow' },
+  { value: 'source_file', label: 'Source file' },
+  { value: 'preset', label: 'Preset' },
+  { value: 'external_link', label: 'Link' },
 ];
+
+const RESOURCE_ITEM_ROLE_OPTIONS: Array<{
+  value: PostResourceItemRole;
+  label: string;
+}> = [
+  { value: 'primary', label: 'Primary' },
+  { value: 'style_reference', label: 'Style reference' },
+  { value: 'product_reference', label: 'Product reference' },
+  { value: 'composition_reference', label: 'Composition reference' },
+  { value: 'character_reference', label: 'Character reference' },
+  { value: 'before_input', label: 'Before/input' },
+  { value: 'supporting_workflow', label: 'Supporting workflow' },
+  { value: 'manual_import', label: 'Manual import' },
+  { value: 'other', label: 'Other' },
+];
+
+const RESOURCE_SECTION_KIND_OPTIONS: Array<{
+  value: PostResourceSectionKind;
+  label: string;
+}> = [
+  { value: 'scene', label: 'Scene' },
+  { value: 'shot', label: 'Shot' },
+  { value: 'frame', label: 'Frame' },
+  { value: 'variation', label: 'Variation' },
+  { value: 'workflow_step', label: 'Workflow step' },
+  { value: 'asset_group', label: 'Asset group' },
+  { value: 'chapter', label: 'Chapter' },
+  { value: 'other', label: 'Other' },
+];
+
 
 const EMPTY_RESOURCE_SELECTIONS: Record<PostResourceKind, boolean> = {
   prompt: false,
@@ -180,6 +194,7 @@ const EMPTY_RESOURCE_SELECTIONS: Record<PostResourceKind, boolean> = {
 };
 
 let attachmentIdCounter = 0;
+let resourceSectionIdCounter = 0;
 
 function createAttachmentRow(partial?: Partial<Omit<AttachmentRow, 'id'>>): AttachmentRow {
   attachmentIdCounter += 1;
@@ -192,6 +207,26 @@ function createAttachmentRow(partial?: Partial<Omit<AttachmentRow, 'id'>>): Atta
     storagePath: partial?.storagePath ?? '',
     contentType: partial?.contentType ?? '',
     sizeBytes: partial?.sizeBytes ?? null,
+    resourceType: partial?.resourceType ?? 'external_link',
+    role: partial?.role ?? 'primary',
+    remixUse: partial?.remixUse ?? 'none',
+  };
+}
+
+function createResourceSectionRow(partial?: Partial<Omit<ResourceSectionRow, 'id'>> & { id?: string }): ResourceSectionRow {
+  resourceSectionIdCounter += 1;
+  const id = partial?.id ?? `section-${resourceSectionIdCounter}`;
+
+  return {
+    id,
+    title: partial?.title ?? `Section ${resourceSectionIdCounter}`,
+    kind: partial?.kind ?? 'scene',
+    description: partial?.description ?? '',
+    promptText: partial?.promptText ?? '',
+    workflowShareUrl: partial?.workflowShareUrl ?? '',
+    notesMarkdown: partial?.notesMarkdown ?? '',
+    attachments: partial?.attachments ?? [createAttachmentRow()],
+    allowRemix: partial?.allowRemix ?? false,
   };
 }
 
@@ -276,6 +311,9 @@ function serializeAttachmentRows(rows: AttachmentRow[]): PostResourceAttachment[
           storagePath,
           contentType: row.contentType || null,
           sizeBytes: row.sizeBytes,
+          resourceType: row.resourceType,
+          role: row.role,
+          remixUse: row.remixUse,
         };
       }
 
@@ -288,9 +326,254 @@ function serializeAttachmentRows(rows: AttachmentRow[]): PostResourceAttachment[
         label: row.label.trim() || url,
         kind: 'link' as const,
         url,
+        resourceType: row.resourceType,
+        role: row.role,
+        remixUse: row.remixUse,
       };
     })
     .filter((row): row is PostResourceAttachment => row !== null);
+}
+
+function sectionHasContent(section: ResourceSectionRow): boolean {
+  return Boolean(
+    section.title.trim() ||
+    section.description.trim() ||
+    section.promptText.trim() ||
+    section.workflowShareUrl.trim() ||
+    section.notesMarkdown.trim() ||
+    serializeAttachmentRows(section.attachments).length > 0 ||
+    section.allowRemix
+  );
+}
+
+function serializeResourceSectionRows(rows: ResourceSectionRow[]): PostResourceSection[] {
+  return rows
+    .filter(sectionHasContent)
+    .map((row, index) => ({
+      id: row.id,
+      title: row.title.trim() || `Section ${index + 1}`,
+      kind: row.kind,
+      description: row.description.trim() || null,
+      sortOrder: index,
+    }));
+}
+
+function buildResourceItems(params: {
+  selectedKinds: PostResourceKind[];
+  promptText: string;
+  notesMarkdown: string;
+  workflowShareUrl: string;
+  attachments: PostResourceAttachment[];
+  allowRemix: boolean;
+}): PostResourceItem[] {
+  const items: PostResourceItem[] = [];
+  const pushItem = (item: Omit<PostResourceItem, 'sortOrder' | 'isPrimary'>) => {
+    items.push({
+      ...item,
+      sortOrder: items.length,
+      isPrimary: items.length === 0,
+    });
+  };
+
+  if (params.selectedKinds.includes('prompt') && params.promptText.trim()) {
+    pushItem({
+      type: 'prompt',
+      role: 'primary',
+      sectionId: null,
+      title: 'Prompt',
+      description: null,
+      textContent: params.promptText.trim(),
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      remixUse: 'none',
+    });
+  }
+
+  if (params.selectedKinds.includes('workflow') && params.workflowShareUrl.trim()) {
+    pushItem({
+      type: 'workflow',
+      role: 'primary',
+      sectionId: null,
+      title: 'Workflow',
+      description: null,
+      textContent: null,
+      externalUrl: params.workflowShareUrl.trim(),
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      remixUse: 'import_source',
+    });
+  }
+
+  if (params.selectedKinds.includes('files')) {
+    for (const attachment of params.attachments) {
+      const type = attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link');
+      pushItem({
+        type,
+        role: attachment.role ?? (type === 'reference_image' ? 'style_reference' : 'primary'),
+        sectionId: null,
+        title: attachment.label,
+        description: null,
+        textContent: null,
+        externalUrl: attachment.kind === 'file' ? null : attachment.url ?? null,
+        storagePath: attachment.kind === 'file' ? attachment.storagePath ?? null : null,
+        contentType: attachment.contentType ?? null,
+        sizeBytes: attachment.sizeBytes ?? null,
+        workflowSnapshot: null,
+        remixUse: attachment.remixUse ?? (type === 'reference_image' ? 'reference_only' : type === 'workflow' ? 'import_source' : 'none'),
+      });
+    }
+  }
+
+  if (params.selectedKinds.includes('notes') && params.notesMarkdown.trim()) {
+    pushItem({
+      type: 'note',
+      role: 'primary',
+      sectionId: null,
+      title: 'Notes',
+      description: null,
+      textContent: params.notesMarkdown.trim(),
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      remixUse: 'none',
+    });
+  }
+
+  if (params.allowRemix) {
+    pushItem({
+      type: 'remix_access',
+      role: 'primary',
+      sectionId: null,
+      title: 'Remix access',
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      remixUse: 'direct_remix',
+    });
+  }
+
+  return items;
+}
+
+function buildSectionResourceItems(sections: ResourceSectionRow[], startingSortOrder: number): PostResourceItem[] {
+  const items: PostResourceItem[] = [];
+  const pushItem = (
+    section: ResourceSectionRow,
+    item: Omit<PostResourceItem, 'sortOrder' | 'isPrimary'>
+  ) => {
+    items.push({
+      ...item,
+      sectionId: section.id,
+      sortOrder: startingSortOrder + items.length,
+      isPrimary: startingSortOrder + items.length === 0,
+    });
+  };
+
+  for (const section of sections.filter(sectionHasContent)) {
+    const sectionTitle = section.title.trim() || 'Section';
+    const promptText = section.promptText.trim();
+    const workflowShareUrl = section.workflowShareUrl.trim();
+    const notesMarkdown = section.notesMarkdown.trim();
+
+    if (promptText) {
+      pushItem(section, {
+        type: 'prompt',
+        role: 'primary',
+        sectionId: section.id,
+        title: `${sectionTitle} prompt`,
+        description: null,
+        textContent: promptText,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        remixUse: 'none',
+      });
+    }
+
+    if (workflowShareUrl) {
+      pushItem(section, {
+        type: 'workflow',
+        role: 'primary',
+        sectionId: section.id,
+        title: `${sectionTitle} workflow`,
+        description: null,
+        textContent: null,
+        externalUrl: workflowShareUrl,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        remixUse: 'import_source',
+      });
+    }
+
+    for (const attachment of serializeAttachmentRows(section.attachments)) {
+      const type = attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link');
+      pushItem(section, {
+        type,
+        role: attachment.role ?? (type === 'reference_image' ? 'style_reference' : 'primary'),
+        sectionId: section.id,
+        title: attachment.label,
+        description: null,
+        textContent: null,
+        externalUrl: attachment.kind === 'file' ? null : attachment.url ?? null,
+        storagePath: attachment.kind === 'file' ? attachment.storagePath ?? null : null,
+        contentType: attachment.contentType ?? null,
+        sizeBytes: attachment.sizeBytes ?? null,
+        workflowSnapshot: null,
+        remixUse: attachment.remixUse ?? (type === 'reference_image' ? 'reference_only' : type === 'workflow' ? 'import_source' : 'none'),
+      });
+    }
+
+    if (notesMarkdown) {
+      pushItem(section, {
+        type: 'note',
+        role: 'primary',
+        sectionId: section.id,
+        title: `${sectionTitle} notes`,
+        description: null,
+        textContent: notesMarkdown,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        remixUse: 'none',
+      });
+    }
+
+    if (section.allowRemix) {
+      pushItem(section, {
+        type: 'remix_access',
+        role: 'primary',
+        sectionId: section.id,
+        title: `${sectionTitle} remix access`,
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        remixUse: 'direct_remix',
+      });
+    }
+  }
+
+  return items;
 }
 
 function formatGeneratedCategory(value: string | null | undefined): Exclude<PostCategory, 'text'> {
@@ -309,19 +592,56 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
   return selectedKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ');
 }
 
+function buildDefaultResourceSummary(selectedKinds: PostResourceKind[], mode: PostResourceBundleAccessMode): string {
+  if (mode === 'none') {
+    return '';
+  }
+
+  const kindSummary = selectedKinds.length > 0
+    ? getLockedSummary(selectedKinds).toLowerCase()
+    : 'reusable process';
+
+  return `Unlock the ${kindSummary} behind this public post.`;
+}
+
+function buildDefaultResourcePreview(selectedKinds: PostResourceKind[]): string {
+  if (selectedKinds.length === 0) {
+    return 'Includes reusable resources buyers can open after access.';
+  }
+
+  return `Includes ${getLockedSummary(selectedKinds).toLowerCase()} for reuse after access.`;
+}
+
 function getInitialResourceSelections(bundle: PostResourceBundleInput | null | undefined): Record<PostResourceKind, boolean> {
   const resources = bundle?.resources;
+  const items = resources?.items ?? [];
   return {
-    prompt: Boolean(resources?.promptText?.trim()),
-    workflow: Boolean(resources?.workflowShareUrl?.trim() || resources?.workflowSnapshot),
-    files: Array.isArray(resources?.attachments) && resources.attachments.length > 0,
-    notes: Boolean(resources?.notesMarkdown?.trim()),
-    remix: Boolean(resources?.allowRemix),
+    prompt: Boolean(resources?.promptText?.trim() || items.some((item) => item.type === 'prompt')),
+    workflow: Boolean(resources?.workflowShareUrl?.trim() || resources?.workflowSnapshot || items.some((item) => item.type === 'workflow')),
+    files: Boolean((Array.isArray(resources?.attachments) && resources.attachments.length > 0) || items.some((item) => item.type === 'reference_image' || item.type === 'source_file' || item.type === 'preset' || item.type === 'external_link')),
+    notes: Boolean(resources?.notesMarkdown?.trim() || items.some((item) => item.type === 'note' || item.type === 'settings')),
+    remix: Boolean(resources?.allowRemix || items.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
   };
 }
 
 function getInitialAttachmentRows(bundle: PostResourceBundleInput | null | undefined): AttachmentRow[] {
-  const attachments = Array.isArray(bundle?.resources?.attachments) ? bundle?.resources?.attachments : [];
+  const attachments = Array.isArray(bundle?.resources?.attachments) && bundle.resources.attachments.length > 0
+    ? bundle.resources.attachments
+    : (bundle?.resources?.items ?? [])
+      .filter((item) => !item.sectionId)
+      .filter((item) => item.type === 'reference_image' || item.type === 'source_file' || item.type === 'preset' || item.type === 'external_link' || item.type === 'workflow')
+      .filter((item) => item.storagePath || item.externalUrl)
+      .map((item): PostResourceAttachment => ({
+        label: item.title,
+        kind: item.storagePath ? 'file' : 'link',
+        url: item.externalUrl,
+        storagePath: item.storagePath,
+        contentType: item.contentType,
+        sizeBytes: item.sizeBytes,
+        resourceType: item.type,
+        role: item.role,
+        remixUse: item.remixUse,
+      }));
   if (!attachments || attachments.length === 0) {
     return [createAttachmentRow()];
   }
@@ -334,8 +654,58 @@ function getInitialAttachmentRows(bundle: PostResourceBundleInput | null | undef
         storagePath: attachment.storagePath ?? '',
         contentType: attachment.contentType ?? '',
         sizeBytes: attachment.sizeBytes ?? null,
+        resourceType: attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link'),
+        role: attachment.role ?? 'primary',
+        remixUse: attachment.remixUse ?? 'none',
       })
     );
+}
+
+function getInitialResourceSectionRows(bundle: PostResourceBundleInput | null | undefined): ResourceSectionRow[] {
+  const sections = bundle?.resources?.sections ?? [];
+  const items = bundle?.resources?.items ?? [];
+
+  if (!Array.isArray(sections) || sections.length === 0) {
+    return [];
+  }
+
+  return sections.map((section) => {
+    const sectionItems = items.filter((item) => item.sectionId === section.id);
+    const promptItem = sectionItems.find((item) => item.type === 'prompt');
+    const workflowItem = sectionItems.find((item) => item.type === 'workflow');
+    const notesItem = sectionItems.find((item) => item.type === 'note' || item.type === 'settings');
+    const attachmentItems = sectionItems
+      .filter((item) =>
+        item.type === 'reference_image' ||
+        item.type === 'source_file' ||
+        item.type === 'preset' ||
+        item.type === 'external_link'
+      )
+      .filter((item) => item.storagePath || item.externalUrl)
+      .map((item): AttachmentRow => createAttachmentRow({
+        label: item.title,
+        kind: item.storagePath ? 'file' : 'link',
+        url: item.externalUrl ?? '',
+        storagePath: item.storagePath ?? '',
+        contentType: item.contentType ?? '',
+        sizeBytes: item.sizeBytes ?? null,
+        resourceType: item.type,
+        role: item.role,
+        remixUse: item.remixUse,
+      }));
+
+    return createResourceSectionRow({
+      id: section.id,
+      title: section.title,
+      kind: section.kind,
+      description: section.description ?? '',
+      promptText: promptItem?.textContent ?? '',
+      workflowShareUrl: workflowItem?.externalUrl ?? '',
+      notesMarkdown: notesItem?.textContent ?? '',
+      attachments: attachmentItems.length > 0 ? attachmentItems : [createAttachmentRow()],
+      allowRemix: sectionItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix'),
+    });
+  });
 }
 
 async function uploadResourceFile(file: File, accessToken: string): Promise<PostResourceAttachment> {
@@ -429,31 +799,39 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
   const [file, setFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [title, setTitle] = useState(initialPost?.title ?? '');
   const [description, setDescription] = useState(initialPost?.description ?? '');
   const [body, setBody] = useState(initialPost?.body ?? '');
   const [sourceTool, setSourceTool] = useState(initialPost?.sourceTool ?? '');
   const [sourceToolSlug, setSourceToolSlug] = useState(initialPost?.sourceToolSlug ?? '');
+  const [isSourceToolSuggestionsOpen, setIsSourceToolSuggestionsOpen] = useState(false);
   const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
   const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>(initialCategory);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost));
+  const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost?.description));
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(
     Object.values(initialResourceSelections).some(Boolean)
       ? initialResourceSelections
       : EMPTY_RESOURCE_SELECTIONS
   );
+  const [resourceSummary] = useState(initialBundle.summary ?? '');
+  const [resourcePreviewText] = useState(initialBundle.previewText ?? '');
   const [resourcePromptText, setResourcePromptText] = useState(initialBundle.resources?.promptText ?? '');
   const [resourceNotes, setResourceNotes] = useState(initialBundle.resources?.notesMarkdown ?? '');
   const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState(initialBundle.resources?.workflowShareUrl ?? '');
   const [resourceAttachmentRows, setResourceAttachmentRows] = useState<AttachmentRow[]>(() => getInitialAttachmentRows(initialBundle));
+  const [resourceSectionRows, setResourceSectionRows] = useState<ResourceSectionRow[]>(() => getInitialResourceSectionRows(initialBundle));
+  const [organizeResourceSections, setOrganizeResourceSections] = useState(() =>
+    (initialBundle.resources?.sections?.length ?? 0) > 0
+  );
   const [resourcePriceUsd, setResourcePriceUsd] = useState(() => getInitialPriceUsd(initialBundle));
   const [resourceSelectionsTouched, setResourceSelectionsTouched] = useState(false);
   const [resourcePromptTouched, setResourcePromptTouched] = useState(false);
   const [resourceNotesTouched, setResourceNotesTouched] = useState(false);
   const [didApplyGenerationPaywallPrefill, setDidApplyGenerationPaywallPrefill] = useState(false);
   const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ComposerError | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
   const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(() =>
@@ -473,6 +851,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  const sourceToolInputRef = useRef<HTMLInputElement | null>(null);
+  const postSectionRef = useRef<HTMLDivElement | null>(null);
+  const storySectionRef = useRef<HTMLDivElement | null>(null);
+  const resourceSectionRef = useRef<HTMLDivElement | null>(null);
+  const publishSectionRef = useRef<HTMLDivElement | null>(null);
 
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   const inferredCategory = useMemo(() => inferCategory(file), [file]);
@@ -486,12 +870,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const bodyCount = body.length;
   const hasMediaProof = proofMode === 'media' && (Boolean(file) || hasGeneratedProof || Boolean(existingProofUrl));
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
-  const effectiveVisibility = resourceAccessMode === 'none' ? visibility : 'public';
+  const effectiveVisibility = visibility;
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
   const normalizedSourceTool = useMemo(
     () => normalizeSourceToolInput({ label: sourceTool, slug: sourceToolSlug }),
     [sourceTool, sourceToolSlug]
   );
+  const filteredSourceToolSuggestions = useMemo(() => {
+    const normalizedQuery = sourceTool.trim().toLowerCase();
+
+    return CURATED_SOURCE_TOOLS.filter((toolOption) => (
+      normalizedQuery.length === 0 || toolOption.label.toLowerCase().includes(normalizedQuery)
+    ));
+  }, [sourceTool]);
+  const shouldShowSourceToolSuggestions = isSourceToolSuggestionsOpen && filteredSourceToolSuggestions.length > 0;
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   const shouldFocusPriceInput =
@@ -501,8 +893,138 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     (resourceSelections.notes && resourceNotes.trim()) ||
     (resourceSelections.workflow && resourceWorkflowUrl.trim()) ||
     (resourceSelections.files && attachments.length > 0) ||
-    resourceSelections.remix
+    resourceSelections.remix ||
+    (organizeResourceSections && resourceSectionRows.some(sectionHasContent))
   );
+  const parsedResourcePriceUsd = Number.parseFloat(resourcePriceUsd.trim() || '0');
+  const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceUsd)
+    ? Math.round(parsedResourcePriceUsd * 100)
+    : 0;
+  const defaultResourceSummary = useMemo(
+    () => buildDefaultResourceSummary(selectedResourceKinds, resourceAccessMode),
+    [resourceAccessMode, selectedResourceKinds]
+  );
+  const defaultResourcePreview = useMemo(
+    () => buildDefaultResourcePreview(selectedResourceKinds),
+    [selectedResourceKinds]
+  );
+  const resourceItems = useMemo(
+    () => {
+      const globalItems = buildResourceItems({
+        selectedKinds: selectedResourceKinds,
+        promptText: resourcePromptText,
+        notesMarkdown: resourceNotes,
+        workflowShareUrl: resourceWorkflowUrl,
+        attachments,
+        allowRemix: resourceSelections.remix,
+      });
+
+      return organizeResourceSections
+        ? [
+            ...globalItems,
+            ...buildSectionResourceItems(resourceSectionRows, globalItems.length),
+          ]
+        : globalItems;
+    },
+    [
+      attachments,
+      organizeResourceSections,
+      resourceNotes,
+      resourcePromptText,
+      resourceSectionRows,
+      resourceSelections.remix,
+      resourceWorkflowUrl,
+      selectedResourceKinds,
+    ]
+  );
+  const resourceSections = useMemo(
+    () => organizeResourceSections ? serializeResourceSectionRows(resourceSectionRows) : [],
+    [organizeResourceSections, resourceSectionRows]
+  );
+  const resourceBundleDraft = useMemo<PostResourceBundleInput | null>(() => {
+    if (resourceAccessMode === 'none') {
+      return null;
+    }
+
+    return {
+      accessMode: resourceAccessMode,
+      summary: resourceSummary.trim() || defaultResourceSummary,
+      previewText: resourcePreviewText.trim() || defaultResourcePreview,
+      priceUsdCents: resourceAccessMode === 'paid' ? resourcePriceUsdCents : 0,
+      resources: {
+        promptText: resourceSelections.prompt ? resourcePromptText.trim() || null : null,
+        notesMarkdown: resourceSelections.notes ? resourceNotes.trim() || null : null,
+        workflowShareUrl: resourceSelections.workflow ? resourceWorkflowUrl.trim() || null : null,
+        attachments: resourceSelections.files ? attachments : [],
+        allowRemix: resourceSelections.remix,
+        sections: resourceSections,
+        items: resourceItems,
+      },
+    };
+  }, [
+    attachments,
+    defaultResourcePreview,
+    defaultResourceSummary,
+    resourceAccessMode,
+    resourceNotes,
+    resourcePreviewText,
+    resourcePriceUsdCents,
+    resourcePromptText,
+    resourceSections,
+    resourceItems,
+    resourceSelections,
+    resourceSummary,
+    resourceWorkflowUrl,
+  ]);
+  const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
+  const shouldRunMarketplaceQuality = resourceAccessMode !== 'none' && effectiveVisibility === 'public';
+  const marketplaceAssessment = useMemo(() => (
+    resourceBundleDraft && shouldRunMarketplaceQuality
+      ? assessMarketplaceListingQuality({
+          title: publicPostTitle,
+          summary: resourceBundleDraft.summary,
+          previewText: resourceBundleDraft.previewText,
+          accessMode: resourceBundleDraft.accessMode,
+          priceUsdCents: resourceBundleDraft.priceUsdCents,
+          resources: resourceBundleDraft.resources,
+          post: {
+            title: publicPostTitle,
+            body: trimmedBody,
+            visibility: effectiveVisibility,
+            archivedAt: initialPost?.archivedAt ?? null,
+            reviewStatus: 'visible',
+            hasMedia: hasMediaProof,
+          },
+          seller: {
+            name: 'Profile ready',
+          },
+        })
+      : { eligible: true, issues: [] }
+  ), [effectiveVisibility, hasMediaProof, initialPost?.archivedAt, publicPostTitle, resourceBundleDraft, shouldRunMarketplaceQuality, trimmedBody]);
+  const completionChecklist = useMemo(() => [
+    {
+      label: 'Proof added',
+      complete: hasMediaProof || trimmedBody.length >= 24,
+      detail: hasMediaProof ? 'Media is attached' : trimmedBody.length >= 24 ? 'Text proof is ready' : 'Add media or switch to text',
+    },
+    {
+      label: 'Story ready',
+      complete: proofMode !== 'text' || trimmedBody.length > 0,
+      detail: trimmedBody ? (proofMode === 'text' ? 'Post body is included' : 'Caption is included') : 'Add a short visible post',
+    },
+    {
+      label: 'Unlock optional',
+      complete: resourceAccessMode === 'none' || hasResourceContent,
+      detail: resourceAccessMode === 'none' ? 'No unlock selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
+    },
+  ], [
+    hasMediaProof,
+    hasResourceContent,
+    proofMode,
+    resourceAccessMode,
+    selectedResourceKinds,
+    trimmedBody,
+  ]);
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
 
   useEffect(() => {
@@ -530,8 +1052,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     if (resourceAccessMode === 'none') {
       return;
     }
-
-    setVisibility('public');
 
     if (!Object.values(resourceSelections).some(Boolean)) {
       setResourceSelections((current) => ({
@@ -697,6 +1217,70 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setError(null);
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const droppedFile = e.dataTransfer.files?.[0];
+    if (droppedFile) {
+      if (droppedFile.type.startsWith('image/') || droppedFile.type.startsWith('video/')) {
+        setFile(droppedFile);
+        resetFeedback();
+      }
+    }
+  };
+
+  const handleMiddleClick = () => {
+    mediaInputRef.current?.click();
+  };
+
+  const focusComposerSection = (section: 'post' | 'story' | 'resources' | 'publish') => {
+    const target = {
+      post: postSectionRef,
+      story: storySectionRef,
+      resources: resourceSectionRef,
+      publish: publishSectionRef,
+    }[section];
+
+    window.requestAnimationFrame(() => {
+      target.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      target.current?.focus({ preventScroll: true });
+    });
+  };
+
+  const stopWithError = (message: string, section: 'post' | 'story' | 'resources' | 'publish') => {
+    setError({ section, message });
+    focusComposerSection(section);
+  };
+
+  const renderSectionError = (section: ComposerError['section']) => {
+    if (!error || error.section !== section) {
+      return null;
+    }
+
+    return (
+      <div role="alert" className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+        {error.message}
+      </div>
+    );
+  };
+
+  const applySourceToolSelection = (toolOption: { label: string; slug: string }) => {
+    setSourceTool(toolOption.label);
+    setSourceToolSlug(toolOption.slug);
+    setIsSourceToolSuggestionsOpen(false);
+    resetFeedback();
+  };
+
   const updateResourceSelection = (kind: PostResourceKind) => {
     setResourceSelectionsTouched(true);
     setResourceSelections((current) => ({
@@ -706,25 +1290,187 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetFeedback();
   };
 
-  const applyUnlockTemplate = (templateKinds: PostResourceKind[]) => {
-    const nextSelections = { ...EMPTY_RESOURCE_SELECTIONS };
-    templateKinds.forEach((kind) => {
-      nextSelections[kind] = true;
+
+  const updateAttachmentRow = (
+    id: string,
+    field: 'label' | 'url' | 'resourceType' | 'role' | 'remixUse',
+    value: string
+  ) => {
+    setResourceAttachmentRows((current) =>
+      current.map((row) => {
+        if (row.id !== id) {
+          return row;
+        }
+
+        if (field === 'resourceType') {
+          return { ...row, resourceType: value as PostResourceItemType };
+        }
+
+        if (field === 'role') {
+          return { ...row, role: value as PostResourceItemRole };
+        }
+
+        if (field === 'remixUse') {
+          return { ...row, remixUse: value as PostResourceRemixUse };
+        }
+
+        return { ...row, [field]: value };
+      })
+    );
+    resetFeedback();
+  };
+
+  const updateResourceSection = (
+    id: string,
+    field: 'title' | 'kind' | 'description' | 'promptText' | 'workflowShareUrl' | 'notesMarkdown' | 'allowRemix',
+    value: string | boolean
+  ) => {
+    setResourceSectionRows((current) =>
+      current.map((section) => section.id === id ? { ...section, [field]: value } : section)
+    );
+    resetFeedback();
+  };
+
+  const addResourceSection = () => {
+    setOrganizeResourceSections(true);
+    setResourceSectionRows((current) => [...current, createResourceSectionRow()]);
+    resetFeedback();
+  };
+
+  const duplicateResourceSection = (id: string) => {
+    setResourceSectionRows((current) => {
+      const section = current.find((row) => row.id === id);
+      if (!section) {
+        return current;
+      }
+
+      return [
+        ...current,
+        createResourceSectionRow({
+          ...section,
+          id: undefined,
+          title: `${section.title || 'Section'} copy`,
+          attachments: section.attachments.map((attachment) => createAttachmentRow({ ...attachment })),
+        }),
+      ];
     });
+    resetFeedback();
+  };
 
-    setResourceSelections(nextSelections);
-    setResourceSelectionsTouched(true);
+  const removeResourceSection = (id: string) => {
+    setResourceSectionRows((current) => current.filter((section) => section.id !== id));
+    resetFeedback();
+  };
 
-    if (templateKinds.includes('files') && resourceAttachmentRows.length === 0) {
-      setResourceAttachmentRows([createAttachmentRow()]);
+  const applySectionToFullPost = (id: string) => {
+    const section = resourceSectionRows.find((row) => row.id === id);
+    if (!section) {
+      return;
+    }
+
+    if (section.promptText.trim()) {
+      setResourcePromptText(section.promptText);
+      setResourcePromptTouched(true);
+      setResourceSelections((current) => ({ ...current, prompt: true }));
+    }
+
+    if (section.workflowShareUrl.trim()) {
+      setResourceWorkflowUrl(section.workflowShareUrl);
+      setResourceSelections((current) => ({ ...current, workflow: true }));
+    }
+
+    if (section.notesMarkdown.trim()) {
+      setResourceNotes(section.notesMarkdown);
+      setResourceNotesTouched(true);
+      setResourceSelections((current) => ({ ...current, notes: true }));
+    }
+
+    const sectionAttachments = serializeAttachmentRows(section.attachments);
+    if (sectionAttachments.length > 0) {
+      setResourceAttachmentRows(sectionAttachments.map((attachment) => createAttachmentRow({
+        label: attachment.label,
+        kind: attachment.kind === 'file' ? 'file' : 'link',
+        url: attachment.url ?? '',
+        storagePath: attachment.storagePath ?? '',
+        contentType: attachment.contentType ?? '',
+        sizeBytes: attachment.sizeBytes ?? null,
+        resourceType: attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link'),
+        role: attachment.role ?? 'primary',
+        remixUse: attachment.remixUse ?? 'none',
+      })));
+      setResourceSelections((current) => ({ ...current, files: true }));
+    }
+
+    if (section.allowRemix) {
+      setResourceSelections((current) => ({ ...current, remix: true }));
     }
 
     resetFeedback();
   };
 
-  const updateAttachmentRow = (id: string, field: 'label' | 'url', value: string) => {
-    setResourceAttachmentRows((current) =>
-      current.map((row) => (row.id === id ? { ...row, [field]: value } : row))
+  const updateSectionAttachmentRow = (
+    sectionId: string,
+    attachmentId: string,
+    field: 'label' | 'url' | 'resourceType' | 'role' | 'remixUse',
+    value: string
+  ) => {
+    setResourceSectionRows((current) =>
+      current.map((section) => {
+        if (section.id !== sectionId) {
+          return section;
+        }
+
+        return {
+          ...section,
+          attachments: section.attachments.map((attachment) => {
+            if (attachment.id !== attachmentId) {
+              return attachment;
+            }
+
+            if (field === 'resourceType') {
+              return { ...attachment, resourceType: value as PostResourceItemType };
+            }
+
+            if (field === 'role') {
+              return { ...attachment, role: value as PostResourceItemRole };
+            }
+
+            if (field === 'remixUse') {
+              return { ...attachment, remixUse: value as PostResourceRemixUse };
+            }
+
+            return { ...attachment, [field]: value };
+          }),
+        };
+      })
+    );
+    resetFeedback();
+  };
+
+  const addSectionAttachmentRow = (sectionId: string) => {
+    setResourceSectionRows((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? { ...section, attachments: [...section.attachments, createAttachmentRow()] }
+          : section
+      )
+    );
+    resetFeedback();
+  };
+
+  const removeSectionAttachmentRow = (sectionId: string, attachmentId: string) => {
+    setResourceSectionRows((current) =>
+      current.map((section) => {
+        if (section.id !== sectionId) {
+          return section;
+        }
+
+        const nextAttachments = section.attachments.filter((attachment) => attachment.id !== attachmentId);
+        return {
+          ...section,
+          attachments: nextAttachments.length > 0 ? nextAttachments : [createAttachmentRow()],
+        };
+      })
     );
     resetFeedback();
   };
@@ -752,13 +1498,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 storagePath: uploaded.storagePath ?? '',
                 contentType: uploaded.contentType ?? '',
                 sizeBytes: uploaded.sizeBytes ?? null,
+                resourceType: uploaded.contentType?.startsWith('image/') ? 'reference_image' : row.resourceType === 'external_link' ? 'source_file' : row.resourceType,
+                role: uploaded.contentType?.startsWith('image/') ? 'style_reference' : row.role,
+                remixUse: uploaded.contentType?.startsWith('image/') ? 'reference_only' : row.remixUse,
                 isUploading: false,
               }
             : row
         )
       );
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : 'Failed to upload resource file.');
+      setError({
+        section: 'resources',
+        message: uploadError instanceof Error ? uploadError.message : 'Failed to upload resource file.',
+      });
       setResourceAttachmentRows((current) =>
         current.map((row) => row.id === id ? { ...row, isUploading: false } : row)
       );
@@ -800,65 +1552,59 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (proofMode === 'media' && !hasMediaProof) {
-      setError(hasGeneratedProof ? 'We could not load the generated media. Try again from My Studio.' : 'Upload an image or video to start the post.');
+      stopWithError(hasGeneratedProof ? 'We could not load the generated media. Try again from My Studio.' : 'Upload an image or video to start the post.', 'post');
       return;
     }
 
     if (!trimmedBody && !hasMediaProof) {
-      setError('Add a story or media before publishing.');
+      stopWithError('Add a story or media before publishing.', 'story');
       return;
     }
 
     if (proofMode === 'text' && !trimmedBody) {
-      setError('Write the story before publishing a text post.');
+      stopWithError('Write the story before publishing a text post.', 'story');
       return;
     }
 
     if (file?.type.startsWith('audio/')) {
-      setError('Audio posts are not supported in the community feed yet.');
+      stopWithError('Audio posts are not supported in the community feed yet.', 'post');
       return;
     }
 
     if (file && !acceptsCategory(file, category)) {
-      setError('Choose a category that matches the file you uploaded.');
+      stopWithError('Choose a category that matches the file you uploaded.', 'post');
       return;
     }
 
     if (bodyCount > BODY_MAX_LENGTH) {
-      setError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`);
+      stopWithError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`, 'story');
       return;
     }
 
-    let resourceBundle: Record<string, unknown> | undefined;
+    let resourceBundle: PostResourceBundleInput | undefined;
     if (resourceAccessMode !== 'none') {
-      const parsedPrice = Number.parseFloat(resourcePriceUsd.trim() || '0');
-
       if (selectedResourceKinds.length === 0) {
-        setError('Choose at least one thing people will unlock.');
+        stopWithError('Choose at least one thing people will unlock.', 'resources');
         return;
       }
 
-      if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedPrice) || parsedPrice < 1)) {
-        setError('Paid unlocks must be priced at $1.00 or above.');
+      if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedResourcePriceUsd) || parsedResourcePriceUsd < 1)) {
+        stopWithError('Paid unlocks must be priced at $1.00 or above.', 'resources');
         return;
       }
 
       if (!hasResourceContent) {
-        setError('Add content for at least one selected unlock item before publishing.');
+        stopWithError('Add content for at least one selected unlock item before publishing.', 'resources');
         return;
       }
 
-      resourceBundle = {
-        accessMode: resourceAccessMode,
-        priceUsdCents: resourceAccessMode === 'paid' ? Math.round(parsedPrice * 100) : 0,
-        resources: {
-          promptText: resourceSelections.prompt ? resourcePromptText.trim() || null : null,
-          notesMarkdown: resourceSelections.notes ? resourceNotes.trim() || null : null,
-          workflowShareUrl: resourceSelections.workflow ? resourceWorkflowUrl.trim() || null : null,
-          attachments: resourceSelections.files ? attachments : [],
-          allowRemix: resourceSelections.remix,
-        },
-      };
+      if (shouldRunMarketplaceQuality && !marketplaceAssessment.eligible) {
+        const firstIssue = marketplaceAssessment.issues[0];
+        stopWithError(`Improve this unlock before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
+        return;
+      }
+
+      resourceBundle = resourceBundleDraft ?? undefined;
     }
 
     try {
@@ -897,6 +1643,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
           resourceAccessMode,
+          resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
+            ? data.resourceBundleStatus
+            : null,
         }, { redirect: true });
 
         return;
@@ -933,6 +1682,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
           resourceAccessMode,
+          resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
+            ? data.resourceBundleStatus
+            : null,
         });
 
         return;
@@ -978,9 +1730,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
         visibility: data.visibility as PostVisibility,
         resourceAccessMode,
+        resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
+          ? data.resourceBundleStatus
+          : null,
       }, { redirect: true });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Failed to publish post.');
+      setError({
+        section: 'publish',
+        message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -989,7 +1747,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const createdPostHasResources = createdPost ? createdPost.resourceAccessMode !== 'none' : false;
   const selectedVisibilityOption = VISIBILITY_OPTIONS.find((option) => option.value === effectiveVisibility) ?? VISIBILITY_OPTIONS[0];
   const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
-  const primaryPostLabel = createdPost?.showcasePath ? 'View post' : 'Open editor';
+  const primaryPostLabel = createdPost?.resourceBundleStatus === 'draft'
+    ? 'Continue editing'
+    : createdPost?.showcasePath
+      ? 'View post'
+      : 'Open editor';
+  const primaryActionLabel = effectiveVisibility !== 'public'
+    ? 'Save draft'
+    : resourceAccessMode === 'none'
+      ? isEditMode ? 'Save changes' : 'Share post'
+      : 'Publish post + unlock';
   const backHref = isEditMode || entrySurface === 'creations' ? '/creations' : '/showcase';
   const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to studio' : 'Back to community';
 
@@ -1037,49 +1804,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           {backLabel}
         </Link>
 
-        <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_420px]">
+        <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1fr)_280px]">
           <section className="rounded-[32px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
-            <div className="mb-6 flex flex-col gap-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">Community post composer</div>
-                  <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                    {isCreationPaywallManagementIntent
-                      ? 'Manage the unlock behind this post'
-                      : isEditMode
-                      ? 'Update the post and its unlock'
-                      : isGeneratedPaywallIntent
-                        ? 'Set the price for this creation'
-                        : 'Share a media or text post'}
-                  </h1>
-                  <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300">
-                    {isCreationPaywallManagementIntent
-                      ? 'You came from My Studio. The media stays attached while you adjust the unlock, update the price, or remove the paid layer here.'
-                      : isEditMode
-                      ? 'Edit the public story, adjust visibility, and keep the post and attached unlock aligned in one place.'
-                      : isGeneratedPaywallIntent
-                        ? 'The media is already attached. We will preload the saved prompt, reusable setup notes, and remix access when available so you can price the unlock and publish.'
-                        : 'Start with the public post: upload media from any creator tool or write a text tip. If there is reusable value behind it, attach an optional free or paid unlock later.'}
-                  </p>
-                </div>
-                <div className="hidden rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100 sm:inline-flex">
-                  {isCreationPaywallManagementIntent ? 'From My Studio' : isEditMode ? 'Owner editor' : 'Post first, unlock optional'}
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-4">
-                {STEP_ORDER.map((step, index) => (
-                  <div
-                    key={step}
-                    className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3"
-                  >
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Step {index + 1}
-                    </div>
-                    <div className="mt-2 text-sm font-semibold text-white">{step}</div>
-                  </div>
-                ))}
-              </div>
+            <div className="mb-6">
+              <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                {isCreationPaywallManagementIntent
+                  ? 'Manage the unlock behind this post'
+                  : isEditMode
+                    ? 'Update post'
+                    : 'Create post'}
+              </h1>
+              <p className="mt-2 text-sm text-zinc-400">
+                {isCreationPaywallManagementIntent
+                  ? 'Adjust post settings, pricing, and visibility below.'
+                  : isGeneratedPaywallIntent
+                    ? 'Your media is attached. Complete the optional unlock details below.'
+                    : isEditMode
+                      ? 'Edit post content, visibility, and unlock settings.'
+                      : 'Share your work and add optional unlockable resources.'}
+              </p>
             </div>
 
             <form id="post-composer-form" className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
@@ -1089,93 +1832,237 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </div>
               ) : null}
 
-              <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.94),rgba(9,11,16,0.96))] p-5 sm:p-6">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/75">Step 1</div>
-                    <h2 className="mt-2 text-xl font-semibold text-white">Choose media or text</h2>
-                    <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {isEditMode
-                        ? 'The post is already attached. This editor keeps the public media fixed while you update the story, visibility, and unlock around it.'
-                        : hasGeneratedProof
-                          ? 'Your generated media is already attached. You can tell the story and decide what unlocks next.'
-                          : 'Start with media when you have a result to show, or text when you want to share a tip, note, or lesson.'}
-                    </p>
-                  </div>
-                  <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
-                    {stepBadgeLabel}
-                  </div>
-                </div>
+              <div
+                ref={postSectionRef}
+                tabIndex={-1}
+                data-composer-section="post"
+                className="rounded-3xl border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.82),rgba(9,11,16,0.9))] p-5 outline-none sm:p-6"
+              >
+                <label className="block">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</div>
+                  <input
+                    value={title}
+                    onChange={(event) => {
+                      setTitle(event.target.value);
+                      resetFeedback();
+                    }}
+                    placeholder={proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                  />
+                </label>
 
-                {!hasGeneratedProof && !isEditMode ? (
-                  <div className="mt-5 grid gap-3 lg:grid-cols-3">
-                    {([
-                      {
-                        value: 'media',
-                        label: 'Share media I made',
-                        description: 'Upload media from magicbooklet, Higgsfield, Freepik, Runway, or any other tool.',
-                        icon: UploadCloud,
-                      },
-                      {
-                        value: 'text',
-                        label: 'Share a tip',
-                        description: 'Post a lesson, tactic, or observation without attaching media.',
-                        icon: BookText,
-                      },
-                      {
-                        value: 'sell',
-                        label: 'Sell the process',
-                        description: 'Start with media and prepare a paid prompt, workflow, file, or remix unlock.',
-                        icon: BadgePlus,
-                      },
-                    ] as const).map((option) => {
-                      const Icon = option.icon;
-                      const active = option.value === 'sell'
-                        ? proofMode === 'media' && resourceAccessMode === 'paid'
-                        : proofMode === option.value;
-
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => {
-                            if (option.value === 'text') {
-                              setProofMode('text');
-                              setFile(null);
-                              setResourceAccessMode('none');
-                            } else if (option.value === 'sell') {
-                              setProofMode('media');
-                              setResourceAccessMode('paid');
-                              setResourceSelections((current) => ({
-                                ...current,
-                                prompt: true,
-                                workflow: true,
-                              }));
-                            } else {
-                              setProofMode('media');
-                            }
-                            resetFeedback();
-                          }}
-                          className={`rounded-[24px] border px-4 py-4 text-left transition ${
-                            active
-                              ? 'border-sky-400/40 bg-sky-400/10 shadow-[0_12px_30px_rgba(56,189,248,0.12)]'
-                              : 'border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-black/30 text-sky-100">
-                              <Icon className="h-5 w-5" />
-                            </div>
-                            <div>
-                              <div className="text-sm font-semibold text-white">{option.label}</div>
-                              <p className="mt-1 text-xs leading-5 text-zinc-400">{option.description}</p>
-                            </div>
+                {proofMode === 'media' ? (
+                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                    {!hasGeneratedProof ? (
+                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
+                            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                              Tag the tool so people can understand how this result was made.
+                            </p>
                           </div>
-                        </button>
-                      );
-                    })}
+                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
+                            {normalizedSourceTool.label || 'Choose tool'}
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {CURATED_SOURCE_TOOLS.map((toolOption) => (
+                            <button
+                              key={toolOption.slug}
+                              type="button"
+                              onClick={() => {
+                                applySourceToolSelection(toolOption);
+                              }}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                                normalizedSourceTool.slug === toolOption.slug
+                                  ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                              }`}
+                            >
+                              {toolOption.label}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSourceToolSlug('');
+                              setIsSourceToolSuggestionsOpen(true);
+                              sourceToolInputRef.current?.focus();
+                              resetFeedback();
+                            }}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                              sourceTool && !normalizedSourceTool.slug
+                                ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
+                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                            }`}
+                          >
+                            Custom
+                          </button>
+                        </div>
+                        <label
+                          className="mt-3 block"
+                          onBlur={(event) => {
+                            const nextFocusedElement = event.relatedTarget;
+                            if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
+                              return;
+                            }
+
+                            setIsSourceToolSuggestionsOpen(false);
+                          }}
+                        >
+                          <span className="sr-only">Custom source tool</span>
+                          <input
+                            ref={sourceToolInputRef}
+                            role="combobox"
+                            aria-label="Custom source tool"
+                            aria-autocomplete="list"
+                            aria-controls="source-tool-suggestions"
+                            aria-expanded={shouldShowSourceToolSuggestions}
+                            value={sourceTool}
+                            onChange={(event) => {
+                              setSourceTool(event.target.value);
+                              setSourceToolSlug('');
+                              setIsSourceToolSuggestionsOpen(true);
+                              resetFeedback();
+                            }}
+                            onFocus={() => {
+                              setIsSourceToolSuggestionsOpen(true);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Escape') {
+                                setIsSourceToolSuggestionsOpen(false);
+                              }
+                            }}
+                            placeholder="Runway, Midjourney, CapCut..."
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                          />
+                          {shouldShowSourceToolSuggestions ? (
+                            <div
+                              id="source-tool-suggestions"
+                              role="listbox"
+                              aria-label="Source tool suggestions"
+                              className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/95 p-2 shadow-[0_20px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+                            >
+                              {filteredSourceToolSuggestions.map((toolOption) => {
+                                const selected = normalizedSourceTool.slug === toolOption.slug;
+
+                                return (
+                                  <button
+                                    key={toolOption.slug}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                    }}
+                                    onClick={() => {
+                                      applySourceToolSelection(toolOption);
+                                    }}
+                                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
+                                      selected
+                                        ? 'bg-sky-400/15 text-sky-50'
+                                        : 'text-zinc-200 hover:bg-white/[0.06] hover:text-white'
+                                    }`}
+                                  >
+                                    <span>{toolOption.label}</span>
+                                    {selected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
+                        <div className="mt-3 inline-flex rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-medium text-zinc-100">
+                          Created in magicbooklet
+                        </div>
+                      </div>
+                    )}
+
+                    <label className="block rounded-[24px] border border-white/8 bg-black/30 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
+                      <select
+                        value={category}
+                        onChange={(event) => {
+                          setCategory(event.target.value as Exclude<PostCategory, 'text'>);
+                          resetFeedback();
+                        }}
+                        disabled={hasGeneratedProof}
+                        className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {CATEGORY_OPTIONS.map((option) => (
+                          <option
+                            key={option.value}
+                            value={option.value}
+                            disabled={file ? !acceptsCategory(file, option.value) : false}
+                            className="bg-zinc-950 text-white"
+                          >
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-zinc-500">
+                        {hasGeneratedProof
+                          ? 'Generated media keeps its category automatically.'
+                          : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
+                      </p>
+                    </label>
                   </div>
                 ) : null}
+
+                {renderSectionError('post')}
+
+                <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-t border-white/8 pt-5">
+                  <div>
+                    <h2 className="text-xl font-semibold text-white">Proof</h2>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      {isEditMode || hasGeneratedProof
+                        ? 'Attached media is locked in.'
+                        : 'Share a result via image/video, or publish a text-only tip.'}
+                    </p>
+                  </div>
+                  {!hasGeneratedProof && !isEditMode ? (
+                    <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProofMode('media');
+                          resetFeedback();
+                        }}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          proofMode === 'media'
+                            ? 'bg-sky-300 text-slate-950'
+                            : 'text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        Media
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProofMode('text');
+                          setFile(null);
+                          resetFeedback();
+                        }}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          proofMode === 'text'
+                            ? 'bg-sky-300 text-slate-950'
+                            : 'text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        Text
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
+                      {stepBadgeLabel}
+                    </div>
+                  )}
+                </div>
 
                 {proofMode === 'media' ? (
                   <div className="mt-5">
@@ -1269,7 +2156,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         </div>
                       </div>
                     ) : (
-                      <label className="block rounded-[28px] border border-dashed border-white/14 bg-white/[0.02] p-5 transition hover:border-white/20 hover:bg-white/[0.03]">
+                      <div
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        className={`rounded-3xl border border-dashed p-5 transition duration-200 ${
+                          isDragging
+                            ? 'border-sky-400 bg-sky-400/5'
+                            : 'border-white/14 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.03]'
+                        }`}
+                      >
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-4">
                             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-400/10 text-sky-100">
@@ -1277,18 +2173,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             </div>
                             <div>
                               <div className="text-sm font-semibold text-white">Upload image or video</div>
-                              <p className="mt-1 text-sm text-zinc-400">
-                                Upload the public result first. Any prompt, workflow, or files can be attached later.
-                              </p>
                             </div>
                           </div>
-                          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-medium text-zinc-300">
-                            <BadgePlus className="h-3.5 w-3.5" />
-                            JPG, PNG, MP4, MOV
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => mediaInputRef.current?.click()}
+                            className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-200"
+                          >
+                            <BadgePlus className="h-4 w-4" />
+                            Add media
+                          </button>
                         </div>
 
                         <input
+                          ref={mediaInputRef}
                           type="file"
                           accept="image/*,video/*"
                           className="sr-only"
@@ -1317,19 +2215,35 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               />
                             )
                           ) : (
-                            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[18px] border border-dashed border-white/10 bg-zinc-950/60 text-center">
+                            <div
+                              onClick={handleMiddleClick}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  handleMiddleClick();
+                                }
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              className={`flex min-h-[320px] cursor-pointer flex-col items-center justify-center rounded-[18px] border border-dashed text-center outline-none transition duration-200 ${
+                                isDragging
+                                  ? 'border-sky-400 bg-sky-400/10 text-sky-200 scale-[0.99]'
+                                  : 'border-white/10 bg-zinc-950/60 text-zinc-400 hover:border-white/20 hover:bg-zinc-950/80 hover:text-zinc-300'
+                              }`}
+                            >
                               {inferredCategory === 'video' ? (
                                 <Film className="h-10 w-10 text-zinc-500" />
                               ) : (
                                 <ImageIcon className="h-10 w-10 text-zinc-500" />
                               )}
-                              <p className="mt-4 max-w-sm text-sm leading-6 text-zinc-400">
-                                Drop in the result first, then decide whether this stays a simple community post or includes an optional unlock.
+                              <p className="mt-3 text-sm text-zinc-400 font-medium">
+                                Drag & drop file, or click to upload
                               </p>
+                              <p className="mt-1.5 text-xs text-zinc-500">JPG, PNG, MP4, MOV</p>
                             </div>
                           )}
                         </div>
-                      </label>
+                      </div>
                     )}
                   </div>
                 ) : (
@@ -1340,94 +2254,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       </div>
                       <div>
                         <div className="text-sm font-semibold text-white">This will be a text post</div>
-                        <p className="mt-1 text-sm text-zinc-400">
-                          Use the story section below to publish the tip. You can still attach notes, files, or workflow links if the tip has reusable value.
+                        <p className="mt-1 text-xs text-zinc-400">
+                          Write your tip or guide in the story section below.
                         </p>
                       </div>
                     </div>
                   </div>
                 )}
-
-                {proofMode === 'media' && !hasGeneratedProof ? (
-                  <div className="mt-5 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Made with</div>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                          Tag the source tool now so buyers can scan the feed by Higgsfield, Freepik, Runway, Midjourney, Kling, Sora, Veo, or your own custom tool.
-                        </p>
-                      </div>
-                      <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
-                        {normalizedSourceTool.label || 'Choose tool'}
-                      </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {CURATED_SOURCE_TOOLS.map((toolOption) => (
-                        <button
-                          key={toolOption.slug}
-                          type="button"
-                          onClick={() => {
-                            setSourceTool(toolOption.label);
-                            setSourceToolSlug(toolOption.slug);
-                            resetFeedback();
-                          }}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                            normalizedSourceTool.slug === toolOption.slug
-                              ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                              : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                          }`}
-                        >
-                          {toolOption.label}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSourceToolSlug('');
-                          resetFeedback();
-                        }}
-                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                          sourceTool && !normalizedSourceTool.slug
-                            ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                            : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                        }`}
-                      >
-                        Custom
-                      </button>
-                    </div>
-                    <input
-                      value={sourceTool}
-                      onChange={(event) => {
-                        setSourceTool(event.target.value);
-                        setSourceToolSlug('');
-                        resetFeedback();
-                      }}
-                      placeholder="Runway, Midjourney, CapCut..."
-                      list="source-tool-options"
-                      className="mt-3 w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                    />
-                    <datalist id="source-tool-options">
-                      <option value="magicbooklet" />
-                      <option value="Higgsfield" />
-                      <option value="Freepik" />
-                      <option value="Runway" />
-                      <option value="Midjourney" />
-                      <option value="Kling" />
-                      <option value="Sora" />
-                      <option value="Veo" />
-                      <option value="CapCut" />
-                    </datalist>
-                  </div>
-                ) : null}
               </div>
 
-              <div className="rounded-[28px] border border-white/8 bg-black/20 p-5">
+              <div
+                ref={storySectionRef}
+                tabIndex={-1}
+                data-composer-section="story"
+                className="rounded-3xl border border-white/8 bg-black/20 p-5 outline-none"
+              >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 2</div>
-                    <h2 className="mt-2 text-lg font-semibold text-white">Write the public post</h2>
-                    <p className="mt-2 text-sm leading-6 text-zinc-400">
-                      This is what everyone sees in the community before any prompt, workflow, file, or remix access unlocks.
+                    <h2 className="text-lg font-semibold text-white">Story</h2>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      The public content visible in the community feed.
                     </p>
                   </div>
                   <button
@@ -1435,14 +2281,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     onClick={() => setIsDetailsOpen((current) => !current)}
                     className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                   >
-                    {isDetailsOpen ? 'Hide details' : 'Add details (optional)'}
+                    {isDetailsOpen ? 'Hide description' : 'Add feed description'}
                   </button>
                 </div>
+
+                {renderSectionError('story')}
 
                 <label className="mt-5 block">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      {proofMode === 'text' ? 'Story' : 'Caption / story'}
+                      {proofMode === 'text' ? 'Post body' : 'Caption'}
                     </span>
                     <span className={`text-xs ${bodyCount > BODY_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}>
                       {bodyCount}/{BODY_MAX_LENGTH}
@@ -1456,8 +2304,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     }}
                     placeholder={
                       proofMode === 'text'
-                        ? 'Share the tactic, lesson, or idea people should take away from this post.'
-                        : 'Optional: explain what tool you used, what changed, or what someone should notice before they open an optional unlock.'
+                        ? 'Write the post content...'
+                        : 'Write an optional caption...'
                     }
                     rows={proofMode === 'text' ? 8 : 6}
                     className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
@@ -1465,106 +2313,34 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </label>
 
                 {isDetailsOpen ? (
-                  <div className="mt-5 space-y-5">
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</div>
-                        <input
-                          value={title}
-                          onChange={(event) => {
-                            setTitle(event.target.value);
-                            resetFeedback();
-                          }}
-                          placeholder={proofMode === 'text' ? 'Optional title, or let us derive one' : 'Spring product reveal'}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                        />
-                      </label>
-
-                      {proofMode === 'media' ? (
-                        <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                            {hasGeneratedProof ? 'Source' : 'Source tool'}
-                          </div>
-                          <div className="mt-3 inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100">
-                            {hasGeneratedProof ? 'Created in magicbooklet' : normalizedSourceTool.label || 'Choose in Step 1'}
-                          </div>
-                          {!hasGeneratedProof ? (
-                            <p className="mt-2 text-xs leading-5 text-zinc-500">
-                              Tool selection lives in Step 1 so the feed and buyer filters stay accurate.
-                            </p>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                            Post type
-                          </div>
-                          <div className="mt-3 inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100">
-                            Text only
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <label className="block">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Description</div>
-                      <textarea
-                        value={description}
-                        onChange={(event) => {
-                          setDescription(event.target.value);
-                          resetFeedback();
-                        }}
-                        placeholder="Optional: give the post a short one-line setup for feeds and previews."
-                        rows={3}
-                        className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                      />
-                    </label>
-
-                    {proofMode === 'media' ? (
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
-                        <select
-                          value={category}
-                          onChange={(event) => {
-                            setCategory(event.target.value as Exclude<PostCategory, 'text'>);
-                            resetFeedback();
-                          }}
-                          disabled={hasGeneratedProof}
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
-                        >
-                          {CATEGORY_OPTIONS.map((option) => (
-                            <option
-                              key={option.value}
-                              value={option.value}
-                              disabled={file ? !acceptsCategory(file, option.value) : false}
-                              className="bg-zinc-950 text-white"
-                            >
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">
-                          {hasGeneratedProof
-                            ? 'Generated media keeps its category automatically.'
-                            : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
-                        </p>
-                      </label>
-                    ) : null}
-                  </div>
-                ) : (
-                  <p className="mt-4 text-sm leading-6 text-zinc-400">
-                    Title, description, source tool, and category tuning all stay optional until they actually help this post travel further.
-                  </p>
-                )}
+                  <label className="mt-5 block">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Feed description</div>
+                    <textarea
+                      value={description}
+                      onChange={(event) => {
+                        setDescription(event.target.value);
+                        resetFeedback();
+                      }}
+                      placeholder="Optional: give the post a short one-line setup for feeds and previews."
+                      rows={3}
+                      className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                    />
+                  </label>
+                ) : null}
               </div>
 
-              <div id="resources" className="rounded-[28px] border border-emerald-500/15 bg-emerald-500/5 p-5">
+              <div
+                id="resources"
+                ref={resourceSectionRef}
+                tabIndex={-1}
+                data-composer-section="resources"
+                className="rounded-3xl border border-emerald-500/15 bg-emerald-500/5 p-5 outline-none"
+              >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Step 3</div>
-                    <h2 className="mt-2 text-lg font-semibold text-white">Optional unlock</h2>
-                    <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                      Attach prompts, workflows, files, notes, or remix access if this post has reusable value.
+                    <h2 className="text-lg font-semibold text-white">Unlock</h2>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      Add optional gated resources (prompts, files, notes, or remix access) to this post.
                     </p>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
@@ -1586,120 +2362,136 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   </div>
                 ) : null}
 
-                {resourceAccessMode === 'none' ? (
-                  <div className="mt-5 rounded-[26px] border border-white/8 bg-black/25 p-4">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                      <p className="max-w-2xl text-sm leading-6 text-zinc-300">
-                        Keep the post simple by default. Add an unlock only when there is a reusable prompt, workflow, file, note, or remix path worth sharing.
-                      </p>
-                      <div className="flex flex-wrap gap-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setResourceAccessMode('free');
-                            resetFeedback();
-                          }}
-                          className="inline-flex items-center justify-center rounded-full border border-emerald-300/25 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/15"
-                        >
-                          Add free unlock
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setResourceAccessMode('paid');
-                            resetFeedback();
-                          }}
-                          className="inline-flex items-center justify-center rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200"
-                        >
-                          Add paid unlock
-                        </button>
-                      </div>
-                    </div>
+                {resourceAccessMode !== 'none' && effectiveVisibility !== 'public' ? (
+                  <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
+                    This unlock will save as a draft until the post is public.
                   </div>
                 ) : null}
 
-                {resourceAccessMode !== 'none' ? (
+                {renderSectionError('resources')}
+
+                <label className="mt-4 flex items-center gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={resourceAccessMode !== 'none'}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      if (checked) {
+                        setResourceAccessMode('free');
+                        setResourceSelections((prev) => {
+                          const hasAny = Object.values(prev).some(Boolean);
+                          return hasAny ? prev : { ...prev, prompt: true };
+                        });
+                      } else {
+                        setResourceAccessMode('none');
+                      }
+                      resetFeedback();
+                    }}
+                    className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
+                  />
+                  <span className="text-sm font-semibold text-white">Add references & unlockable resources</span>
+                </label>
+
+                {resourceAccessMode !== 'none' && (
                   <div className="mt-5 space-y-5">
-                    <div className="flex flex-wrap gap-2">
-                      {RESOURCE_ACCESS_OPTIONS.map((option) => {
-                        const active = resourceAccessMode === option.value;
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => {
-                              setResourceAccessMode(option.value);
-                              resetFeedback();
-                            }}
-                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                              active
-                                ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
-                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
-                            }`}
-                          >
-                            {active ? <Check className="h-4 w-4" /> : null}
-                            {option.value === 'none' ? 'No unlock' : option.label}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-4">
+                      {/* Access Mode and Pricing */}
+                      <div className="flex flex-wrap items-center gap-4 sm:justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Access Mode:</span>
+                          <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
+                            {([
+                              { value: 'free', label: 'Free' },
+                              { value: 'paid', label: 'Paid ($)' }
+                            ] as const).map((mode) => {
+                              const active = (resourceAccessMode === 'paid' ? 'paid' : 'free') === mode.value;
+                              return (
+                                <button
+                                  key={mode.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setResourceAccessMode(mode.value);
+                                    resetFeedback();
+                                  }}
+                                  className={`rounded-full px-4 py-1 text-xs font-semibold transition ${
+                                    active
+                                      ? 'bg-emerald-300 text-emerald-950'
+                                      : 'text-zinc-300 hover:text-white'
+                                  }`}
+                                >
+                                  {mode.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
 
-                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Unlock templates</div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-400">
-                        Start from the buyer shape, then edit the fields that open below.
-                      </p>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {UNLOCK_TEMPLATES.map((template) => {
-                          const active =
-                            template.kinds.every((kind) => resourceSelections[kind]) &&
-                            selectedResourceKinds.length === template.kinds.length;
-
-                          return (
-                            <button
-                              key={template.label}
-                              type="button"
-                              onClick={() => applyUnlockTemplate(template.kinds)}
-                              className={`rounded-[18px] border p-3 text-left transition ${
-                                active
-                                  ? 'border-emerald-300/35 bg-emerald-400/15 text-white'
-                                  : 'border-white/10 bg-white/[0.025] text-zinc-300 hover:border-white/20 hover:bg-white/[0.05] hover:text-white'
-                              }`}
-                            >
-                              <div className="text-sm font-semibold">{template.label}</div>
-                              <p className="mt-1 text-xs leading-5 text-zinc-500">{template.description}</p>
-                            </button>
-                          );
-                        })}
+                        {resourceAccessMode === 'paid' ? (
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price:</span>
+                            <div className="relative inline-flex items-center">
+                              <span className="absolute left-3 text-xs text-zinc-500">$</span>
+                              <input
+                                ref={priceInputRef}
+                                type="text"
+                                aria-label="Price"
+                                placeholder="9"
+                                value={resourcePriceUsd}
+                                onChange={(event) => {
+                                  setResourcePriceUsd(event.target.value);
+                                  resetFeedback();
+                                }}
+                                className="w-20 rounded-full border border-white/10 bg-white/[0.03] pl-6 pr-3 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40"
+                              />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                    </div>
 
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">What does the unlock include?</div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-400">
-                        Select only the reusable pieces people should reveal after choosing this unlock.
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {RESOURCE_KIND_OPTIONS.map((option) => {
-                          const active = resourceSelections[option.value];
+                      {/* Resource Kind Selection */}
+                      <div className="border-t border-white/5 pt-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500 mb-3">Resource Types to Include</div>
+                        <div className="flex flex-wrap gap-2">
+                          {RESOURCE_KIND_OPTIONS.map((option) => {
+                            const active = resourceSelections[option.value];
 
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => updateResourceSelection(option.value)}
-                              title={option.description}
-                              className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                                active
-                                  ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
-                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
-                              }`}
-                            >
-                              {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
-                              {option.label}
-                            </button>
-                          );
-                        })}
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => updateResourceSelection(option.value)}
+                                title={option.description}
+                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                                  active
+                                    ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
+                                    : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
+                                }`}
+                              >
+                                {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
+                                {option.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Section Layout Option */}
+                      <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
+                        <span className="text-xs text-zinc-500">Need section-based structure?</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextValue = !organizeResourceSections;
+                            setOrganizeResourceSections(nextValue);
+                            if (nextValue && resourceSectionRows.length === 0) {
+                              setResourceSectionRows([createResourceSectionRow()]);
+                            }
+                            resetFeedback();
+                          }}
+                          className="text-xs font-semibold text-emerald-300 hover:text-emerald-200 transition"
+                        >
+                          {organizeResourceSections ? 'Remove section layout' : 'Enable section layout'}
+                        </button>
                       </div>
                     </div>
 
@@ -1758,7 +2550,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           <div>
                             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Files / links</div>
                             <p className="mt-1 text-sm leading-6 text-zinc-400">
-                              Add gated workflow files or labeled links people should open after unlocking. Use this for workflow files, docs, presets, references, or source folders.
+                              Add gated workflow files or labeled links people should open after unlocking. Resource file uploads must be 50MB or smaller.
                             </p>
                           </div>
                           <button
@@ -1780,7 +2572,50 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                 placeholder={`Label ${index + 1}`}
                                 className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
                               />
-                              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                              <div className="grid gap-2">
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                  <label>
+                                    <span className="sr-only">Resource type</span>
+                                    <select
+                                      value={row.resourceType}
+                                      onChange={(event) => updateAttachmentRow(row.id, 'resourceType', event.target.value)}
+                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
+                                    >
+                                      {RESOURCE_ITEM_TYPE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    <span className="sr-only">Resource role</span>
+                                    <select
+                                      value={row.role}
+                                      onChange={(event) => updateAttachmentRow(row.id, 'role', event.target.value)}
+                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
+                                    >
+                                      {RESOURCE_ITEM_ROLE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    <span className="sr-only">Reuse mode</span>
+                                    <select
+                                      value={row.remixUse}
+                                      onChange={(event) => updateAttachmentRow(row.id, 'remixUse', event.target.value)}
+                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
+                                    >
+                                      <option value="none" className="bg-zinc-950 text-white">Download/use</option>
+                                      <option value="reference_only" className="bg-zinc-950 text-white">Use as reference</option>
+                                      <option value="import_source" className="bg-zinc-950 text-white">Import source</option>
+                                    </select>
+                                  </label>
+                                </div>
+                                <div className="grid gap-2 md:grid-cols-[1fr_auto]">
                                 {row.kind === 'file' && row.storagePath ? (
                                   <div className="rounded-2xl border border-emerald-300/15 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-50">
                                     {row.label || row.storagePath}
@@ -1808,6 +2643,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                     }}
                                   />
                                 </label>
+                                </div>
                               </div>
                               <button
                                 type="button"
@@ -1832,43 +2668,217 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       </div>
                     ) : null}
 
-                    <div className={`grid gap-4 ${resourceAccessMode === 'paid' ? 'md:grid-cols-[minmax(0,220px)_1fr]' : ''}`}>
-                      {resourceAccessMode === 'paid' ? (
-                        <label className="block">
-                          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</div>
-                          <input
-                            ref={priceInputRef}
-                            value={resourcePriceUsd}
-                            onChange={(event) => {
-                              setResourcePriceUsd(event.target.value);
-                              resetFeedback();
-                            }}
-                            placeholder="9"
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                          />
-                          <p className="mt-2 text-xs leading-5 text-zinc-500">Choose any price at or above $1.00.</p>
-                        </label>
-                      ) : null}
+                    {organizeResourceSections ? (
+                      <div className="rounded-[24px] border border-emerald-300/18 bg-black/30 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Resource sections</div>
+                            <p className="mt-2 text-sm leading-6 text-zinc-400">
+                              Full post resources stay above. Add sections only for grouped prompts, references, workflows, or notes.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={addResourceSection}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                          >
+                            <Plus className="h-4 w-4" />
+                            Add section
+                          </button>
+                        </div>
 
-                      <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Visibility</div>
-                        <p className="mt-3 text-sm leading-6 text-zinc-300">
-                          Posts with unlocks are public so others can discover the result first.
-                        </p>
-                        <div className="mt-3 inline-flex rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
-                          Public post required
+                        <div className="mt-4 rounded-[20px] border border-white/8 bg-white/[0.025] p-3">
+                          <div className="text-sm font-semibold text-white">Full post resources</div>
+                          <p className="mt-1 text-xs leading-5 text-zinc-500">
+                            Anything entered in the prompt, workflow, files, notes, or remix controls above applies to the whole post.
+                          </p>
+                        </div>
+
+                        <div className="mt-4 space-y-4">
+                          {resourceSectionRows.map((section, sectionIndex) => (
+                            <div key={section.id} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
+                              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="grid flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                                  <label className="block">
+                                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                      Section title {sectionIndex + 1}
+                                    </span>
+                                    <input
+                                      aria-label={`Section title ${sectionIndex + 1}`}
+                                      value={section.title}
+                                      onChange={(event) => updateResourceSection(section.id, 'title', event.target.value)}
+                                      placeholder="Hook, Look 1, Step 3..."
+                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
+                                    />
+                                  </label>
+                                  <label className="block">
+                                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                      Section kind {sectionIndex + 1}
+                                    </span>
+                                    <select
+                                      aria-label={`Section kind ${sectionIndex + 1}`}
+                                      value={section.kind}
+                                      onChange={(event) => updateResourceSection(section.id, 'kind', event.target.value as PostResourceSectionKind)}
+                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
+                                    >
+                                      {RESOURCE_SECTION_KIND_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => applySectionToFullPost(section.id)}
+                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                                  >
+                                    Apply to full post
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => duplicateResourceSection(section.id)}
+                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                                  >
+                                    Duplicate section
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeResourceSection(section.id)}
+                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+
+                              <label className="mt-3 block">
+                                <span className="sr-only">Section description {sectionIndex + 1}</span>
+                                <input
+                                  aria-label={`Section description ${sectionIndex + 1}`}
+                                  value={section.description}
+                                  onChange={(event) => updateResourceSection(section.id, 'description', event.target.value)}
+                                  placeholder="Optional section description"
+                                  className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
+                                />
+                              </label>
+
+                              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                                <label className="block">
+                                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                    Section prompt {sectionIndex + 1}
+                                  </span>
+                                  <textarea
+                                    aria-label={`Section prompt ${sectionIndex + 1}`}
+                                    value={section.promptText}
+                                    onChange={(event) => updateResourceSection(section.id, 'promptText', event.target.value)}
+                                    rows={4}
+                                    placeholder="Prompt for this section."
+                                    className="w-full rounded-[20px] border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                    Section notes {sectionIndex + 1}
+                                  </span>
+                                  <textarea
+                                    aria-label={`Section notes ${sectionIndex + 1}`}
+                                    value={section.notesMarkdown}
+                                    onChange={(event) => updateResourceSection(section.id, 'notesMarkdown', event.target.value)}
+                                    rows={4}
+                                    placeholder="Settings, direction, or usage notes for this section."
+                                    className="w-full rounded-[20px] border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
+                                  />
+                                </label>
+                              </div>
+
+                              <label className="mt-3 block">
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                  Section workflow link {sectionIndex + 1}
+                                </span>
+                                <input
+                                  aria-label={`Section workflow link ${sectionIndex + 1}`}
+                                  value={section.workflowShareUrl}
+                                  onChange={(event) => updateResourceSection(section.id, 'workflowShareUrl', event.target.value)}
+                                  placeholder="https://..."
+                                  className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
+                                />
+                              </label>
+
+                              <div className="mt-3 rounded-[18px] border border-white/8 bg-black/25 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                    Section files / links
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => addSectionAttachmentRow(section.id)}
+                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                                  >
+                                    Add link
+                                  </button>
+                                </div>
+                                <div className="mt-3 space-y-2">
+                                  {section.attachments.map((attachment, attachmentIndex) => (
+                                    <div key={attachment.id} className="grid gap-2 md:grid-cols-[150px_1fr_140px_auto]">
+                                      <input
+                                        value={attachment.label}
+                                        onChange={(event) => updateSectionAttachmentRow(section.id, attachment.id, 'label', event.target.value)}
+                                        placeholder={`Label ${attachmentIndex + 1}`}
+                                        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-400/35"
+                                      />
+                                      <input
+                                        value={attachment.url}
+                                        onChange={(event) => updateSectionAttachmentRow(section.id, attachment.id, 'url', event.target.value)}
+                                        placeholder="https://..."
+                                        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-400/35"
+                                      />
+                                      <select
+                                        value={attachment.resourceType}
+                                        onChange={(event) => updateSectionAttachmentRow(section.id, attachment.id, 'resourceType', event.target.value)}
+                                        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
+                                      >
+                                        {RESOURCE_ITEM_TYPE_OPTIONS.map((option) => (
+                                          <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                                            {option.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeSectionAttachmentRow(section.id, attachment.id)}
+                                        className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-zinc-300 transition hover:bg-black/45 hover:text-white"
+                                        aria-label={`Remove section ${sectionIndex + 1} link ${attachmentIndex + 1}`}
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <label className="mt-3 inline-flex items-center gap-3 rounded-full border border-white/10 bg-black/25 px-3 py-2 text-sm font-medium text-zinc-200">
+                                <input
+                                  type="checkbox"
+                                  checked={section.allowRemix}
+                                  onChange={(event) => updateResourceSection(section.id, 'allowRemix', event.target.checked)}
+                                  className="h-4 w-4 accent-emerald-300"
+                                />
+                                Include remix access for this section
+                              </label>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+                    ) : null}
 
-              {error ? (
-                <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                  {error}
-                </div>
-              ) : null}
+                    {/* Price field has been moved to the top Access Mode area */}
+                  </div>
+                )}
+              </div>
 
               {createdPost ? (
                 <div className="rounded-[28px] border border-emerald-500/20 bg-emerald-500/10 p-5">
@@ -1876,9 +2886,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     <div className="text-sm font-semibold text-white">
                       {isEditMode
                         ? 'Changes saved'
-                        : createdPostHasResources
-                          ? 'Post published with an unlock'
-                          : 'Post published'}
+                        : createdPost.resourceBundleStatus === 'draft'
+                          ? 'Draft saved with an unlock'
+                          : createdPostHasResources
+                            ? 'Post published with an unlock'
+                            : 'Post published'}
                     </div>
                     <div className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
                       {createdPost.visibility}
@@ -1889,11 +2901,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       ? createdPost.visibility === 'private'
                         ? 'Your changes are saved in the owner editor. This post is not publicly visible right now.'
                         : 'The post has been updated and the latest version is ready.'
-                      : createdPostHasResources
-                        ? 'The post is public and the unlockable process is ready on the same page.'
-                        : createdPost.visibility === 'public'
-                          ? 'Your post is live.'
-                          : 'Your post is saved with limited visibility.'}
+                      : createdPost.resourceBundleStatus === 'draft'
+                        ? 'The public post and unlock are saved for you. Make the post public when you are ready to list the unlock.'
+                        : createdPostHasResources
+                          ? 'The post is public and the unlockable process is ready on the same page.'
+                          : createdPost.visibility === 'public'
+                            ? 'Your post is live.'
+                            : 'Your post is saved with limited visibility.'}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-3">
                     {primaryPostPath ? (
@@ -1916,192 +2930,106 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </div>
               ) : null}
 
-              <div className="rounded-[28px] border border-white/8 bg-zinc-950/75 p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Step 4</div>
-                <div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="max-w-xl">
-                    <h2 className="text-lg font-semibold text-white">Review the public post and unlock</h2>
-                    <p className="mt-2 text-sm leading-6 text-zinc-400">{selectedVisibilityOption.description}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      type="submit"
-                      disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                      className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
-                    >
-                      {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-                      {isEditMode ? 'Save changes' : 'Share post'}
-                    </button>
-                    <Link
-                      href={isEditMode ? '/creations' : '/showcase'}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                    >
-                      {isEditMode ? 'Back to studio' : 'Back to community'}
-                    </Link>
-                  </div>
-                </div>
-
-                <div className="mt-5 rounded-[24px] border border-emerald-400/15 bg-emerald-500/5 p-4">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/75">Buyer preview</div>
-                      <h3 className="mt-2 text-base font-semibold text-white">
-                        {title.trim() || (proofMode === 'text' ? 'Untitled tip' : 'Untitled media post')}
-                      </h3>
-                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                        {trimmedBody
-                          ? trimmedBody.slice(0, 180)
-                          : proofMode === 'media'
-                            ? `${normalizedSourceTool.label ? `Made with ${normalizedSourceTool.label}. ` : ''}Public media is visible before any unlock.`
-                            : 'Public tip is visible before any unlock.'}
-                      </p>
-                    </div>
-                    <div className="shrink-0 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1.5 text-sm font-semibold text-emerald-50">
-                      {resourceAccessMode === 'none'
-                        ? 'No unlock'
-                        : resourceAccessMode === 'free'
-                          ? 'Free unlock'
-                          : `Paid unlock · ${formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}`}
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Unlock kinds</div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedResourceKinds.length > 0 ? selectedResourceKinds.map((kind) => (
-                          <span
-                            key={kind}
-                            className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-zinc-200"
-                          >
-                            {getPostResourceKindLabel(kind)}
-                          </span>
-                        )) : (
-                          <span className="text-sm text-zinc-400">Nothing for buyers to unlock.</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">What remains locked</div>
-                      <p className="mt-3 text-sm leading-6 text-zinc-300">
-                        {resourceAccessMode === 'none'
-                          ? 'The public post stands alone.'
-                          : selectedResourceKinds.length > 0
-                            ? `${getLockedSummary(selectedResourceKinds)} reveal after access.`
-                            : 'Choose a template or kind to define the locked layer.'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className={`mt-5 grid gap-4 ${resourceAccessMode === 'paid' ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
-                  <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Public</div>
-                    <div className="mt-3 text-sm font-semibold text-white">
-                      {proofMode === 'media' ? 'Media post' : 'Text post'}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {effectiveVisibility === 'public' ? 'Public post' : selectedVisibilityOption.label}
-                      {title.trim() ? `, ${title.trim()}` : ''}
-                      {trimmedBody ? ', story included' : ''}
+              <div
+                ref={publishSectionRef}
+                tabIndex={-1}
+                data-composer-section="publish"
+                className="rounded-3xl border border-white/8 bg-zinc-950/75 p-5 outline-none"
+              >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Publish</h2>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      Configure visibility and submit your post.
                     </p>
                   </div>
-
-                  <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Unlock</div>
-                    <div className="mt-3 text-sm font-semibold text-white">
-                      {resourceAccessMode === 'none'
-                        ? 'No unlock'
-                        : resourceAccessMode === 'free'
-                          ? 'Free unlock'
-                          : getLockedSummary(selectedResourceKinds)}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      {resourceAccessMode === 'none'
-                        ? 'This post stands alone.'
-                        : selectedResourceKinds.length > 0
-                          ? getLockedSummary(selectedResourceKinds)
-                          : 'People unlock the reusable process directly from the post page.'}
-                    </p>
+                  <div className="shrink-0 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold text-zinc-300">
+                    {resourceAccessMode === 'none'
+                      ? selectedVisibilityOption.label
+                      : resourceAccessMode === 'paid'
+                        ? `${selectedVisibilityOption.label} · paid unlock`
+                        : `${selectedVisibilityOption.label} · free unlock`}
                   </div>
-
-                  {resourceAccessMode === 'paid' ? (
-                    <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Price</div>
-                      <div className="mt-3 text-sm font-semibold text-white">
-                        {formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-300">
-                        Buyers pay once to reveal the full unlock.
-                      </p>
-                    </div>
-                  ) : null}
                 </div>
 
-                {resourceAccessMode === 'none' ? (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                {renderSectionError('publish')}
+
+                <div className="mt-5">
+                  <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Visibility</div>
+                  <div className="grid gap-2 sm:grid-cols-3">
                     {VISIBILITY_OPTIONS.map((option) => {
                       const active = visibility === option.value;
+                      const description = resourceAccessMode === 'none'
+                        ? option.description
+                        : option.value === 'public'
+                          ? 'Publishes the post and makes a complete unlock buyer-facing.'
+                          : option.value === 'unlisted'
+                            ? 'Saves the post by direct link and keeps the unlock as a draft.'
+                            : 'Saves everything as an owner-only draft.';
+
                       return (
                         <button
                           key={option.value}
                           type="button"
+                          aria-label={option.label}
                           onClick={() => {
                             setVisibility(option.value);
                             resetFeedback();
                           }}
-                          className={`rounded-[24px] border p-4 text-left transition ${
+                          className={`rounded-2xl border px-4 py-3 text-left transition ${
                             active
                               ? 'border-emerald-300/35 bg-emerald-400/12 text-white'
                               : 'border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/20 hover:bg-white/[0.04] hover:text-white'
                           }`}
                         >
                           <div className="text-sm font-semibold">{option.label}</div>
-                          <p className="mt-2 text-xs leading-5 text-zinc-400">{option.description}</p>
+                          <p className="mt-2 text-xs leading-5 text-zinc-400">{description}</p>
                         </button>
                       );
                     })}
                   </div>
-                ) : null}
+                </div>
+
+                <div className="mt-5 flex flex-wrap justify-end gap-3 border-t border-white/8 pt-5">
+                  <Link
+                    href={isEditMode ? '/creations' : '/showcase'}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                  >
+                    {isEditMode ? 'Back to studio' : 'Back to community'}
+                  </Link>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                    className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
+                    {primaryActionLabel}
+                  </button>
+                </div>
               </div>
             </form>
           </section>
 
-          <aside className="space-y-5">
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Fast path</div>
-              <div className="mt-4 space-y-4">
-                {[
-                  'Start with the public post: upload a result, keep the generated media, or publish a creator tip.',
-                  'Write only the context people should see before they decide to unlock anything.',
-                  isGeneratedPaywallIntent
-                    ? 'When the media came from magicbooklet, we preload the saved prompt and reusable setup so you can price the unlock first.'
-                    : 'If this post has reusable value, choose a free or paid unlock and reveal only the sections you actually need.',
-                ].map((step, index) => (
-                  <div key={step} className="flex items-start gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-sm font-semibold text-white">
-                      {index + 1}
+          <aside aria-label="Publish checklist" className="lg:sticky lg:top-24">
+            <div className="rounded-3xl border border-white/8 bg-zinc-900/60 p-5 shadow-[0_20px_50px_rgba(0,0,0,0.28)] backdrop-blur-sm">
+              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Publish checklist</div>
+              <div className="mt-4 space-y-3">
+                {completionChecklist.map((item) => (
+                  <div key={item.label} className="flex items-center gap-3">
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
+                      item.complete
+                        ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-100'
+                        : 'border-white/10 bg-white/[0.04] text-zinc-500'
+                    }`}>
+                      {item.complete ? <Check className="h-4 w-4" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
                     </div>
-                    <p className="pt-1 text-sm leading-6 text-zinc-300">{step}</p>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-white">{item.label}</div>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
-
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">What people unlock</div>
-              <h2 className="mt-3 text-xl font-semibold text-white">One post, one optional unlock</h2>
-              <p className="mt-3 text-sm leading-7 text-zinc-300">
-                The post stays public. If the prompt, workflow, files, notes, or remix access should unlock later, attach them here and buyers will access everything directly on the post page.
-              </p>
-              <Link
-                href="/marketplace"
-                className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
-              >
-                Browse unlocks
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </div>
-
           </aside>
         </div>
       </div>

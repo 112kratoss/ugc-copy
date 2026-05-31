@@ -1045,6 +1045,158 @@ describe('workflow canvas helpers', () => {
     expect(videoValidation.message).toMatch(/exactly 1 reference video/i);
   });
 
+  it('allows Kling 3.0 video nodes to connect named reference videos', () => {
+    const klingNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+    const firstVideo = createWorkflowNode('video-input', { x: 0, y: 0 });
+    const secondVideo = createWorkflowNode('video-input', { x: 0, y: 120 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...klingNode,
+          data: normalizeNodeData('video-generate', {
+            ...klingNode.data,
+            model: 'kling-3.0-video',
+          }),
+        },
+        {
+          ...firstVideo,
+          data: normalizeNodeData('video-input', {
+            ...firstVideo.data,
+            videoUrl: 'https://cdn.example.com/reference-1.mp4',
+          }),
+        },
+        secondVideo,
+      ],
+      edges: [
+        {
+          id: 'kling-video-1',
+          source: firstVideo.id,
+          target: klingNode.id,
+          sourceHandle: 'video',
+          targetHandle: 'reference-video',
+        },
+      ],
+    });
+
+    const validation = validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: secondVideo.id,
+      sourceHandle: 'video',
+      targetNodeId: klingNode.id,
+      targetHandle: 'reference-video',
+    });
+    const resolvedKlingNode = graph.nodes.find((node) => node.id === klingNode.id)!;
+    const capabilityValidation = inspectWorkflowNodeCapabilities(graph, resolvedKlingNode);
+
+    expect(validation.valid).toBe(true);
+    expect(capabilityValidation.isValid).toBe(true);
+    expect(capabilityValidation.referenceVideoLimit).toBe(3);
+    expect(capabilityValidation.referenceVideoCount).toBe(1);
+  });
+
+  it('enforces the Kling 3.0 video reference cap and blocks reference audio', () => {
+    const klingNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+    const videoInputs = Array.from({ length: 4 }, (_, index) => createWorkflowNode('video-input', { x: 0, y: index * 120 }));
+    const audioInput = createWorkflowNode('audio-input', { x: 0, y: 520 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...klingNode,
+          data: normalizeNodeData('video-generate', {
+            ...klingNode.data,
+            model: 'kling-3.0-video',
+          }),
+        },
+        ...videoInputs,
+        audioInput,
+      ],
+      edges: videoInputs.slice(0, 3).map((videoInput, index) => ({
+        id: `kling-video-${index + 1}`,
+        source: videoInput.id,
+        target: klingNode.id,
+        sourceHandle: 'video',
+        targetHandle: 'reference-video',
+      })),
+    });
+
+    const extraVideoValidation = validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: videoInputs[3]!.id,
+      sourceHandle: 'video',
+      targetNodeId: klingNode.id,
+      targetHandle: 'reference-video',
+    });
+    const audioValidation = validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: audioInput.id,
+      sourceHandle: 'audio',
+      targetNodeId: klingNode.id,
+      targetHandle: 'reference-audio',
+    });
+    const overLimitGraph = normalizeWorkflowGraph({
+      ...graph,
+      edges: [
+        ...graph.edges,
+        {
+          id: 'kling-video-4',
+          source: videoInputs[3]!.id,
+          target: klingNode.id,
+          sourceHandle: 'video',
+          targetHandle: 'reference-video',
+        },
+      ],
+    });
+    const overLimitNode = overLimitGraph.nodes.find((node) => node.id === klingNode.id)!;
+    const capabilityValidation = inspectWorkflowNodeCapabilities(overLimitGraph, overLimitNode);
+
+    expect(extraVideoValidation.valid).toBe(false);
+    expect(extraVideoValidation.message).toMatch(/up to 3 reference videos/i);
+    expect(audioValidation.valid).toBe(false);
+    expect(audioValidation.message).toMatch(/audio/i);
+    expect(capabilityValidation.isValid).toBe(false);
+    expect(capabilityValidation.issues[0]?.code).toBe('too-many-reference-videos');
+  });
+
+  it('accepts Kling multi-shot prompts that mention connected video handles', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const klingNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+    const videoInput = createWorkflowNode('video-input', { x: 0, y: 160 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        promptNode,
+        {
+          ...klingNode,
+          data: normalizeNodeData('video-generate', {
+            ...klingNode.data,
+            model: 'kling-3.0-video',
+            isMultiShot: true,
+            multiPrompts: [
+              { id: 'shot-1', prompt: 'Start with @motion_ref crossing frame.', duration: 3 },
+              { id: 'shot-2', prompt: 'Follow @motion_ref into a close-up.', duration: 4 },
+            ],
+          }),
+        },
+        {
+          ...videoInput,
+          data: normalizeNodeData('video-input', {
+            ...videoInput.data,
+            title: 'Motion ref',
+            videoUrl: 'https://cdn.example.com/motion-ref.mp4',
+          }),
+        },
+      ],
+      edges: [
+        { id: 'prompt-kling', source: promptNode.id, target: klingNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'kling-video-1', source: videoInput.id, target: klingNode.id, sourceHandle: 'video', targetHandle: 'reference-video' },
+      ],
+    });
+    const resolvedKlingNode = graph.nodes.find((node) => node.id === klingNode.id)!;
+    const capabilityValidation = inspectWorkflowNodeCapabilities(graph, resolvedKlingNode);
+
+    expect(capabilityValidation.isValid).toBe(true);
+    expect(capabilityValidation.issues).toEqual([]);
+  });
+
   it('blocks motion runs when a connected reference video exceeds the model duration limit', () => {
     const motionNode = createWorkflowNode('motion-generate', { x: 240, y: 0 });
     const imageNode = createWorkflowNode('image-input', { x: 0, y: 0 });

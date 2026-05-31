@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
+import { notifyPostResourceUnlockCompleted } from '@/lib/mobile-notifications';
 import { getBundleForOrderByPostId } from '@/lib/post-resource-bundles-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -72,6 +73,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
     console.error('Failed to complete free bundle unlock:', completionError);
     return NextResponse.json({ error: 'Failed to open the free unlock.' }, { status: 500 });
   }
+
+  await notifyPostResourceUnlockCompleted(adminSupabase, {
+    buyerUserId: user.id,
+    ownerUserId: bundle.owner_user_id,
+    postId,
+    bundleId: bundle.id,
+    alreadyProcessed: !completed,
+  });
 
   return NextResponse.json({
     success: true,

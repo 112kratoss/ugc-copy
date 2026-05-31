@@ -8,9 +8,15 @@ import {
   isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { getOwnerPostList, type OwnerPostVisibilityFilter } from '@/lib/owner-posts';
-import { savePostResourceBundle } from '@/lib/post-resource-bundles-server';
+import {
+  createPostWithResourceBundleAtomically,
+  getMarketplaceQualityErrorForPostBundle,
+} from '@/lib/post-resource-bundles-server';
 import {
   isPostResourceBundleAccessMode,
+  normalizePostResourceAttachments,
+  normalizePostResourceItems,
+  validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -24,11 +30,12 @@ import {
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
+const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 const BODY_MAX_LENGTH = 2000;
 const MISSING_POSTS_SCHEMA_ERROR =
   'Posts are not enabled on the connected Supabase project yet. Apply the posts migrations and try again.';
 const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
-  'Posts are working, but resource bundles are not enabled on the connected Supabase project yet. Apply supabase/migrations/20260406200000_post_resource_bundles.sql and try again.';
+  'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
 
 function sanitizeFileStem(fileName: string): string {
   const stem = path.basename(fileName, path.extname(fileName)).toLowerCase();
@@ -200,7 +207,8 @@ function resolveTitle(title: string | null, body: string | null, postFormat: Sho
 }
 
 function parseResourceBundle(
-  value: FormDataEntryValue | null
+  value: FormDataEntryValue | null,
+  ownerUserId: string
 ): { bundle: PostResourceBundleInput | null; error: string | null } {
   if (typeof value !== 'string' || !value.trim()) {
     return {
@@ -219,17 +227,12 @@ function parseResourceBundle(
       };
     }
 
-    if (accessMode === 'paid') {
-      const priceUsdCents = Number.isFinite(parsed.priceUsdCents)
-        ? Math.round(parsed.priceUsdCents ?? 0)
-        : 0;
-
-      if (priceUsdCents < 100) {
-        return {
-          bundle: null,
-          error: 'Paid unlocks must be priced at $1.00 or above.',
-        };
-      }
+    const validationError = validatePostResourceBundleInput(parsed, { ownerUserId });
+    if (validationError) {
+      return {
+        bundle: null,
+        error: validationError,
+      };
     }
 
     return {
@@ -329,19 +332,68 @@ export async function POST(request: NextRequest) {
       slug: sourceToolSlugRaw,
     });
     const sourceKind = postFormat === 'text' ? 'manual' : 'external';
-    const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'));
+    const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'), user.id);
 
     if (resourceBundleError) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
 
-    const visibility = resourceBundle?.accessMode && resourceBundle.accessMode !== 'none'
-      ? 'public'
-      : requestedVisibility;
+    const visibility = requestedVisibility;
+
+    const marketplaceQualityError = visibility === 'public'
+      ? await getMarketplaceQualityErrorForPostBundle({
+          supabase: adminSupabase,
+          ownerUserId: user.id,
+          post: {
+            title,
+            body,
+            visibility,
+            archivedAt: null,
+            reviewStatus: 'visible',
+            hasMedia: Boolean(file || uploadedMedia),
+          },
+          bundle: resourceBundle,
+        })
+      : null;
+
+    if (marketplaceQualityError) {
+      return NextResponse.json({ error: marketplaceQualityError }, { status: 400 });
+    }
 
     const postId = randomUUID();
     let storagePath: string | null = null;
     let temporaryUploadPathToCleanup: string | null = null;
+    const cleanupUploadedMedia = async () => {
+      if (storagePath) {
+        const cleanupShowcase = await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove([storagePath]);
+        if (cleanupShowcase.error) {
+          console.warn('Failed to remove uploaded showcase media after post failure:', cleanupShowcase.error);
+        }
+      }
+
+      if (temporaryUploadPathToCleanup) {
+        const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([temporaryUploadPathToCleanup]);
+        if (cleanupUpload.error) {
+          console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
+        }
+      }
+
+      const legacyResourceFiles = normalizePostResourceAttachments(resourceBundle?.resources?.attachments)
+        .filter((attachment) => attachment.kind === 'file' && attachment.storagePath)
+        .map((attachment) => attachment.storagePath as string);
+      const itemResourceFiles = normalizePostResourceItems(resourceBundle?.resources?.items, resourceBundle?.resources)
+        .filter((item) => item.storagePath)
+        .map((item) => item.storagePath as string);
+      const resourceFilePathsToCleanup = Array.from(new Set([...legacyResourceFiles, ...itemResourceFiles]));
+      if (resourceFilePathsToCleanup.length > 0) {
+        const cleanupFiles = await adminSupabase.storage
+          .from(POST_RESOURCE_FILES_BUCKET)
+          .remove(resourceFilePathsToCleanup);
+        if (cleanupFiles.error) {
+          console.warn('Failed to remove uploaded unlock files after post failure:', cleanupFiles.error);
+        }
+      }
+    };
 
     if (file) {
       const extension = inferExtension(file.name, file.type);
@@ -384,9 +436,11 @@ export async function POST(request: NextRequest) {
       temporaryUploadPathToCleanup = uploadedMedia.filePath;
     }
 
-    const { data: post, error: insertError } = await supabase
-      .from('posts')
-      .insert({
+    let post;
+    try {
+      post = await createPostWithResourceBundleAtomically({
+        supabase: adminSupabase,
+        post: {
         id: postId,
         user_id: user.id,
         visibility,
@@ -401,42 +455,19 @@ export async function POST(request: NextRequest) {
         source_tool_slug: normalizedSourceTool.slug,
         showcase_asset_path: storagePath,
         output_url: null,
-      })
-      .select('id, visibility')
-      .single();
-
-    if (insertError || !post) {
-      console.error('Failed to create external post:', insertError);
-      if (storagePath) {
-        await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove([storagePath]);
-      }
-      if (isMissingPostsSchemaError(insertError)) {
-        return NextResponse.json({ error: MISSING_POSTS_SCHEMA_ERROR }, { status: 500 });
-      }
-      return NextResponse.json({ error: 'Failed to create post.' }, { status: 500 });
-    }
-
-    try {
-      await savePostResourceBundle({
-        supabase,
-        postId: post.id as string,
-        ownerUserId: user.id,
-        postTitle: title,
-        postVisibility: post.visibility as ShowcaseVisibility,
+        },
         bundle: resourceBundle,
       });
-    } catch (bundleError) {
-      console.error('Failed to save post resource bundle:', bundleError);
-      if (temporaryUploadPathToCleanup) {
-        const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([temporaryUploadPathToCleanup]);
-        if (cleanupUpload.error) {
-          console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
-        }
+    } catch (publishError) {
+      console.error('Failed to create external post:', publishError);
+      await cleanupUploadedMedia();
+      if (isMissingPostsSchemaError(publishError)) {
+        return NextResponse.json({ error: MISSING_POSTS_SCHEMA_ERROR }, { status: 500 });
       }
-      if (isMissingPostResourceBundlesSchemaError(bundleError)) {
+      if (isMissingPostResourceBundlesSchemaError(publishError)) {
         return NextResponse.json({ error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR }, { status: 500 });
       }
-      return NextResponse.json({ error: 'Post was created, but the attached unlock could not be saved.' }, { status: 500 });
+      return NextResponse.json({ error: 'Failed to create post.' }, { status: 500 });
     }
 
     if (temporaryUploadPathToCleanup) {
@@ -448,14 +479,15 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      postId: post.id,
+      postId: post.postId,
       visibility: post.visibility,
-      showcasePath: post.visibility === 'private' ? null : `/showcase/${post.id}`,
-      ownerPath: `/post/${post.id}/edit`,
+      showcasePath: post.visibility === 'private' ? null : `/showcase/${post.postId}`,
+      ownerPath: `/post/${post.postId}/edit`,
       resourceBundlePath:
-        post.visibility === 'private'
-          ? `/post/${post.id}/edit#resources`
-          : `/showcase/${post.id}#resources`,
+        post.bundleStatus === 'draft' || post.visibility === 'private'
+          ? `/post/${post.postId}/edit#resources`
+          : `/showcase/${post.postId}#resources`,
+      resourceBundleStatus: post.bundleStatus,
     });
   } catch (error) {
     console.error('External post creation failed:', error);

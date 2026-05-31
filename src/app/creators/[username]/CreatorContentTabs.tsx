@@ -25,6 +25,7 @@ import {
   isPostResourceKind,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 
 type TabType = 'collection' | 'unlocks' | 'tools';
@@ -33,6 +34,8 @@ type CreatorItem = CreatorProfilePageData['items'][number];
 interface CreatorContentTabsProps {
   items: CreatorProfilePageData['items'];
   tools?: CreatorProfilePageData['stats']['toolsUsed'];
+  profilePath?: string;
+  pageInfo?: CreatorProfilePageData['pageInfo'];
 }
 
 const tabHashes: Record<TabType, string> = {
@@ -73,6 +76,17 @@ function getCategoryLabel(category: CreatorItem['category']) {
   return categoryLabels[category] ?? 'Creation';
 }
 
+function getAssetAccessLabel(asset: NonNullable<CreatorItem['asset']>): string {
+  if (asset.priceQuote) {
+    return formatBundleAccessLabel({
+      accessMode: asset.accessMode,
+      priceQuote: asset.priceQuote,
+    });
+  }
+
+  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+}
+
 function getItemSummary(item: CreatorItem) {
   const publicText = item.body?.trim() || item.prompt?.trim();
   if (publicText) {
@@ -84,7 +98,7 @@ function getItemSummary(item: CreatorItem) {
   const unlock = item.asset
     ? resourceKinds.length > 0
       ? describePostResourceKinds(resourceKinds)
-      : `${getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents)} attached.`
+      : `${getAssetAccessLabel(item.asset)} attached.`
     : 'Public portfolio piece.';
 
   return [
@@ -124,7 +138,7 @@ function getTabDescription(tab: TabType) {
   }
 }
 
-export function CreatorContentTabs({ items, tools = [] }: CreatorContentTabsProps) {
+export function CreatorContentTabs({ items, tools = [], profilePath = '', pageInfo }: CreatorContentTabsProps) {
   const pathname = usePathname();
   const unlockItems = items.filter((item) => item.asset);
   const [activeTab, setActiveTab] = useState<TabType>(() =>
@@ -215,8 +229,9 @@ export function CreatorContentTabs({ items, tools = [] }: CreatorContentTabsProp
                 </p>
               </div>
             ) : (
-              <div className="columns-1 gap-5 space-y-5 sm:columns-2 xl:columns-3">
-                {visibleItems.map((item) => {
+              <>
+                <div className="columns-1 gap-5 space-y-5 sm:columns-2 xl:columns-3">
+                  {visibleItems.map((item) => {
                   const resourceKinds = getItemResourceKinds(item);
                   const source = getItemSourceLabel(item);
                   const isTextPost = item.postFormat === 'text';
@@ -244,7 +259,7 @@ export function CreatorContentTabs({ items, tools = [] }: CreatorContentTabsProp
                             dateLabel={formatPortfolioDate(item.createdAt)}
                             saveCount={item.saveCount}
                             remixCount={item.remixCount}
-                            unlockLabel={item.asset ? getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents) : null}
+                            unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
                             resourceKinds={resourceKinds}
                             className="rounded-none border-0 border-b border-white/8 shadow-none"
                           />
@@ -296,7 +311,7 @@ export function CreatorContentTabs({ items, tools = [] }: CreatorContentTabsProp
                             {item.asset ? (
                               <span className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-100">
                                 <ShoppingBag className="h-3.5 w-3.5" />
-                                {getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents)}
+                                {getAssetAccessLabel(item.asset)}
                               </span>
                             ) : null}
                             {resourceKinds.map((kind) => (
@@ -361,8 +376,20 @@ export function CreatorContentTabs({ items, tools = [] }: CreatorContentTabsProp
                       </div>
                     </article>
                   );
-                })}
-              </div>
+                  })}
+                </div>
+                {activeTab === 'collection' && pageInfo?.hasMore && pageInfo.nextLimit ? (
+                  <div className="mt-8 flex justify-center">
+                    <Link
+                      href={`${profilePath}?limit=${pageInfo.nextLimit}${tabHashes.collection}`}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
+                    >
+                      Load more collection
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </div>
+                ) : null}
+              </>
             )}
           </>
         )}

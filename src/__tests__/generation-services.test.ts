@@ -708,6 +708,128 @@ describe('generation services', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('sends Kling single-shot generations with named video elements', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-kling-video-element-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, inputMediaRows } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: 'Replace the background motion with @reference_dancer.',
+      model: 'kling-3.0-video',
+      duration: 5,
+      aspectRatio: '16:9',
+      mode: 'std',
+      klingVideoElements: [
+        {
+          url: 'https://cdn.example.com/ref-dancer.mp4',
+          handle: '@reference_dancer',
+          displayName: 'Reference dancer',
+          storagePath: 'uploads/user-1/ref-dancer.mp4',
+          sourceGenerationId: 'source-video-1',
+        },
+      ],
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'kling-3.0/video',
+      input: {
+        prompt: 'Replace the background motion with @reference_dancer.',
+        kling_elements: [
+          {
+            name: 'reference_dancer',
+            description: 'Reference dancer',
+            element_input_video_urls: ['https://cdn.example.com/ref-dancer.mp4'],
+          },
+        ],
+      },
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      klingVideoElements: [
+        expect.objectContaining({
+          handle: '@reference_dancer',
+          displayName: 'Reference dancer',
+          storagePath: 'uploads/user-1/ref-dancer.mp4',
+          sourceGenerationId: 'source-video-1',
+        }),
+      ],
+    });
+    expect(inputMediaRows[0]).toMatchObject({
+      media_type: 'video',
+      role: 'reference_video',
+      label: 'Reference dancer',
+      source_generation_id: 'source-video-1',
+      metadata: expect.objectContaining({
+        handle: '@reference_dancer',
+        displayName: 'Reference dancer',
+      }),
+    });
+  });
+
+  it('sends Kling multi-shot generations with named video elements', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-kling-video-element-2' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-3.0-video',
+      isMultiShot: true,
+      mode: 'pro',
+      aspectRatio: '9:16',
+      multiPrompts: [
+        { id: 'shot-1', prompt: 'Track the runway walk from @motion_ref.', duration: 3 },
+        { id: 'shot-2', prompt: 'Cut closer while @motion_ref turns.', duration: 4 },
+      ],
+      klingVideoElements: [
+        {
+          url: 'asset-video-1',
+          handle: '@motion_ref',
+          displayName: 'Motion ref',
+          storagePath: null,
+          sourceGenerationId: null,
+        },
+      ],
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'kling-3.0/video',
+      input: {
+        multi_shots: true,
+        multi_prompt: [
+          { prompt: 'Track the runway walk from @motion_ref.', duration: 3 },
+          { prompt: 'Cut closer while @motion_ref turns.', duration: 4 },
+        ],
+        kling_elements: [
+          {
+            name: 'motion_ref',
+            description: 'Motion ref',
+            element_input_video_urls: ['asset-video-1'],
+          },
+        ],
+      },
+    });
+  });
+
   it('sends Seedance 2 generations with image, video, and audio references', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;

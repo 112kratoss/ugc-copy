@@ -16,6 +16,11 @@ DECLARE
   v_attachments jsonb := '[]'::jsonb;
   v_price_usd_cents integer := 0;
   v_status text := CASE WHEN p_post_visibility = 'public' THEN 'published' ELSE 'draft' END;
+  v_prompt_text text;
+  v_notes_markdown text;
+  v_workflow_share_url text;
+  v_workflow_snapshot jsonb;
+  v_allow_remix boolean := false;
   v_bundle_id uuid;
   v_bundle_status text;
 BEGIN
@@ -35,6 +40,21 @@ BEGIN
   v_attachments := coalesce(v_resources->'attachments', '[]'::jsonb);
   IF jsonb_typeof(v_attachments) IS DISTINCT FROM 'array' THEN
     v_attachments := '[]'::jsonb;
+  END IF;
+
+  v_prompt_text := nullif(btrim(v_resources->>'promptText'), '');
+  v_notes_markdown := nullif(btrim(v_resources->>'notesMarkdown'), '');
+  v_workflow_share_url := nullif(btrim(v_resources->>'workflowShareUrl'), '');
+  v_workflow_snapshot := v_resources->'workflowSnapshot';
+  v_allow_remix := lower(coalesce(v_resources->>'allowRemix', 'false')) = 'true';
+
+  IF v_prompt_text IS NULL
+    AND v_notes_markdown IS NULL
+    AND v_workflow_share_url IS NULL
+    AND v_workflow_snapshot IS NULL
+    AND jsonb_array_length(v_attachments) = 0
+    AND v_allow_remix IS NOT TRUE THEN
+    RAISE EXCEPTION 'Add content for at least one unlock item before publishing';
   END IF;
 
   IF v_access_mode = 'paid' THEN
@@ -68,12 +88,12 @@ BEGIN
     coalesce(nullif(btrim(p_post_title), ''), 'Attached unlock'),
     coalesce(nullif(btrim(p_bundle->>'summary'), ''), ''),
     coalesce(nullif(btrim(p_bundle->>'previewText'), ''), ''),
-    nullif(btrim(v_resources->>'promptText'), ''),
-    nullif(btrim(v_resources->>'notesMarkdown'), ''),
-    nullif(btrim(v_resources->>'workflowShareUrl'), ''),
-    v_resources->'workflowSnapshot',
+    v_prompt_text,
+    v_notes_markdown,
+    v_workflow_share_url,
+    v_workflow_snapshot,
     v_attachments,
-    coalesce((v_resources->>'allowRemix')::boolean, false),
+    v_allow_remix,
     v_price_usd_cents
   )
   ON CONFLICT (post_id) DO UPDATE
@@ -94,6 +114,80 @@ BEGIN
   RETURNING id, status INTO v_bundle_id, v_bundle_status;
 
   RETURN QUERY SELECT v_bundle_id, v_bundle_status;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.validate_post_resource_bundle_write()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+BEGIN
+  SELECT *
+  INTO v_post
+  FROM public.posts
+  WHERE id = NEW.post_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Attached post not found';
+  END IF;
+
+  IF NEW.owner_user_id <> v_post.user_id THEN
+    RAISE EXCEPTION 'Bundle owner must match post owner';
+  END IF;
+
+  IF NEW.status = 'published' AND v_post.visibility IS DISTINCT FROM 'public' THEN
+    RAISE EXCEPTION 'Only public posts can publish resource bundles';
+  END IF;
+
+  IF NEW.access_mode = 'free' AND NEW.price_usd_cents <> 0 THEN
+    RAISE EXCEPTION 'Free bundles must have a zero price';
+  END IF;
+
+  IF NEW.access_mode = 'paid' AND NEW.price_usd_cents < 100 THEN
+    RAISE EXCEPTION 'Paid bundles must cost at least 100 cents';
+  END IF;
+
+  IF nullif(btrim(coalesce(NEW.workflow_share_url, '')), '') IS NOT NULL
+    AND NEW.workflow_share_url !~* '^https?://' THEN
+    RAISE EXCEPTION 'Workflow links must start with http:// or https://';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(coalesce(NEW.attachments, '[]'::jsonb)) AS attachment
+    WHERE coalesce(attachment->>'kind', 'link') = 'link'
+      AND nullif(btrim(coalesce(attachment->>'url', '')), '') IS NOT NULL
+      AND attachment->>'url' !~* '^https?://'
+  ) THEN
+    RAISE EXCEPTION 'Unlock links must start with http:// or https://';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(coalesce(NEW.attachments, '[]'::jsonb)) AS attachment
+    WHERE coalesce(attachment->>'kind', 'link') = 'file'
+      AND (
+        nullif(btrim(coalesce(attachment->>'storagePath', '')), '') IS NULL
+        OR btrim(attachment->>'storagePath') !~ ('^' || NEW.owner_user_id::text || '/')
+        OR btrim(attachment->>'storagePath') LIKE '%..%'
+        OR btrim(attachment->>'storagePath') ~ '[\\]'
+      )
+  ) THEN
+    RAISE EXCEPTION 'Uploaded unlock files must belong to the creator publishing this post';
+  END IF;
+
+  IF nullif(btrim(coalesce(NEW.prompt_text, '')), '') IS NULL
+    AND nullif(btrim(coalesce(NEW.notes_markdown, '')), '') IS NULL
+    AND nullif(btrim(coalesce(NEW.workflow_share_url, '')), '') IS NULL
+    AND NEW.workflow_snapshot IS NULL
+    AND jsonb_array_length(coalesce(NEW.attachments, '[]'::jsonb)) = 0
+    AND NEW.allow_remix IS NOT TRUE THEN
+    RAISE EXCEPTION 'Add content for at least one unlock item before publishing';
+  END IF;
+
+  RETURN NEW;
 END;
 $$;
 
