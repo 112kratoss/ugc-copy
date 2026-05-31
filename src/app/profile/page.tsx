@@ -2,8 +2,8 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ArrowLeft, BadgeCheck, CheckCircle2, ExternalLink, Sparkles, UserRound } from 'lucide-react';
 
-import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import ProfileShareButton from '@/app/components/ProfileShareButton';
+import DeferredCreatorProfileCard from './DeferredCreatorProfileCard';
 import { isE2EAuthBypassEnabled } from '@/lib/e2e-auth';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
@@ -202,7 +202,7 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
           </section>
         ) : null}
 
-        <CreatorProfileCard
+        <DeferredCreatorProfileCard
           initialProfile={initialProfile}
           isLoading={false}
           loadError={loadError}

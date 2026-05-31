@@ -28,6 +28,7 @@ import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { CURATED_SOURCE_TOOLS, getSourceToolLabel } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
+import { HoverVideo } from '@/app/components/HoverVideo';
 
 interface MarketplacePageInfo {
   hasMore: boolean;
@@ -364,15 +365,13 @@ function MarketplaceCard({
             <img
               src={asset.post.mediaUrl}
               alt={asset.post.title}
+              loading="lazy"
+              decoding="async"
               className="h-64 w-full object-cover transition duration-500 group-hover:scale-[1.02]"
             />
           ) : (
-            <video
+            <HoverVideo
               src={asset.post.mediaUrl}
-              muted
-              playsInline
-              loop
-              autoPlay
               className="h-64 w-full object-cover transition duration-500 group-hover:scale-[1.02]"
             />
           )

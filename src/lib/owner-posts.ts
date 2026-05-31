@@ -3,6 +3,8 @@ import 'server-only';
 import {
   getPostResourceKinds,
   normalizePostResourceAttachments,
+  normalizePostResourceItems,
+  normalizePostResourceSections,
   type PostResourceBundleInput,
   type PostResourceBundleResources,
   type PostResourceBundleStatus,
@@ -13,6 +15,7 @@ import {
   deriveTitleFromBody,
   getPostMediaKind,
   isMissingPostResourceBundlesSchemaError,
+  isMissingPostResourceItemsColumnError,
   isMissingPostSourceToolSlugColumnError,
   isMissingPostTextColumnsError,
   normalizeLegacyPostFormat,
@@ -65,6 +68,8 @@ type BundleSummaryRow = {
   workflow_share_url: string | null;
   workflow_snapshot: unknown;
   attachments: unknown;
+  resource_sections?: unknown;
+  resource_items?: unknown;
   allow_remix: boolean;
 };
 
@@ -128,7 +133,7 @@ function isShareablePost(row: { visibility: ShowcaseVisibility; archived_at: str
 }
 
 function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleResources {
-  return {
+  const legacyResources: PostResourceBundleResources = {
     promptText: typeof row.prompt_text === 'string' && row.prompt_text.trim() ? row.prompt_text.trim() : null,
     notesMarkdown: typeof row.notes_markdown === 'string' && row.notes_markdown.trim() ? row.notes_markdown.trim() : null,
     workflowShareUrl:
@@ -138,6 +143,12 @@ function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleReso
     workflowSnapshot: row.workflow_snapshot ? (row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot']) : null,
     attachments: normalizePostResourceAttachments(row.attachments),
     allowRemix: Boolean(row.allow_remix),
+    sections: normalizePostResourceSections(row.resource_sections),
+  };
+
+  return {
+    ...legacyResources,
+    items: normalizePostResourceItems(row.resource_items, legacyResources),
   };
 }
 
@@ -288,12 +299,20 @@ async function loadBundleMap(postIds: string[]) {
   }
 
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase
-    .from('post_resource_bundles')
-    .select(
-      'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix'
-    )
-    .in('post_id', postIds);
+  const selectWithItems =
+    'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, resource_sections, resource_items, allow_remix';
+  const selectLegacy =
+    'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix';
+  const loadBundles = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .in('post_id', postIds);
+
+  let { data, error } = await loadBundles(selectWithItems);
+  if (isMissingPostResourceItemsColumnError(error)) {
+    ({ data, error } = await loadBundles(selectLegacy));
+  }
 
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
@@ -304,7 +323,7 @@ async function loadBundleMap(postIds: string[]) {
   }
 
   return new Map(
-    ((data ?? []) as BundleSummaryRow[]).map((row) => [row.post_id, row])
+    ((data ?? []) as unknown as BundleSummaryRow[]).map((row) => [row.post_id, row])
   );
 }
 

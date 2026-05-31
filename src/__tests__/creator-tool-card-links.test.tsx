@@ -7,7 +7,13 @@ import Home from '@/app/page';
 
 const getServerAuthStateMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
-const homeShowcasePreviewGridMock = vi.fn(({ items }: { items: unknown[] }) => (
+const homeShowcasePreviewGridMock = vi.fn(({
+  items,
+}: {
+  items: unknown[];
+  initialSession?: unknown;
+  initialCredits?: unknown;
+}) => (
   <div data-testid="home-showcase-preview-grid" data-count={items.length} />
 ));
 
@@ -15,7 +21,7 @@ vi.mock('@/app/components/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('@/app/components/HomeShowcasePreviewGrid', () => ({
+vi.mock('@/app/components/DeferredHomeShowcasePreviewGrid', () => ({
   default: (props: { items: unknown[] }) => homeShowcasePreviewGridMock(props),
 }));
 
@@ -244,6 +250,24 @@ describe('creator tool card links', () => {
     expect(screen.getByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '1');
     expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
       items: [textItem],
+    });
+  });
+
+  it('loads homepage showcase content without blocking on server auth', async () => {
+    getServerAuthStateMock.mockImplementation(() => {
+      throw new Error('Home should not read server auth for cacheable public content');
+    });
+
+    render(await Home());
+
+    expect(getServerAuthStateMock).not.toHaveBeenCalled();
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      viewerUserId: null,
+      countryCode: null,
+    }));
+    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
+      initialSession: null,
+      initialCredits: null,
     });
   });
 

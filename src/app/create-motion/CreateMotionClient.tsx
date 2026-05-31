@@ -1243,6 +1243,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 isOpen={isPublishModalOpen}
                 onClose={() => setIsPublishModalOpen(false)}
                 generationId={latestGenerationId}
+                accessToken={session?.access_token ?? null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,
                     description: shareDescription,

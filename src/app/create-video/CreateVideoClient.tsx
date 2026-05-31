@@ -4061,6 +4061,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 isOpen={isPublishModalOpen}
                 onClose={() => setIsPublishModalOpen(false)}
                 generationId={latestGenerationId}
+                accessToken={session?.access_token ?? null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,
                     description: primarySharePrompt,

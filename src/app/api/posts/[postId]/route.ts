@@ -4,6 +4,9 @@ import { getOwnerPostDetail } from '@/lib/owner-posts';
 import {
   getPostResourceKinds,
   isPostResourceBundleAccessMode,
+  normalizePostResourceAttachments,
+  normalizePostResourceItems,
+  normalizePostResourceSections,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
   type PostResourceBundleResources,
@@ -14,6 +17,7 @@ import {
 } from '@/lib/post-resource-bundles-server';
 import {
   isMissingPostResourceBundlesSchemaError,
+  isMissingPostResourceItemsColumnError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { normalizeSourceToolInput } from '@/lib/source-tools';
@@ -59,6 +63,8 @@ type BundleAuditRow = {
   workflow_share_url: string | null;
   workflow_snapshot: unknown;
   attachments: unknown;
+  resource_sections?: unknown;
+  resource_items?: unknown;
   allow_remix: boolean;
 };
 
@@ -368,13 +374,20 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     const forceDelete = Boolean(body.force);
 
     const adminSupabase = createServiceClient();
-    const { data: bundleData, error: bundleError } = await adminSupabase
-      .from('post_resource_bundles')
-      .select(
+    const selectBundle = (selectColumns: string) =>
+      adminSupabase
+        .from('post_resource_bundles')
+        .select(selectColumns)
+        .eq('post_id', postId)
+        .maybeSingle();
+    let { data: bundleData, error: bundleError } = await selectBundle(
+      'id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, resource_sections, resource_items, allow_remix'
+    );
+    if (isMissingPostResourceItemsColumnError(bundleError)) {
+      ({ data: bundleData, error: bundleError } = await selectBundle(
         'id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix'
-      )
-      .eq('post_id', postId)
-      .maybeSingle();
+      ));
+    }
 
     if (bundleError && !isMissingPostResourceBundlesSchemaError(bundleError)) {
       console.error('Failed to load post bundle before delete:', bundleError);
@@ -395,14 +408,22 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     }
 
     const bundleResources: Partial<PostResourceBundleResources> | null = bundle
-      ? {
-          promptText: bundle.prompt_text,
-          notesMarkdown: bundle.notes_markdown,
-          workflowShareUrl: bundle.workflow_share_url,
-          workflowSnapshot: bundle.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
-          attachments: Array.isArray(bundle.attachments) ? bundle.attachments : [],
-          allowRemix: bundle.allow_remix,
-        }
+      ? (() => {
+          const legacyResources: PostResourceBundleResources = {
+            promptText: bundle.prompt_text,
+            notesMarkdown: bundle.notes_markdown,
+            workflowShareUrl: bundle.workflow_share_url,
+            workflowSnapshot: bundle.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
+            attachments: normalizePostResourceAttachments(bundle.attachments),
+            allowRemix: bundle.allow_remix,
+            sections: normalizePostResourceSections(bundle.resource_sections),
+          };
+
+          return {
+            ...legacyResources,
+            items: normalizePostResourceItems(bundle.resource_items, legacyResources),
+          };
+        })()
       : null;
 
     const { error: auditError } = await adminSupabase.from('post_deletion_audits').insert({

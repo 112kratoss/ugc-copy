@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, Loader2, PencilLine, RotateCcw, Share2, Trash2, UserRound, Volume2, Wand2, X, Zap } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
 import PublicShareButton from '@/app/components/PublicShareButton';
@@ -22,7 +21,6 @@ import { isAudioModel, isImageModel } from '@/lib/models';
 import type { ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
-import { supabase } from '@/lib/supabase';
 
 interface Generation {
     id: string;
@@ -84,11 +82,82 @@ interface OwnerPost {
     } | null;
 }
 
+interface CreationsWorkspaceCache {
+    fetchedAt: number;
+    generations: Generation[];
+    posts: OwnerPost[];
+    profile: ProfileApiResponse | null;
+}
+
+const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getCreationsWorkspaceCacheKey(userId: string) {
+    return `magicbooklet:creations-cache:v1:${userId}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object';
+}
+
+function readCreationsWorkspaceCache(userId: string | null): CreationsWorkspaceCache | null {
+    if (!userId || typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        const raw = window.sessionStorage.getItem(getCreationsWorkspaceCacheKey(userId));
+        if (!raw) {
+            return null;
+        }
+
+        const parsed = JSON.parse(raw) as unknown;
+        if (!isRecord(parsed) || typeof parsed.fetchedAt !== 'number') {
+            return null;
+        }
+
+        if (Date.now() - parsed.fetchedAt > CREATIONS_WORKSPACE_CACHE_TTL_MS) {
+            return null;
+        }
+
+        return {
+            fetchedAt: parsed.fetchedAt,
+            generations: Array.isArray(parsed.generations) ? parsed.generations as Generation[] : [],
+            posts: Array.isArray(parsed.posts) ? parsed.posts as OwnerPost[] : [],
+            profile: isRecord(parsed.profile) ? parsed.profile as unknown as ProfileApiResponse : null,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function writeCreationsWorkspaceCache(
+    userId: string | null,
+    cache: Omit<CreationsWorkspaceCache, 'fetchedAt'>
+) {
+    if (!userId || typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.sessionStorage.setItem(
+            getCreationsWorkspaceCacheKey(userId),
+            JSON.stringify({
+                ...cache,
+                fetchedAt: Date.now(),
+            })
+        );
+    } catch {
+        // Ignore storage errors in private browsing or constrained mobile webviews.
+    }
+}
+
 export default function CreationsPage() {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const { session } = useAuth();
+    const userId = session?.user?.id ?? null;
+    const [initialWorkspaceCache] = useState(() => readCreationsWorkspaceCache(userId));
     const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
     const initialPostVisibility = (() => {
         const value = searchParams.get('visibility');
@@ -97,10 +166,10 @@ export default function CreationsPage() {
         }
         return 'all';
     })();
-    const [generations, setGenerations] = useState<Generation[]>([]);
-    const [posts, setPosts] = useState<OwnerPost[]>([]);
-    const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const [generations, setGenerations] = useState<Generation[]>(() => initialWorkspaceCache?.generations ?? []);
+    const [posts, setPosts] = useState<OwnerPost[]>(() => initialWorkspaceCache?.posts ?? []);
+    const [profile, setProfile] = useState<ProfileApiResponse | null>(() => initialWorkspaceCache?.profile ?? null);
+    const [isLoading, setIsLoading] = useState(() => !initialWorkspaceCache);
     const [filter, setFilter] = useState<FilterType>('all');
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
     const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
@@ -132,10 +201,20 @@ export default function CreationsPage() {
         setPostVisibilityFilter(nextVisibility);
     }, [searchParams]);
 
+    useEffect(() => {
+        const cachedWorkspace = readCreationsWorkspaceCache(userId);
+        if (!cachedWorkspace) {
+            return;
+        }
+
+        setGenerations(cachedWorkspace.generations);
+        setPosts(cachedWorkspace.posts);
+        setProfile(cachedWorkspace.profile);
+        setIsLoading(false);
+    }, [userId]);
+
     const fetchCreations = useCallback(async () => {
-        const { data: { session: clientSession } } = await supabase.auth.getSession();
-        const activeSession = clientSession ?? session;
-        if (!activeSession) {
+        if (!session?.access_token) {
             router.push('/login');
             return;
         }
@@ -143,30 +222,46 @@ export default function CreationsPage() {
         try {
             const [generationsRes, postsRes, profileRes] = await Promise.all([
                 fetch('/api/generations?includeArchived=true', {
-                    headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
+                    headers: { 'Authorization': `Bearer ${session.access_token}` },
                 }),
                 fetch('/api/posts?scope=owner&includeArchived=true', {
-                    headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
+                    headers: { 'Authorization': `Bearer ${session.access_token}` },
                 }),
                 fetch('/api/profile', {
-                    headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
+                    headers: { 'Authorization': `Bearer ${session.access_token}` },
                 }),
             ]);
 
             const generationsData = await generationsRes.json();
+            let nextGenerations: Generation[] | null = null;
             if (generationsRes.ok) {
-                setGenerations(generationsData.generations || []);
+                const loadedGenerations = (generationsData.generations || []) as Generation[];
+                nextGenerations = loadedGenerations;
+                setGenerations(loadedGenerations);
             }
 
             const postsData = await postsRes.json();
+            let nextPosts: OwnerPost[] | null = null;
             if (postsRes.ok) {
-                setPosts(postsData.posts || []);
+                const loadedPosts = (postsData.posts || []) as OwnerPost[];
+                nextPosts = loadedPosts;
+                setPosts(loadedPosts);
             }
 
+            let nextProfile: ProfileApiResponse | null = null;
             if (profileRes.ok) {
-                setProfile(await profileRes.json());
+                nextProfile = await profileRes.json();
+                setProfile(nextProfile);
             } else {
                 setProfile(null);
+            }
+
+            if (nextGenerations && nextPosts) {
+                writeCreationsWorkspaceCache(session.user.id, {
+                    generations: nextGenerations,
+                    posts: nextPosts,
+                    profile: nextProfile,
+                });
             }
         } catch (err) {
             console.error('Failed to fetch creations:', err);
@@ -208,13 +303,17 @@ export default function CreationsPage() {
     };
 
     const handleUnpublish = async (generationId: string) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations');
+            return;
+        }
+
         try {
-            const { data: { session } } = await supabase.auth.getSession();
             const res = await fetch('/api/showcase/publish', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session?.access_token}`
+                    'Authorization': `Bearer ${session.access_token}`
                 },
                 body: JSON.stringify({
                     generationId,
@@ -864,8 +963,7 @@ export default function CreationsPage() {
 
                 {/* Empty State */}
                 {activeView === 'creations' && !isLoading && activeGenerations.length === 0 && archivedGenerations.length === 0 && (
-                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                        className="flex flex-col items-center justify-center gap-6 py-24">
+                    <div className="flex flex-col items-center justify-center gap-6 py-24">
                         <div className="rounded-full border border-white/5 bg-zinc-900/50 p-6">
                             <Film className="w-12 h-12 text-zinc-600" />
                         </div>
@@ -901,7 +999,7 @@ export default function CreationsPage() {
                                 Set up profile
                             </Link>
                         </div>
-                    </motion.div>
+                    </div>
                 )}
 
                 {/* Processing */}
@@ -926,8 +1024,8 @@ export default function CreationsPage() {
                             </button>
                         </div>
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                            {processingGenerations.map((gen, i) => (
-                                <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                            {processingGenerations.map((gen) => (
+                                <div key={gen.id}
                                     className="bg-white/[0.02] rounded-2xl border border-yellow-500/20 overflow-hidden backdrop-blur-md break-inside-avoid mb-6">
                                     <div className="aspect-video bg-black/60 flex items-center justify-center">
                                         <div className="flex flex-col items-center gap-3">
@@ -939,7 +1037,7 @@ export default function CreationsPage() {
                                         <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
                                         <span className="text-xs text-zinc-500">{getStartedAgoLabel(gen) ?? 'Processing'}</span>
                                     </div>
-                                </motion.div>
+                                </div>
                             ))}
                         </div>
                     </div>
@@ -952,7 +1050,7 @@ export default function CreationsPage() {
                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Completed</h2>
                         )}
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                            {successfulCreationCards.map(({ generation: gen, workspaceState }, i) => {
+                            {successfulCreationCards.map(({ generation: gen, workspaceState }) => {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
@@ -978,7 +1076,7 @@ export default function CreationsPage() {
                                     !workspaceState.linkedPost?.archivedAt &&
                                     workspaceState.linkedPost?.visibility !== 'private';
                                 return (
-                                    <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                                    <div key={gen.id}
                                         className="group bg-white/[0.02] rounded-[1.5rem] border border-white/[0.04] overflow-hidden backdrop-blur-md hover:border-purple-500/30 hover:shadow-[0_8px_30px_rgba(0,0,0,0.5)] transition-all duration-300 break-inside-avoid mb-6">
                                         <div className="bg-black relative overflow-hidden rounded-t-[1.5rem]">
                                             {isImage ? (
@@ -1157,7 +1255,7 @@ export default function CreationsPage() {
                                                 </button>
                                             </div>
                                         </div>
-                                    </motion.div>
+                                    </div>
                                 );
                             })}
                         </div>
@@ -1169,8 +1267,8 @@ export default function CreationsPage() {
                     <div className="mb-10">
                         <h2 className="text-xs font-bold text-red-400/80 uppercase tracking-widest mb-4">Failed ({failedGenerations.length})</h2>
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                            {failedGenerations.map((gen, i) => (
-                                <motion.div key={gen.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                            {failedGenerations.map((gen) => (
+                                <div key={gen.id}
                                     className="bg-white/[0.02] rounded-[1.5rem] border border-red-500/20 overflow-hidden backdrop-blur-md opacity-60 break-inside-avoid mb-6">
                                     <div className={`${getMediaKind(gen) === 'audio' ? 'p-6' : 'aspect-video'} bg-black/60 flex items-center justify-center`}>
                                         <span className="text-xs text-red-400/60">Generation failed</span>
@@ -1179,7 +1277,7 @@ export default function CreationsPage() {
                                         <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
                                         {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
                                     </div>
-                                </motion.div>
+                                </div>
                             ))}
                         </div>
                     </div>
@@ -1194,12 +1292,9 @@ export default function CreationsPage() {
                             </p>
                         </div>
                         <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                            {archivedGenerations.map((gen, i) => (
-                                <motion.div
+                            {archivedGenerations.map((gen) => (
+                                <div
                                     key={gen.id}
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: i * 0.05 }}
                                     className="break-inside-avoid mb-6 rounded-[1.5rem] border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-md"
                                 >
                                     <div className="rounded-[1.25rem] border border-white/8 bg-black/60 p-4">
@@ -1224,18 +1319,14 @@ export default function CreationsPage() {
                                             </button>
                                         </div>
                                     </div>
-                                </motion.div>
+                                </div>
                             ))}
                         </div>
                     </div>
                 )}
 
                 {activeView === 'posts' && !isLoading && visiblePosts.length === 0 && (
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="flex flex-col items-center justify-center gap-6 py-24"
-                    >
+                    <div className="flex flex-col items-center justify-center gap-6 py-24">
                         <div className="rounded-full border border-white/8 bg-zinc-900/60 p-6">
                             <Wand2 className="h-12 w-12 text-zinc-600" />
                         </div>
@@ -1252,7 +1343,7 @@ export default function CreationsPage() {
                             Open post composer
                             <ExternalLink className="h-4 w-4" />
                         </Link>
-                    </motion.div>
+                    </div>
                 )}
 
                 {activeView === 'posts' && visiblePosts.length > 0 && (
@@ -1442,6 +1533,7 @@ export default function CreationsPage() {
                 isOpen={Boolean(publishTarget)}
                 onClose={closePublishModal}
                 generationId={publishTarget?.id ?? null}
+                accessToken={session?.access_token ?? null}
                 defaultTitle={publishTarget?.title ?? ''}
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}

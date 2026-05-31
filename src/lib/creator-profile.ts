@@ -3,7 +3,6 @@ import 'server-only';
 import { cache } from 'react';
 
 import {
-  canRemixPost,
   deriveTitleFromBody,
   getMarketplaceAssetSummaryMap,
   getPostMediaKind,
@@ -20,6 +19,7 @@ import {
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
 import { getPostResourceBundlePriceQuote } from '@/lib/post-resource-bundles-server';
+import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -499,6 +499,21 @@ export const getCreatorProfilePageData = cache(async (
           ? 'manual'
           : post.source_tool ?? 'external';
 
+      const sourceKind = normalizeShowcaseSourceKind(post.source_kind);
+      const remix = resolvePostRemixCapability({
+        generationId: post.generation_id,
+        postFormat: post.post_format,
+        category: post.category,
+        sourceKind,
+        resourceBundle: asset
+          ? {
+              viewerCanAccess: false,
+              allowRemix: asset.allowRemix,
+              items: asset.resourceItems ?? [],
+            }
+          : null,
+      });
+
       return {
         id: post.id,
         mediaUrl,
@@ -521,12 +536,14 @@ export const getCreatorProfilePageData = cache(async (
           }),
           avatar: profile.avatar_url,
         },
-        sourceKind: normalizeShowcaseSourceKind(post.source_kind),
+        sourceKind,
         sourceTool: post.source_tool,
         sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
         generationId: post.generation_id,
         asset,
-        canRemix: canRemixPost(post.generation_id) && !asset?.allowRemix,
+        canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
+        remixCapability: remix.capability,
+        remixTarget: remix.target,
       };
     })
   );

@@ -27,7 +27,12 @@ export async function GET(request: NextRequest) {
       countryCode: request.headers.get('x-vercel-ip-country'),
     });
 
-    return NextResponse.json(page);
+    return NextResponse.json(page, {
+      headers: {
+        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
+        Vary: 'x-vercel-ip-country',
+      },
+    });
   } catch (error) {
     console.error('Failed to load marketplace resources:', error);
     return NextResponse.json({ error: 'Failed to load marketplace unlocks.' }, { status: 500 });

@@ -18,11 +18,16 @@ import {
 import { useAuth } from '@/app/components/AuthProvider';
 import {
   describePostResourceKinds,
+  formatPostResourceBundleCountSummary,
   formatUnlockCountLabel,
+  getPostResourceItemTypeLabel,
   getPostResourceKindLabel,
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
+  type PostResourceItem,
+  type PostResourceItemType,
   type PostResourceKind,
+  type PostResourceSection,
 } from '@/lib/post-resource-bundles';
 import { getCurrentInternalPath } from '@/lib/share';
 
@@ -55,6 +60,8 @@ interface PostResourceBundlePanelProps {
     workflowShareUrl: string | null;
     attachments: PostResourceAttachment[];
     allowRemix: boolean;
+    sections?: PostResourceSection[];
+    items?: PostResourceItem[];
   } | null;
 }
 
@@ -67,7 +74,62 @@ interface BundleRefreshPayload {
     workflowShareUrl: string | null;
     attachments: PostResourceAttachment[];
     allowRemix: boolean;
+    sections?: PostResourceSection[];
+    items?: PostResourceItem[];
   } | null;
+}
+
+const RESOURCE_ITEM_GROUP_ORDER: PostResourceItemType[] = [
+  'prompt',
+  'workflow',
+  'reference_image',
+  'source_file',
+  'preset',
+  'settings',
+  'note',
+  'external_link',
+  'remix_access',
+];
+
+function groupResourceItems(items: PostResourceItem[]) {
+  return RESOURCE_ITEM_GROUP_ORDER
+    .map((type) => ({
+      type,
+      items: items.filter((item) => item.type === type),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function groupResourceItemsBySection(items: PostResourceItem[], sections: PostResourceSection[]) {
+  const globalItems = items.filter((item) => !item.sectionId);
+  const globalGroup = globalItems.length > 0
+    ? [{
+        id: 'global',
+        title: 'Full post resources',
+        description: null as string | null,
+        items: globalItems,
+      }]
+    : [];
+
+  const sectionGroups = sections
+    .map((section) => ({
+      id: section.id,
+      title: section.title,
+      description: section.description,
+      items: items.filter((item) => item.sectionId === section.id),
+    }))
+    .filter((group) => group.items.length > 0);
+
+  return [...globalGroup, ...sectionGroups];
+}
+
+function getResourceItemGroupTitle(type: PostResourceItemType, count: number) {
+  const label = getPostResourceItemTypeLabel(type, count);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function formatResourceItemRole(role: string) {
+  return role.replace(/_/g, ' ');
 }
 
 export default function PostResourceBundlePanel({
@@ -102,6 +164,10 @@ export default function PostResourceBundlePanel({
     lockedPreview ?? {
       resourceKinds,
       attachmentPreviews: [],
+      itemCounts: {},
+      itemPreviews: [],
+      sectionCount: 0,
+      sectionPreviews: [],
       hasPrompt: resourceKinds.includes('prompt'),
       hasNotes: resourceKinds.includes('notes'),
       hasWorkflow: resourceKinds.includes('workflow'),
@@ -117,6 +183,20 @@ export default function PostResourceBundlePanel({
     !preview.hasNotes &&
     !preview.hasRemix &&
     preview.attachmentPreviews.length === 0;
+  const bundleCountSummary = useMemo(
+    () => formatPostResourceBundleCountSummary(preview),
+    [preview]
+  );
+  const groupedResourceItems = useMemo(
+    () => groupResourceItems(resources?.items ?? []),
+    [resources?.items]
+  );
+  const groupedSectionResources = useMemo(
+    () => groupResourceItemsBySection(resources?.items ?? [], resources?.sections ?? []),
+    [resources?.items, resources?.sections]
+  );
+  const hasSectionedResourceItems = (resources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
+  const hasStructuredResourceItems = groupedResourceItems.length > 0;
   const accessLabel = useMemo(() => {
     if (viewerIsOwner) {
       return 'You own this unlock.';
@@ -369,7 +449,7 @@ export default function PostResourceBundlePanel({
       })
     : null;
   const includedResourceLabel = preview.resourceKinds.length > 0
-    ? preview.resourceKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ')
+    ? bundleCountSummary || preview.resourceKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ')
     : 'Reusable resources';
 
   const formatFileSize = (sizeBytes: number | null | undefined) => {
@@ -571,6 +651,11 @@ export default function PostResourceBundlePanel({
             <p className="mt-3 text-sm leading-7 text-zinc-400">
               Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.
             </p>
+            {bundleCountSummary ? (
+              <div className="mt-4 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-50">
+                Includes {bundleCountSummary}
+              </div>
+            ) : null}
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
                 <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included</div>
@@ -594,6 +679,7 @@ export default function PostResourceBundlePanel({
                   {preview.hasWorkflow ? <div>Workflow link or snapshot</div> : null}
                   {preview.hasNotes ? <div>Notes or guide</div> : null}
                   {preview.hasRemix ? <div>Remix access</div> : null}
+                  {bundleCountSummary ? <div>Structured bundle: {bundleCountSummary}</div> : null}
                   {preview.attachmentPreviews.length > 0 ? <div>{preview.attachmentPreviews.length} file/link attachment{preview.attachmentPreviews.length === 1 ? '' : 's'}</div> : null}
                   {formattedUpdatedAt ? <div className="text-zinc-500">Updated {formattedUpdatedAt}</div> : null}
                 </div>
@@ -630,7 +716,178 @@ export default function PostResourceBundlePanel({
 
       {hasAccess || viewerIsOwner ? (
         <div className="mt-6 space-y-5">
-          {resources?.promptText ? (
+          {hasStructuredResourceItems ? (
+            hasSectionedResourceItems ? (
+              <>
+                {groupedSectionResources.map((sectionGroup) => (
+                  <div key={sectionGroup.id} className="rounded-[24px] border border-white/8 bg-black/30 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                          Resource section
+                        </div>
+                        <h3 className="mt-2 text-base font-semibold text-white">{sectionGroup.title}</h3>
+                        {sectionGroup.description ? (
+                          <p className="mt-1 text-sm leading-6 text-zinc-400">{sectionGroup.description}</p>
+                        ) : null}
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-zinc-300">
+                        {sectionGroup.items.length} item{sectionGroup.items.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 space-y-4">
+                      {groupResourceItems(sectionGroup.items).map((group) => (
+                        <div key={`${sectionGroup.id}:${group.type}`} className="rounded-[20px] border border-white/8 bg-white/[0.025] p-4">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                            {getResourceItemGroupTitle(group.type, group.items.length)}
+                          </div>
+                          <div className="mt-3 space-y-3">
+                            {group.items.map((item, index) => {
+                              const key = `${sectionGroup.id}:${item.type}:${item.title}:${index}`;
+                              const meta = [
+                                formatResourceItemRole(item.role),
+                                item.contentType,
+                                formatFileSize(item.sizeBytes),
+                                item.remixUse !== 'none' ? formatResourceItemRole(item.remixUse) : null,
+                              ].filter(Boolean).join(' · ');
+
+                              return (
+                                <div key={key} className="rounded-2xl border border-white/8 bg-black/25 p-4">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-semibold text-white">{item.title}</div>
+                                      {item.description ? (
+                                        <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
+                                      ) : null}
+                                      {meta ? <p className="mt-1 text-xs capitalize text-zinc-500">{meta}</p> : null}
+                                    </div>
+                                    {item.textContent ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void copyText(item.textContent ?? '', `${item.title} copied to clipboard.`)}
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                      >
+                                        <Copy className="h-3.5 w-3.5" />
+                                        Copy
+                                      </button>
+                                    ) : null}
+                                  </div>
+
+                                  {item.textContent ? (
+                                    <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">{item.textContent}</pre>
+                                  ) : null}
+
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {item.externalUrl ? (
+                                      <a
+                                        href={item.externalUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                      >
+                                        <ExternalLink className="h-4 w-4" />
+                                        Open link
+                                      </a>
+                                    ) : null}
+                                    {item.storagePath ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void openResourceFile(item.storagePath ?? '')}
+                                        className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                                      >
+                                        <ExternalLink className="h-4 w-4" />
+                                        Open file
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+              {groupedResourceItems.map((group) => (
+                <div key={group.type} className="rounded-[24px] border border-white/8 bg-black/30 p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                    {getResourceItemGroupTitle(group.type, group.items.length)}
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {group.items.map((item, index) => {
+                      const key = `${item.type}:${item.title}:${index}`;
+                      const meta = [
+                        formatResourceItemRole(item.role),
+                        item.contentType,
+                        formatFileSize(item.sizeBytes),
+                        item.remixUse !== 'none' ? formatResourceItemRole(item.remixUse) : null,
+                      ].filter(Boolean).join(' · ');
+
+                      return (
+                        <div key={key} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-white">{item.title}</div>
+                              {item.description ? (
+                                <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
+                              ) : null}
+                              {meta ? <p className="mt-1 text-xs capitalize text-zinc-500">{meta}</p> : null}
+                            </div>
+                            {item.textContent ? (
+                              <button
+                                type="button"
+                                onClick={() => void copyText(item.textContent ?? '', `${item.title} copied to clipboard.`)}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Copy
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {item.textContent ? (
+                            <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">{item.textContent}</pre>
+                          ) : null}
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {item.externalUrl ? (
+                              <a
+                                href={item.externalUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                Open link
+                              </a>
+                            ) : null}
+                            {item.storagePath ? (
+                              <button
+                                type="button"
+                                onClick={() => void openResourceFile(item.storagePath ?? '')}
+                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                Open file
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              </>
+            )
+          ) : null}
+
+          {!hasStructuredResourceItems && resources?.promptText ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
@@ -654,7 +911,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.notesMarkdown ? (
+          {!hasStructuredResourceItems && resources?.notesMarkdown ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
@@ -673,7 +930,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.workflowShareUrl ? (
+          {!hasStructuredResourceItems && resources?.workflowShareUrl ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                 <Link2 className="h-4 w-4" />
@@ -691,7 +948,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.attachments.length ? (
+          {!hasStructuredResourceItems && resources?.attachments.length ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Files and links</div>
               <div className="mt-3 flex flex-wrap gap-3">
@@ -723,7 +980,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {resources?.allowRemix ? (
+          {!hasStructuredResourceItems && resources?.allowRemix ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                 <Sparkles className="h-4 w-4" />

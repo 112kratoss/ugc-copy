@@ -40,6 +40,7 @@ export function HoverVideo({
       muted
       loop
       playsInline
+      preload="metadata"
       autoPlay={autoPlay}
       className={className}
       onMouseEnter={(e) => {

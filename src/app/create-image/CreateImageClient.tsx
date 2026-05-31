@@ -1853,6 +1853,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 isOpen={isPublishModalOpen}
                 onClose={() => setIsPublishModalOpen(false)}
                 generationId={latestGenerationId}
+                accessToken={session?.access_token ?? null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,
                     description: shareDescription,

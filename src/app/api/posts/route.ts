@@ -15,6 +15,7 @@ import {
 import {
   isPostResourceBundleAccessMode,
   normalizePostResourceAttachments,
+  normalizePostResourceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
@@ -377,9 +378,13 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const resourceFilePathsToCleanup = normalizePostResourceAttachments(resourceBundle?.resources?.attachments)
+      const legacyResourceFiles = normalizePostResourceAttachments(resourceBundle?.resources?.attachments)
         .filter((attachment) => attachment.kind === 'file' && attachment.storagePath)
         .map((attachment) => attachment.storagePath as string);
+      const itemResourceFiles = normalizePostResourceItems(resourceBundle?.resources?.items, resourceBundle?.resources)
+        .filter((item) => item.storagePath)
+        .map((item) => item.storagePath as string);
+      const resourceFilePathsToCleanup = Array.from(new Set([...legacyResourceFiles, ...itemResourceFiles]));
       if (resourceFilePathsToCleanup.length > 0) {
         const cleanupFiles = await adminSupabase.storage
           .from(POST_RESOURCE_FILES_BUCKET)

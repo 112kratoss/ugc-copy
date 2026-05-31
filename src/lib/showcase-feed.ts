@@ -4,7 +4,6 @@ import { unstable_cache } from 'next/cache';
 
 import { getCreatorDisplayName } from '@/lib/profile';
 import {
-  canRemixPost,
   deriveTitleFromBody,
   getMarketplaceAssetSummaryMap,
   getPostMediaKind,
@@ -18,6 +17,7 @@ import {
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
 import { getPostResourceBundlePriceQuote } from '@/lib/post-resource-bundles-server';
+import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -307,6 +307,20 @@ async function resolvePostRowsToFeedItems(
           ? 'manual'
           : post.source_tool ?? 'external';
 
+      const remix = resolvePostRemixCapability({
+        generationId: post.generation_id,
+        postFormat: post.post_format,
+        category: post.category,
+        sourceKind: normalizeShowcaseSourceKind(post.source_kind),
+        resourceBundle: asset
+          ? {
+              viewerCanAccess: false,
+              allowRemix: asset.allowRemix,
+              items: asset.resourceItems ?? [],
+            }
+          : null,
+      });
+
       return {
         id: post.id,
         mediaUrl,
@@ -334,7 +348,9 @@ async function resolvePostRowsToFeedItems(
         sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
         generationId: post.generation_id,
         asset,
-        canRemix: canRemixPost(post.generation_id) && !asset?.allowRemix,
+        canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
+        remixCapability: remix.capability,
+        remixTarget: remix.target,
       };
     })
   );
@@ -726,17 +742,35 @@ async function attachViewerStateToFeed(
 
   return {
     ...feed,
-    items: feed.items.map((item) => ({
-      ...item,
-      isSaved: savedIdSet.has(item.id) || (item.generationId ? savedIdSet.has(item.generationId) : false),
-      canRemix: item.canRemix || Boolean(
-        item.asset?.allowRemix
-        && (
+    items: feed.items.map((item) => {
+      const viewerCanAccessBundle = Boolean(
+        item.asset && (
           item.creator.id === viewerUserId
           || purchasedBundleIdSet.has(item.asset.id)
         )
-      ),
-    })),
+      );
+      const remix = resolvePostRemixCapability({
+        generationId: item.generationId,
+        postFormat: item.postFormat,
+        category: item.category,
+        sourceKind: item.sourceKind,
+        resourceBundle: item.asset
+          ? {
+              viewerCanAccess: viewerCanAccessBundle,
+              allowRemix: item.asset.allowRemix,
+              items: item.asset.resourceItems ?? [],
+            }
+          : null,
+      });
+
+      return {
+        ...item,
+        isSaved: savedIdSet.has(item.id) || (item.generationId ? savedIdSet.has(item.generationId) : false),
+        canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
+        remixCapability: remix.capability,
+        remixTarget: remix.target,
+      };
+    }),
   };
 }
 

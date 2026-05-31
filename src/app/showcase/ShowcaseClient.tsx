@@ -643,6 +643,8 @@ export default function ShowcaseClient({
                                                     <img
                                                         src={item.mediaUrl}
                                                         alt={item.title}
+                                                        loading="lazy"
+                                                        decoding="async"
                                                         className="w-full h-auto block object-cover"
                                                     />
                                                 ) : (

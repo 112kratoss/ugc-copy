@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PostResourceBundlePanel from '@/app/showcase/[id]/PostResourceBundlePanel';
-import type { PostResourceBundleLockedPreview, PostResourceKind } from '@/lib/post-resource-bundles';
+import {
+  normalizePostResourceItems,
+  normalizePostResourceSections,
+  type PostResourceBundleLockedPreview,
+  type PostResourceItem,
+  type PostResourceKind,
+} from '@/lib/post-resource-bundles';
 
 const { mockPush, mockRefresh, mockUpdateCredits, authState } = vi.hoisted(() => ({
   mockPush: vi.fn(),
@@ -32,6 +38,13 @@ vi.mock('@/app/components/AuthProvider', () => ({
 const promptOnlyPreview: PostResourceBundleLockedPreview = {
   resourceKinds: ['prompt'],
   attachmentPreviews: [],
+  itemCounts: { prompt: 1 },
+  itemPreviews: [{
+    type: 'prompt',
+    title: 'Prompt',
+    role: 'primary',
+    remixUse: 'none',
+  }],
   hasPrompt: true,
   hasNotes: false,
   hasWorkflow: false,
@@ -62,6 +75,126 @@ function renderPanel(overrides: Partial<Parameters<typeof PostResourceBundlePane
     />
   );
 }
+
+const groupedItems: PostResourceItem[] = normalizePostResourceItems([
+  {
+    type: 'workflow',
+    role: 'primary',
+    title: 'Main workflow',
+    externalUrl: 'https://example.com/workflow',
+    remixUse: 'import_source',
+    sortOrder: 0,
+    isPrimary: true,
+  },
+  {
+    type: 'workflow',
+    role: 'supporting_workflow',
+    title: 'Variation workflow',
+    storagePath: 'user-1/workflows/variation.json',
+    contentType: 'application/json',
+    remixUse: 'none',
+    sortOrder: 1,
+    isPrimary: false,
+  },
+  {
+    type: 'reference_image',
+    role: 'style_reference',
+    title: 'Style frame',
+    storagePath: 'user-1/references/style.png',
+    contentType: 'image/png',
+    remixUse: 'reference_only',
+    sortOrder: 2,
+    isPrimary: false,
+  },
+  {
+    type: 'reference_image',
+    role: 'product_reference',
+    title: 'Product frame',
+    externalUrl: 'https://example.com/product.png',
+    remixUse: 'reference_only',
+    sortOrder: 3,
+    isPrimary: false,
+  },
+]);
+
+const groupedPreview: PostResourceBundleLockedPreview = {
+  resourceKinds: ['workflow', 'files'],
+  attachmentPreviews: [],
+  itemCounts: {
+    workflow: 2,
+    reference_image: 2,
+  },
+  itemPreviews: groupedItems.map((item) => ({
+    type: item.type,
+    title: item.title,
+    role: item.role,
+    contentType: item.contentType,
+    sizeBytes: item.sizeBytes,
+    remixUse: item.remixUse,
+  })),
+  hasPrompt: false,
+  hasNotes: false,
+  hasWorkflow: true,
+  hasRemix: false,
+  updatedAt: '2026-04-25T10:00:00.000Z',
+};
+
+const sectionedResources = {
+  sections: normalizePostResourceSections([
+    {
+      id: 'hook',
+      title: 'Hook',
+      kind: 'scene',
+      description: 'Opening seven seconds',
+    },
+  ]),
+  items: normalizePostResourceItems([
+    {
+      type: 'prompt',
+      role: 'primary',
+      title: 'Hook prompt',
+      textContent: 'Open with the before state.',
+      sectionId: 'hook',
+    },
+    {
+      type: 'reference_image',
+      role: 'style_reference',
+      title: 'Global style reference',
+      storagePath: 'user-1/references/style.png',
+      contentType: 'image/png',
+    },
+  ]),
+};
+
+const sectionedPreview: PostResourceBundleLockedPreview = {
+  resourceKinds: ['prompt', 'files'],
+  attachmentPreviews: [],
+  itemCounts: {
+    prompt: 1,
+    reference_image: 1,
+  },
+  sectionCount: 1,
+  sectionPreviews: sectionedResources.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    kind: section.kind,
+    description: section.description,
+  })),
+  itemPreviews: sectionedResources.items.map((item) => ({
+    type: item.type,
+    title: item.title,
+    role: item.role,
+    contentType: item.contentType,
+    sizeBytes: item.sizeBytes,
+    remixUse: item.remixUse,
+    sectionId: item.sectionId,
+  })),
+  hasPrompt: true,
+  hasNotes: false,
+  hasWorkflow: false,
+  hasRemix: false,
+  updatedAt: '2026-04-25T10:00:00.000Z',
+};
 
 describe('PostResourceBundlePanel', () => {
   beforeEach(() => {
@@ -113,6 +246,51 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText(/digital unlocks are final sale/i)).toBeInTheDocument();
     expect(screen.getByText(/do not resell, redistribute, or claim the raw bundle as your own/i)).toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
+  });
+
+  it('shows grouped item counts before access and grouped resources after access', () => {
+    renderPanel({
+      resourceKinds: ['workflow', 'files'],
+      lockedPreview: groupedPreview,
+      initialResources: {
+        promptText: null,
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+        items: groupedItems,
+      },
+      viewerCanAccess: true,
+    });
+
+    expect(screen.getByText('2 workflows, 2 reference images')).toBeInTheDocument();
+    expect(screen.getByText('Workflows')).toBeInTheDocument();
+    expect(screen.getByText('Reference images')).toBeInTheDocument();
+    expect(screen.getByText('Main workflow')).toBeInTheDocument();
+    expect(screen.getByText('Style frame')).toBeInTheDocument();
+  });
+
+  it('shows section counts while locked and groups unlocked resources by section', () => {
+    renderPanel({
+      resourceKinds: ['prompt', 'files'],
+      lockedPreview: sectionedPreview,
+      initialResources: {
+        promptText: null,
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+        sections: sectionedResources.sections,
+        items: sectionedResources.items,
+      },
+      viewerCanAccess: true,
+    });
+
+    expect(screen.getByText('1 section, 1 prompt, 1 reference image')).toBeInTheDocument();
+    expect(screen.getByText('Full post resources')).toBeInTheDocument();
+    expect(screen.getByText('Hook')).toBeInTheDocument();
+    expect(screen.getByText('Hook prompt')).toBeInTheDocument();
+    expect(screen.getByText('Global style reference')).toBeInTheDocument();
   });
 
   it('unlocks paid post resources with credits and refreshes the revealed bundle', async () => {

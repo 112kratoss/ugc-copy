@@ -1,6 +1,7 @@
 import {
   getPostResourceKinds,
   normalizePostResourceAttachments,
+  normalizePostResourceItems,
   type MarketplacePriceQuote,
   type PersistedPostResourceBundleAccessMode,
   type PostResourceBundleAccessMode,
@@ -241,6 +242,7 @@ function hasMeaningfulResources(
   }
 
   const attachments = normalizePostResourceAttachments(resources.attachments);
+  const items = normalizePostResourceItems(resources.items, resources);
   const promptText = normalizeText(resources.promptText);
   const notesMarkdown = normalizeText(resources.notesMarkdown);
   const workflowShareUrl = normalizeText(resources.workflowShareUrl);
@@ -255,6 +257,11 @@ function hasMeaningfulResources(
     workflowShareUrl ||
     resources.workflowSnapshot ||
     attachments.some((attachment) => attachment.label.length >= 4 && !isPlaceholderText(attachment.label)) ||
+    items.some((item) =>
+      item.title.length >= 4 &&
+      !isPlaceholderText(item.title) &&
+      Boolean(item.textContent || item.externalUrl || item.storagePath || item.workflowSnapshot || item.remixUse !== 'none')
+    ) ||
     resources.allowRemix ||
     kinds.some((kind) => resourceKinds?.includes(kind))
   );

@@ -3,16 +3,15 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, BadgePlus, Globe, Loader2, Share2, X } from 'lucide-react';
-import { AnimatePresence, motion } from 'framer-motion';
 
 import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
-import { supabase } from '@/lib/supabase';
 
 interface PublishToShowcaseModalProps {
   isOpen: boolean;
   onClose: () => void;
   generationId: string | null;
+  accessToken?: string | null;
   defaultTitle?: string;
   defaultDescription?: string;
   showPaidShortcut?: boolean;
@@ -28,6 +27,7 @@ export default function PublishToShowcaseModal({
   isOpen,
   onClose,
   generationId,
+  accessToken = null,
   defaultTitle = '',
   defaultDescription = '',
   showPaidShortcut = true,
@@ -68,17 +68,13 @@ export default function PublishToShowcaseModal({
     setFormError(null);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
       const response = await fetch('/api/showcase/publish', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(session?.access_token
+          ...(accessToken
             ? {
-                Authorization: `Bearer ${session.access_token}`,
+                Authorization: `Bearer ${accessToken}`,
               }
             : {}),
         },
@@ -111,7 +107,7 @@ export default function PublishToShowcaseModal({
           title: normalizedTitle || shareAfterPublish.title,
           description: normalizedDescription || shareAfterPublish.description || null,
           sourceSurface: shareAfterPublish.sourceSurface,
-          accessToken: session?.access_token ?? null,
+          accessToken,
         });
       }
 
@@ -132,18 +128,11 @@ export default function PublishToShowcaseModal({
   };
 
   return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
+      <div
         onClick={onClose}
         className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 px-4 py-6 backdrop-blur-sm sm:items-center sm:py-8"
       >
-        <motion.div
-          initial={{ scale: 0.95, y: 20 }}
-          animate={{ scale: 1, y: 0 }}
-          exit={{ scale: 0.95, y: 20 }}
+        <div
           onClick={(event) => event.stopPropagation()}
           role="dialog"
           aria-modal="true"
@@ -248,8 +237,7 @@ export default function PublishToShowcaseModal({
               {buttonLabel}
             </button>
           </form>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+        </div>
+      </div>
   );
 }

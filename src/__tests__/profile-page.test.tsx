@@ -73,7 +73,23 @@ vi.mock('@/app/creations/CreatorProfileCard', () => ({
     isLoading: boolean;
     loadError: string | null;
   }) => (
-    <div data-testid="creator-profile-card">
+    <div data-testid="direct-creator-profile-card">
+      {isLoading ? 'loading' : loadError ?? initialProfile?.username ?? 'empty'}
+    </div>
+  ),
+}));
+
+vi.mock('@/app/profile/DeferredCreatorProfileCard', () => ({
+  default: ({
+    initialProfile,
+    isLoading,
+    loadError,
+  }: {
+    initialProfile: { username?: string | null } | null;
+    isLoading: boolean;
+    loadError: string | null;
+  }) => (
+    <div data-testid="deferred-creator-profile-card">
       {isLoading ? 'loading' : loadError ?? initialProfile?.username ?? 'empty'}
     </div>
   ),
@@ -107,7 +123,8 @@ describe('ProfilePage', () => {
 
     render(await ProfilePage({}));
 
-    expect(screen.getByTestId('creator-profile-card')).toHaveTextContent('persisted-name');
+    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveTextContent('persisted-name');
+    expect(screen.queryByTestId('direct-creator-profile-card')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /view public profile/i })).toHaveAttribute(
       'href',
       '/creators/persisted-name'

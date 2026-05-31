@@ -393,6 +393,23 @@ describe('showcase feed', () => {
       },
       previewText: 'Unlock the exact prompt stack.',
       allowRemix: true,
+      resourceItems: [{
+        type: 'remix_access',
+        role: 'primary',
+        sectionId: null,
+        title: 'Remix access',
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'direct_remix',
+      }],
+      resourceSections: [],
     });
   });
 

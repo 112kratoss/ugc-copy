@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { headers } from 'next/headers';
 import { ArrowRight, ShoppingBag } from 'lucide-react';
 
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
@@ -21,6 +20,8 @@ function getParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+export const revalidate = 60;
+
 export default async function MarketplacePage({ searchParams }: MarketplacePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const filter = normalizeMarketplaceResourceFilter(
@@ -32,8 +33,6 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
   );
   const tool = slugifySourceTool(getParam(resolvedSearchParams.tool)) ?? '';
   const q = (getParam(resolvedSearchParams.q) ?? '').trim().slice(0, 80);
-  const headerStore = await headers();
-  const countryCode = headerStore.get('x-vercel-ip-country');
   const assetPage = await getMarketplaceResourceList({
     filter,
     resource,
@@ -42,7 +41,7 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
     sort,
     limit: 24,
     offset: 0,
-    countryCode,
+    countryCode: null,
   });
   const initialPage = {
     items: assetPage.items ?? [],

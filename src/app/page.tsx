@@ -1,12 +1,10 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { headers } from 'next/headers';
 import { ArrowRight } from 'lucide-react';
 
-import { AuthProvider } from '@/app/components/AuthProvider';
 import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
-import HomeShowcasePreviewGrid from '@/app/components/HomeShowcasePreviewGrid';
+import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowcasePreviewGrid';
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
 import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
@@ -19,7 +17,6 @@ import {
   siteConfig,
 } from '@/lib/seo';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
-import { getServerAuthState } from '@/lib/supabase-server';
 
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
@@ -28,6 +25,8 @@ export const metadata: Metadata = createMetadata({
     'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with magicbooklet.',
   path: '/',
 });
+
+export const revalidate = 60;
 
 const LATEST_MODELS = [
   {
@@ -68,28 +67,17 @@ const LATEST_MODELS = [
   },
 ] as const;
 
-async function getOptionalRequestCountryCode() {
-  try {
-    const headerStore = await headers();
-    return headerStore.get('x-vercel-ip-country');
-  } catch {
-    return null;
-  }
-}
-
 export default async function Home() {
-  const auth = await getServerAuthState();
-  const countryCode = await getOptionalRequestCountryCode();
   const showcaseFeed = await getShowcaseFeedPage({
     category: 'all',
     sort: 'top-saves',
     offset: 0,
     limit: 12,
-    viewerUserId: auth.session?.user?.id ?? null,
-    countryCode,
+    viewerUserId: null,
+    countryCode: null,
   });
   const previewByTool = await loadCreatorToolPreviewMap({
-    viewerUserId: auth.session?.user?.id ?? null,
+    viewerUserId: null,
     seedItems: showcaseFeed.items,
   });
 
@@ -226,13 +214,11 @@ export default async function Home() {
             variant="minimal"
           />
 
-          <AuthProvider
-            initialSession={auth.session}
-            initialCredits={auth.credits}
-            hasResolvedInitialState
-          >
-            <HomeShowcasePreviewGrid items={showcaseFeed.items} />
-          </AuthProvider>
+          <DeferredHomeShowcasePreviewGrid
+            items={showcaseFeed.items}
+            initialSession={null}
+            initialCredits={null}
+          />
         </section>
       </main>
 

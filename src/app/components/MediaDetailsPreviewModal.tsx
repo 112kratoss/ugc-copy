@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { Check, Copy, Film, Image as ImageIcon, Volume2, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -38,24 +37,24 @@ export default function MediaDetailsPreviewModal({
   creator,
   actions,
 }: MediaDetailsPreviewModalProps) {
+  if (!isOpen || (!src && mediaType !== 'text')) {
+    return null;
+  }
+
   return (
-    <AnimatePresence>
-      {isOpen && (src || mediaType === 'text') ? (
-        <MediaDetailsPreviewDialog
-          key={`${mediaType}:${src ?? title}`}
-          onClose={onClose}
-          mediaType={mediaType}
-          src={src}
-          alt={alt}
-          title={title}
-          prompt={prompt}
-          body={body}
-          inputMedia={inputMedia}
-          creator={creator}
-          actions={actions}
-        />
-      ) : null}
-    </AnimatePresence>
+    <MediaDetailsPreviewDialog
+      key={`${mediaType}:${src ?? title}`}
+      onClose={onClose}
+      mediaType={mediaType}
+      src={src}
+      alt={alt}
+      title={title}
+      prompt={prompt}
+      body={body}
+      inputMedia={inputMedia}
+      creator={creator}
+      actions={actions}
+    />
   );
 }
 
@@ -219,17 +218,11 @@ function MediaDetailsPreviewDialog({
   }
 
   return createPortal(
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+    <div
       className="preview-modal-overlay fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm sm:items-center sm:p-4"
       onClick={onClose}
     >
-      <motion.div
-        initial={{ scale: 0.95, opacity: 0, y: 20 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        exit={{ scale: 0.95, opacity: 0, y: 20 }}
+      <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -312,8 +305,8 @@ function MediaDetailsPreviewDialog({
             {hasPrompt ? trimmedPrompt : mediaType === 'text' ? 'No extra notes available' : 'No prompt available'}
           </p>
         </div>
-      </motion.div>
-    </motion.div>,
+      </div>
+    </div>,
     portalRoot
   );
 }

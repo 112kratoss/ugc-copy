@@ -18,6 +18,7 @@ describe('HoverVideo', () => {
 
     expect(video).not.toBeNull();
     expect(video).not.toHaveAttribute('autoplay');
+    expect(video).toHaveAttribute('preload', 'metadata');
   });
 
   it('enables autoplay when requested', () => {

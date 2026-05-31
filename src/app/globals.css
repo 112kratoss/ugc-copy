@@ -93,6 +93,164 @@ body {
   padding-inline: clamp(1rem, 1.9vw, 2.25rem);
 }
 
+.app-shell-root {
+  min-height: 100dvh;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.16), transparent 32rem),
+    radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.1), transparent 28rem),
+    #050506;
+  color: #f4f4f5;
+}
+
+.app-shell-sidebar {
+  display: none;
+}
+
+.app-shell-main {
+  min-height: 100dvh;
+  width: 100%;
+}
+
+.app-shell-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 7, 8, 0.86);
+  padding: 0.55rem 0.75rem;
+  backdrop-filter: blur(18px);
+}
+
+.app-shell-content {
+  min-height: calc(100dvh - 58px);
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+.app-shell-command {
+  display: none;
+}
+
+.app-shell-bottom-nav {
+  position: fixed;
+  left: max(0.75rem, env(safe-area-inset-left));
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  z-index: 60;
+  display: flex;
+  gap: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.25rem;
+  background: rgba(8, 8, 10, 0.9);
+  padding: 0.35rem;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(18px);
+}
+
+.app-panel {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.5rem;
+  background: rgba(14, 14, 16, 0.78);
+  box-shadow: 0 24px 120px rgba(0, 0, 0, 0.35);
+}
+
+.app-panel-subtle {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1.25rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-scrollbar {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  scrollbar-width: thin;
+}
+
+.app-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.app-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-scrollbar::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  background-clip: padding-box;
+}
+
+@media (min-width: 768px) {
+  .app-shell-root {
+    display: grid;
+    grid-template-columns: 192px minmax(0, 1fr);
+  }
+
+  .app-shell-sidebar {
+    position: sticky;
+    top: 0;
+    display: flex;
+    height: 100dvh;
+    flex-direction: column;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(180deg, rgba(12, 12, 14, 0.98), rgba(7, 7, 8, 0.96));
+  }
+
+  .app-shell-header {
+    min-height: 58px;
+    padding-inline: 1.7rem;
+  }
+
+  .app-shell-content {
+    min-height: calc(100dvh - 58px);
+    padding-bottom: 0;
+  }
+
+  .app-shell-command {
+    display: flex;
+    width: min(34vw, 440px);
+    min-width: 220px;
+    align-items: center;
+    gap: 0.65rem;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.035);
+    padding: 0.65rem 0.85rem;
+    color: #a1a1aa;
+    font-size: 0.8rem;
+    transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+  }
+
+  .app-shell-command:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e4e4e7;
+  }
+
+  .app-shell-bottom-nav {
+    display: none;
+  }
+}
+
+@media (min-width: 1280px) {
+  .app-shell-root {
+    grid-template-columns: 192px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .app-shell-header {
+    padding-inline: 0.65rem;
+  }
+
+  .app-shell-header h1 {
+    max-width: 9rem;
+  }
+}
+
 @media (max-height: 760px) {
   .preview-modal-overlay {
     align-items: flex-start;

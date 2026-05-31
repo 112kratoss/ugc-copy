@@ -9,6 +9,7 @@ import {
   getPostMediaKind,
   isMissingMarketplaceSchemaError,
   isMissingPostResourceBundlesSchemaError,
+  isMissingPostResourceItemsColumnError,
   isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
@@ -23,6 +24,9 @@ import {
 import {
   buildPostResourceBundleLockedPreview,
   normalizePostResourceAttachments,
+  normalizePostResourceItems,
+  normalizePostResourceSections,
+  resolvePostRemixCapability,
   validatePostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 import {
@@ -37,6 +41,8 @@ import type {
   MarketplaceResourceKindFilter,
   MarketplaceResourceSort,
   PersistedPostResourceBundleAccessMode,
+  PostRemixCapability,
+  PostRemixTarget,
   PostResourceAttachment,
   PostResourceBundleInput,
   PostResourceBundleLockedPreview,
@@ -61,6 +67,11 @@ import {
 } from '@/lib/workflow-canvas';
 
 type LinkedPostScope = 'public' | 'owner';
+
+const BUNDLE_ROW_SELECT =
+  'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at';
+const BUNDLE_ROW_SELECT_LEGACY =
+  'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at';
 
 type LinkedPostQueryResult = {
   data: unknown[] | null;
@@ -90,6 +101,8 @@ interface BundleRow {
   workflow_snapshot: Partial<WorkflowCanvasGraph> | null;
   attachments: unknown;
   allow_remix: boolean;
+  resource_sections?: unknown;
+  resource_items?: unknown;
   price_usd_cents: number;
   sales_count: number;
   earnings_usd_cents: number;
@@ -99,6 +112,7 @@ interface BundleRow {
 
 interface LinkedPostRow extends PostMediaRow {
   id: string;
+  generation_id: string | null;
   title: string | null;
   body: string | null;
   category: ShowcaseItemCategory;
@@ -119,6 +133,7 @@ interface OrderRow {
   buyer_user_id: string;
   legacy_order_id: string | null;
   id: string;
+  generationId: string | null;
   amount_subunits: number;
   currency: MarketplaceCheckoutCurrency;
   created_at: string;
@@ -133,6 +148,7 @@ export interface PostResourceBundleSellerSummary {
 
 export interface PostResourceBundleLinkedPost {
   id: string;
+  generationId: string | null;
   title: string;
   category: ShowcaseItemCategory;
   body: string;
@@ -169,6 +185,8 @@ export interface MarketplaceResourceListItem {
   seller: PostResourceBundleSellerSummary;
   post: PostResourceBundleLinkedPost | null;
   priceQuote: MarketplacePriceQuote;
+  remixCapability: PostRemixCapability;
+  remixTarget: PostRemixTarget;
 }
 
 export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
@@ -404,7 +422,7 @@ async function loadLinkedPostMap(
   const adminSupabase = createServiceClient();
   let resultQuery = adminSupabase
     .from('posts')
-    .select('id, title, body, category, post_format, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
+    .select('id, generation_id, title, body, category, post_format, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
     .in('id', uniquePostIds);
 
   if (scope === 'public') {
@@ -420,6 +438,7 @@ async function loadLinkedPostMap(
       .select(
         [
           'id',
+          'generation_id',
           'title',
           'body',
           'category',
@@ -454,7 +473,7 @@ async function loadLinkedPostMap(
   if (isMissingPostTextColumnsError(result.error)) {
     let legacyQuery = adminSupabase
       .from('posts')
-      .select('id, title, category, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
+      .select('id, generation_id, title, category, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
@@ -469,7 +488,8 @@ async function loadLinkedPostMap(
         .from('posts')
         .select(
           [
-            'id',
+          'id',
+          'generation_id',
             'title',
             'category',
             'visibility',
@@ -521,6 +541,7 @@ async function loadLinkedPostMap(
   const linkedPosts = await Promise.all(
     rows.map(async (row) => ({
       id: row.id,
+      generationId: row.generation_id,
       title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
       category: row.category,
       body: row.body?.trim() || '',
@@ -554,6 +575,18 @@ async function hydrateBundleRows(
     rows.map(async (row) => {
       const normalizedResources = normalizeResources(row);
       const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, row.updated_at);
+      const post = postMap.get(row.post_id) ?? null;
+      const remix = resolvePostRemixCapability({
+        generationId: post?.generationId ?? null,
+        postFormat: post?.postFormat ?? null,
+        category: post?.category ?? null,
+        sourceKind: post?.sourceKind ?? null,
+        resourceBundle: {
+          viewerCanAccess: scope === 'owner',
+          allowRemix: row.allow_remix,
+          items: normalizedResources.items ?? [],
+        },
+      });
 
       return {
         id: row.id,
@@ -572,15 +605,18 @@ async function hydrateBundleRows(
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         seller: toSellerSummary(row.owner_user_id, profilesMap),
-        post: postMap.get(row.post_id) ?? null,
+        post,
         priceQuote: await buildPriceQuote(row.price_usd_cents, countryCode),
+        remixCapability: remix.capability,
+        remixTarget: remix.target,
       };
     })
   );
 }
 
 function normalizeResources(row: BundleRow): PostResourceBundleResources {
-  return {
+  const sections = normalizePostResourceSections(row.resource_sections);
+  const legacyResources: PostResourceBundleResources = {
     promptText: normalizeText(row.prompt_text),
     notesMarkdown: normalizeText(row.notes_markdown),
     workflowShareUrl: normalizeText(row.workflow_share_url),
@@ -589,6 +625,12 @@ function normalizeResources(row: BundleRow): PostResourceBundleResources {
       : null,
     attachments: normalizeAttachments(row.attachments),
     allowRemix: Boolean(row.allow_remix),
+    sections,
+  };
+
+  return {
+    ...legacyResources,
+    items: normalizePostResourceItems(row.resource_items, legacyResources),
   };
 }
 
@@ -607,6 +649,8 @@ function buildBundleMutationPayload(bundle: PostResourceBundleInput | null | und
   }
 
   const resources = bundle?.resources ?? {};
+  const sections = normalizePostResourceSections(resources.sections);
+  const attachments = normalizePostResourceAttachments(resources.attachments);
 
   return {
     accessMode,
@@ -620,8 +664,18 @@ function buildBundleMutationPayload(bundle: PostResourceBundleInput | null | und
       notesMarkdown: normalizeText(resources.notesMarkdown ?? null),
       workflowShareUrl: normalizeText(resources.workflowShareUrl ?? null),
       workflowSnapshot: resources.workflowSnapshot ?? null,
-      attachments: normalizePostResourceAttachments(resources.attachments),
+      attachments,
       allowRemix: Boolean(resources.allowRemix),
+      sections,
+      items: normalizePostResourceItems(resources.items, {
+        promptText: normalizeText(resources.promptText ?? null),
+        notesMarkdown: normalizeText(resources.notesMarkdown ?? null),
+        workflowShareUrl: normalizeText(resources.workflowShareUrl ?? null),
+        workflowSnapshot: resources.workflowSnapshot ?? null,
+        attachments,
+        allowRemix: Boolean(resources.allowRemix),
+        sections,
+      }),
     },
   };
 }
@@ -817,6 +871,8 @@ export async function savePostResourceBundle(params: {
   }
 
   const resources = bundle?.resources ?? {};
+  const sections = normalizePostResourceSections(resources.sections);
+  const attachments = normalizePostResourceAttachments(resources.attachments);
   const validationError = validatePostResourceBundleInput(bundle, { ownerUserId });
   if (validationError) {
     throw new Error(validationError);
@@ -840,8 +896,18 @@ export async function savePostResourceBundle(params: {
     notes_markdown: normalizeText(resources.notesMarkdown ?? null),
     workflow_share_url: normalizeText(resources.workflowShareUrl ?? null),
     workflow_snapshot: resources.workflowSnapshot ?? null,
-    attachments: normalizePostResourceAttachments(resources.attachments),
+    attachments,
     allow_remix: Boolean(resources.allowRemix),
+    resource_sections: sections,
+    resource_items: normalizePostResourceItems(resources.items, {
+      promptText: normalizeText(resources.promptText ?? null),
+      notesMarkdown: normalizeText(resources.notesMarkdown ?? null),
+      workflowShareUrl: normalizeText(resources.workflowShareUrl ?? null),
+      workflowSnapshot: resources.workflowSnapshot ?? null,
+      attachments,
+      allowRemix: Boolean(resources.allowRemix),
+      sections,
+    }),
     price_usd_cents: priceUsdCents,
   };
 
@@ -889,34 +955,41 @@ async function getMarketplaceResourceListFallback(options: {
   const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
   const normalizedQuery = normalizeMarketplaceSearchQuery(q);
   const adminSupabase = createServiceClient();
-  let query = adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at')
-    .eq('status', 'published');
+  const buildQuery = (selectColumns: string) => {
+    let query = adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .eq('status', 'published');
 
-  if (filter === 'free') {
-    query = query.eq('access_mode', 'free');
-  } else if (filter === 'paid') {
-    query = query.eq('access_mode', 'paid');
+    if (filter === 'free') {
+      query = query.eq('access_mode', 'free');
+    } else if (filter === 'paid') {
+      query = query.eq('access_mode', 'paid');
+    }
+
+    if (sort === 'top-sales') {
+      query = query
+        .order('sales_count', { ascending: false })
+        .order('created_at', { ascending: false });
+    } else if (sort === 'price-low') {
+      query = query
+        .order('price_usd_cents', { ascending: true })
+        .order('created_at', { ascending: false });
+    } else if (sort === 'price-high') {
+      query = query
+        .order('price_usd_cents', { ascending: false })
+        .order('created_at', { ascending: false });
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
+
+    return query;
+  };
+
+  let { data, error } = await buildQuery(BUNDLE_ROW_SELECT);
+  if (isMissingPostResourceItemsColumnError(error)) {
+    ({ data, error } = await buildQuery(BUNDLE_ROW_SELECT_LEGACY));
   }
-
-  if (sort === 'top-sales') {
-    query = query
-      .order('sales_count', { ascending: false })
-      .order('created_at', { ascending: false });
-  } else if (sort === 'price-low') {
-    query = query
-      .order('price_usd_cents', { ascending: true })
-      .order('created_at', { ascending: false });
-  } else if (sort === 'price-high') {
-    query = query
-      .order('price_usd_cents', { ascending: false })
-      .order('created_at', { ascending: false });
-  } else {
-    query = query.order('created_at', { ascending: false });
-  }
-
-  const { data, error } = await query;
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
       return {
@@ -934,7 +1007,7 @@ async function getMarketplaceResourceListFallback(options: {
     throw error;
   }
 
-  const rows = (data ?? []) as BundleRow[];
+  const rows = (data ?? []) as unknown as BundleRow[];
   const hydratedItems = await hydrateBundleRows(rows, countryCode);
   const filteredItems = hydratedItems.filter((item) => {
     if (!item.post) {
@@ -1067,11 +1140,16 @@ export async function getPostResourceBundleDetailByPostId(
 ): Promise<PostResourceBundleDetail | null> {
   const { viewerUserId = null, countryCode = null } = options ?? {};
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at')
-    .eq('post_id', postId)
-    .maybeSingle();
+  const selectBundle = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .eq('post_id', postId)
+      .maybeSingle();
+  let { data, error } = await selectBundle(BUNDLE_ROW_SELECT);
+  if (isMissingPostResourceItemsColumnError(error)) {
+    ({ data, error } = await selectBundle(BUNDLE_ROW_SELECT_LEGACY));
+  }
 
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
@@ -1110,14 +1188,28 @@ export async function getPostResourceBundleDetailByPostId(
   const viewerIsOwner = Boolean(viewerUserId && viewerUserId === row.owner_user_id);
   const viewerCanAccess = canViewerAccessBundle(row, viewerUserId, viewerHasPurchased);
   const [hydrated] = await hydrateBundleRows([row], countryCode, viewerIsOwner ? 'owner' : 'public');
+  const normalizedResources = normalizeResources(row);
+  const remix = resolvePostRemixCapability({
+    generationId: hydrated.post?.generationId ?? null,
+    postFormat: hydrated.post?.postFormat ?? null,
+    category: hydrated.post?.category ?? null,
+    sourceKind: hydrated.post?.sourceKind ?? null,
+    resourceBundle: {
+      viewerCanAccess,
+      allowRemix: row.allow_remix,
+      items: normalizedResources.items ?? [],
+    },
+  });
 
   return {
     ...hydrated,
     status: row.status,
-    resources: viewerCanAccess ? normalizeResources(row) : null,
+    resources: viewerCanAccess ? normalizedResources : null,
     viewerHasPurchased,
     viewerIsOwner,
     viewerCanAccess,
+    remixCapability: remix.capability,
+    remixTarget: remix.target,
   };
 }
 
@@ -1129,11 +1221,16 @@ export async function getSellerPostResourceBundleDashboard(
 ): Promise<SellerPostResourceBundleDashboard> {
   const countryCode = options?.countryCode ?? null;
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at')
-    .eq('owner_user_id', userId)
-    .order('created_at', { ascending: false });
+  const selectBundles = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .eq('owner_user_id', userId)
+      .order('created_at', { ascending: false });
+  let { data, error } = await selectBundles(BUNDLE_ROW_SELECT);
+  if (isMissingPostResourceItemsColumnError(error)) {
+    ({ data, error } = await selectBundles(BUNDLE_ROW_SELECT_LEGACY));
+  }
 
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
@@ -1151,7 +1248,7 @@ export async function getSellerPostResourceBundleDashboard(
     throw error;
   }
 
-  const rows = (data ?? []) as BundleRow[];
+  const rows = (data ?? []) as unknown as BundleRow[];
   const hydratedBundles = await hydrateBundleRows(rows, countryCode, 'owner');
   const bundles = hydratedBundles.map((bundle, index) => ({
     ...bundle,
@@ -1298,11 +1395,16 @@ export async function resolvePostIdForResourceIdentifier(identifier: string): Pr
 
 export async function getBundleForOrderById(bundleId: string): Promise<BundleRow | null> {
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at')
-    .eq('id', bundleId)
-    .maybeSingle();
+  const selectBundle = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .eq('id', bundleId)
+      .maybeSingle();
+  let { data, error } = await selectBundle(BUNDLE_ROW_SELECT);
+  if (isMissingPostResourceItemsColumnError(error)) {
+    ({ data, error } = await selectBundle(BUNDLE_ROW_SELECT_LEGACY));
+  }
 
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
@@ -1318,11 +1420,16 @@ export async function getBundleForOrderById(bundleId: string): Promise<BundleRow
 
 export async function getBundleForOrderByPostId(postId: string): Promise<BundleRow | null> {
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at')
-    .eq('post_id', postId)
-    .maybeSingle();
+  const selectBundle = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .eq('post_id', postId)
+      .maybeSingle();
+  let { data, error } = await selectBundle(BUNDLE_ROW_SELECT);
+  if (isMissingPostResourceItemsColumnError(error)) {
+    ({ data, error } = await selectBundle(BUNDLE_ROW_SELECT_LEGACY));
+  }
 
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {

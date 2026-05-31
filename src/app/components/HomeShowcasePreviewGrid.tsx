@@ -143,6 +143,8 @@ export default function HomeShowcasePreviewGrid({
               <img
                 src={item.mediaUrl}
                 alt={item.title}
+                loading="lazy"
+                decoding="async"
                 className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
               />
             ) : (

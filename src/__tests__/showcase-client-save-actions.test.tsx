@@ -165,6 +165,40 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
+  it('hydrates saved state after the signed-in client loads cached public feed items', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => ['post-1'],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ success: true }),
+      };
+    }));
+
+    renderShowcase(createShowcaseItem({ isSaved: false }));
+
+    expect(screen.getByRole('button', {
+      name: /save campaign frame\. 4 saves/i,
+    })).toHaveAttribute('aria-pressed', 'false');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: /remove save from campaign frame\. 4 saves/i,
+      })).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/showcase/saved-state?ids=post-1%2Cgen-1', expect.objectContaining({
+      headers: expect.objectContaining({
+        Authorization: 'Bearer test-token',
+      }),
+    }));
+  });
+
   it('disables prefetching for community card detail and creator links', () => {
     renderShowcase(createShowcaseItem({
       asset: {
@@ -186,5 +220,18 @@ describe('ShowcaseClient save actions', () => {
 
     expect(screen.getAllByRole('link', { name: /view unlock/i }).at(-1)).toHaveAttribute('data-prefetch', 'false');
     expect(screen.getByRole('link', { name: /open page/i })).toHaveAttribute('data-prefetch', 'false');
+  });
+
+  it('lazy-loads image previews in the public showcase grid', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => [],
+    })));
+
+    renderShowcase(createShowcaseItem());
+
+    const image = screen.getByRole('img', { name: 'Campaign Frame' });
+    expect(image).toHaveAttribute('loading', 'lazy');
+    expect(image).toHaveAttribute('decoding', 'async');
   });
 });

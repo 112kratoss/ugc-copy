@@ -90,7 +90,7 @@ describe('posts-server marketplace summaries', () => {
     const { getMarketplaceAssetSummaryMap } = await import('@/lib/posts-server');
     const assetMap = await getMarketplaceAssetSummaryMap(['post-1']);
 
-    expect(assetMap.get('post-1')).toEqual({
+    expect(assetMap.get('post-1')).toEqual(expect.objectContaining({
       id: 'asset-active',
       postId: 'post-1',
       title: 'Public workflow',
@@ -98,6 +98,13 @@ describe('posts-server marketplace summaries', () => {
       priceUsdCents: 1900,
       previewText: 'Reusable launch workflow',
       allowRemix: true,
-    });
+    }));
+    expect(assetMap.get('post-1')?.resourceItems).toEqual([
+      expect.objectContaining({
+        type: 'remix_access',
+        title: 'Remix access',
+        remixUse: 'direct_remix',
+      }),
+    ]);
   });
 });

@@ -307,6 +307,13 @@ describe('Showcase detail page', () => {
         lockedPreview: {
           resourceKinds: ['prompt'],
           attachmentPreviews: [],
+          itemCounts: { prompt: 1 },
+          itemPreviews: [{
+            type: 'prompt',
+            title: 'Prompt',
+            role: 'primary',
+            remixUse: 'none',
+          }],
           hasPrompt: true,
           hasNotes: false,
           hasWorkflow: false,

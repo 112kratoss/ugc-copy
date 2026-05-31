@@ -28,20 +28,10 @@ export async function RequireAuth({
   );
 }
 
-export async function OptionalAuth({
+export function OptionalAuth({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const auth = await getServerAuthState();
-
-  return (
-    <AuthProvider
-      initialSession={auth.session}
-      initialCredits={auth.credits}
-      hasResolvedInitialState
-    >
-      {children}
-    </AuthProvider>
-  );
+  return <AuthProvider>{children}</AuthProvider>;
 }

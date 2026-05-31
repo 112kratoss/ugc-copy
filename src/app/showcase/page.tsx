@@ -1,9 +1,7 @@
 import type { Metadata } from 'next';
-import { headers } from 'next/headers';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
-import { getServerAuthState } from '@/lib/supabase-server';
 import {
     SHOWCASE_PAGE_SIZE,
     normalizeShowcaseCategory,
@@ -19,6 +17,8 @@ type ShowcasePageProps = {
 };
 
 const SHOWCASE_PARAM_KEYS = new Set(['category', 'sort', 'offset', 'page', 'tool', 'unlock', 'resource']);
+
+export const revalidate = 60;
 
 function getFirstValue(value: string | string[] | undefined): string | undefined {
     return Array.isArray(value) ? value[0] : value;
@@ -59,8 +59,6 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
 
 export default async function ShowcasePage({ searchParams }: ShowcasePageProps) {
     const resolvedSearchParams = searchParams ? await searchParams : {};
-    const auth = await getServerAuthState();
-    const headerStore = await headers();
     const category = normalizeShowcaseCategory(getFirstValue(resolvedSearchParams.category));
     const sort = normalizeShowcaseSort(getFirstValue(resolvedSearchParams.sort));
     const tool = getFirstValue(resolvedSearchParams.tool) ?? null;
@@ -77,11 +75,11 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         sort,
         offset,
         limit: SHOWCASE_PAGE_SIZE,
-        viewerUserId: auth.session?.user?.id ?? null,
+        viewerUserId: null,
         tool,
         unlock,
         resource,
-        countryCode: headerStore.get('x-vercel-ip-country'),
+        countryCode: null,
     });
 
     return (
