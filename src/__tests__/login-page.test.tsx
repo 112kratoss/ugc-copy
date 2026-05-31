@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import LoginPage from '@/app/login/page';
 
@@ -33,6 +33,9 @@ vi.mock('@/lib/supabase', () => ({
 }));
 
 describe('LoginPage onboarding redirects', () => {
+  const originalAuthRedirectOrigin = process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN;
+  const originalSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+
   beforeEach(() => {
     mocks.replace.mockClear();
     mocks.refresh.mockClear();
@@ -45,6 +48,22 @@ describe('LoginPage onboarding redirects', () => {
     mocks.signInWithPassword.mockResolvedValue({ error: null });
     mocks.signInWithOAuth.mockResolvedValue({ error: null });
     mocks.signUp.mockResolvedValue({ data: { session: null }, error: null });
+    delete process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN;
+    process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
+  });
+
+  afterEach(() => {
+    if (originalAuthRedirectOrigin === undefined) {
+      delete process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN;
+    } else {
+      process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN = originalAuthRedirectOrigin;
+    }
+
+    if (originalSiteUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_SITE_URL;
+    } else {
+      process.env.NEXT_PUBLIC_SITE_URL = originalSiteUrl;
+    }
   });
 
   function fillAuthForm() {
@@ -85,6 +104,7 @@ describe('LoginPage onboarding redirects', () => {
     const emailRedirectTo = new URL(signUpPayload.options.emailRedirectTo);
 
     expect(emailRedirectTo.pathname).toBe('/auth/callback');
+    expect(emailRedirectTo.origin).toBe('https://magicbooklet.com');
     expect(emailRedirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
     expect(mocks.replace).toHaveBeenCalledWith('/profile?welcome=1');
     expect(mocks.replace).not.toHaveBeenCalledWith('/create');
@@ -101,6 +121,7 @@ describe('LoginPage onboarding redirects', () => {
     const signUpPayload = mocks.signUp.mock.calls[0][0];
     const emailRedirectTo = new URL(signUpPayload.options.emailRedirectTo);
 
+    expect(emailRedirectTo.origin).toBe('https://magicbooklet.com');
     expect(emailRedirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
     expect(
       await screen.findByText(/it will open your creator profile setup automatically/i)
@@ -118,7 +139,22 @@ describe('LoginPage onboarding redirects', () => {
     const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
     const redirectTo = new URL(oauthPayload.options.redirectTo);
 
+    expect(redirectTo.origin).toBe('https://magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
     expect(redirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
+  });
+
+  it('allows an explicit auth redirect origin to override the public site URL', async () => {
+    process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN = 'https://www.magicbooklet.com';
+    render(<LoginPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^google$/i }));
+
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
+    const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
+    const redirectTo = new URL(oauthPayload.options.redirectTo);
+
+    expect(redirectTo.origin).toBe('https://www.magicbooklet.com');
+    expect(redirectTo.pathname).toBe('/auth/callback');
   });
 });

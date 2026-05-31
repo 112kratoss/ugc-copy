@@ -25,6 +25,34 @@ function getSafeRedirectPath(value: string | null, fallback = '/profile') {
     return fallback;
 }
 
+function getConfiguredAuthOrigin() {
+    const configuredOrigin =
+        process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN ||
+        process.env.NEXT_PUBLIC_SITE_URL;
+
+    if (configuredOrigin) {
+        try {
+            const parsed = new URL(configuredOrigin);
+            const isSecure = parsed.protocol === 'https:';
+            const isLocal =
+                parsed.protocol === 'http:' &&
+                (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1');
+
+            if (isSecure || isLocal) {
+                return parsed.origin;
+            }
+        } catch {
+            // Fall through to the active browser origin.
+        }
+    }
+
+    return window.location.origin;
+}
+
+function getAuthCallbackUrl(nextPath: string) {
+    return `${getConfiguredAuthOrigin()}/auth/callback?next=${encodeURIComponent(nextPath)}`;
+}
+
 const PROFILE_SETUP_REDIRECT = '/profile?welcome=1';
 
 export default function LoginPage() {
@@ -90,7 +118,7 @@ function LoginContent() {
                     email,
                     password,
                     options: {
-                        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(signupRedirectTo)}`,
+                        emailRedirectTo: getAuthCallbackUrl(signupRedirectTo),
                     },
                 });
                 if (error) throw error;
@@ -122,7 +150,7 @@ function LoginContent() {
             const { error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
-                    redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`,
+                    redirectTo: getAuthCallbackUrl(nextPath),
                 },
             });
             if (error) throw error;
