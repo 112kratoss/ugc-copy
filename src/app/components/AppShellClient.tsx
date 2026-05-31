@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 
 import {
   APP_NAV_ITEMS,
@@ -20,6 +20,10 @@ import {
   type AppNavItem,
 } from './app-shell-nav';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
+
+const subscribeToHydration = () => () => {};
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
 
 function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean }) {
   const Icon = item.icon;
@@ -92,8 +96,15 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
 
 export default function AppShellClient({ children }: { children: React.ReactNode }) {
   const currentPathname = usePathname();
-  const pathname = currentPathname && currentPathname.length > 0 ? currentPathname : '/';
   const [mobileOpen, setMobileOpen] = useState(false);
+  const hasHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
+  const pathname = hasHydrated && currentPathname && currentPathname.length > 0
+    ? currentPathname
+    : '/';
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
