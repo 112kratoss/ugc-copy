@@ -403,5 +403,3 @@ export function WorkflowAssistantDrawer({
     </div>
   );
 }
-
-export const PlannerAssistantDrawer = WorkflowAssistantDrawer;

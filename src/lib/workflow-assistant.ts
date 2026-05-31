@@ -775,7 +775,9 @@ function getRoleMapForManagedNodes(graph: WorkflowCanvasGraph) {
 }
 
 function buildComparableNode(node: WorkflowCanvasNode) {
-  const { runState: _runState, __runtime: _runtime, ...restData } = node.data as Record<string, unknown>;
+  const restData = { ...(node.data as Record<string, unknown>) };
+  delete restData.runState;
+  delete restData.__runtime;
 
   return JSON.stringify({
     type: node.type,
@@ -915,7 +917,7 @@ export function createWorkflowAssistantGraphProposal({
     return draft.node;
   };
 
-  const summaryNode = registerNode(
+  registerNode(
     createAssistantNode(
       existingRoleMap,
       'note',

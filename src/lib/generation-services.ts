@@ -304,19 +304,6 @@ async function resolveMediaUrls(
   return Promise.all(urls.map((url) => resolveStoredMediaUrl(supabase, url)));
 }
 
-function normalizeMultiPromptInputs(value: VideoMultiPromptInput[] | undefined): VideoMultiPromptInput[] {
-  return (value || [])
-    .map((shot, index) => ({
-      id: typeof shot.id === 'string' && shot.id.trim() ? shot.id : `shot-${index + 1}`,
-      prompt: typeof shot.prompt === 'string' ? shot.prompt.trim() : '',
-      duration:
-        typeof shot.duration === 'number' && Number.isFinite(shot.duration)
-          ? Math.max(1, Math.min(12, Math.round(shot.duration)))
-          : 5,
-    }))
-    .filter((shot) => shot.prompt.length > 0);
-}
-
 function normalizeDialogueTurns(dialogueTurns: DialogueTurnInput[] | undefined): DialogueTurnInput[] {
   return (dialogueTurns || [])
     .map((turn) => ({
