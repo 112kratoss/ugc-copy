@@ -91,7 +91,8 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
 }
 
 export default function AppShellClient({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname() ?? '/';
+  const currentPathname = usePathname();
+  const pathname = currentPathname && currentPathname.length > 0 ? currentPathname : '/';
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
