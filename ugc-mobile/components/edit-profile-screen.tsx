@@ -1,0 +1,638 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
+import { ArrowLeft, Camera, Check, ImageIcon, Sparkles } from 'lucide-react-native';
+import type { ComponentProps } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { FantasyPortalArt } from '@/components/fantasy-portal-art';
+import { PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { ApiError } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth';
+import { hasEditProfileChanges } from '@/lib/edit-profile-form';
+import { getEditProfileScrollPadding } from '@/lib/edit-profile-layout';
+import { uploadProfileImage } from '@/lib/media';
+import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/profile-view-model';
+import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { appTheme } from '@/lib/theme';
+import type { ProfileResponse } from '@/lib/types';
+
+const USERNAME_PATTERN = /^[a-z0-9-]{3,24}$/;
+const MAX_DISPLAY_NAME_LENGTH = 60;
+const MAX_BIO_LENGTH = 280;
+
+interface EditProfileForm {
+  username: string;
+  displayName: string;
+  bio: string;
+  avatarUrl: string;
+  coverUrl: string;
+}
+
+type FieldErrors = Partial<Record<keyof EditProfileForm, string>>;
+
+const emptyForm: EditProfileForm = {
+  username: '',
+  displayName: '',
+  bio: '',
+  avatarUrl: '',
+  coverUrl: '',
+};
+
+export function EditProfileScreen() {
+  const { user, api, refreshProfile } = useAuth();
+  const queryClient = useQueryClient();
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const topInset = resolvedTopInset(insets.top);
+  const bottomInset = resolvedBottomInset(insets.bottom);
+  const keyboardHeight = useKeyboardHeight();
+  const scrollBottomPadding = getEditProfileScrollPadding({ bottomInset, keyboardHeight });
+  const pageWidth = Math.min(width, 430);
+  const isCompact = pageWidth < 390;
+  const horizontalPadding = isCompact ? 16 : 20;
+
+  const [form, setForm] = useState<EditProfileForm>(emptyForm);
+  const [avatarDraftUri, setAvatarDraftUri] = useState<string | null>(null);
+  const [coverDraftUri, setCoverDraftUri] = useState<string | null>(null);
+  const [avatarAsset, setAvatarAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [coverAsset, setCoverAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [message, setMessage] = useState<string | null>(null);
+
+  const profileQuery = useQuery({
+    queryKey: ['profile', user?.id],
+    enabled: Boolean(user),
+    queryFn: api.getProfile,
+  });
+
+  useEffect(() => {
+    if (profileQuery.data) {
+      setForm(formFromProfile(profileQuery.data));
+      setAvatarDraftUri(null);
+      setCoverDraftUri(null);
+      setAvatarAsset(null);
+      setCoverAsset(null);
+      setFieldErrors({});
+      setMessage(null);
+    }
+  }, [profileQuery.data]);
+
+  const profile = profileQuery.data;
+  const previewName = getProfileName(
+    {
+      ...(profile ?? emptyProfile(user?.id ?? 'preview')),
+      username: normalizeUsername(form.username) || profile?.username || profile?.suggestedUsername || null,
+      displayName: form.displayName || null,
+      bio: form.bio || null,
+      avatarUrl: (avatarDraftUri ?? form.avatarUrl) || null,
+      coverUrl: (coverDraftUri ?? form.coverUrl) || null,
+    },
+    user?.email
+  );
+  const previewHandle = getProfileHandle(
+    {
+      ...(profile ?? emptyProfile(user?.id ?? 'preview')),
+      username: normalizeUsername(form.username) || profile?.username || profile?.suggestedUsername || null,
+      displayName: form.displayName || null,
+    },
+    user?.email
+  );
+  const previewInitials = getProfileInitials(
+    {
+      ...(profile ?? emptyProfile(user?.id ?? 'preview')),
+      username: normalizeUsername(form.username) || profile?.username || profile?.suggestedUsername || null,
+      displayName: form.displayName || null,
+    },
+    user?.email
+  );
+  const initialForm = useMemo(() => (profile ? formFromProfile(profile) : emptyForm), [profile]);
+  const hasProfileChanges = hasEditProfileChanges({
+    current: form,
+    initial: initialForm,
+    hasAvatarDraft: Boolean(avatarAsset),
+    hasCoverDraft: Boolean(coverAsset),
+  });
+  const bioCount = form.bio.length;
+  const saveLabel = useMemo(() => {
+    if (avatarAsset || coverAsset) return 'Upload & Save';
+    return 'Save Changes';
+  }, [avatarAsset, coverAsset]);
+
+  const saveMutation = useMutation({
+    mutationFn: saveProfile,
+    onSuccess: async () => {
+      await refreshProfile();
+      await queryClient.invalidateQueries({ queryKey: ['profile'] });
+      await queryClient.invalidateQueries({ queryKey: ['home-profile'] });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(tabs)/profile' as never);
+      }
+    },
+    onError: async (error) => {
+      if (error instanceof ApiError) {
+        const details = error.details as { fieldErrors?: FieldErrors } | undefined;
+        if (details?.fieldErrors) {
+          setFieldErrors((current) => ({ ...current, ...details.fieldErrors }));
+        }
+      }
+      setMessage(error instanceof Error ? error.message : 'Profile could not be saved.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    },
+  });
+
+  async function pickProfileImage(role: 'avatar' | 'cover') {
+    setMessage(null);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setMessage('Allow photo access to choose a profile image.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: role === 'avatar' ? [1, 1] : [16, 9],
+      quality: 0.9,
+    });
+
+    if (result.canceled || !result.assets[0]) {
+      return;
+    }
+
+    const asset = result.assets[0];
+    if (role === 'avatar') {
+      setAvatarAsset(asset);
+      setAvatarDraftUri(asset.uri);
+      setFieldErrors((current) => ({ ...current, avatarUrl: undefined }));
+    } else {
+      setCoverAsset(asset);
+      setCoverDraftUri(asset.uri);
+      setFieldErrors((current) => ({ ...current, coverUrl: undefined }));
+    }
+  }
+
+  async function saveProfile() {
+    if (!user) {
+      throw new Error('Sign in before editing your profile.');
+    }
+
+    const validationErrors = validateForm(form);
+    setFieldErrors(validationErrors);
+    if (Object.keys(validationErrors).length > 0) {
+      throw new Error('Fix the highlighted profile fields.');
+    }
+
+    let avatarUrl = form.avatarUrl || null;
+    let coverUrl = form.coverUrl || null;
+
+    if (avatarAsset) {
+      setMessage('Uploading display photo...');
+      avatarUrl = await uploadProfileImage(avatarAsset.uri, {
+        role: 'avatar',
+        fileName: avatarAsset.fileName,
+        mimeType: avatarAsset.mimeType,
+        sizeBytes: avatarAsset.fileSize,
+      });
+    }
+
+    if (coverAsset) {
+      setMessage('Uploading background picture...');
+      coverUrl = await uploadProfileImage(coverAsset.uri, {
+        role: 'cover',
+        fileName: coverAsset.fileName,
+        mimeType: coverAsset.mimeType,
+        sizeBytes: coverAsset.fileSize,
+      });
+    }
+
+    setMessage('Saving profile...');
+    await api.updateProfile({
+      username: normalizeUsername(form.username),
+      displayName: form.displayName,
+      bio: form.bio,
+      avatarUrl,
+      coverUrl,
+      websiteUrl: profile?.websiteUrl ?? null,
+      twitterHandle: profile?.twitterHandle ?? null,
+      instagramHandle: profile?.instagramHandle ?? null,
+      tiktokHandle: profile?.tiktokHandle ?? null,
+      location: profile?.location ?? null,
+    });
+  }
+
+  if (!user) {
+    return (
+      <EditProfileShell topInset={topInset} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
+        <EditHeader isSaving={false} onBack={() => router.back()} onSave={undefined} />
+        <StatusBlock title="Sign in required" body="Sign in to update your Magic Booklet profile." />
+        <PrimaryButton label="Sign in" accent="motion" onPress={() => router.replace('/auth' as never)} />
+      </EditProfileShell>
+    );
+  }
+
+  return (
+    <EditProfileShell topInset={topInset} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
+      <EditHeader
+        isSaving={saveMutation.isPending}
+        onBack={() => router.back()}
+        onSave={hasProfileChanges && !profileQuery.isLoading ? () => saveMutation.mutate() : undefined}
+      />
+
+      {profileQuery.isLoading ? (
+        <View style={{ minHeight: 360, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color="#d946ef" />
+        </View>
+      ) : (
+        <>
+          {profileQuery.error ? (
+            <StatusBlock tone="danger" title="Could not load profile" body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again.'} />
+          ) : null}
+          {message ? <StatusBlock title="Profile status" body={message} /> : null}
+
+          <View style={{ gap: 0 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Change cover"
+              onPress={() => pickProfileImage('cover')}
+              style={({ pressed }) => ({
+                height: isCompact ? 190 : 210,
+                borderRadius: 30,
+                borderCurve: 'continuous',
+                overflow: 'hidden',
+                borderWidth: 1,
+                borderColor: fieldErrors.coverUrl ? 'rgba(251,113,133,0.75)' : 'rgba(168,85,247,0.36)',
+                backgroundColor: '#090914',
+                opacity: pressed ? 0.86 : 1,
+              })}
+            >
+              {coverDraftUri || form.coverUrl ? (
+                <Image source={{ uri: coverDraftUri ?? form.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+              ) : (
+                <FantasyPortalArt variant="tree" muted />
+              )}
+              <LinearGradient colors={['rgba(3,4,13,0.08)', 'rgba(3,4,13,0.76)']} style={{ position: 'absolute', inset: 0 }} />
+              <View style={{ position: 'absolute', left: 18, right: 18, bottom: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
+                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{previewName}</Text>
+                  <Text style={{ color: '#d946ef', fontSize: 14, fontWeight: '900' }}>{previewHandle}</Text>
+                </View>
+                <ActionPill icon={<ImageIcon size={17} color="#fff" />} label="Change cover" />
+              </View>
+            </Pressable>
+
+            <View style={{ marginTop: -44, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Change display photo"
+                onPress={() => pickProfileImage('avatar')}
+                style={({ pressed }) => ({
+                  width: 96,
+                  height: 96,
+                  borderRadius: 48,
+                  padding: 4,
+                  backgroundColor: '#03040d',
+                  opacity: pressed ? 0.86 : 1,
+                })}
+              >
+                <LinearGradient colors={['#f032d0', '#7c3cff', '#22d3ee']} style={{ flex: 1, borderRadius: 44, padding: 2 }}>
+                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: '#141225' }}>
+                    {avatarDraftUri || form.avatarUrl ? (
+                      <Image source={{ uri: avatarDraftUri ?? form.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+                    ) : (
+                      <>
+                        <Sparkles size={22} color="#d946ef" />
+                        <Text style={{ color: '#fff', fontSize: 27, fontWeight: '900' }}>{previewInitials}</Text>
+                      </>
+                    )}
+                  </View>
+                </LinearGradient>
+                <View style={{ position: 'absolute', right: 0, bottom: 2, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#d946ef', borderWidth: 3, borderColor: '#03040d' }}>
+                  <Camera size={16} color="#fff" />
+                </View>
+              </Pressable>
+              <ActionPill icon={<Camera size={17} color="#fff" />} label="Change photo" onPress={() => pickProfileImage('avatar')} />
+            </View>
+            {fieldErrors.avatarUrl || fieldErrors.coverUrl ? (
+              <View style={{ paddingHorizontal: 4, paddingTop: 10, gap: 4 }}>
+                {fieldErrors.avatarUrl ? <ErrorText text={fieldErrors.avatarUrl} /> : null}
+                {fieldErrors.coverUrl ? <ErrorText text={fieldErrors.coverUrl} /> : null}
+              </View>
+            ) : null}
+          </View>
+
+          <GlassForm>
+            <ProfileTextField
+              label="Display name"
+              value={form.displayName}
+              onChangeText={(displayName) => {
+                setForm((current) => ({ ...current, displayName }));
+                setFieldErrors((current) => ({ ...current, displayName: undefined }));
+              }}
+              error={fieldErrors.displayName}
+              placeholder="LunaDreams"
+              maxLength={MAX_DISPLAY_NAME_LENGTH}
+            />
+            <ProfileTextField
+              label="Username"
+              value={form.username}
+              onChangeText={(username) => {
+                setForm((current) => ({ ...current, username }));
+                setFieldErrors((current) => ({ ...current, username: undefined }));
+              }}
+              error={fieldErrors.username}
+              placeholder="@lunadreams"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <ProfileTextField
+              label="Bio"
+              value={form.bio}
+              onChangeText={(bio) => {
+                setForm((current) => ({ ...current, bio }));
+                setFieldErrors((current) => ({ ...current, bio: undefined }));
+              }}
+              error={fieldErrors.bio}
+              placeholder="Fantasy worlds, motion stories, and AI art experiments."
+              multiline
+              maxLength={MAX_BIO_LENGTH}
+              footer={`${bioCount}/${MAX_BIO_LENGTH}`}
+            />
+          </GlassForm>
+
+          <View style={{ gap: 12 }}>
+            <PrimaryButton
+              label={saveMutation.isPending ? 'Saving...' : saveLabel}
+              accent="motion"
+              loading={saveMutation.isPending}
+              disabled={profileQuery.isLoading || !hasProfileChanges}
+              onPress={() => saveMutation.mutate()}
+            />
+            <SecondaryButton label="Cancel" disabled={saveMutation.isPending} onPress={() => router.back()} />
+          </View>
+        </>
+      )}
+    </EditProfileShell>
+  );
+}
+
+function EditProfileShell({
+  children,
+  topInset,
+  scrollBottomPadding,
+  horizontalPadding,
+}: {
+  children: React.ReactNode;
+  topInset: number;
+  scrollBottomPadding: number;
+  horizontalPadding: number;
+}) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
+      <View style={{ position: 'absolute', inset: 0, backgroundColor: '#03040d' }} />
+      <View pointerEvents="none" style={{ position: 'absolute', top: -130, right: -100, width: 280, height: 280, borderRadius: 140, backgroundColor: 'rgba(217,70,239,0.16)' }} />
+      <View pointerEvents="none" style={{ position: 'absolute', bottom: 20, left: -130, width: 280, height: 280, borderRadius: 140, backgroundColor: 'rgba(34,211,238,0.11)' }} />
+      <ScrollView
+        contentInsetAdjustmentBehavior="never"
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: 16,
+          paddingHorizontal: horizontalPadding,
+          paddingBottom: scrollBottomPadding,
+          gap: 18,
+        }}
+      >
+        {children}
+      </ScrollView>
+    </View>
+  );
+}
+
+function useKeyboardHeight() {
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
+      setKeyboardHeight(event.endCoordinates.height);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  return keyboardHeight;
+}
+
+function EditHeader({
+  isSaving,
+  onBack,
+  onSave,
+}: {
+  isSaving: boolean;
+  onBack: () => void;
+  onSave?: () => void;
+}) {
+  return (
+    <View style={{ minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Back"
+        disabled={isSaving}
+        onPress={onBack}
+        style={({ pressed }) => ({
+          width: 42,
+          height: 42,
+          borderRadius: 21,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'rgba(255,255,255,0.07)',
+          opacity: pressed ? 0.72 : isSaving ? 0.5 : 1,
+        })}
+      >
+        <ArrowLeft size={22} color="#fff" />
+      </Pressable>
+      <Text style={{ flex: 1, textAlign: 'center', color: '#fff', fontSize: 21, fontWeight: '900' }}>Edit Profile</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Save profile"
+        disabled={!onSave || isSaving}
+        onPress={onSave}
+        style={({ pressed }) => ({
+          minWidth: 74,
+          minHeight: 42,
+          borderRadius: 21,
+          overflow: 'hidden',
+          opacity: pressed ? 0.82 : !onSave || isSaving ? 0.55 : 1,
+        })}
+      >
+        <LinearGradient
+          colors={['#f032d0', '#7c3cff']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ flex: 1, minHeight: 42, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }}
+        >
+          {isSaving ? <ActivityIndicator color="#fff" size="small" /> : <Check size={16} color="#fff" />}
+          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '900' }}>Save</Text>
+        </LinearGradient>
+      </Pressable>
+    </View>
+  );
+}
+
+function GlassForm({ children }: { children: React.ReactNode }) {
+  return (
+    <View
+      style={{
+        gap: 16,
+        borderRadius: 28,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.12)',
+        backgroundColor: 'rgba(255,255,255,0.055)',
+        padding: 16,
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+function ProfileTextField({
+  label,
+  error,
+  footer,
+  multiline,
+  ...props
+}: ComponentProps<typeof TextInput> & {
+  label: string;
+  error?: string;
+  footer?: string;
+}) {
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
+        {footer ? <Text style={{ color: appTheme.colors.faint, fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{footer}</Text> : null}
+      </View>
+      <TextInput
+        placeholderTextColor={appTheme.colors.faint}
+        multiline={multiline}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        style={{
+          minHeight: multiline ? 122 : 54,
+          borderRadius: multiline ? 22 : 18,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: error ? 'rgba(251,113,133,0.72)' : 'rgba(255,255,255,0.12)',
+          backgroundColor: 'rgba(3,4,13,0.72)',
+          color: '#fff',
+          fontSize: 16,
+          fontWeight: '700',
+          paddingHorizontal: 15,
+          paddingVertical: multiline ? 14 : 0,
+        }}
+        {...props}
+      />
+      {error ? <ErrorText text={error} /> : null}
+    </View>
+  );
+}
+
+function ActionPill({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress?: () => void;
+}) {
+  const content = (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 12, paddingVertical: 9 }}>
+      {icon}
+      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>{label}</Text>
+    </View>
+  );
+
+  if (!onPress) return content;
+
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.76 : 1 })}>
+      {content}
+    </Pressable>
+  );
+}
+
+function ErrorText({ text }: { text: string }) {
+  return <Text style={{ color: '#fb7185', fontSize: 13, lineHeight: 18, fontWeight: '700' }}>{text}</Text>;
+}
+
+function formFromProfile(profile: ProfileResponse): EditProfileForm {
+  return {
+    username: profile.username ?? profile.suggestedUsername ?? '',
+    displayName: profile.displayName ?? '',
+    bio: profile.bio ?? '',
+    avatarUrl: profile.avatarUrl ?? '',
+    coverUrl: profile.coverUrl ?? '',
+  };
+}
+
+function normalizeUsername(value: string) {
+  const normalized = value.trim().replace(/^@+/, '').toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function validateForm(form: EditProfileForm): FieldErrors {
+  const errors: FieldErrors = {};
+  const username = normalizeUsername(form.username);
+
+  if (!username) {
+    errors.username = 'Choose a username for your profile.';
+  } else if (!USERNAME_PATTERN.test(username)) {
+    errors.username = 'Use 3-24 lowercase letters, numbers, or hyphens.';
+  }
+
+  if (form.displayName.trim().length > MAX_DISPLAY_NAME_LENGTH) {
+    errors.displayName = `Display name must be ${MAX_DISPLAY_NAME_LENGTH} characters or fewer.`;
+  }
+
+  if (form.bio.trim().length > MAX_BIO_LENGTH) {
+    errors.bio = `Bio must be ${MAX_BIO_LENGTH} characters or fewer.`;
+  }
+
+  return errors;
+}
+
+function emptyProfile(id: string): ProfileResponse {
+  return {
+    id,
+    username: null,
+    suggestedUsername: null,
+    displayName: null,
+    bio: null,
+    avatarUrl: null,
+    coverUrl: null,
+    websiteUrl: null,
+    twitterHandle: null,
+    instagramHandle: null,
+    tiktokHandle: null,
+    location: null,
+    credits: null,
+  };
+}
