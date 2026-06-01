@@ -351,7 +351,6 @@ export const VIDEO_MODELS = {
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
-export type VideoModel = (typeof VIDEO_MODELS)[VideoModelId];
 
 export function getVideoElementSupport(
     modelId: VideoModelId,
@@ -500,12 +499,10 @@ export const SOUND_EFFECT_MODELS = {
 
 export type SoundEffectModelId = keyof typeof SOUND_EFFECT_MODELS;
 
-export const AUDIO_MODELS = {
+const AUDIO_MODELS = {
     ...VOICEOVER_MODELS,
     ...SOUND_EFFECT_MODELS,
 } as const;
-
-export type AudioModelId = keyof typeof AUDIO_MODELS;
 
 export interface DialogueTurnPricingInput {
     text: string;

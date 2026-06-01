@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export type MobilePushPlatform = 'ios' | 'android';
+type MobilePushPlatform = 'ios' | 'android';
 export type MobileNotificationCategory = 'generation' | 'commerce' | 'social' | 'system';
 export type MobileNotificationType =
   | 'generation_succeeded'
@@ -759,7 +759,7 @@ export async function createMobileNotification({
   return notification;
 }
 
-export async function createMobileNotificationSafely(params: Parameters<typeof createMobileNotification>[0]) {
+async function createMobileNotificationSafely(params: Parameters<typeof createMobileNotification>[0]) {
   try {
     return await createMobileNotification(params);
   } catch (error) {

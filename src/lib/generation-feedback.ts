@@ -40,7 +40,7 @@ export function getGenerationKind(descriptor: GenerationDescriptor): GenerationK
   return 'video';
 }
 
-export function getGenerationLabel(kind: GenerationKind): string {
+function getGenerationLabel(kind: GenerationKind): string {
   switch (kind) {
     case 'image':
       return 'image';

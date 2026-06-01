@@ -139,14 +139,14 @@ interface OrderRow {
   created_at: string;
 }
 
-export interface PostResourceBundleSellerSummary {
+interface PostResourceBundleSellerSummary {
   id: string;
   username: string | null;
   name: string;
   avatar: string | null;
 }
 
-export interface PostResourceBundleLinkedPost {
+interface PostResourceBundleLinkedPost {
   id: string;
   generationId: string | null;
   title: string;
@@ -197,7 +197,7 @@ export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
   viewerCanAccess: boolean;
 }
 
-export interface SellerResourceDashboardBundle extends MarketplaceResourceListItem {
+interface SellerResourceDashboardBundle extends MarketplaceResourceListItem {
   status: PostResourceBundleStatus;
   post: PostResourceBundleLinkedPost | null;
   quality: MarketplaceQualityAssessment;
@@ -210,7 +210,7 @@ export interface PostResourceBundleMutationResult {
   bundleStatus: PostResourceBundleStatus | null;
 }
 
-export interface DeletedPostResourceSnapshot {
+interface DeletedPostResourceSnapshot {
   id: string;
   title: string;
   visibility: ShowcaseVisibility;
@@ -837,11 +837,11 @@ export async function publishGenerationPostWithResourceBundleAtomically(params: 
   return normalizeMutationResult(row);
 }
 
-export function isBundlePublishedForMarketplace(row: BundleRow): boolean {
+function isBundlePublishedForMarketplace(row: BundleRow): boolean {
   return row.status === 'published';
 }
 
-export function canViewerAccessBundle(row: BundleRow, viewerUserId?: string | null, viewerHasPurchased = false): boolean {
+function canViewerAccessBundle(row: BundleRow, viewerUserId?: string | null, viewerHasPurchased = false): boolean {
   return Boolean(viewerUserId && viewerUserId === row.owner_user_id) || viewerHasPurchased;
 }
 
@@ -1391,31 +1391,6 @@ export async function resolvePostIdForResourceIdentifier(identifier: string): Pr
   }
 
   return (data?.post_id as string | null) ?? null;
-}
-
-export async function getBundleForOrderById(bundleId: string): Promise<BundleRow | null> {
-  const adminSupabase = createServiceClient();
-  const selectBundle = (selectColumns: string) =>
-    adminSupabase
-      .from('post_resource_bundles')
-      .select(selectColumns)
-      .eq('id', bundleId)
-      .maybeSingle();
-  let { data, error } = await selectBundle(BUNDLE_ROW_SELECT);
-  if (isMissingPostResourceItemsColumnError(error)) {
-    ({ data, error } = await selectBundle(BUNDLE_ROW_SELECT_LEGACY));
-  }
-
-  if (error) {
-    if (isMissingPostResourceBundlesSchemaError(error)) {
-      return null;
-    }
-
-    console.error('Failed to load bundle by id:', error);
-    throw error;
-  }
-
-  return (data as BundleRow | null) ?? null;
 }
 
 export async function getBundleForOrderByPostId(postId: string): Promise<BundleRow | null> {

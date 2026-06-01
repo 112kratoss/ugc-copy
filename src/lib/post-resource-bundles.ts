@@ -9,7 +9,7 @@ export type MarketplaceResourceKindFilter = 'all' | PostResourceKind;
 export type MarketplaceResourceSort = 'recent' | 'top-sales' | 'price-low' | 'price-high';
 export type MarketplaceCheckoutCurrency = 'INR' | 'USD';
 
-export type PostResourceAttachmentKind = 'link' | 'file';
+type PostResourceAttachmentKind = 'link' | 'file';
 export type PostResourceSectionKind =
   | 'global'
   | 'scene'
@@ -78,14 +78,14 @@ export interface PostResourceSection {
   sortOrder: number;
 }
 
-export interface PostResourceSectionPreview {
+interface PostResourceSectionPreview {
   id: string;
   title: string;
   kind: PostResourceSectionKind;
   description: string | null;
 }
 
-export interface PostResourceItemPreview {
+interface PostResourceItemPreview {
   type: PostResourceItemType;
   title: string;
   role: PostResourceItemRole;
@@ -118,7 +118,7 @@ export interface PostResourceBundleResources {
   items?: PostResourceItem[];
 }
 
-export interface PostResourceAttachmentPreview {
+interface PostResourceAttachmentPreview {
   label: string;
   kind: PostResourceAttachmentKind;
   contentType?: string | null;
@@ -145,18 +145,6 @@ export interface PostResourceBundleInput {
   previewText?: string | null;
   priceUsdCents?: number | null;
   resources?: Partial<PostResourceBundleResources> | null;
-}
-
-export interface PostResourceBundleSummary {
-  id: string;
-  postId: string;
-  title: string;
-  accessMode: PersistedPostResourceBundleAccessMode;
-  priceUsdCents: number;
-  previewText: string;
-  status: PostResourceBundleStatus;
-  allowRemix: boolean;
-  resourceKinds: PostResourceKind[];
 }
 
 export interface PostResourceBundleValidationOptions {
@@ -260,12 +248,6 @@ export function isPostResourceBundleAccessMode(
   return value === 'none' || value === 'free' || value === 'paid';
 }
 
-export function isPersistedPostResourceBundleAccessMode(
-  value: string | null | undefined
-): value is PersistedPostResourceBundleAccessMode {
-  return value === 'free' || value === 'paid';
-}
-
 export function normalizePostResourceBundleAccessMode(
   value: string | null | undefined
 ): PostResourceBundleAccessMode {
@@ -316,19 +298,19 @@ function normalizeNonNegativeNumber(value: unknown): number | null {
     : null;
 }
 
-export function isPostResourceItemType(value: string | null | undefined): value is PostResourceItemType {
+function isPostResourceItemType(value: string | null | undefined): value is PostResourceItemType {
   return Boolean(value && POST_RESOURCE_ITEM_TYPES.includes(value as PostResourceItemType));
 }
 
-export function isPostResourceItemRole(value: string | null | undefined): value is PostResourceItemRole {
+function isPostResourceItemRole(value: string | null | undefined): value is PostResourceItemRole {
   return Boolean(value && POST_RESOURCE_ITEM_ROLES.includes(value as PostResourceItemRole));
 }
 
-export function isPostResourceRemixUse(value: string | null | undefined): value is PostResourceRemixUse {
+function isPostResourceRemixUse(value: string | null | undefined): value is PostResourceRemixUse {
   return Boolean(value && POST_RESOURCE_REMIX_USES.includes(value as PostResourceRemixUse));
 }
 
-export function isPostResourceSectionKind(value: string | null | undefined): value is PostResourceSectionKind {
+function isPostResourceSectionKind(value: string | null | undefined): value is PostResourceSectionKind {
   return Boolean(value && POST_RESOURCE_SECTION_KINDS.includes(value as PostResourceSectionKind));
 }
 
@@ -759,7 +741,7 @@ export function normalizePostResourceAttachments(value: unknown): PostResourceAt
     .filter((item): item is PostResourceAttachment => item !== null);
 }
 
-export function isSafePostResourceUrl(value: string | null | undefined): boolean {
+function isSafePostResourceUrl(value: string | null | undefined): boolean {
   const trimmed = value?.trim();
   if (!trimmed) {
     return false;

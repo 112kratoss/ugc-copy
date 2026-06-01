@@ -79,7 +79,7 @@ export const siteConfig = {
     googleSiteVerification: process.env.GOOGLE_SITE_VERIFICATION || undefined,
 };
 
-export function absoluteUrl(path = '/') {
+function absoluteUrl(path = '/') {
     return new URL(path, `${siteConfig.siteUrl}/`).toString();
 }
 
@@ -95,7 +95,7 @@ function resolveTitle(title: string, absoluteTitle?: string) {
     return `${title} | ${siteConfig.name}`;
 }
 
-export const noIndexRobots: NonNullable<Metadata['robots']> = {
+const noIndexRobots: NonNullable<Metadata['robots']> = {
     index: false,
     follow: true,
     googleBot: {

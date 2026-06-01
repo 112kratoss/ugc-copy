@@ -1,6 +1,6 @@
 import type { EnhancerContext, Medium } from '@/lib/prompt-enhancer';
 
-export type PromptEnhancementWarningSeverity = 'info' | 'warning' | 'blocking';
+type PromptEnhancementWarningSeverity = 'info' | 'warning' | 'blocking';
 
 export interface PromptEnhancementWarning {
   code: string;

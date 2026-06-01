@@ -1,6 +1,6 @@
 import { buildShowcaseDetailPath } from '@/lib/share';
 
-export type CreationWorkspaceState =
+type CreationWorkspaceState =
   | 'unpublished'
   | 'published_no_bundle'
   | 'published_free_bundle'
@@ -17,13 +17,13 @@ export type CreationWorkspacePublishBadge =
 
 export type CreationWorkspaceMonetizationKind = 'none' | 'free' | 'paid' | 'draft';
 
-export type CreationWorkspacePrimaryAction =
+type CreationWorkspacePrimaryAction =
   | 'none'
   | 'publish'
   | 'add-paywall'
   | 'manage-paywall';
 
-export type CreationWorkspaceSecondaryAction = 'none' | 'set-paywall' | 'open-post';
+type CreationWorkspaceSecondaryAction = 'none' | 'set-paywall' | 'open-post';
 
 export interface CreationWorkspaceGeneration {
   id: string;
@@ -50,7 +50,7 @@ export interface CreationWorkspacePost {
   } | null;
 }
 
-export interface CreationWorkspaceResolvedPost {
+interface CreationWorkspaceResolvedPost {
   id: string;
   title: string;
   visibility: 'public' | 'unlisted' | 'private';
@@ -61,7 +61,7 @@ export interface CreationWorkspaceResolvedPost {
   bundle: CreationWorkspacePost['bundle'];
 }
 
-export interface CreationWorkspaceActionLink {
+interface CreationWorkspaceActionLink {
   type: CreationWorkspacePrimaryAction | CreationWorkspaceSecondaryAction;
   label: string | null;
   href: string | null;
@@ -90,7 +90,7 @@ function buildCreationsQuery(params: Record<string, string>): string {
   return searchParams.toString();
 }
 
-export function buildGeneratedPaywallComposerPath(generationId: string): string {
+function buildGeneratedPaywallComposerPath(generationId: string): string {
   return `/post/new?${buildCreationsQuery({
     generationId,
     publishIntent: 'paid-generation',
@@ -100,7 +100,7 @@ export function buildGeneratedPaywallComposerPath(generationId: string): string 
   })}`;
 }
 
-export function buildCreationPaywallManagementPath(post: CreationWorkspaceResolvedPost): string {
+function buildCreationPaywallManagementPath(post: CreationWorkspaceResolvedPost): string {
   const resourceMode = post.bundle?.accessMode ?? 'paid';
   return `/post/${post.id}/edit?${buildCreationsQuery({
     resourceMode,
@@ -109,7 +109,7 @@ export function buildCreationPaywallManagementPath(post: CreationWorkspaceResolv
   })}#resources`;
 }
 
-export function buildCreationOpenPostPath(post: CreationWorkspaceResolvedPost): string {
+function buildCreationOpenPostPath(post: CreationWorkspaceResolvedPost): string {
   if (post.archivedAt || post.visibility === 'private') {
     return post.ownerPath;
   }

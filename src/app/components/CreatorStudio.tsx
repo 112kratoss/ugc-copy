@@ -269,7 +269,7 @@ interface GeneratorQuickSwitchProps {
   toolIds?: CreatorToolId[];
 }
 
-export function GeneratorQuickSwitch({
+function GeneratorQuickSwitch({
   currentToolId,
   toolIds,
 }: GeneratorQuickSwitchProps) {
@@ -390,7 +390,7 @@ function StudioPanel({
   );
 }
 
-export function MediaStudioRail({
+function MediaStudioRail({
   currentToolId,
 }: {
   currentToolId: CreatorToolId;

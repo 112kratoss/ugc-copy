@@ -1,4 +1,4 @@
-export const USERNAME_PATTERN = /^[a-z0-9-]{3,24}$/;
+const USERNAME_PATTERN = /^[a-z0-9-]{3,24}$/;
 const MAX_DISPLAY_NAME_LENGTH = 60;
 const MAX_BIO_LENGTH = 280;
 
@@ -59,7 +59,7 @@ export interface ProfileUpdatePayload {
   location?: unknown;
 }
 
-export interface SanitizedProfileUpdate {
+interface SanitizedProfileUpdate {
   username: string | null;
   displayName: string | null;
   bio: string | null;

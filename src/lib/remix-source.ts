@@ -2,7 +2,7 @@ import type { ImageElementDescriptor } from '@/lib/image-elements';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 
-export type RemixResultMediaType = 'image' | 'video';
+type RemixResultMediaType = 'image' | 'video';
 export type RemixAssetKind = 'image' | 'video' | 'audio';
 
 export interface RemixMediaAssetDescriptor {
@@ -16,7 +16,7 @@ export interface RemixResolvedAsset extends RemixMediaAssetDescriptor {
   url: string | null;
 }
 
-export interface RemixImageElementDescriptor extends ImageElementDescriptor {
+interface RemixImageElementDescriptor extends ImageElementDescriptor {
   sourceGenerationId?: string | null;
 }
 
@@ -24,7 +24,7 @@ export interface RemixResolvedImageElement extends RemixImageElementDescriptor {
   url: string | null;
 }
 
-export interface RemixSourceGeneration {
+interface RemixSourceGeneration {
   id: string;
   title: string;
   prompt: string;

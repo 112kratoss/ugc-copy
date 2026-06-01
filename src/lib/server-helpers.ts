@@ -35,13 +35,13 @@ export function createServiceClient(): SupabaseClient {
     );
 }
 
-export { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket, type MediaBucket } from '@/lib/media-urls';
+export { getStoredMediaLocation, isMediaBucket, type MediaBucket } from '@/lib/media-urls';
 
 /**
  * Converts stored media paths and legacy Supabase storage URLs into a fresh signed URL.
  * Returns the original value for non-storage URLs such as provider temp URLs.
  */
-export async function signStoredMediaUrl(
+async function signStoredMediaUrl(
     adminSupabase: SupabaseClient,
     outputUrl: string
 ): Promise<string> {
@@ -121,43 +121,6 @@ export async function authenticateRequest(
 
 // ─── Credits ──────────────────────────────────────────────────────────────────
 
-/**
- * Deducts credits from the user's profile.
- * Returns the remaining credit count, or a NextResponse error on failure.
- */
-export async function deductCredits(
-    supabase: SupabaseClient,
-    userId: string,
-    cost: number
-): Promise<{ remainingCredits: number } | NextResponse> {
-    const { data, error } = await supabase.rpc('use_credits', { amount: cost });
-
-    if (error) {
-        console.error('Credit deduction failed:', error);
-        return NextResponse.json(
-            { error: 'Insufficient credits or credit error' },
-            { status: 402 }
-        );
-    }
-
-    return { remainingCredits: data };
-}
-
-/**
- * Attempts to refund credits for a failed generation.
- * Calls the idempotent refund_generation RPC.
- */
-export async function refundGeneration(
-    supabase: SupabaseClient,
-    predictionId: string
-): Promise<void> {
-    try {
-        await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
-    } catch (err) {
-        console.error(`Refund failed for prediction ${predictionId}:`, err);
-    }
-}
-
 // ─── Kie.ai API ───────────────────────────────────────────────────────────────
 
 /**
@@ -173,65 +136,4 @@ export function requireKieApiKey(): string | NextResponse {
         );
     }
     return KIE_API_KEY;
-}
-
-/**
- * Calls the Kie.ai prediction API.
- * Returns the parsed JSON response or throws on network errors.
- */
-export async function callKieApi(
-    endpoint: string,
-    body: Record<string, unknown>
-): Promise<{ data: Record<string, unknown>; status: number }> {
-    const response = await fetch(`https://api.kie.ai/api/v1${endpoint}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${KIE_API_KEY}`,
-        },
-        body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    return { data, status: response.status };
-}
-
-/**
- * Fetches the status of a Kie.ai prediction.
- */
-export async function getKiePredictionStatus(
-    predictionId: string
-): Promise<Record<string, unknown>> {
-    const response = await fetch(
-        `https://api.kie.ai/api/v1/predictions/${predictionId}`,
-        {
-            headers: { 'Authorization': `Bearer ${KIE_API_KEY}` },
-        }
-    );
-    return response.json();
-}
-
-// ─── Generation Record ────────────────────────────────────────────────────────
-
-export interface GenerationRecord {
-    user_id: string;
-    model: string;
-    prediction_id: string;
-    status: string;
-    prompt?: string;
-    cost: number;
-    duration?: number;
-}
-
-/**
- * Inserts a generation record into the database.
- */
-export async function insertGeneration(
-    supabase: SupabaseClient,
-    record: GenerationRecord
-): Promise<void> {
-    const { error } = await supabase.from('generations').insert(record);
-    if (error) {
-        console.error('Failed to insert generation record:', error);
-    }
 }

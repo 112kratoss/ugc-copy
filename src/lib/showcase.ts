@@ -15,8 +15,8 @@ export type ShowcaseUnlockFilter = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseResourceFilter = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all'>;
 export const MAGICBOOKLET_SOURCE_KIND = 'magicbooklet' as const;
-export const LEGACY_EMPTYBOOKLET_SOURCE_KIND = 'emptybooklet' as const;
-export const LEGACY_UGC_COPY_SOURCE_KIND = 'ugc_copy' as const;
+const LEGACY_EMPTYBOOKLET_SOURCE_KIND = 'emptybooklet' as const;
+const LEGACY_UGC_COPY_SOURCE_KIND = 'ugc_copy' as const;
 export type ShowcaseSourceKind = typeof MAGICBOOKLET_SOURCE_KIND | 'external' | 'manual';
 export type RawShowcaseSourceKind =
     ShowcaseSourceKind
@@ -26,7 +26,7 @@ export type ShowcaseVisibility = 'public' | 'unlisted' | 'private';
 export type ShowcasePostFormat = 'text' | 'media' | 'mixed';
 export type ShowcaseMediaKind = 'image' | 'video';
 export type ShowcaseAssetType = 'workflow' | 'prompt_pack' | 'guide';
-export type ShowcaseResourceAccessMode = 'free' | 'paid';
+type ShowcaseResourceAccessMode = 'free' | 'paid';
 
 export interface ShowcaseCreator {
     id: string | null;
@@ -76,7 +76,7 @@ export interface ShowcaseFeedItem {
     remixTarget?: PostRemixTarget;
 }
 
-export interface ShowcaseFeedPageInfo {
+interface ShowcaseFeedPageInfo {
     hasMore: boolean;
     nextOffset: number | null;
     limit: number;
@@ -115,10 +115,6 @@ export function normalizeShowcaseSourceKind(value: string | null | undefined): S
 
 export function isShowcaseItemCategory(value: string | null | undefined): value is ShowcaseItemCategory {
     return value === 'image' || value === 'video' || value === 'motion' || value === 'ugc-ad' || value === 'text';
-}
-
-export function isShowcaseMediaCategory(value: string | null | undefined): value is Exclude<ShowcaseItemCategory, 'text'> {
-    return value === 'image' || value === 'video' || value === 'motion' || value === 'ugc-ad';
 }
 
 export function getShowcaseMediaKind(

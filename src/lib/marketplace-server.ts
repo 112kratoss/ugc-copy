@@ -37,7 +37,6 @@ import {
 } from '@/lib/workflow-canvas';
 
 type MarketplaceAssetStatus = 'draft' | 'active' | 'unlisted' | 'deleted';
-type CheckoutCurrency = 'INR' | 'USD';
 
 interface MarketplaceAssetRow {
   id: string;
@@ -73,39 +72,22 @@ interface MarketplacePostRow extends PostMediaRow {
   source_tool: string | null;
 }
 
-interface PurchaseRow {
-  asset_id: string;
-  buyer_user_id: string;
-  order_id: string;
-  price_usd_cents: number;
-  amount_subunits: number;
-  currency: CheckoutCurrency;
-  created_at: string;
-}
-
 interface AssetContentRow {
   workflow_graph: Partial<WorkflowCanvasGraph> | null;
   prompt_pack: string | null;
   guide_markdown: string | null;
 }
 
-interface WorkflowCanvasListRow {
-  id: string;
-  title: string;
-  updated_at: string;
-  status: 'draft' | 'published';
-}
-
 type LinkedPostScope = 'public' | 'owner';
 
-export interface MarketplaceSellerSummary {
+interface MarketplaceSellerSummary {
   id: string;
   username: string | null;
   name: string;
   avatar: string | null;
 }
 
-export interface MarketplaceLinkedPost {
+interface MarketplaceLinkedPost {
   id: string;
   title: string;
   category: ShowcaseItemCategory;
@@ -118,7 +100,7 @@ export interface MarketplaceLinkedPost {
   mediaKind: ShowcaseMediaKind | null;
 }
 
-export interface MarketplaceAssetListItem {
+interface MarketplaceAssetListItem {
   id: string;
   type: ShowcaseAssetType;
   title: string;
@@ -135,7 +117,7 @@ export interface MarketplaceAssetListItem {
   priceQuote: MarketplacePriceQuote;
 }
 
-export interface MarketplaceAssetContent {
+interface MarketplaceAssetContent {
   workflowGraph: SerializedWorkflowCanvasGraph | null;
   promptPack: string | null;
   guideMarkdown: string | null;
@@ -156,43 +138,6 @@ export interface MarketplaceAssetListPage {
     offset: number;
     limit: number;
   };
-}
-
-export interface SellerPostOption {
-  id: string;
-  title: string;
-  category: ShowcaseItemCategory;
-  visibility: ShowcaseVisibility;
-  createdAt: string;
-  linkedAssetId: string | null;
-}
-
-export interface SellerWorkflowCanvasOption {
-  id: string;
-  title: string;
-  updatedAt: string;
-  status: 'draft' | 'published';
-}
-
-export interface SellerSaleRecord {
-  id: string;
-  assetId: string;
-  assetTitle: string;
-  buyerUserId: string;
-  buyerLabel: string;
-  priceUsdCents: number;
-  amountSubunits: number;
-  currency: CheckoutCurrency;
-  createdAt: string;
-}
-
-export interface SellerMarketplaceDashboard {
-  listings: MarketplaceAssetListItem[];
-  posts: SellerPostOption[];
-  workflowCanvases: SellerWorkflowCanvasOption[];
-  sales: SellerSaleRecord[];
-  totalSalesCount: number;
-  totalEarningsUsdCents: number;
 }
 
 type ExchangeRateApiResponse = {
@@ -575,136 +520,5 @@ export async function getMarketplaceAssetDetail(
     viewerIsSeller,
     viewerCanAccess,
     content,
-  };
-}
-
-export async function getSellerMarketplaceDashboard(
-  userId: string,
-  options?: {
-    countryCode?: string | null;
-  }
-): Promise<SellerMarketplaceDashboard> {
-  const countryCode = options?.countryCode ?? null;
-  const adminSupabase = createServiceClient();
-  const { data: assetData, error: assetsError } = await adminSupabase
-    .from('marketplace_assets')
-    .select('id, seller_user_id, post_id, type, title, description, preview, price_usd_cents, status, sales_count, earnings_usd_cents, created_at, updated_at')
-    .eq('seller_user_id', userId)
-    .neq('status', 'deleted')
-    .order('created_at', { ascending: false });
-
-  if (assetsError) {
-    if (isMissingMarketplaceSchemaError(assetsError)) {
-      return {
-        listings: [],
-        posts: [],
-        workflowCanvases: [],
-        sales: [],
-        totalSalesCount: 0,
-        totalEarningsUsdCents: 0,
-      };
-    }
-
-    console.error('Failed to load seller marketplace assets:', assetsError);
-    throw assetsError;
-  }
-
-  const assetRows = (assetData ?? []) as MarketplaceAssetRow[];
-  const listings = await hydrateAssetRows(assetRows, countryCode, {
-    linkedPostScope: 'owner',
-  });
-  const assetIdToTitle = new Map(assetRows.map((row) => [row.id, row.title]));
-  const postIdToAssetId = new Map(
-    assetRows
-      .filter((row) => row.post_id)
-      .map((row) => [row.post_id as string, row.id])
-  );
-
-  const { data: postData, error: postsError } = await adminSupabase
-    .from('posts')
-    .select('id, title, category, visibility, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false });
-
-  if (postsError) {
-    console.error('Failed to load seller posts:', postsError);
-    throw postsError;
-  }
-
-  const posts = (postData ?? []).map((row) => ({
-    id: row.id as string,
-    title: (typeof row.title === 'string' && row.title.trim()) ? row.title.trim() : 'Untitled creation',
-    category: row.category as ShowcaseItemCategory,
-    visibility: row.visibility as ShowcaseVisibility,
-    createdAt: row.created_at as string,
-    linkedAssetId: postIdToAssetId.get(row.id as string) ?? null,
-  }));
-
-  const { data: canvasData, error: canvasError } = await adminSupabase
-    .from('workflow_canvases')
-    .select('id, title, updated_at, status')
-    .eq('user_id', userId)
-    .order('updated_at', { ascending: false });
-
-  if (canvasError) {
-    console.error('Failed to load seller workflow canvases:', canvasError);
-    throw canvasError;
-  }
-
-  const workflowCanvases = (canvasData ?? []).map((row) => ({
-    id: row.id as string,
-    title: row.title as string,
-    updatedAt: row.updated_at as string,
-    status: row.status as WorkflowCanvasListRow['status'],
-  }));
-
-  let sales: SellerSaleRecord[] = [];
-  if (assetRows.length > 0) {
-    const assetIds = assetRows.map((row) => row.id);
-    const { data: purchaseData, error: purchaseError } = await adminSupabase
-      .from('marketplace_purchases')
-      .select('asset_id, buyer_user_id, order_id, price_usd_cents, amount_subunits, currency, created_at')
-      .in('asset_id', assetIds)
-      .order('created_at', { ascending: false });
-
-    if (purchaseError) {
-      console.error('Failed to load seller marketplace sales:', purchaseError);
-      throw purchaseError;
-    }
-
-    const purchases = (purchaseData ?? []) as PurchaseRow[];
-    const buyerProfiles = await loadProfileMap(purchases.map((row) => row.buyer_user_id));
-
-    sales = purchases.map((row) => {
-      const buyerProfile = buyerProfiles.get(row.buyer_user_id);
-      const buyerLabel = buyerProfile?.username
-        ? `@${buyerProfile.username}`
-        : getCreatorDisplayName({
-            displayName: buyerProfile?.display_name ?? null,
-            username: buyerProfile?.username ?? null,
-            email: row.buyer_user_id,
-          });
-
-      return {
-        id: `${row.order_id}:${row.asset_id}`,
-        assetId: row.asset_id,
-        assetTitle: assetIdToTitle.get(row.asset_id) ?? 'Untitled listing',
-        buyerUserId: row.buyer_user_id,
-        buyerLabel,
-        priceUsdCents: row.price_usd_cents,
-        amountSubunits: row.amount_subunits,
-        currency: row.currency,
-        createdAt: row.created_at,
-      };
-    });
-  }
-
-  return {
-    listings,
-    posts,
-    workflowCanvases,
-    sales,
-    totalSalesCount: assetRows.reduce((sum, row) => sum + row.sales_count, 0),
-    totalEarningsUsdCents: assetRows.reduce((sum, row) => sum + row.earnings_usd_cents, 0),
   };
 }

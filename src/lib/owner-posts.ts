@@ -73,7 +73,7 @@ type BundleSummaryRow = {
   allow_remix: boolean;
 };
 
-export interface OwnerPostBundleSummary {
+interface OwnerPostBundleSummary {
   id: string;
   accessMode: 'free' | 'paid';
   status: PostResourceBundleStatus;

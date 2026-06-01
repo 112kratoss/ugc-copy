@@ -26,7 +26,7 @@ import {
 } from '@/lib/workflow-canvas';
 
 export type WorkflowAspectRatio = '9:16' | '16:9' | '1:1';
-export type WorkflowObjective = 'ugc-ad' | 'product-video' | 'social-campaign';
+type WorkflowObjective = 'ugc-ad' | 'product-video' | 'social-campaign';
 
 export interface WorkflowPlannerInput {
   brandName: string;
@@ -44,7 +44,7 @@ export interface WorkflowPlannerInput {
   notes?: string;
 }
 
-export interface WorkflowShot {
+interface WorkflowShot {
   id: string;
   title: string;
   purpose: string;

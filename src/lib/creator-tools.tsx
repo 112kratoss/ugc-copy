@@ -29,13 +29,6 @@ export interface CreatorToolDefinition {
   inspirationLabel: string;
 }
 
-export interface CreatorIntentGroup {
-  id: string;
-  title: string;
-  description: string;
-  toolIds: CreatorToolId[];
-}
-
 export interface CreatorStarterRecipe {
   id: string;
   toolId: CreatorToolId;
@@ -122,23 +115,6 @@ export const CREATOR_TOOLS: CreatorToolDefinition[] = [
     launchLabel: 'Open workflow canvas',
     inspirationHref: '/create-workflow',
     inspirationLabel: 'Open a reusable canvas',
-  },
-];
-
-export const CREATOR_INTENT_GROUPS: CreatorIntentGroup[] = [
-  {
-    id: 'launch',
-    title: 'Start with a fast creative win',
-    description:
-      'Use these paths when you want a strong first output quickly and need momentum more than complexity.',
-    toolIds: ['image', 'video'],
-  },
-  {
-    id: 'scale',
-    title: 'Turn assets into a fuller campaign system',
-    description:
-      'Use these paths when you already have footage, a character, or a broader production workflow in mind.',
-    toolIds: ['motion', 'workflow'],
   },
 ];
 

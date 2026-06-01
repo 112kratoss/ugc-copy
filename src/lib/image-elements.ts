@@ -13,10 +13,6 @@ export interface PersistedImageElementDraft {
 
 const HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function toHandleBase(value: string): string {
   const normalized = value
     .trim()
@@ -242,30 +238,12 @@ export function isValidElementHandle(value: string): boolean {
   return /^@[a-z0-9_]+$/.test(value);
 }
 
-export function getElementFileNameFromStoragePath(storagePath: string, fallbackHandle: string): string {
-  const rawName = storagePath.split('/').pop();
-  if (rawName && rawName.length > 0) {
-    return rawName;
-  }
-
-  return `${fallbackHandle.replace('@', '')}.jpg`;
-}
-
 export function isUploadsStoragePath(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.startsWith('uploads/');
 }
 
 export function getUploadsBucketPath(storagePath: string): string {
   return storagePath.replace(/^uploads\//, '');
-}
-
-export function createPersistedElementDrafts(
-  elements: Array<{ id: string; displayName: string }>
-): PersistedImageElementDraft[] {
-  return elements.map((element) => ({
-    id: element.id,
-    displayName: element.displayName,
-  }));
 }
 
 export function createElementHandleReplacementMap(
@@ -283,21 +261,4 @@ export function createElementHandleReplacementMap(
   });
 
   return replacements;
-}
-
-export function sortElementsByIdOrder<T extends { id: string }>(
-  items: T[],
-  idsInOrder: string[]
-): T[] {
-  const orderMap = new Map(idsInOrder.map((id, index) => [id, index]));
-
-  return [...items].sort((a, b) => {
-    const aIndex = orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-    const bIndex = orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER;
-    return aIndex - bIndex;
-  });
-}
-
-export function buildHandleRegex(handle: string): RegExp {
-  return new RegExp(`(^|[^\\w])(${escapeRegExp(handle)})(?=$|[^\\w])`, 'g');
 }

@@ -10,11 +10,11 @@ import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
 
-export const GENERATION_INPUTS_BUCKET = 'generation_inputs';
+const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 
 export type GenerationInputMediaType = 'image' | 'video' | 'audio';
 
-export type GenerationInputMediaRole =
+type GenerationInputMediaRole =
   | 'reference_image'
   | 'start_frame'
   | 'end_frame'

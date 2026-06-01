@@ -35,14 +35,14 @@ import {
   type WorkflowAspectRatio,
 } from '@/lib/workflow-blueprint';
 
-export type WorkflowAssistantMessageRole = 'user' | 'assistant';
-export type WorkflowAssistantProposalStatus = 'ready' | 'applied' | 'discarded';
-export type WorkflowAssistantAssetKind = 'image' | 'video' | 'audio';
+type WorkflowAssistantMessageRole = 'user' | 'assistant';
+type WorkflowAssistantProposalStatus = 'ready' | 'applied' | 'discarded';
+type WorkflowAssistantAssetKind = 'image' | 'video' | 'audio';
 export type WorkflowAssistantPreviewState = 'added' | 'changed' | 'removed';
 export type WorkflowAssistantAvailability = 'ready' | 'setup_required';
 
 export const WORKFLOW_ASSISTANT_SETUP_ERROR_CODE = 'assistant_schema_missing';
-export const WORKFLOW_ASSISTANT_SETUP_MIGRATION = '20260416120000_workflow_canvas_assistant.sql';
+const WORKFLOW_ASSISTANT_SETUP_MIGRATION = '20260416120000_workflow_canvas_assistant.sql';
 export const WORKFLOW_ASSISTANT_SETUP_MESSAGE = `Workflow assistant database tables are missing. Run migration ${WORKFLOW_ASSISTANT_SETUP_MIGRATION}.`;
 
 export interface WorkflowAssistantAssetSlot {
@@ -53,7 +53,7 @@ export interface WorkflowAssistantAssetSlot {
   required: boolean;
 }
 
-export interface WorkflowAssistantShot {
+interface WorkflowAssistantShot {
   shotKey: string;
   title: string;
   purpose: string;
@@ -86,7 +86,7 @@ export interface WorkflowAssistantBlueprint {
   };
 }
 
-export interface WorkflowAssistantDiffNode {
+interface WorkflowAssistantDiffNode {
   id: string;
   title: string;
   type: WorkflowNodeKind;
@@ -613,7 +613,7 @@ function getAssistantSlotKey(node: WorkflowCanvasNode) {
     : null;
 }
 
-export function findWorkflowAssistantRegionId(graph: WorkflowCanvasGraph): string | null {
+function findWorkflowAssistantRegionId(graph: WorkflowCanvasGraph): string | null {
   const managedNode = graph.nodes.find(isAssistantManagedNode);
   return managedNode ? (getAssistantRegionId(managedNode) ?? null) : null;
 }

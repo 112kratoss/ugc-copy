@@ -1,6 +1,6 @@
 import { isAudioModel } from '@/lib/models';
 
-export const SHARE_SOURCE_SURFACES = [
+const SHARE_SOURCE_SURFACES = [
   'create-image',
   'create-video',
   'create-motion',
@@ -10,12 +10,12 @@ export const SHARE_SOURCE_SURFACES = [
   'detail-page',
 ] as const;
 
-export const SHARE_CHANNELS = ['native-share', 'copy-link'] as const;
+const SHARE_CHANNELS = ['native-share', 'copy-link'] as const;
 
 export type GenerationShareSourceSurface = (typeof SHARE_SOURCE_SURFACES)[number];
 export type GenerationShareChannel = (typeof SHARE_CHANNELS)[number];
 export type GenerationShareEventType = 'share_click' | 'share_visit';
-export type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'home';
+type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'home';
 
 export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
@@ -64,7 +64,7 @@ export function isGenerationShareChannel(value: string): value is GenerationShar
   return (SHARE_CHANNELS as readonly string[]).includes(value);
 }
 
-export function normalizeShowcaseReturnSource(value: string | null | undefined): ShowcaseReturnSource | null {
+function normalizeShowcaseReturnSource(value: string | null | undefined): ShowcaseReturnSource | null {
   if (!value) {
     return null;
   }
@@ -74,7 +74,7 @@ export function normalizeShowcaseReturnSource(value: string | null | undefined):
     : null;
 }
 
-export function getSafeInternalReturnPath(value: string | null | undefined, fallback: string): string {
+function getSafeInternalReturnPath(value: string | null | undefined, fallback: string): string {
   const candidate = value?.trim();
 
   if (

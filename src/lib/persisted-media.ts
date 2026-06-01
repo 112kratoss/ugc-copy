@@ -257,15 +257,6 @@ export async function getPersistedFiles(key: string): Promise<File[]> {
     .filter((item): item is File => item !== null);
 }
 
-export async function setPersistedFiles(key: string, files: File[]): Promise<void> {
-  if (files.length === 0) {
-    await persistedMediaStore.removeItem(key);
-    return;
-  }
-
-  await persistedMediaStore.setItem(key, files.map(toStoredMediaFile));
-}
-
 export async function removePersistedMedia(key: string): Promise<void> {
   await persistedMediaStore.removeItem(key);
 }

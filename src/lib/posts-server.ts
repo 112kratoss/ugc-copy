@@ -80,10 +80,6 @@ export function getPostMediaKind(
   return getShowcaseMediaKind(category, postFormat);
 }
 
-export function canRemixPost(generationId: string | null | undefined): boolean {
-  return typeof generationId === 'string' && generationId.length > 0;
-}
-
 export function deriveTitleFromBody(body: string | null | undefined): string | null {
   if (!body) {
     return null;
@@ -286,7 +282,7 @@ async function findPostReferenceByColumn(
   return (result.data as PostReferenceRow | null) ?? null;
 }
 
-export async function findPostReferenceByIdOrGenerationId(
+async function findPostReferenceByIdOrGenerationId(
   id: string,
   adminSupabase = createServiceClient()
 ): Promise<PostReferenceRow | null> {

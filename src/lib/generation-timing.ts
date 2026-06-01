@@ -2,7 +2,7 @@ import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
 
 export type GenerationKind = 'image' | 'video' | 'motion' | 'audio';
 export type GenerationAppStatus = 'processing' | 'waiting' | 'succeeded' | 'failed';
-export type GenerationProviderState = 'waiting' | 'queuing' | 'generating' | 'success' | 'fail' | null;
+type GenerationProviderState = 'waiting' | 'queuing' | 'generating' | 'success' | 'fail' | null;
 
 export interface GenerationTiming {
   appStatus: GenerationAppStatus;
@@ -110,7 +110,7 @@ function normalizeStringTimestamp(value: string): number | null {
   return null;
 }
 
-export function parseProviderTimestamp(value: unknown): number | null {
+function parseProviderTimestamp(value: unknown): number | null {
   if (typeof value === 'string') {
     return normalizeStringTimestamp(value);
   }
@@ -230,7 +230,7 @@ function coerceProviderState(value: unknown): GenerationProviderState {
   return null;
 }
 
-export function getPhaseLabelForTiming(params: {
+function getPhaseLabelForTiming(params: {
   kind: GenerationKind;
   appStatus: GenerationAppStatus;
   providerState: GenerationProviderState;

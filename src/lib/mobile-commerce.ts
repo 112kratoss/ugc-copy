@@ -10,7 +10,7 @@ import { PRICING_PLAN_MAP, type PricingPlan } from '@/lib/pricing';
 
 export type MobilePurchaseProvider = 'app_store' | 'play_store' | 'revenuecat' | 'sandbox';
 
-export type MobilePurchaseEntitlement =
+type MobilePurchaseEntitlement =
   | { type: 'credits'; productId: string; credits?: number }
   | { type: 'marketplace_unlock'; productId: string; assetId: string }
   | { type: 'post_resource_unlock'; productId: string; postId: string };
@@ -43,7 +43,7 @@ export class MobileCommerceError extends Error {
   }
 }
 
-export const MOBILE_CREDIT_PRODUCTS = {
+const MOBILE_CREDIT_PRODUCTS = {
   'magicbooklet.credits.starter': 'starter',
   'magicbooklet.credits.creator': 'creator',
   'magicbooklet.credits.pro': 'pro',
@@ -150,7 +150,7 @@ export function normalizeMobileCommercePayload(body: unknown): NormalizedMobileC
   };
 }
 
-export function resolveMobileCreditProduct(productId: string): PricingPlan | null {
+function resolveMobileCreditProduct(productId: string): PricingPlan | null {
   const planId = MOBILE_CREDIT_PRODUCTS[productId as MobileCreditProductId];
   return planId ? PRICING_PLAN_MAP[planId] : null;
 }
@@ -171,7 +171,7 @@ function latestPurchase(purchases: RevenueCatPurchase[]) {
   })[0] ?? null;
 }
 
-export function findRevenueCatPurchase(
+function findRevenueCatPurchase(
   response: RevenueCatResponse,
   productId: string,
   provider: MobilePurchaseProvider,
@@ -198,7 +198,7 @@ export function findRevenueCatPurchase(
   return latestPurchase(validPurchases);
 }
 
-export async function fetchRevenueCatSubscriber({
+async function fetchRevenueCatSubscriber({
   userId,
   fetcher = fetch,
   revenueCatApiKey = process.env.REVENUECAT_SECRET_API_KEY ?? process.env.REVENUECAT_REST_API_KEY,
@@ -239,7 +239,7 @@ function revenueCatPurchaseTransactionId(productId: string, purchase: RevenueCat
   return purchaseDate ? `${productId}_${purchaseDate}` : null;
 }
 
-export function listRestorableMobileCreditPurchases(response: RevenueCatResponse): RestorableMobileCreditPurchase[] {
+function listRestorableMobileCreditPurchases(response: RevenueCatResponse): RestorableMobileCreditPurchase[] {
   const subscriber = response.subscriber ?? response.value?.subscriber ?? null;
   const nonSubscriptions = subscriber?.non_subscriptions ?? {};
   const purchases: RestorableMobileCreditPurchase[] = [];

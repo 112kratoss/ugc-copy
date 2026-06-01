@@ -23,7 +23,7 @@ import {
   type VoiceoverModelId,
 } from '@/lib/models';
 
-export const WORKFLOW_GRAPH_VERSION = 1;
+const WORKFLOW_GRAPH_VERSION = 1;
 
 export type WorkflowNodeKind =
   | 'text-input'
@@ -74,7 +74,7 @@ interface BaseWorkflowNodeData extends Record<string, unknown> {
   runState: WorkflowNodeRunState;
 }
 
-export type SeedanceAssetKind = 'Image' | 'Video' | 'Audio';
+type SeedanceAssetKind = 'Image' | 'Video' | 'Audio';
 export type SeedanceAssetStatus = 'idle' | 'processing' | 'active' | 'failed';
 
 export interface SeedanceAssetMetadata {
@@ -96,10 +96,6 @@ function createSeedanceAssetMetadata(overrides?: Partial<SeedanceAssetMetadata>)
     lastCheckedAt: null,
     ...overrides,
   };
-}
-
-export function isSeedanceVideoModel(modelId: VideoModelId): boolean {
-  return modelId === 'seedance-1.5-pro' || modelId === 'seedance-2' || modelId === 'seedance-2-fast';
 }
 
 export function isSeedance2VideoModel(modelId: VideoModelId): boolean {
@@ -138,12 +134,12 @@ export interface WorkflowReferenceElement extends ImageElementDescriptor {
   url: string | null;
 }
 
-export interface WorkflowReferenceBinding {
+interface WorkflowReferenceBinding {
   edgeId: string;
   handle: string | null;
 }
 
-export type WorkflowElementBinding = WorkflowReferenceBinding;
+type WorkflowElementBinding = WorkflowReferenceBinding;
 
 export interface WorkflowMultiPrompt {
   id: string;
@@ -252,9 +248,9 @@ export interface WorkflowCanvasListItem {
   published_at: string | null;
 }
 
-export type WorkflowGraphSerializationMode = 'storage' | 'client-save' | 'share-export';
+type WorkflowGraphSerializationMode = 'storage' | 'client-save' | 'share-export';
 
-export interface SerializedWorkflowCanvasNode {
+interface SerializedWorkflowCanvasNode {
   id: string;
   type: WorkflowNodeKind;
   position: { x: number; y: number };
@@ -262,7 +258,7 @@ export interface SerializedWorkflowCanvasNode {
   draggable: boolean;
 }
 
-export interface SerializedWorkflowCanvasEdge {
+interface SerializedWorkflowCanvasEdge {
   id: string;
   source: string;
   target: string;
@@ -293,17 +289,6 @@ export interface WorkflowCanvasRecord {
 }
 
 export type WorkflowCanvasStatus = 'draft' | 'published';
-export type WorkflowCanvasHistoryKind = 'draft' | 'published' | 'restored';
-
-export interface WorkflowCanvasHistoryEntry {
-  id: string;
-  canvas_id: string;
-  title: string;
-  graph: WorkflowCanvasGraph;
-  revision: number;
-  kind: WorkflowCanvasHistoryKind;
-  created_at: string;
-}
 
 interface WorkflowNodeHandleSchema {
   inputs: WorkflowHandleType[];
@@ -335,7 +320,7 @@ export interface WorkflowCanvasRunRecord {
 
 export const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 0.85 };
 
-export const WORKFLOW_NODE_HANDLE_SCHEMAS: Record<WorkflowNodeKind, WorkflowNodeHandleSchema> = {
+const WORKFLOW_NODE_HANDLE_SCHEMAS: Record<WorkflowNodeKind, WorkflowNodeHandleSchema> = {
   'text-input': {
     inputs: ['prompt'],
     outputs: ['text'],
@@ -386,7 +371,7 @@ export const WORKFLOW_NODE_HANDLE_SCHEMAS: Record<WorkflowNodeKind, WorkflowNode
   },
 };
 
-export const EMPTY_RUN_STATE: WorkflowNodeRunState = {
+const EMPTY_RUN_STATE: WorkflowNodeRunState = {
   status: 'idle',
   generationId: null,
   outputUrl: null,
@@ -407,7 +392,7 @@ export function createNodeRunState(overrides?: Partial<WorkflowNodeRunState>): W
   return { ...EMPTY_RUN_STATE, ...overrides };
 }
 
-export function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
+function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
   switch (type) {
     case 'text-input':
       return { title: 'Prompt', subtitle: 'Text input', text: 'Describe the scene, offer, or instruction here.', runState: createNodeRunState() };
@@ -1298,7 +1283,7 @@ function getLegacyLanguageCode(data: VoiceoverGenerateNodeData | undefined): str
   return typeof legacy.language === 'string' ? legacy.language : null;
 }
 
-export function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
+function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
   return ['text-input', 'image-input', 'video-input', 'audio-input', 'image-generate', 'video-generate', 'motion-generate', 'voiceover-generate', 'music-generate', 'sound-effects-generate', 'note', 'group'].includes(String(value));
 }
 
@@ -1323,43 +1308,6 @@ export function getWorkflowNodeOutputHandles(nodeKind: WorkflowNodeKind): Workfl
   return WORKFLOW_NODE_HANDLE_SCHEMAS[nodeKind]?.outputs ?? [];
 }
 
-export function getPreferredWorkflowInputHandle(
-  nodeKind: WorkflowNodeKind,
-  sourceHandle: WorkflowHandleType
-): WorkflowHandleType | null {
-  const compatibleInput = getWorkflowNodeInputHandles(nodeKind)
-    .find((targetHandle) => validateWorkflowConnection(sourceHandle, targetHandle));
-
-  return compatibleInput ?? null;
-}
-
-export function getPreferredWorkflowOutputHandle(
-  nodeKind: WorkflowNodeKind,
-  targetHandle: WorkflowHandleType
-): WorkflowHandleType | null {
-  const compatibleOutput = getWorkflowNodeOutputHandles(nodeKind)
-    .find((sourceHandle) => validateWorkflowConnection(sourceHandle, targetHandle));
-
-  return compatibleOutput ?? null;
-}
-
-export function getCompatibleWorkflowNodeKindsForSourceHandle(
-  sourceHandle: WorkflowHandleType
-): WorkflowNodeKind[] {
-  return Object.keys(WORKFLOW_NODE_HANDLE_SCHEMAS)
-    .filter((nodeKind) => getPreferredWorkflowInputHandle(nodeKind as WorkflowNodeKind, sourceHandle))
-    .map((nodeKind) => nodeKind as WorkflowNodeKind);
-}
-
-export function getCompatibleWorkflowNodeKindsForEdgeInsertion(
-  sourceHandle: WorkflowHandleType,
-  targetHandle: WorkflowHandleType
-): WorkflowNodeKind[] {
-  return getCompatibleWorkflowNodeKindsForSourceHandle(sourceHandle).filter((nodeKind) => {
-    return Boolean(getPreferredWorkflowOutputHandle(nodeKind, targetHandle));
-  });
-}
-
 export function getNodeById(graph: WorkflowCanvasGraph, nodeId: string): WorkflowCanvasNode | undefined {
   return graph.nodes.find((node) => node.id === nodeId);
 }
@@ -1368,11 +1316,11 @@ export function getIncomingEdges(graph: WorkflowCanvasGraph, nodeId: string): Wo
   return graph.edges.filter((edge) => edge.target === nodeId);
 }
 
-export function getOutgoingEdges(graph: WorkflowCanvasGraph, nodeId: string): WorkflowCanvasEdge[] {
+function getOutgoingEdges(graph: WorkflowCanvasGraph, nodeId: string): WorkflowCanvasEdge[] {
   return graph.edges.filter((edge) => edge.source === nodeId);
 }
 
-export type WorkflowCapabilityIssueCode =
+type WorkflowCapabilityIssueCode =
   | 'too-many-reference-images'
   | 'too-many-reference-videos'
   | 'reference-video-too-long'
@@ -1388,7 +1336,7 @@ export type WorkflowCapabilityIssueCode =
   | 'unknown-element-handles'
   | 'missing-shot-prompts';
 
-export interface WorkflowCapabilityIssue {
+interface WorkflowCapabilityIssue {
   code: WorkflowCapabilityIssueCode;
   message: string;
 }
@@ -1422,7 +1370,7 @@ export interface WorkflowConnectionValidationResult {
 
 const WORKFLOW_MOTION_OUTPUT_DURATION_SECONDS = 10;
 
-export type WorkflowPromptEnhancementMedium = 'image' | 'video' | 'motion';
+type WorkflowPromptEnhancementMedium = 'image' | 'video' | 'motion';
 
 type WorkflowPromptEnhancementNodeType = 'image-generate' | 'video-generate' | 'motion-generate';
 
@@ -1470,7 +1418,7 @@ export interface ResolvedWorkflowInputs extends Record<string, unknown> {
   endFrameUrl: string | null;
 }
 
-export interface ResolvedWorkflowImageReferenceInput {
+interface ResolvedWorkflowImageReferenceInput {
   edgeId: string;
   sourceNodeId: string;
   sourceTitle: string;
@@ -1504,8 +1452,6 @@ export interface WorkflowResolvedVideoReference {
   sourceNodeId: string | null;
   sourceTitle: string | null;
 }
-
-export type WorkflowResolvedElementReference = WorkflowResolvedImageReference;
 
 export interface WorkflowNodeDependencyState {
   kind: 'ready' | 'queued' | 'blocked';
@@ -1691,7 +1637,7 @@ function syncNodeReferenceBindings(
   };
 }
 
-export function syncWorkflowGraphReferenceBindings(
+function syncWorkflowGraphReferenceBindings(
   graph: WorkflowCanvasGraph
 ): WorkflowCanvasGraph {
   const nextNodes = graph.nodes.map((node) => syncNodeReferenceBindings(graph, node));
@@ -1709,18 +1655,6 @@ export function syncWorkflowGraphElementBindings(
   graph: WorkflowCanvasGraph
 ): WorkflowCanvasGraph {
   return syncWorkflowGraphReferenceBindings(graph);
-}
-
-export function getWorkflowReferenceElementDescriptors(
-  elements: WorkflowReferenceElement[]
-): ImageElementDescriptor[] {
-  return elements.map((element) => ({
-    id: element.id,
-    displayName: element.displayName,
-    handle: element.handle,
-    storagePath: element.storagePath ?? null,
-    sourceGenerationId: element.sourceGenerationId ?? null,
-  }));
 }
 
 export function getWorkflowReferenceElementSourceUrl(
@@ -1825,13 +1759,6 @@ export function getResolvedWorkflowVideoReferences(
         sourceTitle: typeof sourceNode?.data.title === 'string' ? sourceNode.data.title : null,
       } satisfies WorkflowResolvedVideoReference;
     });
-}
-
-export function getResolvedWorkflowElementReferences(
-  graph: WorkflowCanvasGraph,
-  nodeId: string
-): WorkflowResolvedImageReference[] {
-  return getResolvedWorkflowImageReferences(graph, nodeId);
 }
 
 function getKnownWorkflowSourceVideoDurationSeconds(node: WorkflowCanvasNode | undefined): number | null {
@@ -2902,57 +2829,6 @@ export function getExecutionOrder(graph: WorkflowCanvasGraph, startNodeId: strin
   }
 
   return ordered;
-}
-
-export function getBranchNodeIds(graph: WorkflowCanvasGraph, startNodeId: string): string[] {
-  return getExecutionOrder(graph, startNodeId, 'branch');
-}
-
-export function tidyWorkflowGraph(
-  graph: WorkflowCanvasGraph,
-  nodeIds?: string[]
-): WorkflowCanvasGraph {
-  const idsToTidy = nodeIds && nodeIds.length > 0
-    ? new Set(nodeIds)
-    : new Set(graph.nodes.map((node) => node.id));
-  const tidyNodes = graph.nodes
-    .filter((node) => idsToTidy.has(node.id))
-    .sort((left, right) => {
-      if (left.position.x !== right.position.x) {
-        return left.position.x - right.position.x;
-      }
-
-      return left.position.y - right.position.y;
-    });
-
-  if (tidyNodes.length === 0) {
-    return graph;
-  }
-
-  const nextPositions = new Map<string, { x: number; y: number }>();
-  const originX = Math.min(...tidyNodes.map((node) => node.position.x));
-  const originY = Math.min(...tidyNodes.map((node) => node.position.y));
-
-  tidyNodes.forEach((node, index) => {
-    const column = Math.floor(index / 3);
-    const row = index % 3;
-    nextPositions.set(node.id, {
-      x: originX + column * 340,
-      y: originY + row * 200,
-    });
-  });
-
-  return {
-    ...graph,
-    nodes: graph.nodes.map((node) => (
-      nextPositions.has(node.id)
-        ? {
-            ...node,
-            position: nextPositions.get(node.id)!,
-          }
-        : node
-    )),
-  };
 }
 
 export function updateNodeRunState(

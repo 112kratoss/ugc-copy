@@ -5,7 +5,7 @@ import {
 
 export type Medium = 'image' | 'video' | 'motion';
 
-export type CreativeIntent = 'general' | 'ugc-ad' | 'product-video' | 'social-campaign';
+type CreativeIntent = 'general' | 'ugc-ad' | 'product-video' | 'social-campaign';
 
 export type PromptScenario =
   | 'image.text_to_image'
@@ -16,7 +16,7 @@ export type PromptScenario =
   | 'video.image_to_video_start_end'
   | 'motion.transfer';
 
-export type PromptPlannerMode = 'legacy-text' | 'structured-image' | 'structured-video';
+type PromptPlannerMode = 'legacy-text' | 'structured-image' | 'structured-video';
 
 export interface EnhancerContext {
   modelId?: string;
@@ -43,7 +43,7 @@ export interface EnhancerContext {
   }>;
 }
 
-export interface ImagePromptSpec {
+interface ImagePromptSpec {
   subject: string;
   setting: string;
   composition: string;
@@ -60,7 +60,7 @@ export interface ImagePromptSpec {
   finish: string;
 }
 
-export interface VideoShotPlan {
+interface VideoShotPlan {
   index: number;
   title: string;
   startState: string;
@@ -70,7 +70,7 @@ export interface VideoShotPlan {
   transition: string;
 }
 
-export interface VideoScenePlan {
+interface VideoScenePlan {
   sceneGoal: string;
   subjectAction: string;
   environment: string;

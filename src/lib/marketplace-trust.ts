@@ -9,7 +9,7 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 
-export interface MarketplaceQualityIssue {
+interface MarketplaceQualityIssue {
   code: string;
   field: string;
   message: string;

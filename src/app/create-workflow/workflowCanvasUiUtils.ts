@@ -8,7 +8,6 @@ import {
 } from '@/lib/workflow-canvas';
 import type {
   CanvasAnchoredPopupPosition,
-  CanvasFloatingPosition,
   PreviewMediaKind,
   WorkflowRunAffordance,
 } from './workflowCanvasUiTypes';
@@ -25,37 +24,6 @@ export function areStringArraysEqual(a: string[], b: string[]): boolean {
   }
 
   return true;
-}
-
-export function getCanvasFloatingPosition({
-  canvasBounds,
-  clientX,
-  clientY,
-  panelWidth,
-  panelHeight,
-}: {
-  canvasBounds: DOMRect;
-  clientX: number;
-  clientY: number;
-  panelWidth: number;
-  panelHeight: number;
-}): CanvasFloatingPosition {
-  let left = clientX - canvasBounds.left + 18;
-  let top = clientY - canvasBounds.top - 18;
-
-  if (left + panelWidth > canvasBounds.width - 16) {
-    left = Math.max(16, clientX - canvasBounds.left - panelWidth - 18);
-  }
-
-  if (top + panelHeight > canvasBounds.height - 16) {
-    top = Math.max(16, canvasBounds.height - panelHeight - 16);
-  }
-
-  return {
-    left: Math.max(16, left),
-    top: Math.max(16, top),
-    width: panelWidth,
-  };
 }
 
 export function getNodeAnchoredPopupPosition({
@@ -94,13 +62,6 @@ export function getNodeAnchoredPopupPosition({
 
 export function getNodeLabel(nodes: WorkflowCanvasGraph['nodes'], nodeId: string): string {
   return nodes.find((node) => node.id === nodeId)?.data.title || 'Unknown node';
-}
-
-export function getNodeLabelFromMap(
-  nodeById: ReadonlyMap<string, WorkflowCanvasNode>,
-  nodeId: string
-): string {
-  return nodeById.get(nodeId)?.data.title || 'Unknown node';
 }
 
 export function getNodePreviewKind(nodeType: WorkflowNodeKind): PreviewMediaKind {

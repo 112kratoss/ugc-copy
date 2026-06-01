@@ -1,7 +1,7 @@
 import type { Session } from '@supabase/supabase-js';
 
 export const E2E_AUTH_COOKIE_NAME = 'e2e-auth';
-export const E2E_AUTH_COOKIE_VALUE = 'workflow-user';
+const E2E_AUTH_COOKIE_VALUE = 'workflow-user';
 export const E2E_AUTH_CREDITS = 25;
 
 export function createE2ESession(): Session {
