@@ -276,6 +276,11 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request<{ success: boolean; alreadyProcessed?: boolean }>(`/api/posts/${postId}/resource-bundle/unlock-free`, { method: 'POST' }),
     unlockBundleWithCredits: (postId: string) =>
       request<MobileCommerceSyncResponse>(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, { method: 'POST' }),
+    getPostResourceFileUrl: (postId: string, storagePath: string) =>
+      request<{ success: boolean; signedUrl: string }>(`/api/posts/${postId}/resource-bundle/file-url`, {
+        method: 'POST',
+        body: JSON.stringify({ storagePath }),
+      }),
     syncMobilePurchase: (body: Record<string, unknown>) =>
       request<MobileCommerceSyncResponse>('/api/mobile/commerce/sync', {
         method: 'POST',

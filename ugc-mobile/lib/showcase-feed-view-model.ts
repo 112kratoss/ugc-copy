@@ -8,6 +8,7 @@ export interface ShowcaseMasonryCard {
   item: ShowcaseFeedItem;
   title: string;
   prompt: string;
+  previewKind: 'media' | 'text';
   creatorLabel: string;
   creatorAvatar: string | null;
   mediaUrl: string | null;
@@ -36,19 +37,21 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
 
   return {
     columnGap: compactPhone ? 12 : 14,
-    pinGap: compactPhone ? 18 : 20,
-    mediaRadius: 6,
+    pinGap: compactPhone ? 22 : 24,
+    mediaRadius: 18,
   };
 }
 
 export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCard {
   const accent = categoryAccent(item.category);
+  const textOnly = (item.category === 'text' || item.postFormat === 'text') && !item.mediaUrl;
 
   return {
     id: item.id,
     item,
     title: item.title || item.prompt || 'Community post',
     prompt: item.body || item.prompt || 'A creator-ready idea from the Magicbooklet community.',
+    previewKind: textOnly ? 'text' : 'media',
     creatorLabel: item.creator.username || item.creator.name,
     creatorAvatar: item.creator.avatar,
     mediaUrl: item.mediaUrl,

@@ -5,11 +5,18 @@ import { Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
 import { createApiClient, type MagicbookletApiClient } from './api-client';
+import { getProfileCreditsOrNull } from './auth-profile';
 import {
   registerForMobilePushNotifications,
   unregisterMobilePushNotifications,
 } from './notifications';
-import { isSupabaseConfigured, supabase } from './supabase';
+import {
+  clearPersistedSupabaseAuthSession,
+  initializeSupabaseAuth,
+  isSupabaseConfigured,
+  supabase,
+} from './supabase';
+import { isInvalidRefreshTokenError } from './supabase-auth-recovery';
 
 interface AuthContextValue {
   session: Session | null;
@@ -34,13 +41,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const missingEnvKeys = useMemo(() => getMissingMobileEnvKeys(), []);
 
+  const resetAuthState = useCallback(() => {
+    setSession(null);
+    setCredits(null);
+    setIsLoading(false);
+  }, []);
+
   const getAccessToken = useCallback(async () => {
     if (!isSupabaseConfigured) {
       return null;
     }
 
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ?? null;
+    try {
+      await initializeSupabaseAuth();
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        if (await recoverInvalidAuthSession(error)) {
+          return null;
+        }
+        throw error;
+      }
+      return data.session?.access_token ?? null;
+    } catch (error) {
+      if (await recoverInvalidAuthSession(error)) {
+        return null;
+      }
+      throw error;
+    }
   }, []);
 
   const api = useMemo(
@@ -56,24 +83,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const {
-      data: { session: latestSession },
-    } = await supabase.auth.getSession();
-    setSession(latestSession ?? null);
+    let latestSession: Session | null = null;
 
-    if (!latestSession?.user) {
-      setCredits(null);
-      setIsLoading(false);
+    try {
+      await initializeSupabaseAuth();
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        if (await recoverInvalidAuthSession(error)) {
+          resetAuthState();
+          return;
+        }
+        throw error;
+      }
+      latestSession = data.session ?? null;
+    } catch (error) {
+      if (await recoverInvalidAuthSession(error)) {
+        resetAuthState();
+        return;
+      }
+      console.warn('Failed to recover mobile auth session', error);
+      resetAuthState();
       return;
     }
 
-    try {
-      const profile = await api.getProfile();
-      setCredits(profile.credits ?? null);
-    } finally {
-      setIsLoading(false);
+    setSession(latestSession ?? null);
+
+    if (!latestSession?.user) {
+      resetAuthState();
+      return;
     }
-  }, [api]);
+
+    const nextCredits = await getProfileCreditsOrNull(api);
+    setCredits(nextCredits);
+    setIsLoading(false);
+  }, [api, resetAuthState]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -88,7 +131,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession ?? null);
       if (nextSession?.user) {
-        void refreshProfile();
+        void refreshProfile().catch((error) => {
+          console.warn('Failed to refresh auth state', error);
+          setIsLoading(false);
+        });
       } else {
         setCredits(null);
         setIsLoading(false);
@@ -107,7 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    void registerForMobilePushNotifications(api).catch((error) => {
+    void registerForMobilePushNotifications(api, { requestPermission: false }).catch((error) => {
       console.error('Failed to register mobile push notifications', error);
     });
   }, [api, session?.user?.id]);
@@ -117,6 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
 
+    await initializeSupabaseAuth();
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
     await refreshProfile();
@@ -128,6 +175,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
 
+    await initializeSupabaseAuth();
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
     await refreshProfile();
@@ -138,9 +186,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isSupabaseConfigured) {
       await unregisterMobilePushNotifications(api);
       await supabase.auth.signOut();
+      await clearPersistedSupabaseAuthSession();
     }
-    setSession(null);
-    setCredits(null);
+    resetAuthState();
     router.replace('/auth');
   };
 
@@ -164,6 +212,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+}
+
+async function recoverInvalidAuthSession(error: unknown) {
+  if (!isInvalidRefreshTokenError(error)) {
+    return false;
+  }
+
+  await clearPersistedSupabaseAuthSession();
+  return true;
 }
 
 export function useAuth() {

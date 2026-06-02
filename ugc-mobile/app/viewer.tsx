@@ -1,52 +1,37 @@
-import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { ArrowLeft, Heart, ImageOff, Play, Repeat2, Share2 } from 'lucide-react-native';
+import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Lock, Play, Repeat2, Share2 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import {
-  buildImmersiveGenerationItems,
-  buildImmersiveOwnerPostItems,
-  buildImmersiveShowcaseItems,
+  getImmersiveHorizontalPageIndex,
   getImmersiveInitialIndex,
+  hasImmersiveDetailsPage,
+  isImmersiveDetailsHorizontalPage,
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
-  type PreviewViewerSource,
 } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
-import type {
-  GenerationListItem,
-  OwnerPostsResponse,
-  ProfileResponse,
-  ShowcaseFeedItem,
-  ShowcaseFeedResponse,
-} from '@/lib/types';
+import {
+  buildViewerItems,
+  loadImmersiveSourceData,
+  normalizeParam,
+  normalizeViewerSource,
+  readCachedImmersiveSourceData,
+  readCachedProfile,
+} from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
-
-const VIEWER_SOURCES: PreviewViewerSource[] = [
-  'showcase-feed',
-  'home-community',
-  'profile-saved',
-  'profile-posts',
-  'profile-creations',
-  'studio-creations',
-  'home-creations',
-];
-
-type ImmersiveSourceData = {
-  showcaseItems?: ShowcaseFeedItem[];
-  generations?: GenerationListItem[];
-  ownerPosts?: OwnerPostsResponse['posts'];
-};
+import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind } from '@/lib/types';
 
 type ViewerParams = {
   source?: string | string[];
@@ -65,12 +50,12 @@ export default function ImmersivePreviewViewerScreen() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [detailsOpenItemId, setDetailsOpenItemId] = useState<string | null>(null);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
     enabled: Boolean(user),
-    initialData: () => queryClient.getQueryData<ProfileResponse>(['profile', user?.id])
-      ?? queryClient.getQueryData<ProfileResponse>(['home-profile', user?.id]),
+    initialData: () => readCachedProfile(queryClient, user?.id),
     queryFn: api.getProfile,
     staleTime: 1000 * 60 * 5,
   });
@@ -78,8 +63,8 @@ export default function ImmersivePreviewViewerScreen() {
   const sourceQuery = useQuery({
     queryKey: ['immersive-preview-source', source, user?.id ?? 'guest', initialId],
     enabled: Boolean(source),
-    initialData: () => readCachedSourceData(queryClient, source, user?.id, initialId),
-    queryFn: () => loadSourceData({ api, source, initialId }),
+    initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId }),
     staleTime: 1000 * 45,
   });
 
@@ -93,7 +78,7 @@ export default function ImmersivePreviewViewerScreen() {
     [source, sourceQuery.data, ownerInfo]
   );
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
-  const activeVideoId = selectActiveImmersiveVideoId(items, activeIndex);
+  const activeVideoId = selectActiveImmersiveVideoId(items, activeIndex, detailsOpenItemId);
   const activeItem = items[activeIndex];
 
   useEffect(() => {
@@ -187,6 +172,7 @@ export default function ImmersivePreviewViewerScreen() {
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
           setActiveIndex(Math.max(0, Math.min(items.length - 1, nextIndex)));
+          setDetailsOpenItemId(null);
         }}
         onScrollToIndexFailed={({ index }) => {
           requestAnimationFrame(() => {
@@ -199,8 +185,10 @@ export default function ImmersivePreviewViewerScreen() {
             active={index === activeIndex}
             activeVideoId={activeVideoId}
             bottomInset={bottomInset}
+            detailsOpen={detailsOpenItemId === item.id}
             height={height}
             item={item}
+            onDetailsOpenChange={(open) => setDetailsOpenItemId(open ? item.id : null)}
             onRecreate={recreateItem}
             onSave={saveItem}
             onShare={shareItem}
@@ -209,6 +197,7 @@ export default function ImmersivePreviewViewerScreen() {
             width={width}
           />
         )}
+        scrollEnabled={!detailsOpenItemId}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: '#000' }}
       />
@@ -260,13 +249,122 @@ function ImmersiveSlide({
   active,
   activeVideoId,
   bottomInset,
+  detailsOpen,
+  height,
+  item,
+  onDetailsOpenChange,
+  onRecreate,
+  onSave,
+  onShare,
+  saveLoading,
+  topInset,
+  width,
+}: {
+  active: boolean;
+  activeVideoId: string | null;
+  bottomInset: number;
+  detailsOpen: boolean;
+  height: number;
+  item: ImmersivePreviewItem;
+  onDetailsOpenChange: (open: boolean) => void;
+  onRecreate: (item: ImmersivePreviewItem) => void;
+  onSave: (item: ImmersivePreviewItem) => void;
+  onShare: (item: ImmersivePreviewItem) => void;
+  saveLoading: boolean;
+  topInset: number;
+  width: number;
+}) {
+  const horizontalRef = useRef<FlatList<'media' | 'details'>>(null);
+  const horizontalPageIndex = getImmersiveHorizontalPageIndex(detailsOpen);
+
+  useEffect(() => {
+    if (!active) return;
+    horizontalRef.current?.scrollToIndex({ index: horizontalPageIndex, animated: false });
+  }, [active, horizontalPageIndex]);
+
+  if (!hasImmersiveDetailsPage(item)) {
+    return (
+      <MediaSlidePage
+        active={active}
+        activeVideoId={activeVideoId}
+        bottomInset={bottomInset}
+        height={height}
+        item={item}
+        onRecreate={onRecreate}
+        onSave={onSave}
+        onShare={onShare}
+        saveLoading={saveLoading}
+        showDetailsHint={false}
+        width={width}
+      />
+    );
+  }
+
+  return (
+    <FlatList
+      ref={horizontalRef}
+      data={['media', 'details'] as const}
+      decelerationRate="fast"
+      getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+      horizontal
+      initialScrollIndex={0}
+      keyExtractor={(page) => page}
+      onMomentumScrollEnd={(event) => {
+        const page = Math.round(event.nativeEvent.contentOffset.x / width);
+        onDetailsOpenChange(isImmersiveDetailsHorizontalPage(page));
+      }}
+      onScrollToIndexFailed={({ index }) => {
+        requestAnimationFrame(() => {
+          horizontalRef.current?.scrollToOffset({ offset: width * index, animated: false });
+        });
+      }}
+      pagingEnabled
+      renderItem={({ item: page }) => page === 'media' ? (
+        <MediaSlidePage
+          active={active && !detailsOpen}
+          activeVideoId={activeVideoId}
+          bottomInset={bottomInset}
+          height={height}
+          item={item}
+          onRecreate={onRecreate}
+          onSave={onSave}
+          onShare={onShare}
+          saveLoading={saveLoading}
+          showDetailsHint
+          width={width}
+        />
+      ) : (
+        <PostDetailsPage
+          active={active && detailsOpen}
+          bottomInset={bottomInset}
+          height={height}
+          item={item}
+          onRecreate={onRecreate}
+          onSave={onSave}
+          onShare={onShare}
+          saveLoading={saveLoading}
+          topInset={topInset}
+          width={width}
+        />
+      )}
+      scrollEnabled={active}
+      showsHorizontalScrollIndicator={false}
+      style={{ width, height, backgroundColor: '#000' }}
+    />
+  );
+}
+
+function MediaSlidePage({
+  active,
+  activeVideoId,
+  bottomInset,
   height,
   item,
   onRecreate,
   onSave,
   onShare,
   saveLoading,
-  topInset,
+  showDetailsHint,
   width,
 }: {
   active: boolean;
@@ -278,7 +376,7 @@ function ImmersiveSlide({
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
-  topInset: number;
+  showDetailsHint: boolean;
   width: number;
 }) {
   return (
@@ -286,82 +384,477 @@ function ImmersiveSlide({
       <ImmersiveMedia item={item} active={active && activeVideoId === item.id} width={width} height={height} />
       <LinearGradient
         pointerEvents="none"
-        colors={['rgba(0,0,0,0.42)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.78)']}
-        locations={[0, 0.42, 1]}
+        colors={['rgba(0,0,0,0.36)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.82)']}
+        locations={[0, 0.48, 1]}
         style={{ position: 'absolute', inset: 0 }}
       />
       <View
         pointerEvents="box-none"
         style={{
           position: 'absolute',
-          right: 15,
-          bottom: bottomInset + 132,
+          right: 14,
+          bottom: bottomInset + 104,
           alignItems: 'center',
-          gap: 22,
+          gap: 17,
         }}
       >
-        <CreatorBubble item={item} />
-        <RailButton
+        <ViewerCreatorAvatar item={item} size={56} />
+        <RailActionButton
           disabled={!item.canSave}
-          icon={<Heart size={38} color="#ffffff" fill={item.isSaved ? '#ffffff' : 'transparent'} strokeWidth={2.6} />}
-          label={item.saveLabel}
+          icon={<Heart size={27} color="#ffffff" fill={item.isSaved ? '#ffffff' : 'transparent'} strokeWidth={2.6} />}
+          label={item.isSaved ? 'Saved' : item.saveLabel}
           loading={saveLoading}
           onPress={() => onSave(item)}
         />
-        <RailButton
-          icon={<Share2 size={38} color="#ffffff" fill="#ffffff" strokeWidth={2.4} />}
+        <RailActionButton
+          icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
           label="Share"
           onPress={() => void onShare(item)}
         />
+        <RailActionButton
+          primary
+          icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
+          label="Create"
+          onPress={() => void onRecreate(item)}
+        />
       </View>
       <View
+        pointerEvents="none"
         style={{
           position: 'absolute',
-          left: 22,
-          right: 110,
+          left: 18,
+          right: 96,
           bottom: bottomInset + 28,
-          gap: 9,
-          paddingTop: topInset,
+          gap: 8,
         }}
       >
-        <View style={{ alignSelf: 'flex-start', borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{item.badge}</Text>
+        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
+            {item.badge}
+          </Text>
         </View>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 23, fontWeight: '700' }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '900' }}>
           {item.creatorLabel}
         </Text>
-        <Text numberOfLines={2} style={{ color: '#fff', fontSize: 17, lineHeight: 22, fontWeight: '500' }}>
+        <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '900' }}>
           {item.title}
         </Text>
-        <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 15, lineHeight: 21 }}>
+        <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
           {item.displayText}
         </Text>
+        {showDetailsHint ? (
+          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
+            Swipe left for details
+          </Text>
+        ) : null}
       </View>
+    </View>
+  );
+}
+
+function PostDetailsPage({
+  active,
+  bottomInset,
+  height,
+  item,
+  onRecreate,
+  onSave,
+  onShare,
+  saveLoading,
+  topInset,
+  width,
+}: {
+  active: boolean;
+  bottomInset: number;
+  height: number;
+  item: ImmersivePreviewItem;
+  onRecreate: (item: ImmersivePreviewItem) => void;
+  onSave: (item: ImmersivePreviewItem) => void;
+  onShare: (item: ImmersivePreviewItem) => void;
+  saveLoading: boolean;
+  topInset: number;
+  width: number;
+}) {
+  const details = item.details;
+  const unlock = details?.unlock ?? null;
+  const { api, user } = useAuth();
+  const queryClient = useQueryClient();
+  const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
+  const [resourceError, setResourceError] = useState<string | null>(null);
+
+  const resourceQuery = useQuery({
+    queryKey: ['post-resource-bundle', unlock?.postId, unlock?.resourceId],
+    enabled: active && Boolean(unlock),
+    queryFn: async () => {
+      if (!unlock) throw new Error('Missing unlock details');
+      return api.getMarketplaceResourceDetail(unlock.resourceId, { postId: unlock.postId });
+    },
+    staleTime: 1000 * 60,
+  });
+
+  const unlockMutation = useMutation({
+    mutationFn: async () => {
+      if (!unlock) return null;
+      if (unlock.accessMode === 'free') {
+        return api.unlockFreeBundle(unlock.postId);
+      }
+      return api.unlockBundleWithCredits(unlock.postId);
+    },
+    onSuccess: async () => {
+      if (unlock) {
+        await queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', unlock.postId, unlock.resourceId] });
+        await queryClient.invalidateQueries({ queryKey: ['marketplace-resource', unlock.resourceId] });
+        await queryClient.invalidateQueries({ queryKey: ['marketplace-resources'] });
+      }
+      await Haptics.selectionAsync();
+    },
+  });
+
+  if (!details) {
+    return <View style={{ width, height, backgroundColor: '#000' }} />;
+  }
+
+  const bundle = resourceQuery.data?.bundle;
+  const canAccess = Boolean(bundle?.viewerCanAccess);
+  const resources = canAccess ? bundle?.resources ?? null : null;
+  const resourceKinds = bundle?.resourceKinds ?? unlock?.resourceKinds ?? [];
+
+  const copyText = async (text: string) => {
+    await Clipboard.setStringAsync(text);
+    await Haptics.selectionAsync();
+  };
+
+  const openAttachment = async (attachment: PostResourceAttachment) => {
+    try {
+      setResourceError(null);
+      if (attachment.url) {
+        await Linking.openURL(attachment.url);
+        return;
+      }
+      if (attachment.storagePath) {
+        setFileLoadingPath(attachment.storagePath);
+        const postId = item.showcasePostId ?? item.ownerPostId ?? item.id;
+        const response = await api.getPostResourceFileUrl(postId, attachment.storagePath);
+        await Linking.openURL(response.signedUrl);
+        return;
+      }
+      Alert.alert('Attachment unavailable', 'This attachment does not have an openable link.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to open this resource.';
+      setResourceError(message);
+    } finally {
+      setFileLoadingPath(null);
+    }
+  };
+
+  const unlockError = unlockMutation.error instanceof Error ? unlockMutation.error.message : null;
+
+  return (
+    <View style={{ width, height, backgroundColor: '#050506' }}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingTop: topInset + 80,
+          paddingBottom: bottomInset + 36,
+          paddingHorizontal: 22,
+          gap: 18,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={{ gap: 8 }}>
+          <Text style={{ color: 'rgba(255,255,255,0.58)', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' }}>
+            Post details
+          </Text>
+          <Text selectable style={{ color: '#fff', fontSize: 30, lineHeight: 35, fontWeight: '900' }}>
+            {details.title}
+          </Text>
+          <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 16, fontWeight: '700' }}>
+            {details.creatorLabel} · {details.categoryLabel}
+          </Text>
+        </View>
+
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <DetailStat label="Saves" value={formatCount(details.saveCount)} />
+          <DetailStat label="Remixes" value={formatCount(details.remixCount)} />
+          <DetailStat label="Source" value={details.sourceLabel} />
+        </View>
+
+        <DetailSection title="Prompt" emptyLabel="No prompt provided">
+          {details.prompt ? (
+            <CopyableText text={details.prompt} onCopy={copyText} />
+          ) : null}
+        </DetailSection>
+
+        <DetailSection title="Caption" emptyLabel="No caption provided">
+          {details.body ? (
+            <CopyableText text={details.body} onCopy={copyText} />
+          ) : null}
+        </DetailSection>
+
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+          <DetailActionButton
+            label="Recreate"
+            icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
+            primary
+            onPress={() => void onRecreate(item)}
+          />
+          <DetailActionButton
+            disabled={!item.canSave}
+            label={item.isSaved ? 'Saved' : 'Save'}
+            icon={<Heart size={18} color={item.canSave ? '#fff' : 'rgba(255,255,255,0.5)'} fill={item.isSaved ? '#fff' : 'transparent'} strokeWidth={2.6} />}
+            loading={saveLoading}
+            onPress={() => onSave(item)}
+          />
+          <DetailActionButton
+            disabled={!item.canShare}
+            label="Share"
+            icon={<Share2 size={18} color={item.canShare ? '#fff' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />}
+            onPress={() => void onShare(item)}
+          />
+        </View>
+
+        <View style={{ borderRadius: 22, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.06)', padding: 16, gap: 14 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+            <View style={{ flex: 1, gap: 5 }}>
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>Unlockables</Text>
+              {unlock ? (
+                <Text style={{ color: 'rgba(255,255,255,0.64)', fontSize: 14, lineHeight: 19 }}>
+                  {bundle?.previewText ?? unlock.previewText ?? 'Reusable resources are attached to this post.'}
+                </Text>
+              ) : (
+                <Text style={{ color: 'rgba(255,255,255,0.64)', fontSize: 14, lineHeight: 19 }}>
+                  No unlock attached.
+                </Text>
+              )}
+            </View>
+            {unlock ? (
+              <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: unlock.accessMode === 'free' ? 'rgba(103,255,69,0.16)' : 'rgba(255,183,77,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
+                <Text style={{ color: unlock.accessMode === 'free' ? '#67ff45' : '#ffcf8a', fontSize: 12, fontWeight: '900' }}>{bundle?.priceQuote?.formatted ?? unlock.priceLabel}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {unlock ? (
+            <>
+              <ResourceKindRow kinds={resourceKinds} />
+              {resourceQuery.isLoading ? <ActivityIndicator color="#67ff45" /> : null}
+              {resourceQuery.error instanceof Error ? (
+                <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceQuery.error.message}</Text>
+              ) : null}
+              {resources ? (
+                <UnlockedResources
+                  fileLoadingPath={fileLoadingPath}
+                  onCopy={copyText}
+                  onOpenAttachment={openAttachment}
+                  resources={resources}
+                />
+              ) : (
+                <View style={{ gap: 10 }}>
+                  {bundle?.lockedPreview?.promptPreview ? (
+                    <LockedPreviewText label="Prompt preview" value={bundle.lockedPreview.promptPreview} />
+                  ) : null}
+                  {bundle?.lockedPreview?.notesPreview ? (
+                    <LockedPreviewText label="Notes preview" value={bundle.lockedPreview.notesPreview} />
+                  ) : null}
+                  {bundle?.lockedPreview?.attachmentPreviews?.length ? (
+                    <View style={{ gap: 8 }}>
+                      {bundle.lockedPreview.attachmentPreviews.map((attachment) => (
+                        <Text key={`${attachment.kind}-${attachment.label}`} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13 }}>
+                          {attachment.kind === 'file' ? 'File' : 'Link'} · {attachment.label}
+                        </Text>
+                      ))}
+                    </View>
+                  ) : null}
+                  <DetailActionButton
+                    label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Unlock free' : 'Unlock with credits'}
+                    icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
+                    loading={unlockMutation.isPending}
+                    primary
+                    onPress={() => {
+                      if (!user) {
+                        router.push('/auth');
+                        return;
+                      }
+                      unlockMutation.mutate();
+                    }}
+                  />
+                  {unlockError ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{unlockError}</Text> : null}
+                </View>
+              )}
+              {resourceError ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceError}</Text> : null}
+            </>
+          ) : null}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function LockedPreviewText({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ borderRadius: 14, borderCurve: 'continuous', backgroundColor: 'rgba(255,255,255,0.07)', padding: 12, gap: 5 }}>
+      <Text style={{ color: 'rgba(255,255,255,0.52)', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
+      <Text selectable numberOfLines={4} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20 }}>{value}</Text>
+    </View>
+  );
+}
+
+function DetailStat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ flex: 1, borderRadius: 14, borderCurve: 'continuous', backgroundColor: 'rgba(255,255,255,0.08)', padding: 12, gap: 4 }}>
+      <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.55)', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
+      <Text numberOfLines={1} style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{value}</Text>
+    </View>
+  );
+}
+
+function DetailSection({ title, emptyLabel, children }: { title: string; emptyLabel: string; children: React.ReactNode }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>{title}</Text>
+      {children || <Text style={{ color: 'rgba(255,255,255,0.48)', fontSize: 15 }}>{emptyLabel}</Text>}
+    </View>
+  );
+}
+
+function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) => Promise<void> }) {
+  return (
+    <View style={{ borderRadius: 16, borderCurve: 'continuous', backgroundColor: 'rgba(255,255,255,0.07)', padding: 14, gap: 12 }}>
+      <Text selectable style={{ color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 22 }}>{text}</Text>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Recreate"
-        onPress={() => void onRecreate(item)}
-        style={({ pressed }) => ({
-          position: 'absolute',
-          right: 20,
-          bottom: bottomInset + 27,
-          minWidth: 128,
-          minHeight: 58,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 29,
-          backgroundColor: '#67ff45',
-          opacity: pressed ? 0.82 : 1,
-          paddingHorizontal: 20,
-        })}
+        accessibilityLabel="Copy text"
+        onPress={() => void onCopy(text)}
+        style={({ pressed }) => ({ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? 0.7 : 1 })}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Repeat2 size={20} color="#050505" strokeWidth={2.8} />
-          <Text numberOfLines={1} style={{ color: '#050505', fontSize: 18, fontWeight: '900' }}>Recreate</Text>
-        </View>
+        <Copy size={15} color="#67ff45" strokeWidth={2.4} />
+        <Text style={{ color: '#67ff45', fontSize: 13, fontWeight: '900' }}>Copy</Text>
       </Pressable>
     </View>
   );
+}
+
+function DetailActionButton({
+  disabled,
+  icon,
+  label,
+  loading,
+  onPress,
+  primary,
+}: {
+  disabled?: boolean;
+  icon: React.ReactNode;
+  label: string;
+  loading?: boolean;
+  onPress: () => void;
+  primary?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled || loading}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 44,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        borderRadius: 22,
+        backgroundColor: primary ? '#67ff45' : 'rgba(255,255,255,0.1)',
+        opacity: disabled ? 0.45 : pressed ? 0.76 : 1,
+        paddingHorizontal: 15,
+      })}
+    >
+      {loading ? <ActivityIndicator color={primary ? '#050505' : '#fff'} /> : icon}
+      <Text numberOfLines={1} style={{ color: primary ? '#050505' : '#fff', fontSize: 14, fontWeight: '900' }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
+  if (!kinds.length) return null;
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {kinds.map((kind) => (
+        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 10, paddingVertical: 6 }}>
+          <FileText size={13} color="rgba(255,255,255,0.78)" strokeWidth={2.5} />
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function UnlockedResources({
+  fileLoadingPath,
+  onCopy,
+  onOpenAttachment,
+  resources,
+}: {
+  fileLoadingPath: string | null;
+  onCopy: (text: string) => Promise<void>;
+  onOpenAttachment: (attachment: PostResourceAttachment) => Promise<void>;
+  resources: NonNullable<MarketplaceResourceDetail['resources']>;
+}) {
+  return (
+    <View style={{ gap: 12 }}>
+      {resources.promptText ? (
+        <DetailSection title="Unlocked prompt" emptyLabel="">
+          <CopyableText text={resources.promptText} onCopy={onCopy} />
+        </DetailSection>
+      ) : null}
+      {resources.notesMarkdown ? (
+        <DetailSection title="Creator notes" emptyLabel="">
+          <CopyableText text={resources.notesMarkdown} onCopy={onCopy} />
+        </DetailSection>
+      ) : null}
+      {resources.workflowShareUrl ? (
+        <DetailActionButton
+          label="Open workflow"
+          icon={<ExternalLink size={18} color="#fff" strokeWidth={2.5} />}
+          onPress={() => void Linking.openURL(resources.workflowShareUrl as string)}
+        />
+      ) : null}
+      {resources.attachments.length ? (
+        <View style={{ gap: 8 }}>
+          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Files and links</Text>
+          {resources.attachments.map((attachment) => {
+            const loading = Boolean(attachment.storagePath && attachment.storagePath === fileLoadingPath);
+            return (
+              <DetailActionButton
+                key={`${attachment.label}-${attachment.url ?? attachment.storagePath ?? 'attachment'}`}
+                label={attachment.label}
+                icon={attachment.kind === 'file'
+                  ? <Download size={18} color="#fff" strokeWidth={2.5} />
+                  : <ExternalLink size={18} color="#fff" strokeWidth={2.5} />}
+                loading={loading}
+                onPress={() => void onOpenAttachment(attachment)}
+              />
+            );
+          })}
+        </View>
+      ) : null}
+      {resources.allowRemix ? (
+        <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 14, lineHeight: 20 }}>
+          Remix access is included with this unlock.
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function resourceKindLabel(kind: PostResourceKind) {
+  if (kind === 'prompt') return 'Prompt';
+  if (kind === 'workflow') return 'Workflow';
+  if (kind === 'files') return 'Files';
+  if (kind === 'notes') return 'Notes';
+  return 'Remix';
+}
+
+function formatCount(value: number) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}K`;
+  return String(value);
 }
 
 function ImmersiveMedia({ item, active, width, height }: { item: ImmersivePreviewItem; active: boolean; width: number; height: number }) {
@@ -387,7 +880,7 @@ function ImmersiveMedia({ item, active, width, height }: { item: ImmersivePrevie
     return (
       <Image
         source={{ uri: item.mediaUrl }}
-        contentFit="contain"
+        contentFit="cover"
         transition={120}
         style={{ width, height, backgroundColor: '#000' }}
       />
@@ -421,7 +914,7 @@ function ActiveVideo({ url, width, height }: { url: string; width: number; heigh
     <VideoView
       player={player}
       nativeControls={false}
-      contentFit="contain"
+      contentFit="cover"
       fullscreenOptions={{ enable: false }}
       allowsPictureInPicture={false}
       startsPictureInPictureAutomatically={false}
@@ -435,11 +928,19 @@ function ActiveVideo({ url, width, height }: { url: string; width: number; heigh
 function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width: number; height: number }) {
   return (
     <LinearGradient
-      colors={['#16051d', '#050506', '#0a1822']}
-      style={{ width, height, justifyContent: 'center', paddingHorizontal: 28 }}
+      colors={['#17051d', '#060609', '#07171f']}
+      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120 }}
     >
-      <View style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', backgroundColor: 'rgba(255,255,255,0.07)', padding: 22 }}>
-        <Text selectable style={{ color: '#fff', fontSize: 28, lineHeight: 36, fontWeight: '900' }}>
+      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', backgroundColor: 'rgba(255,255,255,0.07)', padding: 20, gap: 13 }}>
+        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 11, paddingVertical: 6 }}>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
+            {item.badge}
+          </Text>
+        </View>
+        <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '900' }}>
+          {item.title}
+        </Text>
+        <Text numberOfLines={8} style={{ color: 'rgba(255,255,255,0.76)', fontSize: 16, lineHeight: 23, fontWeight: '700' }}>
           {item.displayText}
         </Text>
       </View>
@@ -447,33 +948,37 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
   );
 }
 
-function CreatorBubble({ item }: { item: ImmersivePreviewItem }) {
+function ViewerCreatorAvatar({ item, size = 40 }: { item: ImmersivePreviewItem; size?: number }) {
   const initial = item.creatorLabel.replace(/^@/, '').trim()[0]?.toUpperCase() || 'C';
+  const innerSize = size - 3;
+
   return (
-    <View style={{ width: 58, height: 58, borderRadius: 29, padding: 2, backgroundColor: '#fff' }}>
-      <View style={{ flex: 1, overflow: 'hidden', borderRadius: 27, alignItems: 'center', justifyContent: 'center', backgroundColor: '#27272a' }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, padding: 1.5, backgroundColor: 'rgba(255,255,255,0.9)' }}>
+      <View style={{ flex: 1, overflow: 'hidden', borderRadius: innerSize / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: '#27272a' }}>
         {item.creatorAvatar ? (
           <Image source={{ uri: item.creatorAvatar }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
-          <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900' }}>{initial}</Text>
+          <Text style={{ color: '#fff', fontSize: size > 44 ? 20 : 15, fontWeight: '900' }}>{initial}</Text>
         )}
       </View>
     </View>
   );
 }
 
-function RailButton({
+function RailActionButton({
   disabled,
   icon,
   label,
   loading,
   onPress,
+  primary,
 }: {
   disabled?: boolean;
   icon: React.ReactNode;
   label: string;
   loading?: boolean;
   onPress: () => void;
+  primary?: boolean;
 }) {
   return (
     <Pressable
@@ -484,146 +989,38 @@ function RailButton({
         alignItems: 'center',
         gap: 5,
         opacity: disabled ? 0.42 : pressed ? 0.72 : 1,
-        minWidth: 62,
+        minWidth: 64,
       })}
     >
-      {loading ? <ActivityIndicator color="#fff" /> : icon}
-      <Text numberOfLines={1} style={{ color: '#fff', fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] }}>
-        {label}
+      <View
+        style={{
+          width: 54,
+          height: 54,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: 27,
+          borderWidth: primary ? 0 : 1,
+          borderColor: 'rgba(255,255,255,0.16)',
+          backgroundColor: primary ? '#67ff45' : 'rgba(12,12,16,0.42)',
+        }}
+      >
+        {loading ? <ActivityIndicator color={primary ? '#050505' : '#fff'} /> : icon}
+      </View>
+      <Text
+        numberOfLines={1}
+        style={{
+          color: '#fff',
+          fontSize: 12,
+          lineHeight: 15,
+          fontWeight: '900',
+          textShadowColor: 'rgba(0,0,0,0.6)',
+          textShadowOffset: { width: 0, height: 1 },
+          textShadowRadius: 6,
+          fontVariant: ['tabular-nums'],
+        }}
+      >
+        {label === '0' ? 'Save' : label}
       </Text>
     </Pressable>
-  );
-}
-
-function normalizeViewerSource(value: string | string[] | undefined): PreviewViewerSource {
-  const source = normalizeParam(value);
-  return VIEWER_SOURCES.includes(source as PreviewViewerSource) ? source as PreviewViewerSource : 'showcase-feed';
-}
-
-function normalizeParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
-}
-
-function buildViewerItems(
-  source: PreviewViewerSource,
-  data: ImmersiveSourceData | undefined,
-  owner: { creatorLabel: string; creatorAvatar?: string | null }
-) {
-  if (isGenerationSource(source)) {
-    return buildImmersiveGenerationItems(source, data?.generations ?? [], owner);
-  }
-  if (source === 'profile-posts') {
-    return buildImmersiveOwnerPostItems(source, data?.ownerPosts ?? [], owner);
-  }
-  return buildImmersiveShowcaseItems(source, data?.showcaseItems ?? []);
-}
-
-function isGenerationSource(source: PreviewViewerSource) {
-  return source === 'profile-creations' || source === 'studio-creations' || source === 'home-creations';
-}
-
-async function loadSourceData({
-  api,
-  source,
-  initialId,
-}: {
-  api: ReturnType<typeof useAuth>['api'];
-  source: PreviewViewerSource;
-  initialId: string;
-}): Promise<ImmersiveSourceData> {
-  if (isGenerationSource(source)) {
-    const response = await api.listGenerations(true);
-    return { generations: response.generations };
-  }
-
-  if (source === 'profile-posts') {
-    const response = await api.listOwnerPosts({ includeArchived: true, visibility: 'all' });
-    return { ownerPosts: response.posts };
-  }
-
-  const response = await api.getShowcaseFeed({ limit: 48, sort: 'recent' }, { auth: source === 'profile-saved' });
-  let showcaseItems = source === 'profile-saved'
-    ? response.items.filter((item) => item.isSaved || item.id === initialId)
-    : response.items;
-
-  if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
-    const detail = await api.getShowcasePost(initialId).catch(() => null);
-    if (detail?.item) {
-      showcaseItems = [detail.item, ...showcaseItems];
-    }
-  }
-
-  return { showcaseItems };
-}
-
-function readCachedSourceData(queryClient: QueryClient, source: PreviewViewerSource, userId: string | undefined, initialId: string): ImmersiveSourceData | undefined {
-  if (isGenerationSource(source)) {
-    const data = cachedGenerations(queryClient, userId);
-    return sourceDataContains(data, initialId) ? data : undefined;
-  }
-
-  if (source === 'profile-posts') {
-    const data = cachedOwnerPosts(queryClient, userId);
-    return sourceDataContains(data, initialId) ? data : undefined;
-  }
-
-  const data = cachedShowcaseItems(queryClient, source, userId);
-  return sourceDataContains(data, initialId) ? data : undefined;
-}
-
-function cachedShowcaseItems(queryClient: QueryClient, source: PreviewViewerSource, userId: string | undefined): ImmersiveSourceData | undefined {
-  const items: ShowcaseFeedItem[] = [];
-  const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-showcase', userId]);
-  if (saved?.items.length) {
-    items.push(...saved.items);
-  }
-
-  const feedQueries = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: ['showcase-feed'] });
-  for (const [, data] of feedQueries) {
-    items.push(...flattenShowcaseFeedPages(data?.pages));
-  }
-
-  const deduped = dedupeById(items);
-  const showcaseItems = source === 'profile-saved' ? deduped.filter((item) => item.isSaved) : deduped;
-  return showcaseItems.length ? { showcaseItems } : undefined;
-}
-
-function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
-  const all: GenerationListItem[] = [];
-  for (const key of [['profile-generations', userId], ['home-generations', userId], ['generations', userId]] as const) {
-    const data = queryClient.getQueryData<{ generations: GenerationListItem[] }>(key);
-    if (data?.generations.length) all.push(...data.generations);
-  }
-  const generations = dedupeById(all);
-  return generations.length ? { generations } : undefined;
-}
-
-function cachedOwnerPosts(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
-  const all: OwnerPostsResponse['posts'] = [];
-  for (const key of [['profile-owner-posts', userId], ['home-seller-posts', userId]] as const) {
-    const data = queryClient.getQueryData<OwnerPostsResponse>(key);
-    if (data?.posts.length) all.push(...data.posts);
-  }
-  const ownerPosts = dedupeById(all);
-  return ownerPosts.length ? { ownerPosts } : undefined;
-}
-
-function dedupeById<T extends { id: string }>(items: T[]) {
-  const seen = new Set<string>();
-  const deduped: T[] = [];
-  for (const item of items) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    deduped.push(item);
-  }
-  return deduped;
-}
-
-function sourceDataContains(data: ImmersiveSourceData | undefined, initialId: string) {
-  if (!data || !initialId) return false;
-  return Boolean(
-    data.showcaseItems?.some((item) => item.id === initialId)
-    || data.generations?.some((item) => item.id === initialId)
-    || data.ownerPosts?.some((item) => item.id === initialId)
   );
 }

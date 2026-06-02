@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Link, router } from 'expo-router';
+import { router } from 'expo-router';
 import {
   Bell,
   ChevronRight,
@@ -20,7 +20,7 @@ import {
   UserPlus,
   WandSparkles,
 } from 'lucide-react-native';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -30,9 +30,10 @@ import { TextPreviewCard } from '@/components/text-preview-card';
 import { useAuth } from '@/lib/auth';
 import {
   FALLBACK_COMMUNITY,
-  FALLBACK_GENERATIONS,
   HOME_TOOL_SHORTCUTS,
-  generationToHomeCard,
+  formatCompactCount,
+  formatUsdCents,
+  generationsToHomeCards,
   getOwnerPostSalesSummary,
   showcaseToCommunityCard,
   type HomeCommunityCard,
@@ -50,16 +51,57 @@ import {
 } from '@/lib/showcase-feed-query';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme } from '@/lib/theme';
+import type { MarketplaceResource } from '@/lib/types';
 
-const FEED_TABS = [
-  { label: 'For You', sort: 'recent' },
-  { label: 'Following', sort: 'top-remixes' },
-  { label: 'Trending', sort: 'top-saves' },
-] as const;
+interface UnlockCard {
+  id: string;
+  postId?: string;
+  title: string;
+  body: string;
+  priceLabel: string;
+  accessLabel: string;
+  mediaUrl: string | null;
+  isPreview: boolean;
+}
+
+const FALLBACK_UNLOCKS: UnlockCard[] = [
+  {
+    id: 'preview-beauty-hook',
+    title: 'Beauty Product Hook',
+    body: 'Prompt framework for a launch-ready product post.',
+    priceLabel: 'Free',
+    accessLabel: 'Prompt',
+    mediaUrl: null,
+    isPreview: true,
+  },
+  {
+    id: 'preview-founder-caption',
+    title: 'Founder Caption Kit',
+    body: 'Reusable notes for founder updates and proof-led posts.',
+    priceLabel: 'Free',
+    accessLabel: 'Notes',
+    mediaUrl: null,
+    isPreview: true,
+  },
+  {
+    id: 'preview-portrait-pack',
+    title: 'Portrait Prompt Pack',
+    body: 'Soft-lit portrait art direction and styling cues.',
+    priceLabel: '$9',
+    accessLabel: 'Prompt',
+    mediaUrl: null,
+    isPreview: true,
+  },
+];
+
+const TOOL_PREVIEW_IMAGES = {
+  kingdom: require('../assets/images/home-previews/image.png'),
+  city: require('../assets/images/home-previews/video.png'),
+  runner: require('../assets/images/home-previews/motion.png'),
+} as const;
 
 export function HomeDashboard() {
   const { user, api, credits, signOut } = useAuth();
-  const [feedTab, setFeedTab] = useState<(typeof FEED_TABS)[number]>(FEED_TABS[0]);
   const [menuVisible, setMenuVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -67,11 +109,13 @@ export function HomeDashboard() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const pageWidth = Math.min(width, 430);
-  const isCompact = pageWidth < 410;
-  const horizontalPadding = isCompact ? 16 : 18;
-  const heroHeight = Math.max(260, Math.min(304, pageWidth * 0.7));
-  const recentCardWidth = Math.max(214, Math.min(250, pageWidth * 0.64));
-  const toolCardWidth = Math.max(154, Math.min(182, pageWidth * 0.43));
+  const isCompact = pageWidth < 390;
+  const horizontalPadding = isCompact ? 15 : 18;
+  const contentWidth = pageWidth - horizontalPadding * 2;
+  const toolGap = 10;
+  const toolCardWidth = Math.floor((contentWidth - toolGap) / 2);
+  const studioCardWidth = Math.max(162, Math.min(186, pageWidth * 0.43));
+  const previewCardWidth = Math.max(188, Math.min(220, pageWidth * 0.52));
 
   const generationsQuery = useQuery({
     queryKey: ['home-generations', user?.id],
@@ -92,78 +136,116 @@ export function HomeDashboard() {
   });
 
   const showcaseQuery = useInfiniteQuery({
-    queryKey: createShowcaseFeedQueryKey({ sort: feedTab.sort }),
+    queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }),
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({ offset: pageParam, sort: feedTab.sort })),
+    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({ offset: pageParam, sort: 'recent' })),
     getNextPageParam: getNextShowcaseFeedOffset,
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
   });
 
-  const generationCards = useMemo(() => {
-    const items = (generationsQuery.data?.generations ?? []).slice(0, 6).map(generationToHomeCard);
-    return items.length > 0 ? items : FALLBACK_GENERATIONS;
-  }, [generationsQuery.data]);
+  const marketplaceQuery = useQuery({
+    queryKey: ['home-marketplace-resources'],
+    queryFn: () => api.listMarketplaceResources({ limit: 6, sort: 'recent' }),
+    staleTime: SHOWCASE_FEED_STALE_TIME_MS,
+  });
+
+  const rawGenerations = generationsQuery.data?.generations ?? [];
+  const generationCards = useMemo(() => generationsToHomeCards(rawGenerations), [rawGenerations]);
+  const hasRecentStudio = generationCards.length > 0;
+  const activeGenerationCount = rawGenerations.filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
 
   const communityCards = useMemo(() => {
     const items = flattenShowcaseFeedPages(showcaseQuery.data?.pages).slice(0, 4).map(showcaseToCommunityCard);
     return items.length > 0 ? items : FALLBACK_COMMUNITY;
   }, [showcaseQuery.data]);
 
+  const unlockCards = useMemo(() => {
+    const items = (marketplaceQuery.data?.items ?? []).slice(0, 4).map(resourceToUnlockCard);
+    return items.length > 0 ? items : FALLBACK_UNLOCKS;
+  }, [marketplaceQuery.data]);
+
   const salesSummary = useMemo(
     () => getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
     [sellerPostsQuery.data]
   );
 
+  const displayName =
+    profileQuery.data?.displayName?.trim() ||
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    'Creator';
+
   return (
     <View style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(37,99,235,0.16)', 'rgba(217,70,239,0.08)', 'rgba(3,4,13,0)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 340 }}
+      />
       <ScrollView
         bounces={false}
         contentInsetAdjustmentBehavior="never"
         overScrollMode="never"
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: '#03040d' }}
+        style={{ flex: 1, backgroundColor: 'transparent' }}
         contentContainerStyle={{
-          paddingTop: 18,
+          paddingTop: 12,
           paddingHorizontal: horizontalPadding,
           paddingBottom: tabBarMetrics.contentBottomPadding,
-          gap: 28,
+          gap: 16,
         }}
       >
         <HomeTopBar credits={credits ?? 0} onMenuPress={() => setMenuVisible(true)} />
 
-        <HeroCard height={heroHeight} />
+        <WelcomePanel
+          displayName={displayName}
+          signedIn={Boolean(user)}
+          credits={credits ?? 0}
+          activeGenerationCount={activeGenerationCount}
+          studioCount={rawGenerations.length}
+          earningsUsdCents={salesSummary.earningsUsdCents}
+        />
 
-        <SectionHeader title="Create Something" actionLabel="See All" onPress={() => router.push('/(tabs)/creator' as never)} />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingRight: horizontalPadding }}>
-          {HOME_TOOL_SHORTCUTS.map((tool) => (
-            <ToolShortcutCard key={tool.id} tool={tool} width={toolCardWidth} />
-          ))}
-        </ScrollView>
-
-        <SectionHeader title="Recent Creations" actionLabel="View Profile" onPress={() => router.push('/(tabs)/profile' as never)} />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 14, paddingRight: horizontalPadding }}>
-          {generationCards.map((item) => (
-            <RecentCreationCard key={item.id} item={item} width={recentCardWidth} />
-          ))}
-        </ScrollView>
-
-        <View style={{ gap: 14 }}>
-          <View style={{ gap: 16 }}>
-            <View style={{ flexDirection: isCompact ? 'column' : 'row', alignItems: isCompact ? 'stretch' : 'center', justifyContent: 'space-between', gap: 12 }}>
-              <Text style={{ color: appTheme.colors.text, fontSize: isCompact ? 23 : 24, fontWeight: '900' }}>Community Feed</Text>
-              <FeedSegment value={feedTab.label} onChange={(label) => {
-                const next = FEED_TABS.find((tab) => tab.label === label) ?? FEED_TABS[0];
-                setFeedTab(next);
-              }} />
-            </View>
-          </View>
-          <View style={{ gap: 16 }}>
-            {communityCards.map((item) => (
-              <CommunityPostCard key={item.id} item={item} />
+        <View style={{ gap: 11 }}>
+          <SectionHeader title="Creator paths" actionLabel="Create" onPress={() => router.push('/(tabs)/creator' as never)} />
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: toolGap }}>
+            {HOME_TOOL_SHORTCUTS.map((tool) => (
+              <ToolShortcutCard key={tool.id} tool={tool} width={toolCardWidth} />
             ))}
           </View>
         </View>
+
+        {hasRecentStudio ? (
+          <Panel>
+            <SectionHeader title="Recent Studio" actionLabel="View all" onPress={() => router.push('/(tabs)/profile' as never)} compact />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 2 }}>
+              {generationCards.map((item) => (
+                <RecentCreationCard key={item.id} item={item} width={studioCardWidth} />
+              ))}
+            </ScrollView>
+          </Panel>
+        ) : null}
+
+        <View style={{ gap: 16 }}>
+          <PreviewRail
+            title="Showcase"
+            actionLabel="Browse"
+            onPress={() => router.push('/(tabs)/showcase' as never)}
+            items={communityCards}
+            width={previewCardWidth}
+          />
+          <UnlockRail
+            title="Unlocks"
+            actionLabel="Open"
+            onPress={() => router.push('/(tabs)/marketplace' as never)}
+            items={unlockCards}
+            width={previewCardWidth}
+          />
+        </View>
       </ScrollView>
+
       <HomeSideMenu
         visible={menuVisible}
         onClose={() => setMenuVisible(false)}
@@ -180,48 +262,52 @@ export function HomeDashboard() {
 
 function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: () => void }) {
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+    <View style={{ minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Open menu"
         onPress={onMenuPress}
         style={({ pressed }) => ({
-          width: 34,
-          height: 42,
+          width: 38,
+          height: 38,
           alignItems: 'center',
           justifyContent: 'center',
+          borderRadius: 19,
+          backgroundColor: 'rgba(255,255,255,0.06)',
           opacity: pressed ? 0.72 : 1,
         })}
       >
-        <Menu size={28} color="#ffffff" strokeWidth={2.2} />
+        <Menu size={23} color="#ffffff" strokeWidth={2.2} />
       </Pressable>
 
-      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 0 }}>
-        <Sparkles size={24} color="#d946ef" fill="rgba(217,70,239,0.22)" />
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 20, fontWeight: '900', letterSpacing: 0, flexShrink: 1 }}>Magic Booklet</Text>
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minWidth: 0 }}>
+        <Sparkles size={22} color="#c084fc" fill="rgba(192,132,252,0.2)" />
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 19, fontWeight: '900', letterSpacing: 0, flexShrink: 1 }}>
+          Magicbooklet
+        </Text>
       </View>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Open credits"
           onPress={() => router.push('/pricing' as never)}
           style={({ pressed }) => ({
-            minWidth: 82,
-            height: 42,
-            borderRadius: 22,
+            minWidth: 72,
+            height: 38,
+            borderRadius: 19,
             overflow: 'hidden',
             opacity: pressed ? 0.78 : 1,
           })}
         >
           <LinearGradient
-            colors={['rgba(255,255,255,0.12)', 'rgba(124,58,237,0.22)']}
-            style={{ flex: 1, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', borderRadius: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}
+            colors={['rgba(124,58,237,0.4)', 'rgba(22,24,36,0.92)']}
+            style={{ flex: 1, borderWidth: 1, borderColor: 'rgba(168,85,247,0.36)', borderRadius: 19, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 }}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-              <Crown size={16} color="#fbbf24" fill="rgba(251,191,36,0.32)" />
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits}</Text>
-              <Plus size={16} color="#d946ef" strokeWidth={2.4} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.24)" />
+              <Text style={{ color: '#fff', fontSize: 14, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{credits}</Text>
+              <Plus size={14} color="#c084fc" strokeWidth={2.5} />
             </View>
           </LinearGradient>
         </Pressable>
@@ -231,155 +317,234 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           accessibilityLabel="Open notifications"
           onPress={() => router.push('/studio' as never)}
           style={({ pressed }) => ({
-            width: 34,
-            height: 42,
+            width: 38,
+            height: 38,
+            borderRadius: 19,
             alignItems: 'center',
             justifyContent: 'center',
+            backgroundColor: 'rgba(255,255,255,0.06)',
             opacity: pressed ? 0.72 : 1,
           })}
         >
-          <Bell size={25} color="#ffffff" strokeWidth={2.1} />
-          <View style={{ position: 'absolute', right: 2, top: 1, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#7c3cff' }}>
-            <Plus size={12} color="#ffffff" strokeWidth={2.6} />
-          </View>
+          <Bell size={21} color="#ffffff" strokeWidth={2.1} />
         </Pressable>
       </View>
     </View>
   );
 }
 
-function HeroCard({ height }: { height: number }) {
+function WelcomePanel({
+  displayName,
+  signedIn,
+  credits,
+  activeGenerationCount,
+  studioCount,
+  earningsUsdCents,
+}: {
+  displayName: string;
+  signedIn: boolean;
+  credits: number;
+  activeGenerationCount: number;
+  studioCount: number;
+  earningsUsdCents: number;
+}) {
+  const title = signedIn ? `Welcome back, ${displayName}` : 'Welcome to Magicbooklet';
+  const body = signedIn
+    ? 'Pick up a render, launch a new path, or open your workspace.'
+    : 'Explore creator paths, then sign in when you are ready to save and publish.';
+  const studioValue = signedIn
+    ? studioCount > 0
+      ? formatCompactCount(studioCount)
+      : earningsUsdCents > 0
+        ? formatUsdCents(earningsUsdCents)
+        : 'Empty'
+    : 'Preview';
+
+  return (
+    <Panel padded={false}>
+      <LinearGradient
+        colors={['rgba(37,99,235,0.22)', 'rgba(217,70,239,0.16)', 'rgba(15,23,42,0.2)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ padding: 16, gap: 14 }}
+      >
+        <View style={{ gap: 5 }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: '#fff', fontSize: 22, fontWeight: '900' }}>
+            {title}
+          </Text>
+          <Text style={{ color: 'rgba(255,255,255,0.68)', fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
+            {body}
+          </Text>
+        </View>
+
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <MetricTile label="Credits" value={formatCompactCount(credits)} accent="rgba(168,85,247,0.22)" />
+          <MetricTile label="Renders" value={activeGenerationCount > 0 ? `${activeGenerationCount} live` : 'Ready'} accent="rgba(56,189,248,0.16)" />
+          <MetricTile label="Studio" value={studioValue} accent="rgba(52,211,153,0.14)" />
+        </View>
+
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Create now"
+            onPress={() => router.push('/(tabs)/creator' as never)}
+            style={({ pressed }) => ({
+              flex: 1,
+              minHeight: 48,
+              borderRadius: 17,
+              overflow: 'hidden',
+              opacity: pressed ? 0.82 : 1,
+              transform: [{ scale: pressed ? 0.985 : 1 }],
+            })}
+          >
+            <LinearGradient
+              colors={['#2563eb', '#d946ef']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 }}
+            >
+              <WandSparkles size={19} color="#ffffff" />
+              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>Create new</Text>
+            </LinearGradient>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open Studio"
+            onPress={() => router.push('/(tabs)/profile' as never)}
+            style={({ pressed }) => ({
+              minWidth: 104,
+              minHeight: 48,
+              borderRadius: 17,
+              borderCurve: 'continuous',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.13)',
+              backgroundColor: 'rgba(255,255,255,0.06)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.78 : 1,
+            })}
+          >
+            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>Studio</Text>
+          </Pressable>
+        </View>
+      </LinearGradient>
+    </Panel>
+  );
+}
+
+function MetricTile({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <View
       style={{
-        height,
-        overflow: 'hidden',
-        borderRadius: 28,
+        flex: 1,
+        minHeight: 58,
+        borderRadius: 15,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(168,85,247,0.28)',
-        backgroundColor: '#080817',
-        boxShadow: '0 26px 70px rgba(0,0,0,0.5)',
+        borderColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: accent,
+        paddingHorizontal: 10,
+        paddingVertical: 9,
+        justifyContent: 'space-between',
       }}
     >
-      <FantasyPortalArt variant="portal" />
-      <LinearGradient
-        colors={['rgba(5,5,16,0.95)', 'rgba(5,5,16,0.62)', 'rgba(5,5,16,0.08)']}
-        locations={[0, 0.5, 1]}
-        start={{ x: 0, y: 0.5 }}
-        end={{ x: 1, y: 0.5 }}
-        style={{ position: 'absolute', inset: 0 }}
-      />
-      <View style={{ position: 'absolute', left: 20, top: 20, bottom: 28, width: '54%', justifyContent: 'center', gap: 10 }}>
-        <Text style={{ color: 'rgba(255,255,255,0.78)', fontSize: 17, lineHeight: 22, fontWeight: '500' }}>Turn your ideas into</Text>
-        <Text style={{ color: '#ffffff', fontSize: 31, lineHeight: 34, fontWeight: '900' }}>
-          <Text style={{ color: '#f03bd0' }}>stunning{'\n'}</Text>
-          creations
-        </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20 }}>Image, video or motion transfer - the magic is in your hands.</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Create now"
-          onPress={() => router.push('/(tabs)/creator' as never)}
-          style={({ pressed }) => ({
-            width: 164,
-            minHeight: 50,
-            borderRadius: 16,
-            overflow: 'hidden',
-            opacity: pressed ? 0.82 : 1,
-            transform: [{ scale: pressed ? 0.98 : 1 }],
-          })}
-        >
-          <LinearGradient
-            colors={['#ed34ca', '#7838ff']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }}
-          >
-            <WandSparkles size={22} color="#ffffff" fill="rgba(255,255,255,0.16)" />
-            <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>Create Now</Text>
-          </LinearGradient>
-        </Pressable>
-      </View>
-      <View style={{ position: 'absolute', bottom: 16, alignSelf: 'center', flexDirection: 'row', gap: 7 }}>
-        {[0, 1, 2, 3].map((dot) => (
-          <View key={dot} style={{ width: dot === 0 ? 24 : 20, height: 6, borderRadius: 999, backgroundColor: dot === 0 ? '#d946ef' : 'rgba(255,255,255,0.28)' }} />
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function SectionHeader({
-  title,
-  actionLabel,
-  onPress,
-}: {
-  title: string;
-  actionLabel: string;
-  onPress: () => void;
-}) {
-  const { width } = useWindowDimensions();
-  const isCompact = Math.min(width, 430) < 390;
-
-  return (
-    <View style={{ marginBottom: -12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.84} style={{ color: appTheme.colors.text, flex: 1, fontSize: isCompact ? 22 : 24, fontWeight: '900' }}>{title}</Text>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${actionLabel} ${title}`}
-        hitSlop={10}
-        onPress={onPress}
-        style={({ pressed }) => ({
-          minHeight: 36,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 4,
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
-        <Text numberOfLines={1} style={{ color: '#a855f7', fontSize: isCompact ? 15 : 16, fontWeight: '800' }}>{actionLabel}</Text>
-        <ChevronRight size={isCompact ? 19 : 20} color="#a855f7" />
-      </Pressable>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: 'rgba(255,255,255,0.62)', fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>
+        {label}
+      </Text>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: '#fff', fontSize: 15, fontWeight: '900', fontVariant: ['tabular-nums'] }}>
+        {value}
+      </Text>
     </View>
   );
 }
 
 function ToolShortcutCard({ tool, width }: { tool: HomeToolShortcut; width: number }) {
-  const Icon = tool.id === 'image' ? ImageIcon : tool.id === 'video' ? Play : Rocket;
-  const accent = tool.id === 'image' ? '#8b35ff' : tool.id === 'video' ? '#2563eb' : '#0f9f8e';
+  const Icon = tool.id === 'image' ? ImageIcon : tool.id === 'video' ? Play : tool.id === 'motion' ? Rocket : Sparkles;
+  const colors = toolColors(tool.accent);
+  const disabled = !tool.href;
 
   return (
-    <Link href={`/create/${tool.id}` as never} asChild>
-      <Pressable style={({ pressed }) => ({ width, opacity: pressed ? 0.82 : 1, transform: [{ scale: pressed ? 0.98 : 1 }] })}>
-        <LinearGradient
-          colors={tool.id === 'image' ? ['#1b0838', '#10051e'] : tool.id === 'video' ? ['#061d4d', '#041022'] : ['#073b36', '#06191b']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{
-            minHeight: 156,
-            borderRadius: 19,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: `${accentColor(tool.accent)}66`,
-            padding: 18,
-            justifyContent: 'space-between',
-          }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-            <View style={{ width: 58, height: 58, borderRadius: 29, backgroundColor: accent, alignItems: 'center', justifyContent: 'center' }}>
-              <Icon size={31} color="#ffffff" fill={tool.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.18)'} />
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={tool.badge ? `${tool.title} ${tool.badge}` : tool.title}
+      disabled={disabled}
+      onPress={() => {
+        if (tool.href) {
+          router.push(tool.href as never);
+        }
+      }}
+      style={({ pressed }) => ({
+        width,
+        opacity: disabled ? 0.86 : pressed ? 0.82 : 1,
+        transform: [{ scale: pressed && !disabled ? 0.985 : 1 }],
+      })}
+    >
+      <LinearGradient
+        colors={colors.background}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{
+          minHeight: tool.previewVariant ? 150 : 132,
+          borderRadius: 20,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: colors.border,
+          padding: tool.previewVariant ? 0 : 13,
+          justifyContent: 'space-between',
+          overflow: 'hidden',
+        }}
+      >
+        <View style={{ position: 'absolute', right: -18, bottom: -18, width: 92, height: 92, borderRadius: 46, backgroundColor: colors.glow }} />
+        {tool.previewVariant ? (
+          <ToolPreview variant={tool.previewVariant} icon={<Icon size={18} color="#ffffff" fill={tool.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />} />
+        ) : (
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <View style={{ width: 36, height: 36, borderRadius: 13, backgroundColor: colors.icon, alignItems: 'center', justifyContent: 'center' }}>
+              <Icon size={20} color="#ffffff" fill={tool.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />
             </View>
-            <ChevronRight size={26} color="#ffffff" />
+            {tool.badge ? (
+              <View style={{ borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.32)', paddingHorizontal: 8, paddingVertical: 4 }}>
+                <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>{tool.badge}</Text>
+              </View>
+            ) : (
+              <ChevronRight size={20} color="rgba(255,255,255,0.86)" />
+            )}
           </View>
-          <View style={{ gap: 8 }}>
-            <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '900' }}>{tool.title}</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.76)', fontSize: 15, lineHeight: 21 }}>{tool.body}</Text>
-          </View>
-        </LinearGradient>
-      </Pressable>
-    </Link>
+        )}
+        <View style={{ gap: 5, paddingHorizontal: tool.previewVariant ? 12 : 0, paddingBottom: tool.previewVariant ? 11 : 0, paddingTop: tool.previewVariant ? 10 : 0 }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: tool.previewVariant ? 16 : 17, fontWeight: '900' }}>
+            {tool.title}
+          </Text>
+          <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
+            {tool.body}
+          </Text>
+        </View>
+      </LinearGradient>
+    </Pressable>
+  );
+}
+
+function ToolPreview({
+  variant,
+  icon,
+}: {
+  variant: NonNullable<HomeToolShortcut['previewVariant']>;
+  icon: ReactNode;
+}) {
+  return (
+    <View style={{ height: 58, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+      <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+      <LinearGradient
+        colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.48)']}
+        style={{ position: 'absolute', inset: 0 }}
+      />
+      <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' }}>
+        {icon}
+      </View>
+      <View style={{ position: 'absolute', right: 9, bottom: 8, width: 29, height: 29, borderRadius: 15, backgroundColor: 'rgba(0,0,0,0.42)', alignItems: 'center', justifyContent: 'center' }}>
+        <ChevronRight size={17} color="#ffffff" />
+      </View>
+    </View>
   );
 }
 
@@ -394,81 +559,80 @@ function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: 
       accessibilityLabel={item.title}
       onPress={() => {
         if (isFallbackPreview) {
-          router.push('/(tabs)/profile' as never);
+          router.push('/(tabs)/creator' as never);
           return;
         }
         router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
       }}
       style={({ pressed }) => ({
         width,
-        height: 194,
+        height: 160,
         overflow: 'hidden',
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: 'rgba(255,255,255,0.11)',
         backgroundColor: '#090914',
         opacity: pressed ? 0.86 : 1,
         transform: [{ scale: pressed ? 0.985 : 1 }],
       })}
     >
       {isText ? (
-        <TextPreviewCard text={item.previewText} accent={accentColor('amber')} height={194} radius={18} lines={4} />
+        <TextPreviewCard text={item.previewText} accent={accentColor('amber')} height={160} radius={18} lines={4} />
       ) : item.mediaUrl && item.kind === 'image' ? (
         <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
       ) : (
         <FantasyPortalArt variant={item.artVariant} muted />
       )}
-      <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.78)']} style={{ position: 'absolute', inset: 0 }} />
-      <View style={{ position: 'absolute', left: 13, top: 13, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', padding: 7 }}>
-        <Icon size={21} color="#ffffff" />
+      <LinearGradient colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.82)']} style={{ position: 'absolute', inset: 0 }} />
+      <View style={{ position: 'absolute', left: 10, top: 10, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.38)', padding: 7 }}>
+        <Icon size={18} color="#ffffff" />
       </View>
-      <View style={{ position: 'absolute', left: 14, right: 14, bottom: 12, gap: 7 }}>
-        <View style={{ alignSelf: 'flex-start', borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.42)', paddingHorizontal: 10, paddingVertical: 6 }}>
-          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{item.label}</Text>
-        </View>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 17, fontWeight: '900' }}>{item.title}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14 }}>{item.timeLabel}</Text>
-          <MoreHorizontal size={24} color="#ffffff" />
+      <View style={{ position: 'absolute', left: 12, right: 12, bottom: 11, gap: 5 }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>{item.title}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, fontWeight: '700' }}>{item.label} • {item.timeLabel}</Text>
+          <MoreHorizontal size={19} color="#ffffff" />
         </View>
       </View>
     </Pressable>
   );
 }
 
-function FeedSegment({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function PreviewRail({
+  title,
+  actionLabel,
+  onPress,
+  items,
+  width,
+}: {
+  title: string;
+  actionLabel: string;
+  onPress: () => void;
+  items: HomeCommunityCard[];
+  width: number;
+}) {
   return (
-    <View style={{ flexDirection: 'row', borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.06)', padding: 3 }}>
-      {FEED_TABS.map((tab) => {
-        const active = tab.label === value;
-        return (
-          <Pressable
-            key={tab.label}
-            onPress={() => onChange(tab.label)}
-            style={({ pressed }) => ({
-              minHeight: 38,
-              flex: 1,
-              minWidth: 0,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 20,
-              backgroundColor: active ? 'rgba(124,58,237,0.72)' : 'transparent',
-              opacity: pressed ? 0.76 : 1,
-              paddingHorizontal: 12,
-            })}
-          >
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: active ? '#fff' : appTheme.colors.muted, fontWeight: active ? '800' : '600', fontSize: 14 }}>{tab.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
+    <Panel>
+      <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 10, paddingRight: 2, paddingBottom: 2 }}
+        decelerationRate="fast"
+        disableIntervalMomentum
+        snapToAlignment="start"
+        snapToInterval={width + 10}
+      >
+        {items.map((item) => (
+          <CommunityPreviewCard key={item.id} item={item} width={width} />
+        ))}
+      </ScrollView>
+    </Panel>
   );
 }
 
-function CommunityPostCard({ item }: { item: HomeCommunityCard }) {
-  const { width } = useWindowDimensions();
-  const isCompact = Math.min(width, 430) < 390;
+function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width: number }) {
   const isFallbackPreview = item.sourceId.startsWith('preview-');
 
   return (
@@ -482,84 +646,244 @@ function CommunityPostCard({ item }: { item: HomeCommunityCard }) {
         }
         router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
       }}
-      style={({ pressed }) => ({ opacity: pressed ? 0.86 : 1, transform: [{ scale: pressed ? 0.99 : 1 }] })}
+      style={({ pressed }) => ({
+        width,
+        height: 202,
+        overflow: 'hidden',
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.11)',
+        backgroundColor: '#080916',
+        opacity: pressed ? 0.86 : 1,
+      })}
     >
+      <View style={{ height: 108, overflow: 'hidden' }}>
+        {item.previewKind === 'text' ? (
+          <TextPreviewCard text={item.body} accent={accentColor('workflow')} height={108} radius={0} lines={3} compact />
+        ) : item.mediaUrl && item.mediaKind === 'image' ? (
+          <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        ) : (
+          <FantasyPortalArt variant={item.artVariant} muted />
+        )}
+        <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.5)']} style={{ position: 'absolute', inset: 0 }} />
         <View
           style={{
-            overflow: 'hidden',
-            borderRadius: 24,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.12)',
-            backgroundColor: '#080916',
+            position: 'absolute',
+            left: item.previewKind === 'text' ? undefined : 9,
+            right: item.previewKind === 'text' ? 9 : undefined,
+            top: 9,
+            borderRadius: 999,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            paddingHorizontal: 8,
+            paddingVertical: 5,
           }}
         >
-          <View style={{ padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <LinearGradient colors={['#f03bd0', '#6738ff']} style={{ width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' }}>
-                <Sparkles size={24} color="#fff" />
-              </LinearGradient>
-              <View style={{ flex: 1, gap: 2 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text numberOfLines={1} style={{ color: '#fff', fontSize: 17, fontWeight: '900', flexShrink: 1 }}>{item.creatorName}</Text>
-                  <View style={{ width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#7c3cff', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '900' }}>✓</Text>
-                  </View>
-                </View>
-                <Text style={{ color: appTheme.colors.muted, fontSize: 13 }}>{item.timeLabel}</Text>
-              </View>
-            </View>
-            <Pressable style={{ borderRadius: 16, overflow: 'hidden' }}>
-              <LinearGradient colors={['#8b35ff', '#5b21b6']} style={{ minWidth: isCompact ? 78 : 88, minHeight: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: isCompact ? 10 : 14 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: isCompact ? 5 : 7 }}>
-                  <UserPlus size={isCompact ? 15 : 16} color="#ffffff" />
-                  <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: '#fff', fontSize: isCompact ? 13 : 14, fontWeight: '900' }}>Follow</Text>
-                </View>
-              </LinearGradient>
-            </Pressable>
-            <MoreHorizontal size={24} color="#ffffff" />
-          </View>
-
-          <View style={{ height: isCompact ? 220 : 238, overflow: 'hidden' }}>
-            {item.mediaUrl && item.mediaKind === 'image' ? (
-              <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-            ) : (
-              <FantasyPortalArt variant={item.artVariant} />
-            )}
-            <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.72)']} style={{ position: 'absolute', inset: 0 }} />
-            <View style={{ position: 'absolute', left: 14, right: 14, bottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: isCompact ? 8 : 10 }}>
-              <View style={{ flexDirection: 'row', gap: isCompact ? 8 : 10, flex: 1, minWidth: 0 }}>
-                <StatPill compact={isCompact} icon={<Heart size={18} color="#ffffff" fill="#ffffff" />} label={item.saveLabel} />
-                <StatPill compact={isCompact} collapseLabel={isCompact} icon={<Share2 size={18} color="#ffffff" />} label="Share" />
-              </View>
-              <View style={{ borderRadius: 14, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-                <View style={{ minHeight: isCompact ? 40 : 44, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: isCompact ? 10 : 13 }}>
-                  <Lock size={isCompact ? 16 : 17} color="#f03bd0" fill="rgba(240,59,208,0.24)" />
-                  <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: '#fff', fontWeight: '800', fontSize: isCompact ? 13 : 14 }}>{item.accessLabel}</Text>
-                </View>
-              </View>
-            </View>
-          </View>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, fontWeight: '900' }}>{item.accessLabel}</Text>
         </View>
+      </View>
+      <View style={{ flex: 1, paddingHorizontal: 10, paddingTop: 9, paddingBottom: 9, justifyContent: 'space-between', gap: 5 }}>
+        <View style={{ gap: 4 }}>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 14, lineHeight: 17, fontWeight: '900' }}>{item.title}</Text>
+          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 14, fontWeight: '700' }}>{item.creatorHandle}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <MiniStat icon={<Heart size={13} color="#ffffff" />} label={item.saveLabel} />
+          <MiniStat icon={<Share2 size={13} color="#ffffff" />} label="Share" />
+        </View>
+      </View>
     </Pressable>
   );
 }
 
-function StatPill({
-  icon,
-  label,
-  compact = false,
-  collapseLabel = false,
+function UnlockRail({
+  title,
+  actionLabel,
+  onPress,
+  items,
+  width,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  compact?: boolean;
-  collapseLabel?: boolean;
+  title: string;
+  actionLabel: string;
+  onPress: () => void;
+  items: UnlockCard[];
+  width: number;
 }) {
   return (
-    <View style={{ minHeight: compact ? 38 : 42, flexDirection: 'row', alignItems: 'center', gap: compact ? 6 : 8, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.46)', paddingHorizontal: collapseLabel ? 10 : compact ? 9 : 12 }}>
-      {icon}
-      {!collapseLabel ? <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: '#fff', fontWeight: '800', fontSize: compact ? 13 : 14 }}>{label}</Text> : null}
+    <Panel>
+      <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 10, paddingRight: 2, paddingBottom: 2 }}
+        decelerationRate="fast"
+        disableIntervalMomentum
+        snapToAlignment="start"
+        snapToInterval={width + 10}
+      >
+        {items.map((item) => (
+          <UnlockPreviewCard key={item.id} item={item} width={width} />
+        ))}
+      </ScrollView>
+    </Panel>
+  );
+}
+
+function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={item.title}
+      onPress={() => {
+        if (item.isPreview) {
+          router.push('/(tabs)/marketplace' as never);
+          return;
+        }
+        const postQuery = item.postId ? `?postId=${encodeURIComponent(item.postId)}` : '';
+        router.push(`/marketplace/${encodeURIComponent(item.id)}${postQuery}` as never);
+      }}
+      style={({ pressed }) => ({
+        width,
+        minHeight: 144,
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.11)',
+        backgroundColor: '#0d0e16',
+        overflow: 'hidden',
+        opacity: pressed ? 0.86 : 1,
+      })}
+    >
+      {item.mediaUrl ? (
+        <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+      ) : (
+        <LinearGradient colors={['rgba(16,185,129,0.22)', 'rgba(124,58,237,0.12)', 'rgba(8,9,18,1)']} style={{ position: 'absolute', inset: 0 }} />
+      )}
+      <LinearGradient colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.86)']} style={{ position: 'absolute', inset: 0 }} />
+      <View style={{ minHeight: 144, padding: 12, justifyContent: 'space-between', gap: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <View style={{ borderRadius: 999, backgroundColor: 'rgba(16,185,129,0.2)', borderWidth: 1, borderColor: 'rgba(52,211,153,0.32)', paddingHorizontal: 8, paddingVertical: 5 }}>
+            <Text numberOfLines={1} style={{ color: '#bbf7d0', fontSize: 11, fontWeight: '900' }}>{item.accessLabel}</Text>
+          </View>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>{item.priceLabel}</Text>
+        </View>
+        <View style={{ gap: 6 }}>
+          <Text numberOfLines={2} style={{ color: '#fff', fontSize: 15, lineHeight: 18, fontWeight: '900' }}>{item.title}</Text>
+          <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.66)', fontSize: 12, lineHeight: 17, fontWeight: '600' }}>{item.body}</Text>
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
+function SectionHeader({
+  title,
+  actionLabel,
+  onPress,
+  compact = false,
+}: {
+  title: string;
+  actionLabel: string;
+  onPress: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.84} style={{ color: appTheme.colors.text, flex: 1, fontSize: compact ? 16 : 18, fontWeight: '900' }}>
+        {title}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${actionLabel} ${title}`}
+        hitSlop={10}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          minHeight: 30,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 3,
+          opacity: pressed ? 0.7 : 1,
+        })}
+      >
+        <Text numberOfLines={1} style={{ color: '#c084fc', fontSize: compact ? 12 : 13, fontWeight: '900' }}>{actionLabel}</Text>
+        <ChevronRight size={compact ? 15 : 16} color="#c084fc" />
+      </Pressable>
     </View>
   );
+}
+
+function Panel({ children, padded = true }: { children: ReactNode; padded?: boolean }) {
+  return (
+    <View
+      style={{
+        borderRadius: 24,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: 'rgba(15,16,24,0.72)',
+        overflow: 'hidden',
+        padding: padded ? 12 : 0,
+        gap: padded ? 11 : 0,
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+function MiniStat({ icon, label }: { icon: ReactNode; label: string }) {
+  return (
+    <View style={{ minHeight: 24, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 8 }}>
+      {icon}
+      <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{label}</Text>
+    </View>
+  );
+}
+
+function toolColors(accent: HomeToolShortcut['accent']) {
+  if (accent === 'image') {
+    return {
+      background: ['#123a8f', '#07152e'] as const,
+      icon: 'rgba(96,165,250,0.32)',
+      border: 'rgba(96,165,250,0.42)',
+      glow: 'rgba(37,99,235,0.28)',
+    };
+  }
+  if (accent === 'video') {
+    return {
+      background: ['#9f234c', '#2b0b19'] as const,
+      icon: 'rgba(251,113,133,0.34)',
+      border: 'rgba(251,113,133,0.42)',
+      glow: 'rgba(244,63,94,0.26)',
+    };
+  }
+  if (accent === 'motion') {
+    return {
+      background: ['#5b21b6', '#17072f'] as const,
+      icon: 'rgba(192,132,252,0.34)',
+      border: 'rgba(192,132,252,0.42)',
+      glow: 'rgba(124,58,237,0.3)',
+    };
+  }
+  return {
+    background: ['#08725f', '#06231f'] as const,
+    icon: 'rgba(52,211,153,0.3)',
+    border: 'rgba(52,211,153,0.42)',
+    glow: 'rgba(16,185,129,0.26)',
+  };
+}
+
+function resourceToUnlockCard(item: MarketplaceResource): UnlockCard {
+  const accessLabel = item.resourceKinds?.[0] ? item.resourceKinds[0] : item.accessMode === 'free' ? 'Free unlock' : 'Unlock';
+  return {
+    id: item.id,
+    postId: item.postId,
+    title: item.title,
+    body: item.summary ?? item.description ?? item.previewText ?? 'Reusable creator resource.',
+    priceLabel: item.accessMode === 'free' ? 'Free' : item.priceQuote?.formatted ?? formatUsdCents(item.priceUsdCents ?? 0),
+    accessLabel,
+    mediaUrl: item.mediaUrl ?? item.post?.mediaUrl ?? null,
+    isPreview: false,
+  };
 }

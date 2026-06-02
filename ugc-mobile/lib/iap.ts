@@ -1,9 +1,39 @@
-import Purchases, { type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
+import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
 
 import { env } from './env';
 import { normalizePurchasedPackage, type NormalizedNativePurchase } from './iap-purchase';
 export { resolveCreditEntitlement, type MobilePurchaseEntitlement } from './iap-entitlements';
 export { normalizePurchasedPackage, type NormalizedNativePurchase } from './iap-purchase';
+
+let hasInstalledRevenueCatLogHandler = false;
+
+function isExpectedDevBillingUnavailable(message: string) {
+  return message.includes('BILLING_UNAVAILABLE') || message.includes('Billing is not available in this device');
+}
+
+function installRevenueCatLogHandler() {
+  if (hasInstalledRevenueCatLogHandler) {
+    return;
+  }
+
+  hasInstalledRevenueCatLogHandler = true;
+  Purchases.setLogHandler((level, message) => {
+    if (__DEV__ && isExpectedDevBillingUnavailable(message)) {
+      return;
+    }
+
+    const formattedMessage = `[RevenueCat] ${message}`;
+    if (level === LOG_LEVEL.ERROR) {
+      console.error(formattedMessage);
+    } else if (level === LOG_LEVEL.WARN) {
+      console.warn(formattedMessage);
+    } else if (level === LOG_LEVEL.INFO) {
+      console.info(formattedMessage);
+    } else {
+      console.debug(formattedMessage);
+    }
+  });
+}
 
 export function isIapConfigured(os: 'ios' | 'android' | 'web' | string) {
   if (os === 'ios') return Boolean(env.revenueCatIosApiKey);
@@ -23,6 +53,8 @@ export async function configureIapForUser(userId: string | null, os: 'ios' | 'an
   }
 
   const apiKey = platformApiKey(os);
+  installRevenueCatLogHandler();
+
   const configured = await Purchases.isConfigured();
 
   if (!configured) {

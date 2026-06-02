@@ -65,11 +65,32 @@ describe('mobile api client caching', () => {
     await api.createPost(formData);
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    const [url, init] = fetcher.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(url).toBe('https://magicbooklet.test/api/posts');
     expect(init.method).toBe('POST');
     expect(init.body).toBe(formData);
     expect((init.headers as Headers).get('Content-Type')).toBeNull();
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('requests signed resource file URLs with JSON metadata', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      signedUrl: 'https://cdn.magicbooklet.test/resource.zip',
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getPostResourceFileUrl('post-1', 'bundles/resource.zip');
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-1/resource-bundle/file-url');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ storagePath: 'bundles/resource.zip' });
+    expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 });

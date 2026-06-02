@@ -1,4 +1,4 @@
-const CONTENT_BOTTOM_GAP = 20;
+const CONTENT_BOTTOM_GAP = 14;
 
 export interface MagicTabBarMetrics {
   isCompact: boolean;
@@ -16,19 +16,19 @@ export interface MagicTabBarMetrics {
 
 export function getMagicTabBarMetrics(windowWidth: number, bottomInset: number): MagicTabBarMetrics {
   const isCompact = windowWidth < 380;
-  const centerSize = isCompact ? 66 : 74;
-  const barHeight = isCompact ? 72 : 78;
+  const centerSize = isCompact ? 58 : 64;
+  const barHeight = isCompact ? 62 : 66;
   const bottomPadding = Math.max(bottomInset, 10);
-  const topPadding = Math.round(centerSize * 0.38);
+  const topPadding = Math.round(centerSize * 0.34);
 
   return {
     isCompact,
     centerSize,
     barHeight,
-    centerGap: isCompact ? 70 : 78,
-    tabIconSize: isCompact ? 22 : 24,
-    tabLabelSize: isCompact ? 10 : 11,
-    horizontalPadding: isCompact ? 8 : 12,
+    centerGap: isCompact ? 62 : 68,
+    tabIconSize: isCompact ? 21 : 22,
+    tabLabelSize: 10,
+    horizontalPadding: isCompact ? 10 : 14,
     bottomInset,
     bottomPadding,
     topPadding,

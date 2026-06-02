@@ -1,12 +1,18 @@
 import type { CreatorToolId, GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '@/lib/types';
 import type { ToolAccent } from '@/lib/theme';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
+import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
+
+export type HomeToolShortcutId = CreatorToolId | 'workflow';
 
 export interface HomeToolShortcut {
-  id: CreatorToolId;
+  id: HomeToolShortcutId;
   title: string;
   body: string;
   accent: ToolAccent;
+  href: string | null;
+  previewVariant: 'kingdom' | 'city' | 'runner' | null;
+  badge?: string;
 }
 
 export interface HomeGenerationCard {
@@ -30,6 +36,7 @@ export interface HomeCommunityCard {
   body: string;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
+  previewKind: 'media' | 'text';
   timeLabel: string;
   saveLabel: string;
   accessLabel: string;
@@ -42,20 +49,35 @@ export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
   {
     id: 'image',
     title: 'Image',
-    body: 'Generate stunning AI images',
+    body: 'Polished stills, hooks, and product frames.',
     accent: 'image',
+    href: '/create/image',
+    previewVariant: 'kingdom',
   },
   {
     id: 'video',
     title: 'Video',
-    body: 'Create amazing AI videos',
+    body: 'Prompt-to-clip scenes for launch content.',
     accent: 'video',
+    href: '/create/video',
+    previewVariant: 'city',
   },
   {
     id: 'motion',
-    title: 'Motion Transfer',
-    body: 'Apply motion to any image',
+    title: 'Motion',
+    body: 'Animate a face, product, or creator visual.',
     accent: 'motion',
+    href: '/create/motion',
+    previewVariant: 'runner',
+  },
+  {
+    id: 'workflow',
+    title: 'Workflow',
+    body: 'Reusable systems are coming to mobile.',
+    accent: 'workflow',
+    href: null,
+    previewVariant: null,
+    badge: 'Soon',
   },
 ];
 
@@ -107,6 +129,7 @@ export const FALLBACK_COMMUNITY: HomeCommunityCard[] = [
     body: 'A glowing island scene with soft pink clouds, cinematic lighting, and a premium fantasy editorial finish.',
     mediaUrl: null,
     mediaKind: 'image',
+    previewKind: 'media',
     timeLabel: '2h ago',
     saveLabel: '1.2K',
     accessLabel: 'Paywalled',
@@ -182,15 +205,23 @@ export function generationToHomeCard(item: GenerationListItem): HomeGenerationCa
   };
 }
 
+export function generationsToHomeCards(items: GenerationListItem[]) {
+  return items.slice(0, 6).map(generationToHomeCard);
+}
+
 export function showcaseToCommunityCard(item: ShowcaseFeedItem): HomeCommunityCard {
+  const hasUsableMedia = Boolean(item.mediaUrl && item.mediaKind);
+  const previewKind = isTextOnlyShowcasePost(item) || !hasUsableMedia ? 'text' : 'media';
+
   return {
     id: item.id,
     creatorName: item.creator.name,
     creatorHandle: item.creator.username ? `@${item.creator.username}` : '@creator',
     title: item.title || item.prompt || 'Community creation',
-    body: item.body || item.prompt || 'A public creator post from the Magic Booklet community.',
+    body: getShowcasePostDisplayText(item),
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
+    previewKind,
     timeLabel: formatRelativeTime(item.createdAt),
     saveLabel: formatCompactCount(item.saveCount),
     accessLabel: item.asset ? (item.asset.accessMode === 'free' ? 'Free unlock' : 'Paywalled') : 'Open',

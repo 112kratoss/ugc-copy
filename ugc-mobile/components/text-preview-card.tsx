@@ -10,12 +10,14 @@ export function TextPreviewCard({
   height,
   radius,
   lines = 5,
+  compact = false,
 }: {
   text: string;
   accent: string;
   height: number;
   radius: number;
   lines?: number;
+  compact?: boolean;
 }) {
   return (
     <LinearGradient
@@ -30,26 +32,26 @@ export function TextPreviewCard({
         borderColor: `${accent}4d`,
         justifyContent: 'flex-end',
         overflow: 'hidden',
-        padding: 14,
+        padding: compact ? 10 : 14,
       }}
     >
       <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}14` }} />
-      <View style={{ gap: 12 }}>
+      <View style={{ gap: compact ? 7 : 12 }}>
         <View
           style={{
-            width: 34,
-            height: 34,
+            width: compact ? 24 : 34,
+            height: compact ? 24 : 34,
             alignItems: 'center',
             justifyContent: 'center',
-            borderRadius: 17,
+            borderRadius: compact ? 12 : 17,
             backgroundColor: `${accent}24`,
             borderWidth: 1,
             borderColor: `${accent}55`,
           }}
         >
-          <FileText size={18} color={accent} strokeWidth={2.4} />
+          <FileText size={compact ? 13 : 18} color={accent} strokeWidth={2.4} />
         </View>
-        <Text numberOfLines={lines} style={{ color: appTheme.colors.text, fontSize: 17, lineHeight: 22, fontWeight: '900' }}>
+        <Text numberOfLines={lines} style={{ color: appTheme.colors.text, fontSize: compact ? 12 : 17, lineHeight: compact ? 15 : 22, fontWeight: '900' }}>
           {text}
         </Text>
       </View>

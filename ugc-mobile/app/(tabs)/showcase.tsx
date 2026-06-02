@@ -1,8 +1,9 @@
 import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { Heart, Play, RefreshCw, Search, SlidersHorizontal } from 'lucide-react-native';
+import { FileText, Heart, Play, RefreshCw, Search, SlidersHorizontal } from 'lucide-react-native';
 import { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,8 +15,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedVideoPreview } from '@/components/feed-video-preview';
-import { TextPreviewCard } from '@/components/text-preview-card';
 import { StatusBlock } from '@/components/ui';
+import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -45,7 +46,7 @@ const SKELETON_HEIGHTS = [
 ];
 const LOAD_MORE_COOLDOWN_MS = 800;
 const MAX_ACTIVE_VIDEO_PREVIEWS = 3;
-const FEED_HORIZONTAL_PADDING = 8;
+const FEED_HORIZONTAL_PADDING = 14;
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
@@ -136,111 +137,118 @@ export default function ShowcaseScreen() {
   };
 
   return (
-    <FlashList
-      contentInsetAdjustmentBehavior="never"
-      data={isFirstLoad ? [] : cards}
-      drawDistance={900}
-      extraData={activeVideoIds}
-      getItemType={(item) => item.item.category === 'text' || item.item.postFormat === 'text' ? 'text' : item.mediaKind ?? item.item.category}
-      keyExtractor={(item) => item.id}
-      masonry
-      numColumns={2}
-      optimizeItemArrangement={false}
-      onEndReached={requestNextPage}
-      onEndReachedThreshold={0.32}
-      onRefresh={handleRefresh}
-      onViewableItemsChanged={onViewableItemsChanged}
-      refreshing={isRefreshing}
-      renderItem={renderCard}
-      showsVerticalScrollIndicator={false}
-      style={{ flex: 1, backgroundColor: appTheme.colors.background }}
-      contentContainerStyle={{
-        paddingTop: topInset + appTheme.spacing.screen,
-        paddingHorizontal: FEED_HORIZONTAL_PADDING,
-        paddingBottom: tabBarMetrics.contentBottomPadding,
-      }}
-      ListHeaderComponent={
-        <View style={{ gap: appTheme.spacing.section, paddingBottom: appTheme.spacing.section }}>
-          <View style={{ gap: 16 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <View style={{ gap: 4, flex: 1 }}>
-                <Text selectable style={{ color: appTheme.colors.text, fontSize: 34, lineHeight: 38, fontWeight: '900' }}>
-                  Showcase
-                </Text>
-                <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600' }}>
-                  Fresh creator pins
-                </Text>
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <FlashList
+        contentInsetAdjustmentBehavior="never"
+        data={isFirstLoad ? [] : cards}
+        drawDistance={900}
+        extraData={activeVideoIds}
+        getItemType={(item) => item.previewKind === 'text' ? 'text' : item.mediaKind ?? item.item.category}
+        keyExtractor={(item) => item.id}
+        masonry
+        numColumns={2}
+        optimizeItemArrangement={false}
+        onEndReached={requestNextPage}
+        onEndReachedThreshold={0.32}
+        onRefresh={handleRefresh}
+        onViewableItemsChanged={onViewableItemsChanged}
+        refreshing={isRefreshing}
+        renderItem={renderCard}
+        showsVerticalScrollIndicator={false}
+        style={{
+          flex: 1,
+          backgroundColor: appTheme.colors.background,
+          marginBottom: tabBarMetrics.contentBottomPadding - 10,
+        }}
+        contentContainerStyle={{
+          paddingTop: topInset + appTheme.spacing.screen,
+          paddingHorizontal: FEED_HORIZONTAL_PADDING,
+          paddingBottom: appTheme.spacing.section + 8,
+        }}
+        ListHeaderComponent={
+          <View style={{ gap: appTheme.spacing.section, paddingBottom: appTheme.spacing.section }}>
+            <View style={{ gap: 16 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <View style={{ gap: 4, flex: 1 }}>
+                  <Text selectable style={{ color: appTheme.colors.text, fontSize: 34, lineHeight: 38, fontWeight: '900' }}>
+                    Showcase
+                  </Text>
+                  <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600' }}>
+                    Fresh creator pins
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 9 }}>
+                  <IconButton label="Search showcase">
+                    <Search size={19} color={appTheme.colors.text} strokeWidth={2.4} />
+                  </IconButton>
+                  <IconButton label="Filter showcase">
+                    <SlidersHorizontal size={19} color={appTheme.colors.text} strokeWidth={2.4} />
+                  </IconButton>
+                </View>
               </View>
-              <View style={{ flexDirection: 'row', gap: 9 }}>
-                <IconButton label="Search showcase">
-                  <Search size={19} color={appTheme.colors.text} strokeWidth={2.4} />
-                </IconButton>
-                <IconButton label="Filter showcase">
-                  <SlidersHorizontal size={19} color={appTheme.colors.text} strokeWidth={2.4} />
-                </IconButton>
-              </View>
-            </View>
 
-            <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-              {FILTERS.map((filter, index) => (
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                {FILTERS.map((filter, index) => (
+                  <Pressable
+                    key={filter}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({
+                      minHeight: 34,
+                      justifyContent: 'center',
+                      borderRadius: appTheme.radii.pill,
+                      borderWidth: 1,
+                      borderColor: index === 0 ? 'rgba(56,189,248,0.55)' : appTheme.colors.border,
+                      backgroundColor: index === 0 ? 'rgba(56,189,248,0.14)' : appTheme.colors.panelSoft,
+                      opacity: pressed ? 0.75 : 1,
+                      paddingHorizontal: 13,
+                    })}
+                  >
+                    <Text style={{ color: index === 0 ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>
+                      {filter}
+                    </Text>
+                  </Pressable>
+                ))}
                 <Pressable
-                  key={filter}
                   accessibilityRole="button"
+                  accessibilityLabel="Refresh showcase"
+                  disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
+                  onPress={handleRefresh}
                   style={({ pressed }) => ({
-                    minHeight: 34,
+                    width: 34,
+                    height: 34,
+                    alignItems: 'center',
                     justifyContent: 'center',
                     borderRadius: appTheme.radii.pill,
                     borderWidth: 1,
-                    borderColor: index === 0 ? 'rgba(56,189,248,0.55)' : appTheme.colors.border,
-                    backgroundColor: index === 0 ? 'rgba(56,189,248,0.14)' : appTheme.colors.panelSoft,
-                    opacity: pressed ? 0.75 : 1,
-                    paddingHorizontal: 13,
+                    borderColor: appTheme.colors.border,
+                    backgroundColor: appTheme.colors.panelSoft,
+                    opacity: pressed ? 0.75 : showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage ? 0.52 : 1,
                   })}
                 >
-                  <Text style={{ color: index === 0 ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>
-                    {filter}
-                  </Text>
+                  <RefreshCw size={15} color={appTheme.colors.muted} strokeWidth={2.5} />
                 </Pressable>
-              ))}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Refresh showcase"
-                disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
-                onPress={handleRefresh}
-                style={({ pressed }) => ({
-                  width: 34,
-                  height: 34,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: appTheme.radii.pill,
-                  borderWidth: 1,
-                  borderColor: appTheme.colors.border,
-                  backgroundColor: appTheme.colors.panelSoft,
-                  opacity: pressed ? 0.75 : showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage ? 0.52 : 1,
-                })}
-              >
-                <RefreshCw size={15} color={appTheme.colors.muted} strokeWidth={2.5} />
-              </Pressable>
+              </View>
             </View>
+            {showcaseQuery.error ? (
+              <StatusBlock
+                tone="danger"
+                title="Could not load showcase"
+                body={showcaseQuery.error instanceof Error ? showcaseQuery.error.message : 'Try again.'}
+              />
+            ) : null}
+            {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
           </View>
-          {showcaseQuery.error ? (
-            <StatusBlock
-              tone="danger"
-              title="Could not load showcase"
-              body={showcaseQuery.error instanceof Error ? showcaseQuery.error.message : 'Try again.'}
-            />
-          ) : null}
-          {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
-        </View>
-      }
-      ListEmptyComponent={
-        !isFirstLoad && !showcaseQuery.error && !hasItems ? (
-          <StatusBlock title="No posts loaded" body="Check the API URL or try again in a moment." />
-        ) : null
-      }
-      ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
-      viewabilityConfig={viewabilityConfig}
-    />
+        }
+        ListEmptyComponent={
+          !isFirstLoad && !showcaseQuery.error && !hasItems ? (
+            <StatusBlock title="No posts loaded" body="Check the API URL or try again in a moment." />
+          ) : null
+        }
+        ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
+        viewabilityConfig={viewabilityConfig}
+      />
+      <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} />
+    </View>
   );
 }
 
@@ -365,26 +373,39 @@ function MasonryPin({
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
+  const creatorLabel = formatCreatorLabel(card.creatorLabel);
+
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={card.title}
       onPress={() => onOpenPost(card.item)}
       style={({ pressed }) => ({
-        gap: 8,
+        borderRadius: 22,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: pressed ? `${accent}66` : 'rgba(255,255,255,0.11)',
+        backgroundColor: 'rgba(18,18,24,0.92)',
+        overflow: 'hidden',
         opacity: pressed ? 0.88 : 1,
         transform: [{ scale: pressed ? 0.985 : 1 }],
       })}
     >
       <View
         style={{
-          borderRadius: layout.mediaRadius,
-          borderCurve: 'continuous',
           overflow: 'hidden',
-          backgroundColor: '#050506',
+          backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
         }}
       >
-        {card.mediaUrl && !isVideoCard ? (
+        {card.previewKind === 'text' ? (
+          <TextPinPreview
+            accent={accent}
+            badge={card.badge}
+            height={card.height}
+            prompt={card.prompt}
+            title={card.title}
+          />
+        ) : card.mediaUrl && !isVideoCard ? (
           <Image
             source={{ uri: card.mediaUrl }}
             contentFit="cover"
@@ -400,27 +421,139 @@ function MasonryPin({
         ) : isVideoCard ? (
           <VideoPinPreview accent={accent} height={card.height} radius={layout.mediaRadius} />
         ) : (
-          <TextPreviewCard text={card.prompt} accent={accent} height={card.height} radius={layout.mediaRadius} />
+          <VisualFallbackPreview accent={accent} height={card.height} radius={layout.mediaRadius} />
         )}
-        {isVideoCard ? <VideoCornerPlay /> : null}
+        {card.previewKind === 'media' ? (
+          <>
+            <PinBadge label={card.badge} accent={accent} />
+            <LinearGradient
+              pointerEvents="none"
+              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.74)', 'rgba(0,0,0,0.92)']}
+              locations={[0, 0.58, 1]}
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                minHeight: 88,
+                justifyContent: 'flex-end',
+                paddingHorizontal: 12,
+                paddingBottom: 12,
+              }}
+            >
+              <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 15, lineHeight: 18, fontWeight: '900' }}>
+                {card.title}
+              </Text>
+            </LinearGradient>
+            {isVideoCard ? <VideoCornerPlay /> : null}
+          </>
+        ) : null}
       </View>
 
-      <View style={{ gap: 7, paddingBottom: 8 }}>
-        <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 19, lineHeight: 23, fontWeight: '500' }}>
-          {card.title}
-        </Text>
+      <View style={{ paddingHorizontal: 10, paddingTop: 9, paddingBottom: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-            <CreatorAvatar uri={card.creatorAvatar} name={card.creatorLabel} />
-            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, fontSize: 16, fontWeight: '500' }}>
-              {card.creatorLabel}
+            <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />
+            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, fontSize: 12, lineHeight: 15, fontWeight: '800' }}>
+              {creatorLabel}
             </Text>
-            <CreatorKBadge />
           </View>
-          <PinStat icon={<Heart size={24} color={appTheme.colors.text} strokeWidth={2.3} />} label={card.saveLabel} />
+          <PinStat icon={<Heart size={16} color={appTheme.colors.text} strokeWidth={2.4} />} label={card.saveLabel} />
         </View>
       </View>
     </Pressable>
+  );
+}
+
+function formatCreatorLabel(label: string) {
+  const clean = label.trim() || 'creator';
+  return clean.startsWith('@') ? clean : `@${clean}`;
+}
+
+function PinBadge({ label, accent }: { label: string; accent: string }) {
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: 10,
+        top: 10,
+        maxWidth: '82%',
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: `${accent}66`,
+        backgroundColor: 'rgba(3,3,6,0.68)',
+        paddingHorizontal: 9,
+        paddingVertical: 5,
+      }}
+    >
+      <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 10, lineHeight: 12, fontWeight: '900' }}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function TextPinPreview({
+  accent,
+  badge,
+  height,
+  prompt,
+  title,
+}: {
+  accent: string;
+  badge: string;
+  height: number;
+  prompt: string;
+  title: string;
+}) {
+  return (
+    <LinearGradient
+      colors={['#231126', '#14101c', '#090914']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{
+        height,
+        borderTopLeftRadius: 21,
+        borderTopRightRadius: 21,
+        borderCurve: 'continuous',
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.08)',
+        overflow: 'hidden',
+        padding: 13,
+      }}
+    >
+      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}12` }} />
+      <View style={{ flex: 1, justifyContent: 'space-between', gap: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+          <View
+            style={{
+              width: 26,
+              height: 26,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 13,
+              backgroundColor: `${accent}22`,
+              borderWidth: 1,
+              borderColor: `${accent}55`,
+            }}
+          >
+            <FileText size={14} color={accent} strokeWidth={2.4} />
+          </View>
+          <Text numberOfLines={1} style={{ color: accent, flex: 1, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', fontWeight: '900' }}>
+            {badge}
+          </Text>
+        </View>
+        <View style={{ gap: 7 }}>
+          <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 15, lineHeight: 18, fontWeight: '900' }}>
+            {title}
+          </Text>
+          <Text numberOfLines={5} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 17, fontWeight: '700' }}>
+            {prompt}
+          </Text>
+        </View>
+      </View>
+    </LinearGradient>
   );
 }
 
@@ -448,26 +581,6 @@ function CreatorAvatar({ uri, name }: { uri: string | null; name: string }) {
   );
 }
 
-function CreatorKBadge() {
-  return (
-    <View
-      accessibilityLabel="Creator badge"
-      style={{
-        width: 21,
-        height: 21,
-        borderRadius: 10.5,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#f59e0b',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.32)',
-      }}
-    >
-      <Text style={{ color: '#fff7ed', fontSize: 13, lineHeight: 16, fontWeight: '900' }}>K</Text>
-    </View>
-  );
-}
-
 function VideoCornerPlay() {
   return (
     <View
@@ -486,6 +599,47 @@ function VideoCornerPlay() {
     >
       <Play size={16} color="#ffffff" fill="#ffffff" strokeWidth={2.5} />
     </View>
+  );
+}
+
+function VisualFallbackPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
+  return (
+    <LinearGradient
+      colors={['#06111a', '#090914', '#17071b']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{
+        height,
+        borderRadius: radius,
+        borderCurve: 'continuous',
+        overflow: 'hidden',
+      }}
+    >
+      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}14` }} />
+      <View
+        style={{
+          position: 'absolute',
+          width: 150,
+          height: 150,
+          right: -54,
+          top: -42,
+          borderRadius: 75,
+          backgroundColor: `${accent}1f`,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          left: 18,
+          top: 24,
+          width: 82,
+          height: 82,
+          borderRadius: 41,
+          borderWidth: 1,
+          borderColor: `${accent}44`,
+        }}
+      />
+    </LinearGradient>
   );
 }
 

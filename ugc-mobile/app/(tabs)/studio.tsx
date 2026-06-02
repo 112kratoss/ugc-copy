@@ -13,12 +13,12 @@ import {
   ToggleRight,
   WandSparkles,
 } from 'lucide-react-native';
-import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PrimaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { navigateToNotificationDeepLink } from '@/lib/notifications';
+import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
@@ -65,6 +65,7 @@ export default function StudioScreen() {
   const horizontalPadding = isCompact ? 16 : 18;
   const queryKey = ['mobile-notifications', user?.id] as const;
   const preferencesQueryKey = ['mobile-notification-preferences', user?.id] as const;
+  const devicePushQueryKey = ['mobile-push-registration', user?.id] as const;
 
   const notificationsQuery = useQuery({
     queryKey,
@@ -94,6 +95,20 @@ export default function StudioScreen() {
     mutationFn: (patch: Partial<PreferenceState>) => api.updateMobileNotificationPreferences(patch),
     onSuccess: (response) => {
       queryClient.setQueryData(preferencesQueryKey, response);
+    },
+  });
+
+  const devicePushQuery = useQuery({
+    queryKey: devicePushQueryKey,
+    enabled: Boolean(user),
+    queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
+    staleTime: 1000 * 30,
+  });
+
+  const enablePushMutation = useMutation({
+    mutationFn: () => registerForMobilePushNotifications(api, { requestPermission: true }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(devicePushQueryKey, result);
     },
   });
 
@@ -150,6 +165,12 @@ export default function StudioScreen() {
               unreadCount={unreadCount}
               totalCount={notifications.length}
               isRefreshing={notificationsQuery.isRefetching}
+            />
+            <PushPermissionCard
+              result={enablePushMutation.data ?? devicePushQuery.data ?? null}
+              isLoading={devicePushQuery.isLoading}
+              isPending={enablePushMutation.isPending}
+              onEnable={() => enablePushMutation.mutate()}
             />
             {notificationsQuery.isLoading ? (
               <LoadingState />
@@ -421,6 +442,81 @@ function NotificationPreferences({
           );
         })}
       </View>
+    </View>
+  );
+}
+
+function PushPermissionCard({
+  result,
+  isLoading,
+  isPending,
+  onEnable,
+}: {
+  result: MobilePushRegistrationResult | null;
+  isLoading: boolean;
+  isPending: boolean;
+  onEnable: () => void;
+}) {
+  if (result?.status === 'registered' || result?.status === 'not-mobile') {
+    return null;
+  }
+
+  let title = 'Enable push alerts';
+  let body = 'Turn on native alerts for finished renders, creator activity, and unlock updates on this device.';
+  let actionLabel = 'Enable push alerts';
+  let action: (() => void) | undefined = onEnable;
+  let actionAccent: 'motion' | 'image' = 'motion';
+
+  if (isLoading) {
+    title = 'Checking this device';
+    body = 'Looking up notification access and syncing the current push state.';
+    actionLabel = 'Checking';
+    action = undefined;
+  } else if (result?.status === 'denied') {
+    title = 'Push alerts are off';
+    body = 'Notifications are disabled for this device. Re-enable them in system settings to get native alerts again.';
+    actionLabel = 'Open system settings';
+    action = () => {
+      void Linking.openSettings();
+    };
+    actionAccent = 'image';
+  } else if (result?.status === 'missing-firebase-setup') {
+    title = 'Android push setup is incomplete';
+    body = 'This build can show inbox history, but native Android delivery still needs Firebase credentials.';
+    actionLabel = 'Refresh status';
+    action = onEnable;
+    actionAccent = 'image';
+  } else if (result?.status === 'missing-project-id') {
+    title = 'Push project setup is incomplete';
+    body = 'The app is missing its Expo project identifier, so this device cannot register for push yet.';
+    actionLabel = 'Refresh status';
+    action = onEnable;
+    actionAccent = 'image';
+  }
+
+  return (
+    <View
+      style={{
+        borderRadius: 24,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: '#10111a',
+        padding: 16,
+        gap: 12,
+      }}
+    >
+      <View style={{ gap: 5 }}>
+        <Text style={{ color: '#fff', fontSize: 18, lineHeight: 23, fontWeight: '900' }}>{title}</Text>
+        <Text style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 20, fontWeight: '600' }}>{body}</Text>
+      </View>
+      <PrimaryButton
+        label={actionLabel}
+        onPress={action}
+        disabled={!action}
+        loading={isPending}
+        accent={actionAccent}
+      />
     </View>
   );
 }
