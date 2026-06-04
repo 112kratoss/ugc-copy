@@ -108,7 +108,7 @@ describe('MediaDetailsPreviewModal', () => {
     expect(screen.queryByRole('button', { name: /copy prompt/i })).toBeNull();
   });
 
-  it('renders input media previews with labels', async () => {
+  it('renders input media previews with labels and opens them in the full media preview', async () => {
     render(
       <MediaDetailsPreviewModal
         isOpen
@@ -150,6 +150,31 @@ describe('MediaDetailsPreviewModal', () => {
     expect(await screen.findByText('Inputs used')).toBeInTheDocument();
     expect(screen.getByAltText('Hero product')).toBeInTheDocument();
     expect(screen.getByText('Voice timing')).toBeInTheDocument();
+
+    expect(document.querySelectorAll('audio')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /voice timing/i }));
+
     expect(document.querySelectorAll('audio')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /close full media preview/i })).toBeInTheDocument();
+  });
+
+  it('opens the main image in a full media preview', async () => {
+    render(
+      <MediaDetailsPreviewModal
+        isOpen
+        onClose={() => undefined}
+        mediaType="image"
+        src="https://example.com/image.jpg"
+        alt="Preview image"
+        title="Prompted still"
+        prompt="Detailed creator prompt"
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /open full image preview/i }));
+
+    expect(screen.getByRole('button', { name: /close full media preview/i })).toBeInTheDocument();
+    expect(screen.getAllByAltText('Preview image')).toHaveLength(2);
   });
 });

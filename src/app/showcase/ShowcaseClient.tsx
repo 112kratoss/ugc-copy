@@ -1,16 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Heart, Wand2, Image as ImageIcon, Video, Layers, Users, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X } from 'lucide-react';
+import { Loader2, Heart, Image as ImageIcon, Video, Layers, Users, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
-import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
 import {
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
@@ -182,7 +182,9 @@ export default function ShowcaseClient({
     const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
     const [pageInfo, setPageInfo] = useState(initialFeed.pageInfo);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [selectedItem, setSelectedItem] = useState<ShowcaseFeedItem | null>(null);
+    const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+    const isLoadingMoreRef = useRef(false);
+    const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
     const registerPreviewVideo = (id: string, node: HTMLVideoElement | null) => {
@@ -199,10 +201,19 @@ export default function ShowcaseClient({
             returnTo: currentShowcasePath,
             section,
         });
+    const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
+
+    useEffect(() => {
+        if (selectedItemId && !items.some((item) => item.id === selectedItemId)) {
+            setSelectedItemId(null);
+        }
+    }, [items, selectedItemId]);
 
     useEffect(() => {
         setItems(initialFeed.items);
         setPageInfo(initialFeed.pageInfo);
+        setIsLoadingMore(false);
+        isLoadingMoreRef.current = false;
         setCategory(initialCategory);
         setSort(initialSort);
         setTool(initialTool ?? 'all');
@@ -275,11 +286,12 @@ export default function ShowcaseClient({
         });
     };
 
-    const loadMore = async () => {
-        if (isLoadingMore || !pageInfo.hasMore || pageInfo.nextOffset === null) {
+    const loadMore = useCallback(async () => {
+        if (isLoadingMoreRef.current || !pageInfo.hasMore || pageInfo.nextOffset === null) {
             return;
         }
 
+        isLoadingMoreRef.current = true;
         setIsLoadingMore(true);
 
         try {
@@ -321,9 +333,42 @@ export default function ShowcaseClient({
         } catch (error) {
             console.error('Failed to fetch more showcase items:', error);
         } finally {
+            isLoadingMoreRef.current = false;
             setIsLoadingMore(false);
         }
-    };
+    }, [
+        category,
+        pageInfo.hasMore,
+        pageInfo.nextOffset,
+        resource,
+        session?.access_token,
+        setItems,
+        setSavedItemIds,
+        sort,
+        tool,
+        unlock,
+    ]);
+
+    useEffect(() => {
+        const sentinel = loadMoreSentinelRef.current;
+        if (!sentinel || !pageInfo.hasMore || isLoadingInitialFeed) {
+            return;
+        }
+
+        const observer = new IntersectionObserver((entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+                void loadMore();
+            }
+        }, {
+            rootMargin: '1200px 0px',
+        });
+
+        observer.observe(sentinel);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [isLoadingInitialFeed, loadMore, pageInfo.hasMore]);
 
     const handleRemix = async (id: string) => {
         if (!user || !session?.access_token) {
@@ -351,11 +396,11 @@ export default function ShowcaseClient({
     };
 
     const openPreview = (item: ShowcaseFeedItem) => {
-        setSelectedItem(item);
+        setSelectedItemId(item.id);
     };
 
     const closePreview = () => {
-        setSelectedItem(null);
+        setSelectedItemId(null);
     };
 
     const activeFilterPills = [
@@ -384,8 +429,6 @@ export default function ShowcaseClient({
             },
         } : null,
     ].filter((pill): pill is { key: string; label: string; clear: () => void } => Boolean(pill));
-
-    const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
 
     return (
         <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
@@ -758,11 +801,19 @@ export default function ShowcaseClient({
                     </div>
                 )}
 
+                {pageInfo.hasMore && !isLoadingInitialFeed ? (
+                    <div
+                        ref={loadMoreSentinelRef}
+                        aria-hidden="true"
+                        className="h-1"
+                    />
+                ) : null}
+
                 {pageInfo.hasMore && !isLoadingInitialFeed && (
                     <div className="mt-12 text-center">
                         <button
                             type="button"
-                            onClick={loadMore}
+                            onClick={() => void loadMore()}
                             disabled={isLoadingMore}
                             className="px-6 py-3 bg-zinc-900 border border-zinc-700 rounded-xl text-sm font-medium hover:bg-zinc-800 hover:border-zinc-600 transition-all disabled:opacity-50"
                         >
@@ -772,62 +823,21 @@ export default function ShowcaseClient({
                 )}
             </div>
 
-            <MediaDetailsPreviewModal
-                isOpen={Boolean(selectedItem)}
+            <ShowcaseReelViewer
+                isOpen={Boolean(selectedItemId)}
+                items={items}
+                selectedItemId={selectedItemId}
+                savedItemIds={savedItemIds}
+                savingItemIds={savingItemIds}
+                accessToken={session?.access_token ?? null}
+                hasMoreItems={pageInfo.hasMore}
+                isLoadingMoreItems={isLoadingMore}
+                onLoadMoreItems={loadMore}
                 onClose={closePreview}
-                mediaType={
-                    selectedItem
-                        ? selectedItem.postFormat === 'text'
-                            ? 'text'
-                            : selectedItem.mediaKind === 'video'
-                                ? 'video'
-                                : 'image'
-                        : 'image'
-                }
-                src={selectedItem?.mediaUrl ?? null}
-                alt={selectedItem?.title ?? 'Selected showcase item'}
-                title={selectedItem?.title ?? 'Showcase preview'}
-                prompt={selectedItem?.prompt ?? ''}
-                body={selectedItem?.body ?? ''}
-                creator={selectedItem?.creator}
-                actions={selectedItem ? (
-                    <>
-                        <PublicShareButton
-                            generationId={selectedItem.id}
-                            title={selectedItem.title}
-                            description={selectedItem.body || selectedItem.prompt}
-                            sourceSurface="showcase"
-                            accessToken={session?.access_token ?? null}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                        />
-                        {selectedItem.asset ? (
-                            <Link
-                                href={buildCommunityDetailPath(selectedItem.id, 'resources')}
-                                prefetch={false}
-                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
-                            >
-                                View unlock
-                            </Link>
-                        ) : null}
-                        <Link
-                            href={buildCommunityDetailPath(selectedItem.id)}
-                            prefetch={false}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-                        >
-                            Open page
-                        </Link>
-                        {selectedItem.canRemix ? (
-                            <button
-                                type="button"
-                                onClick={() => handleRemix(selectedItem.id)}
-                                className="inline-flex items-center gap-2 rounded-full bg-purple-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-purple-500"
-                            >
-                                <Wand2 className="h-4 w-4" />
-                                Remix
-                            </button>
-                        ) : null}
-                    </>
-                ) : null}
+                onSelectItemId={setSelectedItemId}
+                onToggleSave={toggleSave}
+                onRemix={handleRemix}
+                buildDetailPath={buildCommunityDetailPath}
             />
         </div>
     );

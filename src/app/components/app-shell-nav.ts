@@ -54,7 +54,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     href: '/creations',
     description: 'Your generations, posts, and media library',
     icon: Layers3,
-    match: (pathname) => isExactOrChild(pathname, '/creations'),
+    match: (pathname) => isExactOrChild(pathname, '/creations') || isExactOrChild(pathname, '/post'),
   },
   {
     id: 'showcase',
@@ -65,8 +65,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     icon: Users,
     match: (pathname) =>
       isExactOrChild(pathname, '/showcase') ||
-      isExactOrChild(pathname, '/creators') ||
-      isExactOrChild(pathname, '/post'),
+      isExactOrChild(pathname, '/creators'),
   },
   {
     id: 'marketplace',

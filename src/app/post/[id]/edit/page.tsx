@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 
 import { getOwnerPostDetail } from '@/lib/owner-posts';
 import { getServerAuthState } from '@/lib/supabase-server';
+import { AuthProvider } from '@/app/components/AuthProvider';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import NewPostClient from '@/app/post/new/NewPostClient';
 
@@ -62,5 +63,13 @@ export default async function EditPostPage({ params, searchParams }: EditPostPag
     notFound();
   }
 
-  return <NewPostClient initialPost={toEditablePostDraft(post)} />;
+  return (
+    <AuthProvider
+      initialSession={auth.session}
+      initialCredits={auth.credits}
+      hasResolvedInitialState
+    >
+      <NewPostClient initialPost={toEditablePostDraft(post)} />
+    </AuthProvider>
+  );
 }

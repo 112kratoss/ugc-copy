@@ -5,12 +5,6 @@ import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 
 const getSessionMock = vi.hoisted(() => vi.fn());
 
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: vi.fn(),
-  }),
-}));
-
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -44,7 +38,7 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    const dialog = screen.getByRole('dialog', { name: /add this creation to your portfolio/i });
+    const dialog = screen.getByRole('dialog', { name: /publish this creation/i });
     const overlay = dialog.parentElement;
 
     expect(overlay).toHaveClass('overflow-y-auto');
@@ -65,7 +59,7 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /^add to portfolio$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
@@ -77,5 +71,101 @@ describe('PublishToShowcaseModal', () => {
 
     expect(getSessionMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps visibility as final public or private actions', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Broadcast"
+      />
+    );
+
+    expect(screen.queryByText(/^visibility$/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /unlisted/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /^private post$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^public post$/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
+        body: expect.any(String),
+      }));
+    });
+
+    const request = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+
+    expect(body.visibility).toBe('private');
+  });
+
+  it('prefills notes from the saved generation setup when no description exists', () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes', 'remix'],
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('textbox', { name: /notes optional/i })).toHaveValue(
+      'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5'
+    );
+  });
+
+  it('can publish a generated paid unlock from saved generation data', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        accessToken="layout-session-token"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes', 'remix'],
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        }}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /advanced edit/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /sell the prompt and setup/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
+        body: expect.any(String),
+      }));
+    });
+
+    const request = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+
+    expect(body).toMatchObject({
+      generationId: 'gen-1',
+      visibility: 'public',
+      resourceBundle: {
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        resources: {
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        },
+      },
+    });
   });
 });

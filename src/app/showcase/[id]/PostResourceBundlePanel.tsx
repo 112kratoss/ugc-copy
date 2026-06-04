@@ -471,23 +471,25 @@ export default function PostResourceBundlePanel({
   return (
     <div
       id="resources"
-      className="rounded-[30px] border border-emerald-500/15 bg-emerald-500/5 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm"
+      className="overflow-hidden rounded-[28px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.14),transparent_42%),linear-gradient(180deg,rgba(10,18,15,0.92),rgba(7,8,9,0.94))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl"
     >
       <Script id="post-resource-bundle-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
 
-      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Unlock details</div>
-      <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-xl">
-          <h2 className="text-lg font-semibold text-white">{title}</h2>
-          <p className="mt-2 text-sm leading-7 text-zinc-300">{summaryLine}</p>
-        </div>
+      <div className="border-b border-emerald-300/10 p-5 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-xl">
+            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Unlock details</div>
+            <h2 className="mt-3 text-xl font-semibold tracking-tight text-white">{title}</h2>
+            <p className="mt-2 text-sm leading-7 text-zinc-300">{summaryLine}</p>
+          </div>
 
-        <div className="rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1 text-sm font-semibold text-emerald-50">
-          {isFree ? 'Free unlock' : priceLabel}
+          <div className="rounded-full border border-emerald-300/25 bg-emerald-300 px-3.5 py-1.5 text-sm font-bold text-slate-950">
+            {isFree ? 'Free unlock' : priceLabel}
+          </div>
         </div>
       </div>
 
-      <div className="mt-5 rounded-[24px] border border-white/8 bg-black/30 p-5">
+      <div className="m-5 rounded-[22px] border border-white/8 bg-black/35 p-5 sm:m-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Access</div>
@@ -588,7 +590,7 @@ export default function PostResourceBundlePanel({
         ) : null}
       </div>
 
-      <div className="mt-5 rounded-[24px] border border-sky-300/12 bg-sky-500/[0.06] p-5">
+      <div className="mx-5 rounded-[22px] border border-sky-300/12 bg-sky-500/[0.06] p-5 sm:mx-6">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
           <ShieldCheck className="h-4 w-4" />
           Buyer trust
@@ -620,7 +622,7 @@ export default function PostResourceBundlePanel({
         </div>
       </div>
 
-      <div className="mt-5 rounded-[24px] border border-white/8 bg-black/30 p-5">
+      <div className="m-5 rounded-[22px] border border-white/8 bg-black/35 p-5 sm:m-6">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
           {hasAccess || viewerIsOwner ? <FileText className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
           {hasAccess || viewerIsOwner ? 'Included resources' : 'Preview before access'}

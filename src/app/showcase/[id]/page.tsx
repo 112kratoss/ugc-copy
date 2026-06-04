@@ -204,31 +204,40 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
   ) : null;
 
   return (
-    <div className="min-h-screen bg-black py-8 text-white">
+    <div className="min-h-screen overflow-hidden bg-[#050506] py-6 text-white">
       <div className="fixed inset-0 z-0 pointer-events-none">
-        <div className="absolute left-[-10%] top-[-15%] h-[44%] w-[44%] rounded-full bg-purple-900/15 blur-[140px] mix-blend-screen" />
-        <div className="absolute bottom-[-12%] right-[-8%] h-[38%] w-[38%] rounded-full bg-pink-900/10 blur-[140px] mix-blend-screen" />
+        <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
+        <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
       </div>
 
-      <div className="studio-shell relative z-10 pt-20">
-        <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+      <div className="studio-shell-wide relative z-10 pt-4 sm:pt-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <Link
             href={returnContext.href}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
           >
             <ArrowLeft className="h-4 w-4" />
             {returnContext.label}
           </Link>
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">
-            <Share2 className="h-3.5 w-3.5" />
-            Shared creation
+          <div className="flex flex-wrap items-center gap-2">
+            {sourceToolLabel ? (
+              <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-50">
+                <Tag className="h-3.5 w-3.5" />
+                {sourceToolLabel}
+              </span>
+            ) : null}
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">
+              <Share2 className="h-3.5 w-3.5" />
+              Shared creation
+            </div>
           </div>
         </div>
 
-        <div className="grid items-start gap-8 xl:grid-cols-[minmax(0,1.2fr)_420px]">
+        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_400px] 2xl:grid-cols-[minmax(0,1fr)_430px]">
           <section className={isTextOnlyPost
             ? 'space-y-6'
-            : 'overflow-hidden rounded-[32px] border border-white/8 bg-zinc-950/70 p-4 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6'}
+            : 'overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(5,5,6,0.92))] p-3 shadow-[0_28px_90px_rgba(0,0,0,0.5)] backdrop-blur-sm sm:p-4'}
           >
             {isTextOnlyPost ? (
               <>
@@ -264,87 +273,93 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                 {resourceBundlePanel}
               </>
             ) : (
-              <div data-testid="media-detail-frame" className="overflow-hidden rounded-[24px] border border-white/5 bg-black/70">
-                {detail.mediaKind === 'image' && detail.mediaUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={detail.mediaUrl}
-                    alt={detail.title}
-                    className="block max-h-[76vh] w-full object-contain"
-                  />
-                ) : detail.mediaKind === 'video' && detail.mediaUrl ? (
-                  <video
-                    src={detail.mediaUrl}
-                    controls
-                    autoPlay
-                    loop
-                    playsInline
-                    preload="metadata"
-                    className="block max-h-[76vh] w-full object-contain"
-                  />
-                ) : (
-                  <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">
-                    <article className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-zinc-950/85 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-                      <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tip / Note</div>
-                      <div className="mt-6 whitespace-pre-wrap text-lg leading-9 text-zinc-100">
-                        {detail.body || publicPostFallback}
-                      </div>
-                    </article>
+              <div className="space-y-5">
+                <div data-testid="media-detail-frame" className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black">
+                  <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2">
+                    <span className="rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-semibold text-zinc-100 backdrop-blur-md">
+                      {postTypeLabel}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-medium text-zinc-300 backdrop-blur-md">
+                      {formatPostDate(detail.createdAt)}
+                    </span>
                   </div>
-                )}
+                  {detail.mediaKind === 'image' && detail.mediaUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={detail.mediaUrl}
+                      alt={detail.title}
+                      className="block max-h-[calc(100dvh-10rem)] min-h-[360px] w-full object-contain sm:min-h-[520px]"
+                    />
+                  ) : detail.mediaKind === 'video' && detail.mediaUrl ? (
+                    <video
+                      src={detail.mediaUrl}
+                      controls
+                      autoPlay
+                      loop
+                      playsInline
+                      preload="metadata"
+                      className="block max-h-[calc(100dvh-10rem)] min-h-[360px] w-full object-contain sm:min-h-[520px]"
+                    />
+                  ) : (
+                    <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">
+                      <article className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-zinc-950/85 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+                        <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tip / Note</div>
+                        <div className="mt-6 whitespace-pre-wrap text-lg leading-9 text-zinc-100">
+                          {detail.body || publicPostFallback}
+                        </div>
+                      </article>
+                    </div>
+                  )}
+                </div>
+                {resourceBundlePanel}
               </div>
             )}
           </section>
 
-          <aside className="space-y-6">
-            <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Portfolio post</div>
-                {sourceToolLabel ? (
-                  <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-50">
-                    <Tag className="h-3.5 w-3.5" />
-                    {sourceToolLabel}
-                  </span>
-                ) : null}
+          <aside className="space-y-4 xl:sticky xl:top-[76px]">
+            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+              <div className="border-b border-white/8 p-5 sm:p-6">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-zinc-500">
+                  <span>{postTypeLabel}</span>
+                  <span aria-hidden="true">/</span>
+                  <span>{formatPostDate(detail.createdAt)}</span>
+                  {detail.visibility === 'unlisted' ? (
+                    <>
+                      <span aria-hidden="true">/</span>
+                      <span>Unlisted</span>
+                    </>
+                  ) : null}
+                </div>
+                <h1 className="mt-3 text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                  {detail.title}
+                </h1>
+                <div className="mt-5">
+                  <CreatorIdentity creator={detail.creator} />
+                </div>
               </div>
-              <h1 className="mt-3 bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-3xl font-bold tracking-tight text-transparent">
-                {detail.title}
-              </h1>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-medium text-zinc-500">
-                <span>{postTypeLabel}</span>
-                <span aria-hidden="true">/</span>
-                <span>{formatPostDate(detail.createdAt)}</span>
-                {detail.visibility === 'unlisted' ? (
-                  <>
-                    <span aria-hidden="true">/</span>
-                    <span>Unlisted</span>
-                  </>
-                ) : null}
-              </div>
-              <div className="mt-5">
-                <CreatorIdentity creator={detail.creator} />
-              </div>
+
               {detail.description ? (
-                <p className="mt-4 text-sm leading-7 text-zinc-300">
+                <p className="px-5 pt-5 text-sm leading-7 text-zinc-300 sm:px-6">
                   {detail.description}
                 </p>
               ) : null}
+
               {bundle ? (
                 <Link
                   data-testid="unlock-summary-link"
                   href="#resources"
-                  className="mt-6 block rounded-[26px] border border-emerald-400/20 bg-emerald-500/10 p-4 text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                  className="mx-5 mt-5 block rounded-[22px] border border-emerald-300/25 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.2),transparent_50%),rgba(16,185,129,0.08)] p-4 text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/15 sm:mx-6"
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/25 px-3 py-1 text-xs font-semibold">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1 text-xs font-semibold">
                       <ShoppingBag className="h-3.5 w-3.5" />
                       {bundle.accessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
                     </span>
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-emerald-50/80">
+                    <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs text-emerald-50/80">
                       {formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}
                     </span>
                   </div>
-                  <div className="mt-4 text-lg font-semibold">
+                  <div className="mt-4 text-xl font-semibold tracking-tight">
                     {bundle.accessMode === 'free'
                       ? 'Free unlock available'
                       : `${bundle.priceQuote.formatted} unlock available`}
@@ -362,14 +377,14 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                       </span>
                     ))}
                   </div>
-                  <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-slate-950">
+                  <div className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950">
                     View unlock details
                     <ShoppingBag className="h-4 w-4" />
                   </div>
                 </Link>
               ) : null}
 
-              <div className="mt-6 border-t border-white/8 pt-5">
+              <div className="mt-5 border-t border-white/8 p-5 sm:p-6">
                 <ShowcaseDetailActions
                   postId={detail.id}
                   generationId={detail.generationId}
@@ -385,7 +400,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
             </div>
 
             {statItems.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
                 {statItems.map((item) => {
                   const Icon = item.icon;
                   const label = item.value === 1 ? item.singular : item.plural;
@@ -393,10 +408,10 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                   return (
                     <div
                       key={item.plural}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-black/40 px-3 py-1.5 text-sm text-zinc-300"
+                      className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-3 text-sm text-zinc-300 backdrop-blur-sm"
                     >
                       <Icon className={`h-4 w-4 ${item.color}`} />
-                      <span>{item.value}</span>
+                      <span className="font-semibold text-zinc-100">{item.value}</span>
                       <span className="text-zinc-500">{label}</span>
                     </div>
                   );
@@ -405,7 +420,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
             ) : null}
 
             {detail.body && !isTextOnlyPost ? (
-              <div data-testid="post-body-panel" className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+              <div data-testid="post-body-panel" className="rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm">
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                   {detail.postFormat === 'mixed' ? 'Note' : 'Post'}
                 </div>
@@ -416,7 +431,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
             ) : null}
 
             {detail.prompt ? (
-              <div className="rounded-[30px] border border-white/8 bg-zinc-900/70 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+              <div className="rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm">
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                   {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
                 </div>
@@ -425,8 +440,6 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                 </p>
               </div>
             ) : null}
-
-            {!isTextOnlyPost ? resourceBundlePanel : null}
 
             <ReportPostButton
               postId={detail.id}

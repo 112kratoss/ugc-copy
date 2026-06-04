@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, Loader2, PencilLine, RotateCcw, Share2, Trash2, UserRound, Volume2, Wand2, X, Zap } from 'lucide-react';
+import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, LockKeyhole, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
-import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import {
@@ -16,6 +15,7 @@ import {
     type CreationWorkspacePublishBadge,
 } from '@/lib/creation-workspace';
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
+import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import type { ProfileApiResponse } from '@/lib/profile';
@@ -43,6 +43,7 @@ interface Generation {
     linked_post_title?: string | null;
     linked_post_visibility?: 'public' | 'unlisted' | 'private' | null;
     linked_post_archived_at?: string | null;
+    paywallPrefill?: GenerationPaywallPrefill | null;
 }
 
 type FilterType = 'all' | 'images' | 'videos' | 'audio';
@@ -177,6 +178,7 @@ export default function CreationsPage() {
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
+    const [postVisibilityUpdatingKey, setPostVisibilityUpdatingKey] = useState<string | null>(null);
     const creationsReturnPath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
         : pathname;
@@ -302,11 +304,18 @@ export default function CreationsPage() {
         void fetchCreations();
     };
 
-    const handleUnpublish = async (generationId: string) => {
+    const handleCreationPostVisibilityChange = async (
+        generationId: string,
+        postId: string,
+        nextVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'>
+    ) => {
         if (!session?.access_token) {
             router.push('/login?returnUrl=/creations');
             return;
         }
+
+        const updateKey = `${postId}:${nextVisibility}`;
+        setPostVisibilityUpdatingKey(updateKey);
 
         try {
             const res = await fetch('/api/showcase/publish', {
@@ -317,16 +326,21 @@ export default function CreationsPage() {
                 },
                 body: JSON.stringify({
                     generationId,
-                    isPublic: false
+                    visibility: nextVisibility,
                 })
             });
 
             const data = await res.json();
-            if (data.success) {
-                await fetchCreations();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'Failed to update post visibility.');
             }
-        } catch (err) {
-            console.error(err);
+
+            await fetchCreations();
+        } catch (error) {
+            console.error('Failed to update creation post visibility:', error);
+            window.alert(error instanceof Error ? error.message : 'Failed to update post visibility.');
+        } finally {
+            setPostVisibilityUpdatingKey(null);
         }
     };
 
@@ -335,6 +349,55 @@ export default function CreationsPage() {
             await navigator.clipboard.writeText(`${window.location.origin}${path}`);
         } catch (error) {
             console.error('Failed to copy post link:', error);
+        }
+    };
+
+    const handlePostVisibilityChange = async (
+        post: OwnerPost,
+        nextVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'>
+    ) => {
+        if (!session?.access_token) {
+            router.push('/login?returnUrl=/creations?view=posts');
+            return;
+        }
+
+        if (post.archivedAt) {
+            return;
+        }
+
+        const updateKey = `${post.id}:${nextVisibility}`;
+        setPostVisibilityUpdatingKey(updateKey);
+
+        try {
+            const isGenerationBacked = Boolean(post.generationId);
+            const response = await fetch(isGenerationBacked ? '/api/showcase/publish' : `/api/posts/${post.id}`, {
+                method: isGenerationBacked ? 'POST' : 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify(isGenerationBacked
+                    ? {
+                        generationId: post.generationId,
+                        visibility: nextVisibility,
+                    }
+                    : {
+                        visibility: nextVisibility,
+                    }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to update post visibility.');
+            }
+
+            await fetchCreations();
+            setActiveView('posts');
+            setPostVisibilityFilter(nextVisibility);
+        } catch (error) {
+            console.error('Failed to update post visibility:', error);
+            window.alert(error instanceof Error ? error.message : 'Failed to update post visibility.');
+        } finally {
+            setPostVisibilityUpdatingKey(null);
         }
     };
 
@@ -646,54 +709,137 @@ export default function CreationsPage() {
             model: generation.model,
         });
 
-    const renderShareAction = (generation: Generation, compact = false) => {
-        const baseClass = compact
-            ? 'inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white'
-            : 'flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium transition-all';
+    const appendCreationsSource = (path: string): string => {
+        const [pathWithoutHash, hash = ''] = path.split('#');
+        const [pathnamePart, query = ''] = pathWithoutHash.split('?');
+        const params = new URLSearchParams(query);
+        params.set('from', 'creations');
+        const nextQuery = params.toString();
+        return `${pathnamePart}${nextQuery ? `?${nextQuery}` : ''}${hash ? `#${hash}` : ''}`;
+    };
 
-        if (!isShareSupported(generation)) {
-            return (
-                <button
-                    type="button"
-                    disabled
-                    title="Audio creations cannot be shared publicly yet."
-                    className={compact
-                        ? `${baseClass} cursor-not-allowed opacity-50`
-                        : `${baseClass} cursor-not-allowed border border-white/5 bg-zinc-900/50 text-zinc-500 opacity-60`}
-                >
-                    <Share2 className="h-4 w-4" />
-                    Share unavailable
-                </button>
-            );
+    const buildCreationCustomizePath = (
+        generation: Generation,
+        workspaceState: CreationWorkspaceCardState
+    ): string => {
+        if (workspaceState.linkedPost?.ownerPath) {
+            return appendCreationsSource(workspaceState.linkedPost.ownerPath);
         }
 
-        if (generation.is_public) {
-            return (
-                <PublicShareButton
-                    generationId={generation.id}
-                    title={getPreviewTitle(generation)}
-                    description={generation.description ?? generation.prompt ?? null}
-                    sourceSurface="my-creations"
-                    accessToken={session?.access_token ?? null}
-                    label="Share link"
-                    className={compact
-                        ? baseClass
-                        : `${baseClass} border border-white/10 bg-white/[0.04] text-zinc-100 hover:border-white/20 hover:bg-white/[0.08] hover:text-white`}
-                />
-            );
-        }
+        return `/post/new?${new URLSearchParams({
+            generationId: generation.id,
+            from: 'creations',
+        }).toString()}`;
+    };
+
+    const getPreviewMetadata = (generation: Generation): Array<{ label: string; value: string }> => {
+        const mediaKind = getMediaKind(generation);
+        const mediaLabel = mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video';
+        const createdLabel = new Date(generation.created_at).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+        });
+        const completedLabel = getCompletedInLabel(generation);
+
+        return [
+            { label: 'Type', value: mediaLabel },
+            { label: 'Model', value: generation.model },
+            { label: 'Created', value: createdLabel },
+            generation.cost !== null ? { label: 'Credits', value: `${generation.cost} credits` } : null,
+            completedLabel ? { label: 'Render time', value: completedLabel.replace('Completed in ', '') } : null,
+        ].filter((item): item is { label: string; value: string } => Boolean(item));
+    };
+
+    const renderPreviewActions = (generation: Generation) => {
+        const workspaceState = resolveCreationWorkspaceCardState(generation, posts);
+        const mediaKind = getMediaKind(generation);
+        const canManageFromCreation = mediaKind !== 'audio' && isShareSupported(generation);
+        const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
+        const primaryIsUnlock =
+            workspaceState.primaryAction.type === 'add-paywall' ||
+            workspaceState.primaryAction.type === 'manage-paywall';
+        const customizeHref = canManageFromCreation
+            ? buildCreationCustomizePath(generation, workspaceState)
+            : null;
+        const downloadHref = generation.output_url;
+        const primaryClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 sm:w-auto sm:min-w-36';
+        const secondaryClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white sm:w-auto';
+        const quietIconClass = 'inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white';
+        const dangerIconClass = 'inline-flex h-11 w-11 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15';
 
         return (
-            <button
-                type="button"
-                onClick={() => openPublishModal(generation, { shareAfterPublish: true })}
-                className={compact
-                    ? `${baseClass} border border-purple-500/20 bg-purple-500/10 text-purple-100 hover:border-purple-400/40 hover:bg-purple-500/15`
-                    : `${baseClass} border border-purple-500/25 bg-purple-500/10 text-purple-100 hover:border-purple-400/40 hover:bg-purple-500/15`}
-            >
-                <Share2 className="h-4 w-4" />
-                Publish & share
-            </button>
+            <>
+                {canManageFromCreation && primaryIsPublish ? (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setPreviewGen(null);
+                            openPublishModal(generation);
+                        }}
+                        className={primaryClass}
+                    >
+                        <Globe className="h-4 w-4" />
+                        Publish
+                    </button>
+                ) : null}
+
+                {canManageFromCreation && primaryIsUnlock && workspaceState.primaryAction.href ? (
+                    <Link
+                        href={workspaceState.primaryAction.href}
+                        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 sm:w-auto sm:min-w-40"
+                    >
+                        <Wand2 className="h-4 w-4" />
+                        {workspaceState.primaryAction.label}
+                    </Link>
+                ) : null}
+
+                {customizeHref ? (
+                    <Link href={customizeHref} className={secondaryClass}>
+                        <PencilLine className="h-4 w-4" />
+                        Customize post
+                    </Link>
+                ) : null}
+
+                {workspaceState.secondaryAction.href && workspaceState.linkedPost ? (
+                    <Link href={workspaceState.secondaryAction.href} className={secondaryClass}>
+                        <ExternalLink className="h-4 w-4" />
+                        Open post
+                    </Link>
+                ) : null}
+
+                {downloadHref ? (
+                    <a
+                        href={downloadHref}
+                        download={`creation_${generation.id}.${inferDownloadExtension(generation)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={quietIconClass}
+                        title="Download creation"
+                        aria-label="Download creation"
+                    >
+                        <Download className="h-4 w-4" />
+                    </a>
+                ) : null}
+
+                <button
+                    type="button"
+                    onClick={() => void handleGenerationArchive(generation.id)}
+                    className={quietIconClass}
+                    title="Archive creation"
+                    aria-label="Archive creation"
+                >
+                    <Archive className="h-4 w-4" />
+                </button>
+                <button
+                    type="button"
+                    onClick={() => void handleGenerationDelete(generation.id)}
+                    className={dangerIconClass}
+                    title="Delete creation"
+                    aria-label="Delete creation"
+                >
+                    <Trash2 className="h-4 w-4" />
+                </button>
+            </>
         );
     };
 
@@ -1049,36 +1195,69 @@ export default function CreationsPage() {
                         {processingGenerations.length > 0 && (
                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Completed</h2>
                         )}
-                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                        <div className="columns-1 gap-5 space-y-5 sm:columns-2 lg:columns-3 xl:columns-4">
                             {successfulCreationCards.map(({ generation: gen, workspaceState }) => {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
+                                const MediaIcon = isImage ? ImageIcon : isAudio ? Volume2 : Film;
                                 const imageOutputs = isImage
                                     ? (Array.isArray(gen.output_urls) && gen.output_urls.length > 0 ? gen.output_urls : (gen.output_url ? [gen.output_url] : []))
                                     : [];
                                 const canManageFromCreation = !isAudio && isShareSupported(gen);
                                 const completedInLabel = getCompletedInLabel(gen);
                                 const badgeClass = isImage
-                                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                    ? 'border-blue-400/30 bg-blue-500/20 text-blue-100'
                                     : isAudio
-                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                        : 'bg-purple-500/20 text-purple-300 border border-purple-500/30';
-                                const badgeLabel = isImage ? '🖼 Image' : isAudio ? '🔊 Audio' : '🎬 Video';
+                                        ? 'border-emerald-400/30 bg-emerald-500/20 text-emerald-100'
+                                        : 'border-rose-400/30 bg-rose-500/20 text-rose-100';
+                                const badgeLabel = isImage ? 'Image' : isAudio ? 'Audio' : 'Video';
                                 const publishBadgeLabel = workspaceState.publishBadge;
                                 const monetizationBadgeLabel = getMonetizationBadgeLabel(workspaceState);
                                 const linkedPostPublicPath = workspaceState.linkedPost?.publicPath ?? null;
                                 const canCopyLinkedPost =
                                     Boolean(workspaceState.linkedPost?.canShare) &&
                                     Boolean(linkedPostPublicPath);
-                                const canUnpublish =
+                                const linkedPostQuickVisibility =
+                                    workspaceState.linkedPost &&
+                                    !workspaceState.linkedPost.archivedAt &&
+                                    (workspaceState.linkedPost.visibility === 'public' || workspaceState.linkedPost.visibility === 'private')
+                                        ? workspaceState.linkedPost.visibility
+                                        : null;
+                                const nextLinkedPostVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'> | null =
+                                    linkedPostQuickVisibility === 'public'
+                                        ? 'private'
+                                        : linkedPostQuickVisibility === 'private'
+                                            ? 'public'
+                                            : null;
+                                const linkedPostVisibilityActionLabel =
+                                    nextLinkedPostVisibility === 'public' ? 'Make public' : 'Make private';
+                                const LinkedPostVisibilityActionIcon =
+                                    nextLinkedPostVisibility === 'public' ? Globe : LockKeyhole;
+                                const isLinkedPostVisibilityUpdating =
                                     Boolean(workspaceState.linkedPost) &&
-                                    !workspaceState.linkedPost?.archivedAt &&
-                                    workspaceState.linkedPost?.visibility !== 'private';
+                                    Boolean(nextLinkedPostVisibility) &&
+                                    postVisibilityUpdatingKey === `${workspaceState.linkedPost?.id}:${nextLinkedPostVisibility}`;
+                                const linkedPostVisibilityActionClass =
+                                    nextLinkedPostVisibility === 'public'
+                                        ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15'
+                                        : 'border-violet-400/25 bg-violet-500/10 text-violet-100 hover:border-violet-300/35 hover:bg-violet-500/15';
+                                const hasPrimaryAction =
+                                    canManageFromCreation &&
+                                    workspaceState.primaryAction.type !== 'none' &&
+                                    Boolean(workspaceState.primaryAction.label);
+                                const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
+                                const primaryIsUnlock =
+                                    workspaceState.primaryAction.type === 'add-paywall' ||
+                                    workspaceState.primaryAction.type === 'manage-paywall';
+                                const createdShort = new Date(gen.created_at).toLocaleDateString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                });
                                 return (
                                     <div key={gen.id}
-                                        className="group bg-white/[0.02] rounded-[1.5rem] border border-white/[0.04] overflow-hidden backdrop-blur-md hover:border-purple-500/30 hover:shadow-[0_8px_30px_rgba(0,0,0,0.5)] transition-all duration-300 break-inside-avoid mb-6">
-                                        <div className="bg-black relative overflow-hidden rounded-t-[1.5rem]">
+                                        className="group mb-5 break-inside-avoid overflow-hidden rounded-[28px] border border-white/[0.07] bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(8,8,10,0.96))] shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-md transition duration-300 hover:border-white/14 hover:shadow-[0_24px_80px_rgba(0,0,0,0.46)]">
+                                        <div className="relative overflow-hidden bg-black">
                                             {isImage ? (
                                                 imageOutputs.length > 1 ? (
                                                     <div className="grid grid-cols-2 gap-1 p-1">
@@ -1100,13 +1279,19 @@ export default function CreationsPage() {
                                                         ))}
                                                     </div>
                                                 ) : (
-                                                    // eslint-disable-next-line @next/next/no-img-element
-                                                    <img src={gen.output_url!} alt="Generated image" className="w-full h-auto block" />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setPreviewGen(gen)}
+                                                        className="block w-full bg-black text-left"
+                                                    >
+                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                        <img src={gen.output_url!} alt="Generated image" className="block w-full object-cover transition duration-500 group-hover:scale-[1.015]" />
+                                                    </button>
                                                 )
                                             ) : isAudio ? (
-                                                <div className="p-6">
+                                                <div className="p-5">
                                                     <div className="mb-4 flex items-center gap-3 text-emerald-300">
-                                                        <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 p-3">
+                                                        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3">
                                                             <Volume2 className="w-5 h-5" />
                                                         </div>
                                                         <div>
@@ -1121,30 +1306,21 @@ export default function CreationsPage() {
                                                     onMouseEnter={(e) => e.currentTarget.play()}
                                                     onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }} />
                                             )}
-                                            <div className={`absolute top-3 left-3 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider backdrop-blur-md ${badgeClass}`}>
+                                            <div className={`absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] backdrop-blur-md ${badgeClass}`}>
+                                                <MediaIcon className="h-3.5 w-3.5" />
                                                 {badgeLabel}
                                             </div>
                                             <a href={gen.output_url!} download={`creation_${gen.id}.${inferDownloadExtension(gen)}`} target="_blank" rel="noopener noreferrer"
-                                                className="absolute top-3 right-3 p-2 bg-black/60 hover:bg-purple-500/80 text-white rounded-full backdrop-blur-md transition-all opacity-0 group-hover:opacity-100 shadow-lg">
+                                                className="absolute right-3 top-3 rounded-full bg-black/60 p-2 text-white opacity-0 shadow-lg backdrop-blur-md transition-all hover:bg-white hover:text-black focus:opacity-100 group-hover:opacity-100"
+                                                title="Download creation"
+                                                aria-label="Download creation"
+                                            >
                                                 <Download className="w-4 h-4" />
                                             </a>
                                         </div>
-                                        <div className="p-4 flex items-center justify-between">
-                                            <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
-                                            <div className="flex items-center gap-3">
-                                                {completedInLabel ? (
-                                                    <span className="flex items-center gap-1 text-xs text-zinc-500">
-                                                        <CheckCircle2 className="w-3 h-3" />
-                                                        {completedInLabel}
-                                                    </span>
-                                                ) : null}
-                                                {gen.duration && <span className="flex items-center gap-1 text-xs text-zinc-500"><Clock className="w-3 h-3" />{Math.round(gen.duration)}s</span>}
-                                                {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
-                                            </div>
-                                        </div>
-                                        
-                                        <div className="px-4 pb-4">
-                                            <div>
+
+                                        <div className="space-y-4 p-4">
+                                            <div className="min-w-0">
                                                 <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">
                                                     {getPreviewTitle(gen)}
                                                 </h3>
@@ -1152,7 +1328,29 @@ export default function CreationsPage() {
                                                     {getPreviewSummary(gen)}
                                                 </p>
                                             </div>
-                                            <div className="mt-3 flex flex-wrap gap-2">
+
+                                            <div className="grid grid-cols-3 gap-2 rounded-[18px] border border-white/8 bg-black/25 p-2.5">
+                                                <div>
+                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Created</div>
+                                                    <div className="mt-1 text-xs font-medium text-zinc-200">{createdShort}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Render</div>
+                                                    <div className="mt-1 flex items-center gap-1 text-xs font-medium text-zinc-200">
+                                                        <Clock className="h-3 w-3 text-zinc-500" />
+                                                        {gen.duration ? `${Math.round(gen.duration)}s` : completedInLabel?.replace('Completed in ', '') ?? 'Ready'}
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Credits</div>
+                                                    <div className="mt-1 flex items-center gap-1 text-xs font-medium text-zinc-200">
+                                                        <Zap className="h-3 w-3 text-zinc-500" />
+                                                        {gen.cost ?? 0}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
                                                 <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getPublishBadgeClass(publishBadgeLabel)}`}>
                                                     {publishBadgeLabel}
                                                 </div>
@@ -1162,97 +1360,113 @@ export default function CreationsPage() {
                                             </div>
 
                                             {workspaceState.linkedPost ? (
-                                                <div className="mt-3 rounded-[22px] border border-white/8 bg-black/25 p-3">
-                                                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Linked post</div>
-                                                    <div className="mt-2 text-sm font-semibold text-white">{workspaceState.linkedPost.title}</div>
-                                                    <p className="mt-1 text-xs leading-5 text-zinc-400">
-                                                        {workspaceState.linkedPost.archivedAt
-                                                            ? 'This creation is already connected to an archived owner post.'
-                                                            : workspaceState.linkedPost.visibility === 'private'
-                                                                ? 'This creation is already connected to a private owner post.'
-                                                                : 'This creation is already connected to a post you can manage directly from here.'}
-                                                    </p>
+                                                <div className="rounded-[20px] border border-white/8 bg-black/25 p-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Linked post</div>
+                                                            <div className="mt-1 truncate text-sm font-semibold text-white">{workspaceState.linkedPost.title}</div>
+                                                        </div>
+                                                        <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300">
+                                                            {workspaceState.linkedPost.archivedAt ? 'Archived' : workspaceState.linkedPost.visibility}
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             ) : null}
 
-                                            {canManageFromCreation && (workspaceState.primaryAction.type !== 'none' || workspaceState.secondaryAction.type !== 'none') ? (
-                                                <div className="mt-4 flex gap-2">
-                                                    {workspaceState.primaryAction.type === 'publish' ? (
+                                            {hasPrimaryAction ? (
+                                                <div className="space-y-2">
+                                                    {primaryIsPublish ? (
                                                         <button
                                                             type="button"
                                                             onClick={() => openPublishModal(gen)}
-                                                            className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
                                                         >
                                                             <Globe className="h-4 w-4" />
                                                             {workspaceState.primaryAction.label}
                                                         </button>
-                                                    ) : workspaceState.primaryAction.href ? (
+                                                    ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
                                                         <Link
                                                             href={workspaceState.primaryAction.href}
-                                                            className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
                                                         >
                                                             <Wand2 className="h-4 w-4" />
                                                             {workspaceState.primaryAction.label}
                                                         </Link>
                                                     ) : null}
 
-                                                    {workspaceState.secondaryAction.href ? (
+                                                    {workspaceState.secondaryAction.href && !primaryIsPublish ? (
                                                         <Link
                                                             href={workspaceState.secondaryAction.href}
-                                                            className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
                                                         >
                                                             <ExternalLink className="h-4 w-4" />
                                                             {workspaceState.secondaryAction.label}
                                                         </Link>
                                                     ) : null}
+
+                                                    {workspaceState.linkedPost && nextLinkedPostVisibility ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleCreationPostVisibilityChange(
+                                                                gen.id,
+                                                                workspaceState.linkedPost!.id,
+                                                                nextLinkedPostVisibility
+                                                            )}
+                                                            disabled={Boolean(postVisibilityUpdatingKey)}
+                                                            className={`inline-flex w-full items-center justify-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${linkedPostVisibilityActionClass}`}
+                                                        >
+                                                            {isLinkedPostVisibilityUpdating ? (
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                            ) : (
+                                                                <LinkedPostVisibilityActionIcon className="h-4 w-4" />
+                                                            )}
+                                                            {linkedPostVisibilityActionLabel}
+                                                        </button>
+                                                    ) : null}
                                                 </div>
                                             ) : null}
 
-                                            <div className="mt-4 flex flex-wrap gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setPreviewGen(gen)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                                >
-                                                    <Eye className="h-3.5 w-3.5" />
-                                                    View details
-                                                </button>
-                                                {canCopyLinkedPost && workspaceState.linkedPost?.publicPath ? (
+                                            <div className="flex items-center justify-between gap-3 border-t border-white/8 pt-3">
+                                                <div className="flex min-w-0 flex-wrap gap-2">
                                                     <button
                                                         type="button"
-                                                        onClick={() => linkedPostPublicPath && void copyPostLink(linkedPostPublicPath)}
+                                                        onClick={() => setPreviewGen(gen)}
                                                         className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                                                     >
-                                                        <Copy className="h-3.5 w-3.5" />
-                                                        Share link
+                                                        <Eye className="h-3.5 w-3.5" />
+                                                        Details
                                                     </button>
-                                                ) : null}
-                                                {canUnpublish ? (
+                                                    {canCopyLinkedPost && workspaceState.linkedPost?.publicPath ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => linkedPostPublicPath && void copyPostLink(linkedPostPublicPath)}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                                        >
+                                                            <Copy className="h-3.5 w-3.5" />
+                                                            Link
+                                                        </button>
+                                                    ) : null}
+                                                </div>
+                                                <div className="flex shrink-0 gap-1.5">
                                                     <button
                                                         type="button"
-                                                        onClick={() => void handleUnpublish(gen.id)}
-                                                        className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                        onClick={() => void handleGenerationArchive(gen.id)}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/20 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                        title="Archive creation"
+                                                        aria-label="Archive creation"
                                                     >
-                                                        <X className="h-3.5 w-3.5" />
-                                                        Unpublish
+                                                        <Archive className="h-3.5 w-3.5" />
                                                     </button>
-                                                ) : null}
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleGenerationArchive(gen.id)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
-                                                >
-                                                    <Archive className="h-3.5 w-3.5" />
-                                                    Archive
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleGenerationDelete(gen.id)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
-                                                >
-                                                    <Trash2 className="h-3.5 w-3.5" />
-                                                    Delete
-                                                </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleGenerationDelete(gen.id)}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                                        title="Delete creation"
+                                                        aria-label="Delete creation"
+                                                    >
+                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -1356,144 +1570,226 @@ export default function CreationsPage() {
                                 Post Library is the owner view for the actual posts people can visit, unlock, archive, or clean up.
                             </p>
                         </div>
-                        <div className="grid gap-5 lg:grid-cols-2">
-                            {visiblePosts.map((post) => (
-                                <div
-                                    key={post.id}
-                                    className="rounded-[28px] border border-white/[0.08] bg-white/[0.02] p-5 backdrop-blur-md"
-                                >
-                                    <div className="flex items-start justify-between gap-4">
-                                        <div>
-                                            <div className="text-lg font-semibold text-white">{post.title}</div>
-                                            <p className="mt-2 text-sm text-zinc-400">
-                                                {post.sourceLabel} · {new Date(post.updatedAt).toLocaleString()}
-                                            </p>
-                                        </div>
-                                        <div className="flex flex-wrap justify-end gap-2">
-                                            <div className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                                                post.archivedAt
-                                                    ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
-                                                    : 'border-white/10 bg-white/[0.04] text-zinc-200'
-                                            }`}>
-                                                {post.archivedAt ? 'Archived' : post.visibility}
-                                            </div>
-                                            {post.bundle ? (
-                                                <div className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                                                    post.bundle.status === 'published'
-                                                        ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                        : 'border-amber-400/20 bg-amber-500/10 text-amber-100'
-                                                }`}>
-                                                    {post.bundle.status === 'published' ? 'Unlock live' : 'Unlock draft'}
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    </div>
+                        <div className="grid gap-4">
+                            {visiblePosts.map((post) => {
+                                const postSummary = post.description || post.body || post.prompt || 'No post story yet.';
+                                const updatedLabel = new Date(post.updatedAt).toLocaleDateString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                });
+                                const statusClass = post.archivedAt
+                                    ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
+                                    : post.visibility === 'public'
+                                        ? 'border-sky-400/20 bg-sky-500/10 text-sky-100'
+                                        : post.visibility === 'unlisted'
+                                            ? 'border-indigo-400/20 bg-indigo-500/10 text-indigo-100'
+                                            : 'border-violet-400/20 bg-violet-500/10 text-violet-100';
+                                const bundleStatusClass = post.bundle?.status === 'published'
+                                    ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                    : 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+                                const categoryLabel = post.mediaKind === 'video'
+                                    ? 'Video'
+                                    : post.mediaKind === 'image'
+                                        ? 'Image'
+                                        : post.postFormat === 'text'
+                                            ? 'Text'
+                                            : post.category;
+                                const nextVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'> =
+                                    post.visibility === 'private' ? 'public' : 'private';
+                                const visibilityActionLabel = nextVisibility === 'public' ? 'Make public' : 'Make private';
+                                const VisibilityActionIcon = nextVisibility === 'public' ? Globe : LockKeyhole;
+                                const isVisibilityUpdating = postVisibilityUpdatingKey === `${post.id}:${nextVisibility}`;
+                                const visibilityActionClass = nextVisibility === 'public'
+                                    ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15'
+                                    : 'border-violet-400/25 bg-violet-500/10 text-violet-100 hover:border-violet-300/35 hover:bg-violet-500/15';
 
-                                    {post.mediaUrl ? (
-                                        <div className="mt-4 overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
-                                            {post.mediaKind === 'video' ? (
-                                                <video src={post.mediaUrl} controls playsInline className="max-h-[320px] w-full object-contain" />
-                                            ) : (
-                                                // eslint-disable-next-line @next/next/no-img-element
-                                                <img src={post.mediaUrl} alt={post.title} className="max-h-[320px] w-full object-contain" />
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <div className="mt-4 rounded-[22px] border border-white/8 bg-black/50 p-4 text-sm leading-7 text-zinc-300">
-                                            {post.body || 'No post story yet.'}
-                                        </div>
-                                    )}
-
-                                    <div className="mt-4 flex flex-wrap gap-2">
-                                        {post.bundle ? (
-                                            <>
-                                                <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
-                                                    {post.bundle.accessMode === 'free'
-                                                        ? 'Free unlock'
-                                                        : formatUsdCents(post.bundle.priceUsdCents)}
-                                                </div>
-                                                {post.bundle.resourceKinds.map((kind) => (
-                                                    <div
-                                                        key={`${post.id}-${kind}`}
-                                                        className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200"
-                                                    >
-                                                        {getPostResourceKindLabel(kind)}
+                                return (
+                                    <article
+                                        key={post.id}
+                                        className="overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(135deg,rgba(24,24,27,0.82),rgba(8,8,10,0.96))] p-3 shadow-[0_20px_70px_rgba(0,0,0,0.32)] backdrop-blur-md transition hover:border-white/14"
+                                    >
+                                        <div className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
+                                            <div className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
+                                                {post.mediaUrl ? (
+                                                    post.mediaKind === 'video' ? (
+                                                        <video src={post.mediaUrl} controls playsInline className="aspect-[4/5] h-full w-full object-cover" />
+                                                    ) : (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img src={post.mediaUrl} alt={post.title} className="aspect-[4/5] h-full w-full object-cover" />
+                                                    )
+                                                ) : (
+                                                    <div className="flex aspect-[4/5] h-full w-full items-center justify-center p-4 text-sm leading-6 text-zinc-400">
+                                                        <span className="line-clamp-6">{post.body || 'Text post'}</span>
                                                     </div>
-                                                ))}
-                                            </>
-                                        ) : (
-                                            <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
-                                                No unlock
+                                                )}
+                                                <div className="absolute left-3 top-3 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-100 backdrop-blur-md">
+                                                    {categoryLabel}
+                                                </div>
                                             </div>
-                                        )}
-                                    </div>
 
-                                    <div className="mt-5 flex flex-wrap gap-2">
-                                        {post.publicPath ? (
-                                            <Link
-                                                href={buildStudioDetailPath(post.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                            >
-                                                <ExternalLink className="h-4 w-4" />
-                                                Open public page
-                                            </Link>
-                                        ) : null}
-                                        <Link
-                                            href={post.ownerPath}
-                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                        >
-                                            <PencilLine className="h-4 w-4" />
-                                            Edit
-                                        </Link>
-                                        {post.resourcePath ? (
-                                            <Link
-                                                href={buildStudioDetailPath(post.id, 'resources')}
-                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                                            >
-                                                <Wand2 className="h-4 w-4" />
-                                                Manage unlock
-                                            </Link>
-                                        ) : null}
-                                        {post.canShare ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => void copyPostLink(post.publicPath ?? `/showcase/${post.id}`)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                            >
-                                                <Copy className="h-4 w-4" />
-                                                Copy link
-                                            </button>
-                                        ) : null}
-                                        {post.archivedAt ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => void handlePostRestore(post.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                                            >
-                                                <RotateCcw className="h-4 w-4" />
-                                                Restore
-                                            </button>
-                                        ) : (
-                                            <button
-                                                type="button"
-                                                onClick={() => void handlePostArchive(post.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
-                                            >
-                                                <Archive className="h-4 w-4" />
-                                                Archive
-                                            </button>
-                                        )}
-                                        <button
-                                            type="button"
-                                            onClick={() => void handlePostDelete(post.id)}
-                                            className="inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                            Delete
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
+                                            <div className="flex min-w-0 flex-col justify-between gap-4 p-1 md:p-2">
+                                                <div>
+                                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                                        <div className="min-w-0">
+                                                            <h3 className="line-clamp-2 text-lg font-semibold leading-6 text-white">
+                                                                {post.title}
+                                                            </h3>
+                                                            <p className="mt-2 text-sm text-zinc-500">
+                                                                {post.sourceLabel} · Updated {updatedLabel}
+                                                            </p>
+                                                        </div>
+                                                        <div className="flex shrink-0 flex-wrap gap-2">
+                                                            <span className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${statusClass}`}>
+                                                                {post.archivedAt ? 'Archived' : post.visibility}
+                                                            </span>
+                                                            {post.bundle ? (
+                                                                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${bundleStatusClass}`}>
+                                                                    {post.bundle.status === 'published' ? 'Unlock live' : 'Unlock draft'}
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                    </div>
+
+                                                    <p className="mt-4 line-clamp-2 max-w-3xl text-sm leading-6 text-zinc-400">
+                                                        {postSummary}
+                                                    </p>
+
+                                                    <div className="mt-4 rounded-[20px] border border-white/8 bg-black/25 p-3">
+                                                        {post.bundle ? (
+                                                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                                                <div>
+                                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
+                                                                        Unlock package
+                                                                    </div>
+                                                                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                                                                        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-100">
+                                                                            {post.bundle.accessMode === 'free'
+                                                                                ? 'Free unlock'
+                                                                                : formatUsdCents(post.bundle.priceUsdCents)}
+                                                                        </span>
+                                                                        {post.bundle.resourceKinds.slice(0, 4).map((kind) => (
+                                                                            <span
+                                                                                key={`${post.id}-${kind}`}
+                                                                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-300"
+                                                                            >
+                                                                                {getPostResourceKindLabel(kind)}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-xs leading-5 text-zinc-500">
+                                                                    {post.bundle.salesCount} sold · {formatUsdCents(post.bundle.earningsUsdCents)} earned
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                                <div>
+                                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Unlock package</div>
+                                                                    <p className="mt-1 text-sm text-zinc-300">No reusable prompt, files, notes, or workflow attached.</p>
+                                                                </div>
+                                                                <span className="self-start rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-300">
+                                                                    No unlock
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex flex-col gap-3 border-t border-white/8 pt-4 lg:flex-row lg:items-center lg:justify-between">
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {post.publicPath ? (
+                                                            <Link
+                                                                href={buildStudioDetailPath(post.id)}
+                                                                className="inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                                            >
+                                                                <ExternalLink className="h-4 w-4" />
+                                                                Open public page
+                                                            </Link>
+                                                        ) : null}
+                                                        {!post.archivedAt ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void handlePostVisibilityChange(post, nextVisibility)}
+                                                                disabled={Boolean(postVisibilityUpdatingKey)}
+                                                                className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${visibilityActionClass}`}
+                                                            >
+                                                                {isVisibilityUpdating ? (
+                                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                                ) : (
+                                                                    <VisibilityActionIcon className="h-4 w-4" />
+                                                                )}
+                                                                {visibilityActionLabel}
+                                                            </button>
+                                                        ) : null}
+                                                        <Link
+                                                            href={post.ownerPath}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                                        >
+                                                            <PencilLine className="h-4 w-4" />
+                                                            Edit
+                                                        </Link>
+                                                        {post.resourcePath ? (
+                                                            <Link
+                                                                href={buildStudioDetailPath(post.id, 'resources')}
+                                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                            >
+                                                                <Wand2 className="h-4 w-4" />
+                                                                Manage unlock
+                                                            </Link>
+                                                        ) : null}
+                                                    </div>
+
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {post.canShare ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void copyPostLink(post.publicPath ?? `/showcase/${post.id}`)}
+                                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-100 transition hover:bg-white/[0.08]"
+                                                                title="Copy post link"
+                                                                aria-label="Copy post link"
+                                                            >
+                                                                <Copy className="h-4 w-4" />
+                                                            </button>
+                                                        ) : null}
+                                                        {post.archivedAt ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void handlePostRestore(post.id)}
+                                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-500/10 text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                                title="Restore post"
+                                                                aria-label="Restore post"
+                                                            >
+                                                                <RotateCcw className="h-4 w-4" />
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void handlePostArchive(post.id)}
+                                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/25 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                                title="Archive post"
+                                                                aria-label="Archive post"
+                                                            >
+                                                                <Archive className="h-4 w-4" />
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handlePostDelete(post.id)}
+                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/25 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                                            title="Delete post"
+                                                            aria-label="Delete post"
+                                                        >
+                                                            <Trash2 className="h-4 w-4" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </article>
+                                );
+                            })}
                         </div>
                     </div>
                 )}
@@ -1507,26 +1803,10 @@ export default function CreationsPage() {
                 alt={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
                 title={previewGen ? getPreviewTitle(previewGen) : 'Creation preview'}
                 prompt={previewGen?.prompt ?? ''}
+                body={previewGen?.description ?? ''}
                 inputMedia={previewGen?.input_media ?? []}
-                actions={previewGen ? (
-                    <>
-                        {renderShareAction(previewGen, true)}
-                        {previewGen.is_public ? (
-                            <Link
-                                href={
-                                    previewGen.linked_post_id
-                                        ? previewGen.linked_post_visibility === 'private' || previewGen.linked_post_archived_at
-                                            ? `/post/${previewGen.linked_post_id}/edit`
-                                            : buildStudioDetailPath(previewGen.linked_post_id)
-                                        : buildStudioDetailPath(previewGen.id)
-                                }
-                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-                            >
-                                {previewGen.linked_post_id ? 'Open post' : 'Open public page'}
-                            </Link>
-                        ) : null}
-                    </>
-                ) : null}
+                metadata={previewGen ? getPreviewMetadata(previewGen) : []}
+                actions={previewGen ? renderPreviewActions(previewGen) : null}
             />
 
             <PublishToShowcaseModal
@@ -1537,6 +1817,7 @@ export default function CreationsPage() {
                 defaultTitle={publishTarget?.title ?? ''}
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}
+                paywallPrefill={publishTarget?.paywallPrefill ?? null}
                 shareAfterPublish={shareAfterPublish ? {
                     title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',
                     description: publishTarget?.description ?? publishTarget?.prompt ?? null,
