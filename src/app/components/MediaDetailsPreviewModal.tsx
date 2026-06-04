@@ -18,6 +18,10 @@ interface ActiveMediaPreview {
   alt: string;
 }
 
+export interface MediaDetailsAdditionalMediaItem extends ActiveMediaPreview {
+  id: string;
+}
+
 interface MediaDetailsPreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -28,6 +32,7 @@ interface MediaDetailsPreviewModalProps {
   prompt?: string | null;
   body?: string | null;
   inputMedia?: GenerationInputMediaItem[] | null;
+  additionalMedia?: MediaDetailsAdditionalMediaItem[] | null;
   creator?: ShowcaseCreator;
   metadata?: Array<{
     label: string;
@@ -46,6 +51,7 @@ export default function MediaDetailsPreviewModal({
   prompt,
   body,
   inputMedia,
+  additionalMedia,
   creator,
   metadata,
   actions,
@@ -65,6 +71,7 @@ export default function MediaDetailsPreviewModal({
       prompt={prompt}
       body={body}
       inputMedia={inputMedia}
+      additionalMedia={additionalMedia}
       creator={creator}
       metadata={metadata}
       actions={actions}
@@ -81,6 +88,7 @@ function MediaDetailsPreviewDialog({
   prompt,
   body,
   inputMedia,
+  additionalMedia,
   creator,
   metadata,
   actions,
@@ -95,11 +103,13 @@ function MediaDetailsPreviewDialog({
   const hasPrompt = trimmedPrompt.length > 0;
   const hasBody = trimmedBody.length > 0;
   const visibleInputMedia = (inputMedia ?? []).filter((item) => Boolean(item.url));
+  const visibleAdditionalMedia = (additionalMedia ?? []).filter((item) => Boolean(item.src));
   const visibleMetadata = (metadata ?? []).filter((item) => item.value.trim().length > 0);
   const recipeItems = [
     hasPrompt ? 'Prompt' : null,
     hasBody && mediaType !== 'text' ? 'Notes' : null,
     visibleInputMedia.length > 0 ? `${visibleInputMedia.length} input${visibleInputMedia.length === 1 ? '' : 's'}` : null,
+    visibleAdditionalMedia.length > 0 ? `${visibleAdditionalMedia.length} more output${visibleAdditionalMedia.length === 1 ? '' : 's'}` : null,
   ].filter((item): item is string => Boolean(item));
 
   useEffect(() => {
@@ -292,6 +302,35 @@ function MediaDetailsPreviewDialog({
     );
   };
 
+  const renderAdditionalMediaPreview = (item: MediaDetailsAdditionalMediaItem) => {
+    if (item.mediaType === 'image') {
+      return (
+        <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl bg-black/70">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={item.src} alt={item.alt} loading="lazy" decoding="async" className="h-full w-full object-contain" />
+        </div>
+      );
+    }
+
+    if (item.mediaType === 'audio') {
+      return (
+        <div className="flex aspect-square w-full items-center justify-center rounded-2xl border border-white/8 bg-zinc-950/80 p-3 text-emerald-100">
+          <Volume2 className="h-5 w-5" />
+        </div>
+      );
+    }
+
+    return (
+      <video
+        src={item.src}
+        muted
+        playsInline
+        preload="metadata"
+        className="aspect-square w-full rounded-2xl bg-black/70 object-contain"
+      />
+    );
+  };
+
   if (!portalRoot) {
     return null;
   }
@@ -368,6 +407,29 @@ function MediaDetailsPreviewDialog({
           </summary>
 
           <div className="mt-4 grid gap-4">
+            {visibleAdditionalMedia.length > 0 ? (
+              <div>
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-600">Additional outputs</div>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  {visibleAdditionalMedia.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => openMediaPreview(item)}
+                      className="group w-[calc(50%-0.375rem)] min-w-0 rounded-[18px] border border-white/8 bg-white/[0.03] p-2 text-left transition hover:border-white/18 hover:bg-white/[0.06] sm:w-36"
+                      aria-label={`Open ${item.title}`}
+                    >
+                      {renderAdditionalMediaPreview(item)}
+                      <div className="mt-2 flex min-w-0 items-center gap-2 px-1 text-xs font-semibold text-zinc-200">
+                        <span className="truncate">{item.title}</span>
+                        <Maximize2 className="ml-auto h-3.5 w-3.5 shrink-0 text-zinc-500 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {visibleInputMedia.length > 0 ? (
               <div>
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-600">Inputs used</div>

@@ -28,6 +28,12 @@ const bundleUpdateCalls: Array<{
 const publishRpcCalls: Array<Record<string, unknown>> = [];
 const removeMock = vi.fn(async () => ({ data: null, error: null }));
 const createUserClientMock = vi.fn();
+const ensureDurableGenerationMediaMock = vi.fn();
+let publishRpcError: { message: string } | null = null;
+
+vi.mock('@/lib/durable-generation-media', () => ({
+  ensureDurableGenerationMedia: (...args: unknown[]) => ensureDurableGenerationMediaMock(...args),
+}));
 
 vi.mock('@/lib/posts-server', () => ({
   deriveTitleFromBody: vi.fn((value: string | null | undefined) => value?.split('\n')[0] ?? null),
@@ -74,17 +80,19 @@ vi.mock('@/lib/server-helpers', () => ({
       postUpserts.push(args.p_post as Record<string, unknown>);
 
       return {
-        data: [{
-          post_id: 'post-1',
-          visibility: (args.p_post as Record<string, unknown>).visibility,
-          bundle_id: args.p_has_bundle ? 'bundle-1' : null,
-          bundle_status: args.p_has_bundle
-            ? (args.p_post as Record<string, unknown>).visibility === 'public'
-              ? 'published'
-              : 'draft'
-            : null,
-        }],
-        error: null,
+        data: publishRpcError
+          ? null
+          : [{
+              post_id: 'post-1',
+              visibility: (args.p_post as Record<string, unknown>).visibility,
+              bundle_id: args.p_has_bundle ? 'bundle-1' : null,
+              bundle_status: args.p_has_bundle
+                ? (args.p_post as Record<string, unknown>).visibility === 'public'
+                  ? 'published'
+                  : 'draft'
+                : null,
+            }],
+        error: publishRpcError,
       };
     }),
     storage: {
@@ -117,7 +125,13 @@ describe('/api/showcase/publish route', () => {
     listingUpdateCalls.length = 0;
     bundleUpdateCalls.length = 0;
     publishRpcCalls.length = 0;
+    publishRpcError = null;
     removeMock.mockClear();
+    ensureDurableGenerationMediaMock.mockReset();
+    ensureDurableGenerationMediaMock.mockImplementation(async ({ generation }) => ({
+      outputUrl: generation.outputUrl,
+      createdLocation: null,
+    }));
     createUserClientMock.mockReset();
     createUserClientMock.mockReturnValue({
       auth: {
@@ -292,6 +306,114 @@ describe('/api/showcase/publish route', () => {
       p_owner_user_id: 'user-1',
       p_has_bundle: false,
     });
+  });
+
+  it('secures legacy provider media before making a generation-backed post private', async () => {
+    generationState = {
+      ...generationState!,
+      output_url: 'https://provider.example.com/expired.jpg',
+    };
+    ensureDurableGenerationMediaMock.mockResolvedValue({
+      outputUrl: 'generated_images/user-1/restored-gen-1.jpg',
+      createdLocation: {
+        bucket: 'generated_images',
+        filePath: 'user-1/restored-gen-1.jpg',
+      },
+    });
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'private',
+      }),
+    }) as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(ensureDurableGenerationMediaMock).toHaveBeenCalledWith(expect.objectContaining({
+      generation: {
+        id: 'gen-1',
+        userId: 'user-1',
+        model: 'nano-banana-2',
+        category: 'image',
+        outputUrl: 'https://provider.example.com/expired.jpg',
+        showcaseAssetPath: 'showcase/gen-1/example.jpg',
+      },
+    }));
+    expect(generationUpdates[0]).toMatchObject({
+      output_url: 'generated_images/user-1/restored-gen-1.jpg',
+      showcase_asset_path: null,
+    });
+    expect(postUpserts[0]).toMatchObject({
+      output_url: 'generated_images/user-1/restored-gen-1.jpg',
+      showcase_asset_path: null,
+      visibility: 'private',
+    });
+    expect(removeMock).toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
+  });
+
+  it('keeps the public state untouched when private media cannot be secured', async () => {
+    generationState = {
+      ...generationState!,
+      output_url: 'https://provider.example.com/expired.jpg',
+    };
+    ensureDurableGenerationMediaMock.mockRejectedValue(new Error('source missing'));
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'private',
+      }),
+    }) as NextRequest);
+    const data = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(data.error).toMatch(/could not be secured/i);
+    expect(publishRpcCalls).toHaveLength(0);
+    expect(removeMock).not.toHaveBeenCalled();
+  });
+
+  it('removes a newly copied private object and keeps the showcase derivative when the atomic update fails', async () => {
+    generationState = {
+      ...generationState!,
+      output_url: 'https://provider.example.com/expired.jpg',
+    };
+    ensureDurableGenerationMediaMock.mockResolvedValue({
+      outputUrl: 'generated_images/user-1/restored-gen-1.jpg',
+      createdLocation: {
+        bucket: 'generated_images',
+        filePath: 'user-1/restored-gen-1.jpg',
+      },
+    });
+    publishRpcError = { message: 'atomic update failed' };
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'private',
+      }),
+    }) as NextRequest);
+
+    expect(response.status).toBe(500);
+    expect(removeMock).toHaveBeenCalledWith(['user-1/restored-gen-1.jpg']);
+    expect(removeMock).not.toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
   });
 
   it('persists input-media remix sharing only for public publishes', async () => {

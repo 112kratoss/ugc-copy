@@ -110,6 +110,7 @@ interface PublishToShowcaseModalProps {
   defaultTitle?: string;
   defaultDescription?: string;
   showPaidShortcut?: boolean;
+  initialSellAutoUnlock?: boolean;
   paywallPrefill?: GenerationPaywallPrefill | null;
   shareAfterPublish?: {
     title: string;
@@ -133,6 +134,7 @@ export default function PublishToShowcaseModal({
   defaultTitle = '',
   defaultDescription = '',
   showPaidShortcut = true,
+  initialSellAutoUnlock = false,
   paywallPrefill = null,
   shareAfterPublish,
   onPublished,
@@ -157,11 +159,11 @@ export default function PublishToShowcaseModal({
 
     setPublishTitle(defaultTitle);
     setPublishDescription(getDefaultPublishDescription(defaultDescription, paywallPrefill));
-    setSellAutoUnlock(false);
+    setSellAutoUnlock(Boolean(initialSellAutoUnlock && hasAutoUnlock));
     setPriceUsd('9');
     setPublishingVisibility(null);
     setFormError(null);
-  }, [defaultDescription, defaultTitle, generationId, isOpen, paywallPrefill]);
+  }, [defaultDescription, defaultTitle, generationId, hasAutoUnlock, initialSellAutoUnlock, isOpen, paywallPrefill]);
 
   if (!isOpen || !generationId) {
     return null;
@@ -199,6 +201,25 @@ export default function PublishToShowcaseModal({
     setFormError(null);
 
     try {
+      const requestBody: {
+        generationId: string;
+        visibility: Extract<PostVisibility, 'public' | 'private'>;
+        title?: string;
+        description?: string;
+        shareInputMediaForRemix: boolean;
+        resourceBundle?: PostResourceBundleInput;
+      } = {
+        generationId,
+        visibility: nextVisibility,
+        title: normalizeOptionalText(publishTitle),
+        description: normalizeOptionalText(publishDescription),
+        shareInputMediaForRemix: false,
+      };
+
+      if (resourceBundle) {
+        requestBody.resourceBundle = resourceBundle;
+      }
+
       const response = await fetch('/api/showcase/publish', {
         method: 'POST',
         headers: {
@@ -209,14 +230,7 @@ export default function PublishToShowcaseModal({
               }
             : {}),
         },
-        body: JSON.stringify({
-          generationId,
-          visibility: nextVisibility,
-          title: normalizeOptionalText(publishTitle),
-          description: normalizeOptionalText(publishDescription),
-          shareInputMediaForRemix: false,
-          resourceBundle,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const data = await response.json();

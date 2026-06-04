@@ -177,4 +177,35 @@ describe('MediaDetailsPreviewModal', () => {
     expect(screen.getByRole('button', { name: /close full media preview/i })).toBeInTheDocument();
     expect(screen.getAllByAltText('Preview image')).toHaveLength(2);
   });
+
+  it('shows additional outputs and opens them in the full media preview', async () => {
+    render(
+      <MediaDetailsPreviewModal
+        isOpen
+        onClose={() => undefined}
+        mediaType="image"
+        src="https://example.com/primary.jpg"
+        alt="Primary output"
+        title="Multi-output preview"
+        prompt="Prompt"
+        additionalMedia={[
+          {
+            id: 'output-2',
+            mediaType: 'image',
+            title: 'Output 2',
+            alt: 'Additional output 2',
+            src: 'https://example.com/secondary.jpg',
+          },
+        ]}
+      />
+    );
+
+    expect(await screen.findByText('Additional outputs')).toBeInTheDocument();
+    expect(screen.getByAltText('Additional output 2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /output 2/i }));
+
+    expect(screen.getByRole('button', { name: /close full media preview/i })).toBeInTheDocument();
+    expect(screen.getAllByAltText('Additional output 2')).toHaveLength(2);
+  });
 });

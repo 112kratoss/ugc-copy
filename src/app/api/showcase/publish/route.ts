@@ -1,5 +1,9 @@
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
+import {
+    ensureDurableGenerationMedia,
+    type CreatedGenerationMediaLocation,
+} from '@/lib/durable-generation-media';
 import { isAudioModel } from '@/lib/models';
 import {
     getMarketplaceQualityErrorForPostBundle,
@@ -233,6 +237,8 @@ export async function POST(request: NextRequest) {
         };
 
         let nextShowcaseAssetPath = hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null;
+        let nextOutputUrl = generation.output_url;
+        let createdPrivateMediaLocation: CreatedGenerationMediaLocation | null = null;
 
         if (shouldExposePost) {
             if (!generation.output_url) {
@@ -253,9 +259,38 @@ export async function POST(request: NextRequest) {
             if (prompt !== undefined) updatePayload.prompt = prompt;
             if (detectedCategory !== undefined) updatePayload.category = detectedCategory;
             if (workflowSettings !== undefined) updatePayload.workflow_settings = workflowSettings;
-        } else if (hasShowcaseAssetColumn) {
-            updatePayload.showcase_asset_path = null;
-            nextShowcaseAssetPath = null;
+        } else {
+            if (generation.output_url || generation.showcase_asset_path) {
+                try {
+                    const durableMedia = await ensureDurableGenerationMedia({
+                        supabase: adminSupabase,
+                        generation: {
+                            id: generation.id,
+                            userId: generation.user_id,
+                            model: generation.model,
+                            category: generation.category,
+                            outputUrl: generation.output_url,
+                            showcaseAssetPath: hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null,
+                        },
+                    });
+                    nextOutputUrl = durableMedia.outputUrl;
+                    createdPrivateMediaLocation = durableMedia.createdLocation;
+                    if (nextOutputUrl !== generation.output_url) {
+                        updatePayload.output_url = nextOutputUrl;
+                    }
+                } catch (mediaError) {
+                    console.error('Failed to secure private generation media:', mediaError);
+                    return NextResponse.json(
+                        { error: 'This post could not be made private because its preview could not be secured. The current visibility was kept.' },
+                        { status: 500 }
+                    );
+                }
+            }
+
+            if (hasShowcaseAssetColumn) {
+                updatePayload.showcase_asset_path = null;
+                nextShowcaseAssetPath = null;
+            }
         }
 
         let postId: string | null = null;
@@ -274,7 +309,7 @@ export async function POST(request: NextRequest) {
             source_tool_slug: normalizeSourceToolInput({ slug: 'magicbooklet' }).slug,
             generation_id: generation.id,
             showcase_asset_path: nextShowcaseAssetPath,
-            output_url: generation.output_url,
+            output_url: nextOutputUrl,
         };
 
         try {
@@ -299,6 +334,15 @@ export async function POST(request: NextRequest) {
                     });
             }
 
+            if (createdPrivateMediaLocation) {
+                const cleanupResult = await adminSupabase.storage
+                    .from(createdPrivateMediaLocation.bucket)
+                    .remove([createdPrivateMediaLocation.filePath]);
+                if (cleanupResult.error) {
+                    console.error('Failed to delete private generation media after publish failure:', cleanupResult.error);
+                }
+            }
+
             if (isMissingPostsSchemaError(postError)) {
                 return NextResponse.json({ error: 'Failed to sync showcase post' }, { status: 500 });
             }
@@ -311,12 +355,12 @@ export async function POST(request: NextRequest) {
         }
 
         if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
-            void adminSupabase.storage
+            const removalResult = await adminSupabase.storage
                 .from(SHOWCASE_MEDIA_BUCKET)
-                .remove([generation.showcase_asset_path])
-                .catch((storageError) => {
-                    console.error('Failed to delete showcase derivative after unpublish:', storageError);
-                });
+                .remove([generation.showcase_asset_path]);
+            if (removalResult.error) {
+                console.error('Failed to delete showcase derivative after unpublish:', removalResult.error);
+            }
         }
 
         return NextResponse.json({

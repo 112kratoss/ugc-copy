@@ -168,4 +168,88 @@ describe('PublishToShowcaseModal', () => {
       },
     });
   });
+
+  it('opens unlock management with the saved package selected', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        accessToken="layout-session-token"
+        initialSellAutoUnlock
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes', 'remix'],
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('checkbox', { name: /sell the prompt and setup/i })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
+        body: expect.any(String),
+      }));
+    });
+
+    const request = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+
+    expect(body).toMatchObject({
+      generationId: 'gen-1',
+      visibility: 'private',
+      resourceBundle: {
+        accessMode: 'paid',
+        priceUsdCents: 900,
+      },
+    });
+  });
+
+  it('removes an existing unlock when saving from unlock management with pricing off', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        accessToken="layout-session-token"
+        initialSellAutoUnlock
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes', 'remix'],
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        }}
+      />
+    );
+
+    const sellPackageCheckbox = screen.getByRole('checkbox', { name: /sell the prompt and setup/i });
+    expect(sellPackageCheckbox).toBeChecked();
+
+    fireEvent.click(sellPackageCheckbox);
+    expect(sellPackageCheckbox).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
+        body: expect.any(String),
+      }));
+    });
+
+    const request = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+
+    expect(body).toMatchObject({
+      generationId: 'gen-1',
+      visibility: 'public',
+      resourceBundle: {
+        accessMode: 'none',
+      },
+    });
+  });
 });

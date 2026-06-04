@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, LockKeyhole, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
@@ -8,6 +8,7 @@ import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
+import CreationMediaFrame from '@/app/creations/CreationMediaFrame';
 import {
     resolveCreationWorkspaceCardState,
     type CreationWorkspaceCardState,
@@ -17,10 +18,12 @@ import {
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
+import { getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import type { ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
+import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 
 interface Generation {
     id: string;
@@ -91,6 +94,7 @@ interface CreationsWorkspaceCache {
 }
 
 const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
+const STUDIO_GRID_CLASS = 'grid items-stretch gap-4 xl:gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,16rem),1fr))]';
 
 function getCreationsWorkspaceCacheKey(userId: string) {
     return `magicbooklet:creations-cache:v1:${userId}`;
@@ -152,13 +156,86 @@ function writeCreationsWorkspaceCache(
     }
 }
 
+function getMediaIdentity(url: string | null | undefined): string | null {
+    if (!url) {
+        return null;
+    }
+
+    const storedLocation = getStoredMediaLocation(url);
+    return storedLocation ? `${storedLocation.bucket}/${storedLocation.filePath}` : url;
+}
+
+function getUniqueMediaUrls(urls: Array<string | null | undefined>): string[] {
+    const seenIdentities = new Set<string | null>();
+
+    return urls.filter((url): url is string => {
+        if (!url) {
+            return false;
+        }
+
+        const identity = getMediaIdentity(url);
+        if (seenIdentities.has(identity)) {
+            return false;
+        }
+
+        seenIdentities.add(identity);
+        return true;
+    });
+}
+
+function preserveStableMediaUrl(
+    previousUrl: string | null | undefined,
+    incomingUrl: string | null | undefined
+): string | null {
+    if (!incomingUrl) {
+        return incomingUrl ?? null;
+    }
+
+    if (previousUrl && getMediaIdentity(previousUrl) === getMediaIdentity(incomingUrl)) {
+        return previousUrl;
+    }
+
+    return incomingUrl;
+}
+
+function mergeGenerationRefresh(previousGenerations: Generation[], incomingGenerations: Generation[]): Generation[] {
+    const previousById = new Map(previousGenerations.map((generation) => [generation.id, generation]));
+
+    return incomingGenerations.map((incomingGeneration) => {
+        const previousGeneration = previousById.get(incomingGeneration.id);
+        if (!previousGeneration) {
+            return incomingGeneration;
+        }
+
+        const previousOutputUrls = [
+            ...(previousGeneration.output_urls ?? []),
+            previousGeneration.output_url,
+        ].filter((url): url is string => Boolean(url));
+
+        const mergedOutputUrls = Array.isArray(incomingGeneration.output_urls)
+            ? incomingGeneration.output_urls.map((incomingUrl) => {
+                const matchingPreviousUrl = previousOutputUrls.find(
+                    (previousUrl) => getMediaIdentity(previousUrl) === getMediaIdentity(incomingUrl)
+                );
+                return preserveStableMediaUrl(matchingPreviousUrl, incomingUrl) ?? incomingUrl;
+            })
+            : incomingGeneration.output_urls;
+
+        return {
+            ...incomingGeneration,
+            output_url: preserveStableMediaUrl(previousGeneration.output_url, incomingGeneration.output_url),
+            output_urls: mergedOutputUrls,
+        };
+    });
+}
+
 export default function CreationsPage() {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const { session } = useAuth();
     const userId = session?.user?.id ?? null;
-    const [initialWorkspaceCache] = useState(() => readCreationsWorkspaceCache(userId));
+    const accessToken = session?.access_token ?? null;
     const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
     const initialPostVisibility = (() => {
         const value = searchParams.get('visibility');
@@ -167,18 +244,23 @@ export default function CreationsPage() {
         }
         return 'all';
     })();
-    const [generations, setGenerations] = useState<Generation[]>(() => initialWorkspaceCache?.generations ?? []);
-    const [posts, setPosts] = useState<OwnerPost[]>(() => initialWorkspaceCache?.posts ?? []);
-    const [profile, setProfile] = useState<ProfileApiResponse | null>(() => initialWorkspaceCache?.profile ?? null);
-    const [isLoading, setIsLoading] = useState(() => !initialWorkspaceCache);
+    const [generations, setGenerations] = useState<Generation[]>([]);
+    const [posts, setPosts] = useState<OwnerPost[]>([]);
+    const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const generationsRef = useRef<Generation[]>([]);
     const [filter, setFilter] = useState<FilterType>('all');
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
     const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
+    const [initialSellAutoUnlockInPublishModal, setInitialSellAutoUnlockInPublishModal] = useState(false);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
     const [postVisibilityUpdatingKey, setPostVisibilityUpdatingKey] = useState<string | null>(null);
+    const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
+    const [restoringGenerationId, setRestoringGenerationId] = useState<string | null>(null);
+    const restoreInputRef = useRef<HTMLInputElement>(null);
     const creationsReturnPath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
         : pathname;
@@ -209,6 +291,7 @@ export default function CreationsPage() {
             return;
         }
 
+        generationsRef.current = cachedWorkspace.generations;
         setGenerations(cachedWorkspace.generations);
         setPosts(cachedWorkspace.posts);
         setProfile(cachedWorkspace.profile);
@@ -216,7 +299,7 @@ export default function CreationsPage() {
     }, [userId]);
 
     const fetchCreations = useCallback(async () => {
-        if (!session?.access_token) {
+        if (!accessToken || !userId) {
             router.push('/login');
             return;
         }
@@ -224,13 +307,13 @@ export default function CreationsPage() {
         try {
             const [generationsRes, postsRes, profileRes] = await Promise.all([
                 fetch('/api/generations?includeArchived=true', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
                 }),
                 fetch('/api/posts?scope=owner&includeArchived=true', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
                 }),
                 fetch('/api/profile', {
-                    headers: { 'Authorization': `Bearer ${session.access_token}` },
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
                 }),
             ]);
 
@@ -238,8 +321,9 @@ export default function CreationsPage() {
             let nextGenerations: Generation[] | null = null;
             if (generationsRes.ok) {
                 const loadedGenerations = (generationsData.generations || []) as Generation[];
-                nextGenerations = loadedGenerations;
-                setGenerations(loadedGenerations);
+                nextGenerations = mergeGenerationRefresh(generationsRef.current, loadedGenerations);
+                generationsRef.current = nextGenerations;
+                setGenerations(nextGenerations);
             }
 
             const postsData = await postsRes.json();
@@ -259,7 +343,7 @@ export default function CreationsPage() {
             }
 
             if (nextGenerations && nextPosts) {
-                writeCreationsWorkspaceCache(session.user.id, {
+                writeCreationsWorkspaceCache(userId, {
                     generations: nextGenerations,
                     posts: nextPosts,
                     profile: nextProfile,
@@ -270,10 +354,20 @@ export default function CreationsPage() {
         } finally {
             setIsLoading(false);
         }
-    }, [router, session]);
+    }, [accessToken, router, userId]);
 
     useEffect(() => {
         void fetchCreations();
+    }, [fetchCreations]);
+
+    const hasProcessingGenerations = generations.some(
+        (generation) => !generation.archived_at && (generation.status === 'processing' || generation.status === 'waiting')
+    );
+
+    useEffect(() => {
+        if (!hasProcessingGenerations) {
+            return;
+        }
 
         const intervalId = window.setInterval(() => {
             if (document.visibilityState === 'hidden') {
@@ -286,18 +380,54 @@ export default function CreationsPage() {
         return () => {
             window.clearInterval(intervalId);
         };
-    }, [fetchCreations]);
+    }, [fetchCreations, hasProcessingGenerations]);
 
-    const openPublishModal = (generation: Generation, options?: { shareAfterPublish?: boolean; showPaidShortcut?: boolean }) => {
+    const openPublishModal = (generation: Generation, options?: {
+        shareAfterPublish?: boolean;
+        showPaidShortcut?: boolean;
+        initialSellAutoUnlock?: boolean;
+    }) => {
         setPublishTarget(generation);
+        setInitialSellAutoUnlockInPublishModal(Boolean(options?.initialSellAutoUnlock));
         setShareAfterPublish(Boolean(options?.shareAfterPublish));
         setShowPaidShortcutInPublishModal(options?.showPaidShortcut ?? true);
     };
 
     const closePublishModal = () => {
         setPublishTarget(null);
+        setInitialSellAutoUnlockInPublishModal(false);
         setShareAfterPublish(false);
         setShowPaidShortcutInPublishModal(true);
+    };
+
+    const openUnlockModalForGeneration = (generation: Generation) => {
+        openPublishModal(generation, {
+            showPaidShortcut: true,
+            initialSellAutoUnlock: true,
+        });
+    };
+
+    const openUnlockModalForPost = (post: OwnerPost) => {
+        const linkedGeneration = post.generationId
+            ? generationsRef.current.find((generation) => generation.id === post.generationId) ??
+                generations.find((generation) => generation.id === post.generationId) ??
+                null
+            : null;
+
+        if (!linkedGeneration) {
+            router.push(buildStudioDetailPath(post.id, 'resources'));
+            return;
+        }
+
+        openUnlockModalForGeneration({
+            ...linkedGeneration,
+            title: post.title || linkedGeneration.title,
+            description: post.description || linkedGeneration.description,
+            linked_post_id: post.id,
+            linked_post_title: post.title,
+            linked_post_visibility: post.visibility,
+            linked_post_archived_at: post.archivedAt,
+        });
     };
 
     const handlePublished = () => {
@@ -341,6 +471,64 @@ export default function CreationsPage() {
             window.alert(error instanceof Error ? error.message : 'Failed to update post visibility.');
         } finally {
             setPostVisibilityUpdatingKey(null);
+        }
+    };
+
+    const requestPreviewRestore = (generation: Generation) => {
+        const mediaKind = getMediaKind(generation);
+        if (mediaKind === 'audio') {
+            return;
+        }
+
+        setRestoreTarget(generation);
+        if (restoreInputRef.current) {
+            restoreInputRef.current.accept = mediaKind === 'video' ? 'video/*' : 'image/*';
+            restoreInputRef.current.value = '';
+            restoreInputRef.current.click();
+        }
+    };
+
+    const handlePreviewRestoreFile = async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0] ?? null;
+        const generation = restoreTarget;
+        event.target.value = '';
+
+        if (!file || !generation) {
+            return;
+        }
+
+        if (!session?.access_token || !session.user?.id) {
+            router.push('/login?returnUrl=/creations');
+            return;
+        }
+
+        setRestoringGenerationId(generation.id);
+        try {
+            const uploadedMedia = await uploadMediaToTemporaryStorage(file, session.user.id);
+            const response = await fetch(`/api/generations/${generation.id}/restore-media`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({
+                    storagePath: uploadedMedia.storagePath,
+                    originalName: file.name,
+                    contentType: file.type,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to restore preview.');
+            }
+
+            await fetchCreations();
+            setRestoreTarget(null);
+        } catch (error) {
+            console.error('Failed to restore creation preview:', error);
+            window.alert(error instanceof Error ? error.message : 'Failed to restore preview.');
+        } finally {
+            setRestoringGenerationId(null);
         }
     };
 
@@ -703,6 +891,18 @@ export default function CreationsPage() {
         return mediaKind === 'image' ? 'image' : 'video';
     };
 
+    const getAdditionalPreviewMedia = (generation: Generation) => {
+        const outputUrls = getUniqueMediaUrls([generation.output_url, ...(generation.output_urls ?? [])]);
+
+        return outputUrls.slice(1).map((src, index) => ({
+                id: `${generation.id}-output-${index + 2}`,
+                mediaType: getPreviewMediaType(generation) as Exclude<MediaDetailsType, 'text'>,
+                src,
+                title: `Output ${index + 2}`,
+                alt: `Additional output ${index + 2}`,
+            }));
+    };
+
     const isShareSupported = (generation: Generation): boolean =>
         supportsPublicCreationSharing({
             category: getGenerationCategory(generation),
@@ -783,14 +983,18 @@ export default function CreationsPage() {
                     </button>
                 ) : null}
 
-                {canManageFromCreation && primaryIsUnlock && workspaceState.primaryAction.href ? (
-                    <Link
-                        href={workspaceState.primaryAction.href}
+                {canManageFromCreation && primaryIsUnlock ? (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setPreviewGen(null);
+                            openUnlockModalForGeneration(generation);
+                        }}
                         className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 sm:w-auto sm:min-w-40"
                     >
                         <Wand2 className="h-4 w-4" />
                         {workspaceState.primaryAction.label}
-                    </Link>
+                    </button>
                 ) : null}
 
                 {customizeHref ? (
@@ -926,6 +1130,14 @@ export default function CreationsPage() {
 
     return (
         <div className="min-h-screen bg-black text-white">
+            <input
+                ref={restoreInputRef}
+                type="file"
+                accept={restoreTarget && getMediaKind(restoreTarget) === 'video' ? 'video/*' : 'image/*'}
+                aria-label="Restore preview media"
+                className="hidden"
+                onChange={(event) => void handlePreviewRestoreFile(event)}
+            />
             {/* Background effects */}
             <div className="fixed inset-0 z-0 pointer-events-none">
                 <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-purple-900/15 blur-[120px] rounded-full mix-blend-screen" />
@@ -1050,17 +1262,17 @@ export default function CreationsPage() {
 
                 {/* Filter Tabs */}
                 {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
-                    <div className="flex gap-2 mb-8">
+                    <div className="mb-8 flex gap-2 overflow-x-auto pb-1">
                         {([
                             { key: 'all', label: `All (${successfulGenerations.length})` },
-                            { key: 'images', label: `🖼 Images (${imageCount})` },
-                            { key: 'videos', label: `🎬 Videos (${videoCount})` },
-                            { key: 'audio', label: `🔊 Audio (${audioCount})` },
+                            { key: 'images', label: `Images (${imageCount})` },
+                            { key: 'videos', label: `Videos (${videoCount})` },
+                            { key: 'audio', label: `Audio (${audioCount})` },
                         ] as { key: FilterType; label: string }[]).map(tab => (
                             <button
                                 key={tab.key}
                                 onClick={() => setFilter(tab.key)}
-                                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${filter === tab.key
+                                className={`shrink-0 whitespace-nowrap px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${filter === tab.key
                                     ? 'bg-white/10 text-white border border-white/20'
                                     : 'bg-zinc-900/50 text-zinc-500 border border-white/5 hover:text-zinc-300 hover:bg-zinc-800'
                                     }`}
@@ -1098,10 +1310,10 @@ export default function CreationsPage() {
 
                 {/* Loading */}
                 {isLoading && (
-                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6 mb-10 mt-8">
+                    <div className={`${STUDIO_GRID_CLASS} mb-10 mt-8`}>
                         {[1, 2, 3, 4, 5, 6].map((i) => (
-                            <div key={i} className="break-inside-avoid mb-6">
-                                <SkeletonLoader className="h-48" />
+                            <div key={i}>
+                                <SkeletonLoader className="aspect-[4/5] w-full" />
                             </div>
                         ))}
                     </div>
@@ -1148,6 +1360,30 @@ export default function CreationsPage() {
                     </div>
                 )}
 
+                {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && filteredSuccessful.length === 0 && (
+                    <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+                        <div className="rounded-full border border-white/8 bg-zinc-900/60 p-5">
+                            {filter === 'audio' ? (
+                                <Volume2 className="h-9 w-9 text-zinc-600" />
+                            ) : filter === 'videos' ? (
+                                <Film className="h-9 w-9 text-zinc-600" />
+                            ) : (
+                                <ImageIcon className="h-9 w-9 text-zinc-600" />
+                            )}
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-semibold text-zinc-300">
+                                {filter === 'audio'
+                                    ? 'No audio creations yet'
+                                    : filter === 'videos'
+                                        ? 'No video creations yet'
+                                        : 'No image creations yet'}
+                            </h2>
+                            <p className="mt-2 text-sm text-zinc-500">Choose another filter to keep browsing your Studio.</p>
+                        </div>
+                    </div>
+                )}
+
                 {/* Processing */}
                 {activeView === 'creations' && processingGenerations.length > 0 && (
                     <div className="mb-10">
@@ -1169,17 +1405,17 @@ export default function CreationsPage() {
                                 Refresh now
                             </button>
                         </div>
-                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                        <div className={STUDIO_GRID_CLASS}>
                             {processingGenerations.map((gen) => (
                                 <div key={gen.id}
-                                    className="bg-white/[0.02] rounded-2xl border border-yellow-500/20 overflow-hidden backdrop-blur-md break-inside-avoid mb-6">
-                                    <div className="aspect-video bg-black/60 flex items-center justify-center">
+                                    className="flex h-full flex-col overflow-hidden rounded-2xl border border-yellow-500/20 bg-white/[0.02] backdrop-blur-md">
+                                    <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                         <div className="flex flex-col items-center gap-3">
                                             <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
                                             <span className="text-xs text-zinc-400">{getStartedAgoLabel(gen) ?? 'Still processing in background...'}</span>
                                         </div>
                                     </div>
-                                    <div className="p-4 flex items-center justify-between gap-3">
+                                    <div className="mt-auto flex items-center justify-between gap-3 p-4">
                                         <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
                                         <span className="text-xs text-zinc-500">{getStartedAgoLabel(gen) ?? 'Processing'}</span>
                                     </div>
@@ -1195,15 +1431,17 @@ export default function CreationsPage() {
                         {processingGenerations.length > 0 && (
                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4">Completed</h2>
                         )}
-                        <div className="columns-1 gap-5 space-y-5 sm:columns-2 lg:columns-3 xl:columns-4">
+                        <div data-testid="creation-grid" className={STUDIO_GRID_CLASS}>
                             {successfulCreationCards.map(({ generation: gen, workspaceState }) => {
                                 const mediaKind = getMediaKind(gen);
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
                                 const MediaIcon = isImage ? ImageIcon : isAudio ? Volume2 : Film;
-                                const imageOutputs = isImage
-                                    ? (Array.isArray(gen.output_urls) && gen.output_urls.length > 0 ? gen.output_urls : (gen.output_url ? [gen.output_url] : []))
-                                    : [];
+                                const outputUrls = getUniqueMediaUrls([
+                                    gen.output_url,
+                                    ...(gen.output_urls ?? []),
+                                ]);
+                                const primaryMediaUrl = gen.output_url ?? outputUrls[0];
                                 const canManageFromCreation = !isAudio && isShareSupported(gen);
                                 const completedInLabel = getCompletedInLabel(gen);
                                 const badgeClass = isImage
@@ -1254,63 +1492,36 @@ export default function CreationsPage() {
                                     month: 'short',
                                     day: 'numeric',
                                 });
+                                const hasSecondaryInlineAction =
+                                    Boolean(workspaceState.secondaryAction.href) && !primaryIsPublish;
+                                const hasLinkedVisibilityAction =
+                                    Boolean(workspaceState.linkedPost) && Boolean(nextLinkedPostVisibility);
+                                const hasCompactActionRow = hasSecondaryInlineAction || hasLinkedVisibilityAction;
                                 return (
-                                    <div key={gen.id}
-                                        className="group mb-5 break-inside-avoid overflow-hidden rounded-[28px] border border-white/[0.07] bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(8,8,10,0.96))] shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-md transition duration-300 hover:border-white/14 hover:shadow-[0_24px_80px_rgba(0,0,0,0.46)]">
-                                        <div className="relative overflow-hidden bg-black">
-                                            {isImage ? (
-                                                imageOutputs.length > 1 ? (
-                                                    <div className="grid grid-cols-2 gap-1 p-1">
-                                                        {imageOutputs.map((imageUrl, outputIndex) => (
-                                                            <button
-                                                                key={`${imageUrl}-${outputIndex}`}
-                                                                type="button"
-                                                                onClick={() => setPreviewGen(gen)}
-                                                                className="relative overflow-hidden rounded-2xl bg-zinc-950"
-                                                            >
-                                                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                                <img src={imageUrl} alt={`Generated image ${outputIndex + 1}`} className="aspect-square w-full object-cover transition duration-300 group-hover:scale-[1.02]" />
-                                                                {outputIndex === 0 ? (
-                                                                    <span className="absolute bottom-2 left-2 rounded-full border border-white/10 bg-black/65 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white backdrop-blur-md">
-                                                                        Primary
-                                                                    </span>
-                                                                ) : null}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                ) : (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setPreviewGen(gen)}
-                                                        className="block w-full bg-black text-left"
-                                                    >
-                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                        <img src={gen.output_url!} alt="Generated image" className="block w-full object-cover transition duration-500 group-hover:scale-[1.015]" />
-                                                    </button>
-                                                )
-                                            ) : isAudio ? (
-                                                <div className="p-5">
-                                                    <div className="mb-4 flex items-center gap-3 text-emerald-300">
-                                                        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3">
-                                                            <Volume2 className="w-5 h-5" />
-                                                        </div>
-                                                        <div>
-                                                            <div className="text-sm font-semibold text-white">Audio generation</div>
-                                                            <div className="text-xs text-zinc-500">{gen.model}</div>
-                                                        </div>
-                                                    </div>
-                                                    <audio src={gen.output_url!} className="w-full" controls />
-                                                </div>
-                                            ) : (
-                                                <video src={gen.output_url!} className="w-full h-auto block" controls muted loop playsInline
-                                                    onMouseEnter={(e) => e.currentTarget.play()}
-                                                    onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }} />
-                                            )}
+                                    <div
+                                        key={gen.id}
+                                        data-testid={`creation-card-${gen.id}`}
+                                        className="group flex h-full flex-col overflow-hidden rounded-[24px] border border-white/[0.07] bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(8,8,10,0.96))] shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-md transition duration-300 hover:border-white/14 hover:shadow-[0_24px_80px_rgba(0,0,0,0.46)]"
+                                    >
+                                        <div className="relative shrink-0 overflow-hidden bg-black">
+                                            {primaryMediaUrl ? (
+                                                <CreationMediaFrame
+                                                    key={primaryMediaUrl}
+                                                    id={gen.id}
+                                                    mediaKind={mediaKind}
+                                                    src={primaryMediaUrl}
+                                                    alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
+                                                    outputCount={outputUrls.length}
+                                                    onOpen={() => setPreviewGen(gen)}
+                                                    onRestore={!isAudio ? () => requestPreviewRestore(gen) : undefined}
+                                                    isRestoring={restoringGenerationId === gen.id}
+                                                />
+                                            ) : null}
                                             <div className={`absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] backdrop-blur-md ${badgeClass}`}>
                                                 <MediaIcon className="h-3.5 w-3.5" />
                                                 {badgeLabel}
                                             </div>
-                                            <a href={gen.output_url!} download={`creation_${gen.id}.${inferDownloadExtension(gen)}`} target="_blank" rel="noopener noreferrer"
+                                            <a href={primaryMediaUrl} download={`creation_${gen.id}.${inferDownloadExtension(gen)}`} target="_blank" rel="noopener noreferrer"
                                                 className="absolute right-3 top-3 rounded-full bg-black/60 p-2 text-white opacity-0 shadow-lg backdrop-blur-md transition-all hover:bg-white hover:text-black focus:opacity-100 group-hover:opacity-100"
                                                 title="Download creation"
                                                 aria-label="Download creation"
@@ -1319,7 +1530,7 @@ export default function CreationsPage() {
                                             </a>
                                         </div>
 
-                                        <div className="space-y-4 p-4">
+                                        <div className="flex flex-1 flex-col gap-3.5 p-3.5 sm:p-4">
                                             <div className="min-w-0">
                                                 <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">
                                                     {getPreviewTitle(gen)}
@@ -1360,7 +1571,7 @@ export default function CreationsPage() {
                                             </div>
 
                                             {workspaceState.linkedPost ? (
-                                                <div className="rounded-[20px] border border-white/8 bg-black/25 p-3">
+                                                <div className="rounded-2xl border border-white/8 bg-black/25 p-2.5">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <div className="min-w-0">
                                                             <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Linked post</div>
@@ -1379,54 +1590,59 @@ export default function CreationsPage() {
                                                         <button
                                                             type="button"
                                                             onClick={() => openPublishModal(gen)}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
                                                         >
                                                             <Globe className="h-4 w-4" />
                                                             {workspaceState.primaryAction.label}
                                                         </button>
-                                                    ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
-                                                        <Link
-                                                            href={workspaceState.primaryAction.href}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+                                                    ) : primaryIsUnlock ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openUnlockModalForGeneration(gen)}
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
                                                         >
                                                             <Wand2 className="h-4 w-4" />
                                                             {workspaceState.primaryAction.label}
-                                                        </Link>
-                                                    ) : null}
-
-                                                    {workspaceState.secondaryAction.href && !primaryIsPublish ? (
-                                                        <Link
-                                                            href={workspaceState.secondaryAction.href}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                                                        >
-                                                            <ExternalLink className="h-4 w-4" />
-                                                            {workspaceState.secondaryAction.label}
-                                                        </Link>
-                                                    ) : null}
-
-                                                    {workspaceState.linkedPost && nextLinkedPostVisibility ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void handleCreationPostVisibilityChange(
-                                                                gen.id,
-                                                                workspaceState.linkedPost!.id,
-                                                                nextLinkedPostVisibility
-                                                            )}
-                                                            disabled={Boolean(postVisibilityUpdatingKey)}
-                                                            className={`inline-flex w-full items-center justify-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${linkedPostVisibilityActionClass}`}
-                                                        >
-                                                            {isLinkedPostVisibilityUpdating ? (
-                                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                            ) : (
-                                                                <LinkedPostVisibilityActionIcon className="h-4 w-4" />
-                                                            )}
-                                                            {linkedPostVisibilityActionLabel}
                                                         </button>
+                                                    ) : null}
+
+                                                    {hasCompactActionRow ? (
+                                                        <div className={`grid gap-2 ${hasSecondaryInlineAction && hasLinkedVisibilityAction ? 'min-[1180px]:grid-cols-2' : ''}`}>
+                                                            {hasSecondaryInlineAction && workspaceState.secondaryAction.href ? (
+                                                                <Link
+                                                                    href={workspaceState.secondaryAction.href}
+                                                                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                                >
+                                                                    <ExternalLink className="h-3.5 w-3.5" />
+                                                                    {workspaceState.secondaryAction.label}
+                                                                </Link>
+                                                            ) : null}
+
+                                                            {hasLinkedVisibilityAction && workspaceState.linkedPost && nextLinkedPostVisibility ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => void handleCreationPostVisibilityChange(
+                                                                        gen.id,
+                                                                        workspaceState.linkedPost!.id,
+                                                                        nextLinkedPostVisibility
+                                                                    )}
+                                                                    disabled={Boolean(postVisibilityUpdatingKey)}
+                                                                    className={`inline-flex w-full items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${linkedPostVisibilityActionClass}`}
+                                                                >
+                                                                    {isLinkedPostVisibilityUpdating ? (
+                                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                                    ) : (
+                                                                        <LinkedPostVisibilityActionIcon className="h-3.5 w-3.5" />
+                                                                    )}
+                                                                    {linkedPostVisibilityActionLabel}
+                                                                </button>
+                                                            ) : null}
+                                                        </div>
                                                     ) : null}
                                                 </div>
                                             ) : null}
 
-                                            <div className="flex items-center justify-between gap-3 border-t border-white/8 pt-3">
+                                            <div className="mt-auto flex items-center justify-between gap-3 border-t border-white/8 pt-3">
                                                 <div className="flex min-w-0 flex-wrap gap-2">
                                                     <button
                                                         type="button"
@@ -1480,14 +1696,14 @@ export default function CreationsPage() {
                 {activeView === 'creations' && failedGenerations.length > 0 && (
                     <div className="mb-10">
                         <h2 className="text-xs font-bold text-red-400/80 uppercase tracking-widest mb-4">Failed ({failedGenerations.length})</h2>
-                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                        <div className={STUDIO_GRID_CLASS}>
                             {failedGenerations.map((gen) => (
                                 <div key={gen.id}
-                                    className="bg-white/[0.02] rounded-[1.5rem] border border-red-500/20 overflow-hidden backdrop-blur-md opacity-60 break-inside-avoid mb-6">
-                                    <div className={`${getMediaKind(gen) === 'audio' ? 'p-6' : 'aspect-video'} bg-black/60 flex items-center justify-center`}>
+                                    className="flex h-full flex-col overflow-hidden rounded-[1.5rem] border border-red-500/20 bg-white/[0.02] opacity-60 backdrop-blur-md">
+                                    <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                         <span className="text-xs text-red-400/60">Generation failed</span>
                                     </div>
-                                    <div className="p-4 flex items-center justify-between">
+                                    <div className="mt-auto flex items-center justify-between p-4">
                                         <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
                                         {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
                                     </div>
@@ -1505,16 +1721,16 @@ export default function CreationsPage() {
                                 Archived raw creations stay out of the active workspace until you restore them.
                             </p>
                         </div>
-                        <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                        <div className={STUDIO_GRID_CLASS}>
                             {archivedGenerations.map((gen) => (
                                 <div
                                     key={gen.id}
-                                    className="break-inside-avoid mb-6 rounded-[1.5rem] border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-md"
+                                    className="flex h-full flex-col rounded-[1.5rem] border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-md"
                                 >
-                                    <div className="rounded-[1.25rem] border border-white/8 bg-black/60 p-4">
+                                    <div className="flex h-full flex-col rounded-[1.25rem] border border-white/8 bg-black/60 p-4">
                                         <div className="text-sm font-semibold text-white">{getPreviewTitle(gen)}</div>
                                         <p className="mt-2 text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
-                                        <div className="mt-4 flex flex-wrap gap-2">
+                                        <div className="mt-auto flex flex-wrap gap-2 pt-4">
                                             <button
                                                 type="button"
                                                 onClick={() => void handleGenerationRestore(gen.id)}
@@ -1614,13 +1830,13 @@ export default function CreationsPage() {
                                             <div className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
                                                 {post.mediaUrl ? (
                                                     post.mediaKind === 'video' ? (
-                                                        <video src={post.mediaUrl} controls playsInline className="aspect-[4/5] h-full w-full object-cover" />
+                                                        <video src={post.mediaUrl} controls playsInline preload="metadata" className="aspect-[4/5] w-full object-cover" />
                                                     ) : (
                                                         // eslint-disable-next-line @next/next/no-img-element
-                                                        <img src={post.mediaUrl} alt={post.title} className="aspect-[4/5] h-full w-full object-cover" />
+                                                        <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />
                                                     )
                                                 ) : (
-                                                    <div className="flex aspect-[4/5] h-full w-full items-center justify-center p-4 text-sm leading-6 text-zinc-400">
+                                                    <div className="flex aspect-[4/5] w-full items-center justify-center p-4 text-sm leading-6 text-zinc-400">
                                                         <span className="line-clamp-6">{post.body || 'Text post'}</span>
                                                     </div>
                                                 )}
@@ -1730,7 +1946,16 @@ export default function CreationsPage() {
                                                             <PencilLine className="h-4 w-4" />
                                                             Edit
                                                         </Link>
-                                                        {post.resourcePath ? (
+                                                        {post.generationId && !post.archivedAt ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openUnlockModalForPost(post)}
+                                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                            >
+                                                                <Wand2 className="h-4 w-4" />
+                                                                {post.bundle ? 'Manage unlock' : 'Add unlock'}
+                                                            </button>
+                                                        ) : post.resourcePath ? (
                                                             <Link
                                                                 href={buildStudioDetailPath(post.id, 'resources')}
                                                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
@@ -1805,6 +2030,7 @@ export default function CreationsPage() {
                 prompt={previewGen?.prompt ?? ''}
                 body={previewGen?.description ?? ''}
                 inputMedia={previewGen?.input_media ?? []}
+                additionalMedia={previewGen ? getAdditionalPreviewMedia(previewGen) : []}
                 metadata={previewGen ? getPreviewMetadata(previewGen) : []}
                 actions={previewGen ? renderPreviewActions(previewGen) : null}
             />
@@ -1817,6 +2043,7 @@ export default function CreationsPage() {
                 defaultTitle={publishTarget?.title ?? ''}
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}
+                initialSellAutoUnlock={initialSellAutoUnlockInPublishModal}
                 paywallPrefill={publishTarget?.paywallPrefill ?? null}
                 shareAfterPublish={shareAfterPublish ? {
                     title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',
