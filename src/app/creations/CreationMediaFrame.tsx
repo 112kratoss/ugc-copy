@@ -108,19 +108,25 @@ export default function CreationMediaFrame({
                     />
                 </div>
             ) : (
-                <video
-                    src={src}
-                    controls
-                    muted
-                    loop
-                    playsInline
-                    preload="metadata"
-                    onLoadedMetadata={() => setLoadState('loaded')}
-                    onError={() => setLoadState('error')}
-                    onMouseEnter={safelyPlayVideo}
-                    onMouseLeave={resetVideo}
-                    className="h-full w-full object-contain"
-                />
+                <button
+                    type="button"
+                    onClick={onOpen}
+                    className="block h-full w-full bg-black text-left cursor-pointer"
+                    aria-label="Open video details"
+                >
+                    <video
+                        src={src}
+                        muted
+                        loop
+                        playsInline
+                        preload="metadata"
+                        onLoadedMetadata={() => setLoadState('loaded')}
+                        onError={() => setLoadState('error')}
+                        onMouseEnter={safelyPlayVideo}
+                        onMouseLeave={resetVideo}
+                        className="h-full w-full object-contain"
+                    />
+                </button>
             )}
 
             {outputCount > 1 ? (

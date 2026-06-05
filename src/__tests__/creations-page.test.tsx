@@ -144,7 +144,7 @@ describe('CreationsPage', () => {
   it('uses the authenticated layout session for tab data instead of importing a fresh Supabase session', async () => {
     render(<CreationsPage />);
 
-    expect(await screen.findByRole('heading', { name: /my creations/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /studio/i })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/generations?includeArchived=true', {

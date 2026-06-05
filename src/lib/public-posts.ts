@@ -324,22 +324,7 @@ export async function getPublicPostDetail(
       ? {
           viewerCanAccess: resourceBundle.viewerCanAccess,
           allowRemix: resourceBundle.allowRemix,
-          items: resourceBundle.resources?.items ?? resourceBundle.lockedPreview.itemPreviews.map((item) => ({
-            type: item.type,
-            role: item.role,
-            sectionId: item.sectionId ?? null,
-            title: item.title,
-            description: null,
-            textContent: null,
-            externalUrl: null,
-            storagePath: null,
-            contentType: item.contentType ?? null,
-            sizeBytes: item.sizeBytes ?? null,
-            workflowSnapshot: null,
-            sortOrder: 0,
-            isPrimary: false,
-            remixUse: item.remixUse,
-          })),
+          items: resourceBundle.resources?.items ?? resourceBundle.lockedPreview.itemPreviews,
         }
       : null,
   });

@@ -46,6 +46,8 @@ type ResourceBundleRow = {
   workflow_share_url?: string | null;
   workflow_snapshot?: unknown;
   attachments?: unknown;
+  resource_sections?: unknown;
+  resource_items?: unknown;
   allow_remix: boolean;
   sales_count?: number;
   status: 'published' | 'draft';
@@ -393,24 +395,114 @@ describe('showcase feed', () => {
       },
       previewText: 'Unlock the exact prompt stack.',
       allowRemix: true,
-      resourceItems: [{
-        type: 'remix_access',
-        role: 'primary',
-        sectionId: null,
-        title: 'Remix access',
-        description: null,
-        textContent: null,
-        externalUrl: null,
-        storagePath: null,
-        contentType: null,
-        sizeBytes: null,
-        workflowSnapshot: null,
-        sortOrder: 0,
-        isPrimary: true,
-        remixUse: 'direct_remix',
-      }],
-      resourceSections: [],
+      resourceKinds: ['remix'],
+      itemCounts: {
+        remix_access: 1,
+      },
+      lockedPreview: expect.objectContaining({
+        resourceKinds: ['remix'],
+        itemCounts: {
+          remix_access: 1,
+        },
+        hasRemix: true,
+        itemPreviews: [
+          expect.objectContaining({
+            type: 'remix_access',
+            title: 'Remix access',
+            remixUse: 'direct_remix',
+          }),
+        ],
+      }),
     });
+  });
+
+  it('does not expose raw paid unlock resources on public feed asset summaries', async () => {
+    resourceBundlesState[0] = {
+      ...resourceBundlesState[0],
+      prompt_text: 'SECRET_FEED_PROMPT',
+      notes_markdown: 'SECRET_FEED_NOTES',
+      workflow_share_url: 'https://secret.example/workflow',
+      workflow_snapshot: { nodes: [{ id: 'secret-node' }] },
+      attachments: [
+        {
+          label: 'Secret source file',
+          kind: 'file',
+          storagePath: 'user-1/private/source.png',
+          contentType: 'image/png',
+          sizeBytes: 2048,
+        },
+      ],
+      resource_sections: [
+        {
+          id: 'setup',
+          title: 'Setup',
+          kind: 'workflow_step',
+          description: 'Safe section description.',
+        },
+      ],
+      resource_items: [
+        {
+          type: 'prompt',
+          title: 'Prompt',
+          textContent: 'SECRET_TYPED_PROMPT',
+          sectionId: 'setup',
+        },
+        {
+          type: 'workflow',
+          title: 'Workflow',
+          externalUrl: 'https://secret.example/typed-workflow',
+          workflowSnapshot: { nodes: [{ id: 'typed-secret-node' }] },
+          remixUse: 'import_source',
+        },
+        {
+          type: 'reference_image',
+          title: 'Reference image',
+          storagePath: 'user-1/private/reference.png',
+          contentType: 'image/png',
+          remixUse: 'reference_only',
+        },
+        {
+          type: 'note',
+          title: 'Notes',
+          textContent: 'SECRET_TYPED_NOTES',
+        },
+      ],
+      allow_remix: false,
+    };
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+    const asset = page.items[0].asset as unknown as Record<string, unknown>;
+    const serializedAsset = JSON.stringify(asset);
+
+    expect(asset).not.toHaveProperty('resourceItems');
+    expect(asset).not.toHaveProperty('resourceSections');
+    expect(asset.lockedPreview).toEqual(expect.objectContaining({
+      hasPrompt: true,
+      hasNotes: true,
+      hasWorkflow: true,
+      hasRemix: false,
+      resourceKinds: ['prompt', 'workflow', 'files', 'notes'],
+      itemCounts: {
+        prompt: 1,
+        workflow: 1,
+        reference_image: 1,
+        note: 1,
+      },
+    }));
+    expect(serializedAsset).not.toContain('SECRET_FEED_PROMPT');
+    expect(serializedAsset).not.toContain('SECRET_FEED_NOTES');
+    expect(serializedAsset).not.toContain('SECRET_TYPED_PROMPT');
+    expect(serializedAsset).not.toContain('SECRET_TYPED_NOTES');
+    expect(serializedAsset).not.toContain('https://secret.example');
+    expect(serializedAsset).not.toContain('user-1/private');
+    expect(serializedAsset).not.toContain('secret-node');
+    expect(serializedAsset).not.toContain('typed-secret-node');
   });
 
   it('normalizes legacy app-created source rows to magicbooklet', async () => {

@@ -319,7 +319,7 @@ export default function GenerationNotifications() {
                       href="/creations"
                       className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.08]"
                     >
-                      View My Creations
+                      View Studio
                     </Link>
                   </div>
                 </div>

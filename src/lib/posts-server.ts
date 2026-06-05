@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
+  buildPostResourceBundleLockedPreview,
   getPostResourceKinds,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
@@ -362,10 +363,12 @@ export async function getMarketplaceAssetSummaryMap(
             sections: normalizePostResourceSections((row as { resource_sections?: unknown }).resource_sections),
           };
           const resourceItems = normalizePostResourceItems((row as { resource_items?: unknown }).resource_items, legacyResources);
-          const resourceKinds = getPostResourceKinds({
+          const normalizedResources = {
             ...legacyResources,
             items: resourceItems,
-          });
+          };
+          const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources);
+          const resourceKinds = getPostResourceKinds(normalizedResources);
 
           return [
             row.post_id as string,
@@ -378,9 +381,9 @@ export async function getMarketplaceAssetSummaryMap(
               previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
               allowRemix: Boolean(row.allow_remix || resourceItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
               ...(salesCount > 0 ? { salesCount } : {}),
-              ...(resourceKinds.some((kind) => kind !== 'remix') ? { resourceKinds } : {}),
-              resourceSections: legacyResources.sections,
-              resourceItems,
+              resourceKinds,
+              itemCounts: lockedPreview.itemCounts,
+              lockedPreview,
             } satisfies ShowcaseAssetSummary,
           ] as const;
         })

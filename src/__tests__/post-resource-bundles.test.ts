@@ -145,7 +145,7 @@ describe('post resource bundle validation', () => {
     expect(items[0]?.sectionId).toBe('hook');
     expect(items[1]?.sectionId).toBeNull();
     expect(preview.sectionCount).toBe(2);
-    expect(preview.sectionPreviews.map((section) => section.title)).toEqual(['Hook', 'Section 2']);
+    expect(preview.sectionPreviews?.map((section) => section.title)).toEqual(['Hook', 'Section 2']);
     expect(formatPostResourceBundleCountSummary(preview)).toBe('2 sections, 1 prompt, 1 reference image');
   });
 

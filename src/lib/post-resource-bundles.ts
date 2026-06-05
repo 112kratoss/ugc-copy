@@ -85,7 +85,7 @@ interface PostResourceSectionPreview {
   description: string | null;
 }
 
-interface PostResourceItemPreview {
+export interface PostResourceItemPreview {
   type: PostResourceItemType;
   title: string;
   role: PostResourceItemRole;
@@ -158,6 +158,8 @@ export interface MarketplacePriceQuote {
   note: string | null;
 }
 
+export type PostResourceRemixDescriptor = Pick<PostResourceItem, 'type' | 'remixUse'>;
+
 export interface PostRemixResolutionInput {
   generationId: string | null | undefined;
   postFormat: string | null | undefined;
@@ -166,7 +168,7 @@ export interface PostRemixResolutionInput {
   resourceBundle?: {
     viewerCanAccess?: boolean | null;
     allowRemix?: boolean | null;
-    items?: PostResourceItem[] | null;
+    items?: PostResourceRemixDescriptor[] | null;
   } | null;
 }
 
@@ -979,7 +981,32 @@ function targetForMediaCategory(category: string | null | undefined): Exclude<Po
   return 'image';
 }
 
-function resolveResourceItemRemixTarget(items: PostResourceItem[]): PostRemixTarget {
+function normalizePostResourceRemixDescriptors(value: unknown): PostResourceRemixDescriptor[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): PostResourceRemixDescriptor | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const type = normalizeTextValue(item.type);
+      if (!isPostResourceItemType(type)) {
+        return null;
+      }
+
+      const remixUse = normalizeTextValue(item.remixUse);
+      return {
+        type,
+        remixUse: isPostResourceRemixUse(remixUse) ? remixUse : defaultRemixUseForResourceItemType(type),
+      };
+    })
+    .filter((item): item is PostResourceRemixDescriptor => item !== null);
+}
+
+function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor[]): PostRemixTarget {
   if (items.some((item) => item.remixUse === 'text_template')) {
     return 'text_template';
   }
@@ -1004,9 +1031,9 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   target: PostRemixTarget;
 } {
   const resourceBundle = input.resourceBundle ?? null;
-  const items = normalizePostResourceItems(resourceBundle?.items ?? []);
+  const items = normalizePostResourceRemixDescriptors(resourceBundle?.items ?? []);
   const bundleRequiresUnlock = Boolean(resourceBundle && !resourceBundle.viewerCanAccess);
-  const resourceTarget = resolveResourceItemRemixTarget(items);
+  const resourceTarget = resolveResourceRemixDescriptorTarget(items);
   const isTextPost = input.postFormat === 'text' || input.category === 'text';
   const hasGeneration = typeof input.generationId === 'string' && input.generationId.length > 0;
 

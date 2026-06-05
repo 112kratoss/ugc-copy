@@ -59,7 +59,7 @@ export function getBackgroundProcessingCopy(kind: Exclude<GenerationKind, 'audio
   return {
     title: `${label.charAt(0).toUpperCase()}${label.slice(1)} still processing`,
     description:
-      'This run is taking longer than usual, but it is still active in the background. You can keep working and check My Creations any time.',
+      'This run is taking longer than usual, but it is still active in the background. You can keep working and check Studio any time.',
     status:
       kind === 'image'
         ? 'Still processing in background'
@@ -78,12 +78,12 @@ export function getGenerationNotificationCopy(
     const completionSuffix = completedInMs ? ` in ${formatDurationShort(completedInMs)}` : '';
     return {
       title: `${label.charAt(0).toUpperCase()}${label.slice(1)} ready`,
-      description: `Your latest ${label} finished${completionSuffix} and is ready in My Creations.`,
+      description: `Your latest ${label} finished${completionSuffix} and is ready in Studio.`,
     };
   }
 
   return {
     title: `${label.charAt(0).toUpperCase()}${label.slice(1)} failed`,
-    description: `Your latest ${label} did not finish successfully. Open My Creations to review it or try another run.`,
+    description: `Your latest ${label} did not finish successfully. Open Studio to review it or try another run.`,
   };
 }

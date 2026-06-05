@@ -166,7 +166,7 @@ describe('ShowcaseClient save actions', () => {
             {
               isIntersecting,
               target: document.createElement('div'),
-            } as IntersectionObserverEntry,
+            } as unknown as IntersectionObserverEntry,
           ], observer);
         },
       });
@@ -256,6 +256,50 @@ describe('ShowcaseClient save actions', () => {
     }));
   });
 
+  it('labels paid unlock links with the price instead of a generic view action', () => {
+    renderShowcase(createShowcaseItem({
+      asset: {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Prompt pack',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        priceQuote: {
+          currency: 'USD',
+          amountSubunits: 900,
+          formatted: '$9.00',
+          note: null,
+        },
+        previewText: 'Unlock the exact reusable prompt.',
+        allowRemix: false,
+        resourceKinds: ['prompt', 'notes'],
+        itemCounts: { prompt: 1, note: 1 },
+        lockedPreview: {
+          resourceKinds: ['prompt', 'notes'],
+          attachmentPreviews: [],
+          itemCounts: { prompt: 1, note: 1 },
+          itemPreviews: [
+            {
+              type: 'prompt',
+              title: 'Prompt',
+              role: 'primary',
+              sectionId: null,
+              remixUse: 'none',
+            },
+          ],
+          hasPrompt: true,
+          hasNotes: true,
+          hasWorkflow: false,
+          hasRemix: false,
+          updatedAt: '2026-04-02T10:00:00.000Z',
+        },
+      },
+    }));
+
+    const unlockLink = screen.getByRole('link', { name: /unlock for \$9\.00/i });
+    expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#resources'));
+  });
+
   it('disables prefetching for community card detail and creator links', () => {
     renderShowcase(createShowcaseItem({
       asset: {
@@ -271,11 +315,11 @@ describe('ShowcaseClient save actions', () => {
     }));
 
     expect(screen.getByRole('link', { name: /creator name/i })).toHaveAttribute('data-prefetch', 'false');
-    expect(screen.getByRole('link', { name: /view unlock/i })).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /unlock for \$9\.00/i })).toHaveAttribute('data-prefetch', 'false');
 
     fireEvent.click(screen.getByAltText('Campaign Frame'));
 
-    expect(screen.getAllByRole('link', { name: /view unlock/i }).at(-1)).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getAllByRole('link', { name: /unlock for \$9\.00/i }).at(-1)).toHaveAttribute('data-prefetch', 'false');
     expect(screen.getByRole('link', { name: /open full page/i })).toHaveAttribute('data-prefetch', 'false');
   });
 

@@ -339,7 +339,7 @@ describe('Showcase detail page', () => {
 
     const unlockSummary = screen.getByTestId('unlock-summary-link');
     expect(within(unlockSummary).getByText(/free unlock available/i)).toBeInTheDocument();
-    expect(within(unlockSummary).getByText(/view unlock details/i)).toBeInTheDocument();
-    expect(within(unlockSummary).queryByText(/open free unlock/i)).not.toBeInTheDocument();
+    expect(within(unlockSummary).getByText(/open free unlock/i)).toBeInTheDocument();
+    expect(within(unlockSummary).queryByText(/view unlock details/i)).not.toBeInTheDocument();
   });
 });

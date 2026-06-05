@@ -21,6 +21,7 @@ import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
+  sanitizeShowcaseFeedPage,
   type RawShowcaseSourceKind,
   type ShowcaseCategory,
   type ShowcaseFeedItem,
@@ -316,7 +317,7 @@ async function resolvePostRowsToFeedItems(
           ? {
               viewerCanAccess: false,
               allowRemix: asset.allowRemix,
-              items: asset.resourceItems ?? [],
+              items: asset.lockedPreview?.itemPreviews ?? [],
             }
           : null,
       });
@@ -669,8 +670,9 @@ export async function getShowcaseFeedPage(options: {
   const resourceFilter = options.resource ?? 'all';
   const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
   const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
+  const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
 
-  return attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
+  return sanitizeShowcaseFeedPage(hydratedFeed);
 }
 
 async function attachViewerStateToFeed(
@@ -758,7 +760,7 @@ async function attachViewerStateToFeed(
           ? {
               viewerCanAccess: viewerCanAccessBundle,
               allowRemix: item.asset.allowRemix,
-              items: item.asset.resourceItems ?? [],
+              items: item.asset.lockedPreview?.itemPreviews ?? [],
             }
           : null,
       });
@@ -841,8 +843,9 @@ export async function getShowcaseFeedItemById(options: {
     },
   }, countryCode);
   const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
+  const sanitizedFeed = sanitizeShowcaseFeedPage(hydratedFeed);
 
-  return hydratedFeed.items[0] ?? null;
+  return sanitizedFeed.items[0] ?? null;
 }
 
 async function attachLocalizedAssetPrices(

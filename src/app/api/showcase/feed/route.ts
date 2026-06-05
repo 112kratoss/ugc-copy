@@ -9,6 +9,7 @@ import {
     normalizeShowcaseSort,
     normalizeShowcaseUnlockFilter,
     parsePositiveInt,
+    sanitizeShowcaseFeedPage,
 } from '@/lib/showcase';
 
 export async function GET(request: NextRequest) {
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
             ? 'private, no-store'
             : 'public, s-maxage=60, stale-while-revalidate=300';
 
-        return NextResponse.json(feed, {
+        return NextResponse.json(sanitizeShowcaseFeedPage(feed), {
             headers: {
                 'Cache-Control': cacheControl,
             },

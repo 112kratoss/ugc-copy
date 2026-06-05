@@ -378,7 +378,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                     ))}
                   </div>
                   <div className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950">
-                    View unlock details
+                    {bundle.accessMode === 'free' ? 'Open free unlock' : `Unlock for ${bundle.priceQuote.formatted}`}
                     <ShoppingBag className="h-4 w-4" />
                   </div>
                 </Link>

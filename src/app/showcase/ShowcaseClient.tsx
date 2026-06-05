@@ -141,6 +141,14 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
     return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
 }
 
+function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+    if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
+        return 'Open free unlock';
+    }
+
+    return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, '')}`;
+}
+
 function setNonDefaultParam(params: URLSearchParams, key: string, value: string, defaultValue: string) {
     if (value !== defaultValue) {
         params.set(key, value);
@@ -723,7 +731,8 @@ export default function ShowcaseClient({
                                                             href={buildCommunityDetailPath(item.id, 'resources')}
                                                             prefetch={false}
                                                             className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/90 text-white hover:bg-emerald-500 transition-all shadow-md"
-                                                            title="View unlock"
+                                                            aria-label={`${getAssetPurchaseCtaLabel(item.asset)} for ${item.title}`}
+                                                            title={getAssetPurchaseCtaLabel(item.asset)}
                                                         >
                                                             <ShoppingBag className="h-4.5 w-4.5" />
                                                         </Link>

@@ -122,12 +122,6 @@ export default function AppShellClient({ children }: { children: React.ReactNode
   return (
     <div className="app-shell-root">
       <aside className="app-shell-sidebar">
-        <div className="flex items-center gap-2 px-3 py-2">
-          <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-          <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-          <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-        </div>
-
         <Link href="/" className="mt-6 flex items-center gap-3 px-3 text-white">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-violet-500 text-sm font-bold shadow-lg shadow-blue-500/20">
             M

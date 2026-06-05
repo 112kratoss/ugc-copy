@@ -1111,7 +1111,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     href="/creations"
                                     className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
                                 >
-                                    View My Creations
+                                    View Studio
                                     <Download className="h-4 w-4" />
                                 </Link>
                             }
@@ -1125,7 +1125,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     href="/creations"
                                     className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
                                 >
-                                    My Creations
+                                    Studio
                                     <Download className="h-4 w-4" />
                                 </Link>
                             }

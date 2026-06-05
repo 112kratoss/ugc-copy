@@ -2,9 +2,9 @@ import type {
     MarketplacePriceQuote,
     PostRemixCapability,
     PostRemixTarget,
-    PostResourceItem,
     PostResourceItemCounts,
-    PostResourceSection,
+    PostResourceBundleLockedPreview,
+    PostResourceKind,
 } from '@/lib/post-resource-bundles';
 
 export const SHOWCASE_PAGE_SIZE = 12;
@@ -45,9 +45,8 @@ export interface ShowcaseAssetSummary {
     previewText: string;
     allowRemix: boolean;
     salesCount?: number;
-    resourceKinds?: string[];
-    resourceSections?: PostResourceSection[];
-    resourceItems?: PostResourceItem[];
+    resourceKinds?: PostResourceKind[];
+    lockedPreview?: PostResourceBundleLockedPreview;
     itemCounts?: PostResourceItemCounts;
 }
 
@@ -87,6 +86,56 @@ export interface ShowcaseFeedPage {
     items: ShowcaseFeedItem[];
     pageInfo: ShowcaseFeedPageInfo;
     availableTools?: Array<{ slug: string; label: string; count: number }>;
+}
+
+export function sanitizeShowcaseAssetSummary(
+    asset: ShowcaseAssetSummary | null | undefined
+): ShowcaseAssetSummary | null {
+    if (!asset) {
+        return null;
+    }
+
+    const sanitized: ShowcaseAssetSummary = {
+        id: asset.id,
+        postId: asset.postId,
+        title: asset.title,
+        accessMode: asset.accessMode,
+        priceUsdCents: asset.priceUsdCents,
+        previewText: asset.previewText,
+        allowRemix: asset.allowRemix,
+    };
+
+    if (asset.priceQuote) {
+        sanitized.priceQuote = asset.priceQuote;
+    }
+
+    if (typeof asset.salesCount === 'number') {
+        sanitized.salesCount = asset.salesCount;
+    }
+
+    if (asset.resourceKinds) {
+        sanitized.resourceKinds = asset.resourceKinds;
+    }
+
+    if (asset.lockedPreview) {
+        sanitized.lockedPreview = asset.lockedPreview;
+    }
+
+    if (asset.itemCounts) {
+        sanitized.itemCounts = asset.itemCounts;
+    }
+
+    return sanitized;
+}
+
+export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPage {
+    return {
+        ...feed,
+        items: feed.items.map((item) => ({
+            ...item,
+            asset: sanitizeShowcaseAssetSummary(item.asset),
+        })),
+    };
 }
 
 export function normalizeShowcaseCategory(value: string | null | undefined): ShowcaseCategory {

@@ -509,7 +509,7 @@ export const getCreatorProfilePageData = cache(async (
           ? {
               viewerCanAccess: false,
               allowRemix: asset.allowRemix,
-              items: asset.resourceItems ?? [],
+              items: asset.lockedPreview?.itemPreviews ?? [],
             }
           : null,
       });

@@ -544,9 +544,9 @@ export default function PostResourceBundlePanel({
             >
               <span className="inline-flex items-center gap-2">
                 {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-                Pay with Razorpay
+                Pay {priceLabel} with Razorpay
               </span>
-              <span className="text-xs font-medium text-slate-800">Razorpay: {priceLabel}</span>
+              <span className="text-xs font-medium text-slate-800">Secure checkout</span>
             </button>
 
             <button
@@ -557,7 +557,7 @@ export default function PostResourceBundlePanel({
             >
               <span className="inline-flex items-center gap-2">
                 {workingAction === 'credits' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Unlock with credits
+                Use {formattedCreditCost} credits
               </span>
               <span className="text-xs font-medium text-zinc-300">Credit cost: {formattedCreditCost} credits</span>
             </button>

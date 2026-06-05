@@ -99,7 +99,7 @@ describe('posts-server marketplace summaries', () => {
       previewText: 'Reusable launch workflow',
       allowRemix: true,
     }));
-    expect(assetMap.get('post-1')?.resourceItems).toEqual([
+    expect(assetMap.get('post-1')?.lockedPreview?.itemPreviews).toEqual([
       expect.objectContaining({
         type: 'remix_access',
         title: 'Remix access',

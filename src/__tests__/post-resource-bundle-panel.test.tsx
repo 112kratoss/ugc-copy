@@ -239,9 +239,8 @@ describe('PostResourceBundlePanel', () => {
       priceNote: 'Charged in INR for buyers in India.',
     });
 
-    expect(screen.getByRole('button', { name: /pay with razorpay/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /unlock with credits/i })).toBeInTheDocument();
-    expect(screen.getByText(/razorpay: ₹189/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /pay ₹189 with razorpay/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeInTheDocument();
     expect(screen.getByText(/credit cost: 900 credits/i)).toBeInTheDocument();
     expect(screen.getByText(/digital unlocks are final sale/i)).toBeInTheDocument();
     expect(screen.getByText(/do not resell, redistribute, or claim the raw bundle as your own/i)).toBeInTheDocument();
@@ -332,7 +331,7 @@ describe('PostResourceBundlePanel', () => {
       priceUsdCents: 900,
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /unlock with credits/i }));
+    fireEvent.click(screen.getByRole('button', { name: /use 900 credits/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.objectContaining({
@@ -357,7 +356,7 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText(/120 credits available/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /unlock with credits/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
     expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
   });
 
@@ -393,7 +392,7 @@ describe('PostResourceBundlePanel', () => {
       priceUsdCents: 900,
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /pay with razorpay/i }));
+    fireEvent.click(screen.getByRole('button', { name: /pay ₹189 with razorpay/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/order', expect.objectContaining({

@@ -691,7 +691,7 @@ export function StudioBackgroundProcessingNotice({
           This run is taking longer than usual, but it is still active in the background. We&apos;ll keep
           tracking it in{' '}
           <Link href="/creations" className={clsx('underline underline-offset-4 transition hover:text-white', theme.accentText)}>
-            My Creations
+            Studio
           </Link>
           .
         </p>

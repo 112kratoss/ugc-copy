@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 const getShowcaseFeedPageMock = vi.fn(async (_options?: unknown) => {
   void _options;
   return {
-    items: [],
+    items: [] as unknown[],
     pageInfo: {
       hasMore: false,
       nextOffset: null,
@@ -118,5 +118,100 @@ describe('/api/showcase/feed route', () => {
       resource: 'all',
       countryCode: null,
     });
+  });
+
+  it('strips raw unlock resource payloads from anonymous feed responses', async () => {
+    getShowcaseFeedPageMock.mockResolvedValue({
+      items: [
+        {
+          id: 'post-1',
+          mediaUrl: 'https://example.com/image.jpg',
+          mediaKind: 'image',
+          model: 'nano-banana-2',
+          title: 'Paid post',
+          prompt: 'Public post prompt',
+          body: 'Public post body',
+          category: 'image',
+          postFormat: 'media',
+          saveCount: 0,
+          remixCount: 0,
+          createdAt: '2026-04-02T10:00:00.000Z',
+          creator: {
+            id: 'creator-1',
+            username: 'creator',
+            name: 'Creator',
+            avatar: null,
+          },
+          sourceKind: 'magicbooklet',
+          sourceTool: null,
+          generationId: 'gen-1',
+          canRemix: false,
+          asset: {
+            id: 'bundle-1',
+            postId: 'post-1',
+            title: 'Prompt pack',
+            accessMode: 'paid',
+            priceUsdCents: 900,
+            previewText: 'Safe preview text.',
+            allowRemix: false,
+            resourceKinds: ['prompt', 'notes'],
+            lockedPreview: {
+              resourceKinds: ['prompt', 'notes'],
+              attachmentPreviews: [],
+              itemCounts: { prompt: 1, note: 1 },
+              itemPreviews: [
+                {
+                  type: 'prompt',
+                  title: 'Prompt',
+                  role: 'primary',
+                  sectionId: null,
+                  remixUse: 'none',
+                },
+              ],
+              hasPrompt: true,
+              hasNotes: true,
+              hasWorkflow: false,
+              hasRemix: false,
+              updatedAt: '2026-04-02T10:00:00.000Z',
+            },
+            resourceItems: [
+              {
+                type: 'prompt',
+                title: 'Prompt',
+                textContent: 'SECRET_ROUTE_PROMPT',
+                externalUrl: 'https://secret.example/prompt',
+                storagePath: 'creator/private/prompt.txt',
+                workflowSnapshot: { nodes: [{ id: 'secret-route-node' }] },
+              },
+            ],
+            resourceSections: [
+              {
+                id: 'secret-section',
+                title: 'Secret section',
+              },
+            ],
+          },
+        },
+      ],
+      pageInfo: {
+        hasMore: false,
+        nextOffset: null,
+        limit: 12,
+        offset: 0,
+      },
+    });
+
+    const { GET } = await import('@/app/api/showcase/feed/route');
+    const response = await GET(new NextRequest('http://localhost/api/showcase/feed'));
+    const responseBody = await response.text();
+    const data = JSON.parse(responseBody);
+
+    expect(response.status).toBe(200);
+    expect(data.items[0].asset).not.toHaveProperty('resourceItems');
+    expect(data.items[0].asset).not.toHaveProperty('resourceSections');
+    expect(responseBody).not.toContain('SECRET_ROUTE_PROMPT');
+    expect(responseBody).not.toContain('https://secret.example');
+    expect(responseBody).not.toContain('creator/private');
+    expect(responseBody).not.toContain('workflowSnapshot');
   });
 });

@@ -346,6 +346,9 @@ function MarketplaceCard({
     accessMode: asset.accessMode,
     priceQuote: asset.priceQuote,
   });
+  const unlockCtaLabel = asset.accessMode === 'free'
+    ? 'Open free unlock'
+    : `Unlock for ${asset.priceQuote.formatted}`;
   const updatedLabel = formatMarketplaceDate(asset.updatedAt);
   const detailHref = buildShowcaseDetailPath(asset.postId, {
     from: 'unlocks',
@@ -356,6 +359,7 @@ function MarketplaceCard({
   return (
     <Link
       href={detailHref}
+      aria-label={`${unlockCtaLabel}: ${asset.title}`}
       className="group mb-6 block break-inside-avoid overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14 hover:shadow-[0_28px_90px_rgba(0,0,0,0.45)]"
     >
       <div className="relative overflow-hidden border-b border-white/8 bg-black/60">
@@ -435,7 +439,7 @@ function MarketplaceCard({
         <div className="mt-5 grid grid-cols-3 gap-2 text-xs text-zinc-500">
           <span>{formatUnlockCountLabel(asset.accessMode, asset.salesCount)}</span>
           <span className="text-center">Updated {updatedLabel}</span>
-          <span className="text-right font-semibold text-zinc-200">View unlock</span>
+          <span className="text-right font-semibold text-zinc-200">{unlockCtaLabel}</span>
         </div>
       </div>
     </Link>

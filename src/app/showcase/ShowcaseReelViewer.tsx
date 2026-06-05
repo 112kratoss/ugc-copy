@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import Script from 'next/script';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent, type WheelEvent } from 'react';
 import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion';
 import {
@@ -21,14 +23,28 @@ import {
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
+import { useAuth } from '@/app/components/AuthProvider';
 import {
   getBundleAccessLabel,
   getPostResourceKindLabel,
   isPostResourceKind,
+  type PostResourceAttachment,
+  type PostResourceItem,
   type PostResourceKind,
+  type PostResourceSection,
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import { getCurrentInternalPath } from '@/lib/share';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: Record<string, unknown>) => {
+      open: () => void;
+      on: (event: string, handler: (payload: unknown) => void) => void;
+    };
+  }
+}
 
 interface ShowcaseReelViewerProps {
   isOpen: boolean;
@@ -48,6 +64,23 @@ interface ShowcaseReelViewerProps {
 }
 
 type ReelTransitionDirection = 'next' | 'previous' | 'neutral';
+type ReelUnlockAction = 'free' | 'cash' | 'tokens' | null;
+
+interface ReelBundleResources {
+  promptText: string | null;
+  notesMarkdown: string | null;
+  workflowShareUrl: string | null;
+  attachments: PostResourceAttachment[];
+  allowRemix: boolean;
+  sections?: PostResourceSection[];
+  items?: PostResourceItem[];
+}
+
+interface ReelBundleRefreshPayload {
+  viewerCanAccess: boolean;
+  viewerIsOwner: boolean;
+  resources: ReelBundleResources | null;
+}
 
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
   return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
@@ -69,6 +102,14 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
   }
 
   return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+}
+
+function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
+    return 'Open free unlock';
+  }
+
+  return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, '')}`;
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
@@ -118,6 +159,8 @@ export default function ShowcaseReelViewer({
   onRemix,
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
+  const router = useRouter();
+  const { session, credits, updateCredits } = useAuth();
   const touchStartYRef = useRef<number | null>(null);
   const wheelCooldownRef = useRef(0);
   const detailsScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -125,6 +168,12 @@ export default function ShowcaseReelViewer({
   const prefersReducedMotion = useReducedMotion();
   const [transitionDirection, setTransitionDirection] = useState<ReelTransitionDirection>('neutral');
   const [loadedMediaKeys, setLoadedMediaKeys] = useState<Set<string>>(new Set());
+  const [activeUnlockCheckoutItemId, setActiveUnlockCheckoutItemId] = useState<string | null>(null);
+  const [unlockWorkingAction, setUnlockWorkingAction] = useState<ReelUnlockAction>(null);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
+  const [unlockedResources, setUnlockedResources] = useState<ReelBundleResources | null>(null);
+  const [showUnlockedDetails, setShowUnlockedDetails] = useState(false);
   const selectedIndex = useMemo(
     () => selectedItemId ? items.findIndex((item) => item.id === selectedItemId) : -1,
     [items, selectedItemId]
@@ -134,6 +183,10 @@ export default function ShowcaseReelViewer({
   const nextItem = selectedIndex >= 0 && selectedIndex < items.length - 1 ? items[selectedIndex + 1] : null;
 
   const moveToItem = useCallback((targetItem: ShowcaseFeedItem, direction: ReelTransitionDirection) => {
+    setActiveUnlockCheckoutItemId(null);
+    setUnlockWorkingAction(null);
+    setUnlockError(null);
+    setShowUnlockedDetails(false);
     setTransitionDirection(direction);
     onSelectItemId(targetItem.id);
   }, [onSelectItemId]);
@@ -169,9 +222,29 @@ export default function ShowcaseReelViewer({
   }, [hasMoreItems, moveToItem, nextItem, requestMoreItems]);
 
   const handleClose = useCallback(() => {
+    setActiveUnlockCheckoutItemId(null);
+    setUnlockWorkingAction(null);
+    setUnlockError(null);
+    setShowUnlockedDetails(false);
     setTransitionDirection('neutral');
     onClose();
   }, [onClose]);
+
+  const openUnlockCheckout = () => {
+    if (!item?.asset) {
+      return;
+    }
+
+    setActiveUnlockCheckoutItemId(item.id);
+    setUnlockError(null);
+    setShowUnlockedDetails(false);
+    window.requestAnimationFrame(() => {
+      detailsScrollerRef.current?.scrollTo({
+        top: 0,
+        behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      });
+    });
+  };
 
   const markMediaReady = useCallback((mediaKey: string) => {
     setLoadedMediaKeys((currentKeys) => {
@@ -302,6 +375,23 @@ export default function ShowcaseReelViewer({
   const summary = getItemSummary(item);
   const dateLabel = formatDate(item.createdAt);
   const mediaTypeLabel = getMediaTypeLabel(item);
+  const unlockCtaLabel = item.asset ? getAssetPurchaseCtaLabel(item.asset) : null;
+  const isUnlockCheckoutOpen = Boolean(item.asset && activeUnlockCheckoutItemId === item.id);
+  const hasReelUnlockAccess = unlockSuccessItemId === item.id;
+  const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
+  const priceLabel = item.asset
+    ? item.asset.priceQuote?.formatted ?? getAssetAccessLabel(item.asset).replace(/\s+unlock$/i, '')
+    : '';
+  const tokenCost = item.asset ? Math.max(0, item.asset.priceUsdCents) : 0;
+  const hasKnownInsufficientTokens = Boolean(session?.access_token && typeof credits === 'number' && credits < tokenCost);
+  const includedKindLabels = resourceKinds.map(getPostResourceKindLabel);
+  const unlockedDetailLines = [
+    (unlockedResources?.promptText || resourceKinds.includes('prompt')) ? 'Prompt is ready.' : null,
+    (unlockedResources?.notesMarkdown || resourceKinds.includes('notes')) ? 'Notes are ready.' : null,
+    (unlockedResources?.workflowShareUrl || resourceKinds.includes('workflow')) ? 'Workflow is ready.' : null,
+    (unlockedResources?.allowRemix || resourceKinds.includes('remix')) ? 'Remix is ready.' : null,
+    ((unlockedResources?.attachments.length ?? 0) > 0 || resourceKinds.includes('files')) ? 'Files are ready.' : null,
+  ].filter((line): line is string => Boolean(line));
   const shouldWaitForMedia = item.postFormat !== 'text' && Boolean(item.mediaUrl);
   const currentMediaKey = shouldWaitForMedia ? `${item.id}:${item.mediaUrl}` : null;
   const isMediaReady = !currentMediaKey || loadedMediaKeys.has(currentMediaKey);
@@ -312,6 +402,191 @@ export default function ShowcaseReelViewer({
   const detailsTransition = prefersReducedMotion
     ? { duration: 0.16, ease: 'easeOut' as const }
     : { duration: 0.3, ease: [0.22, 1, 0.36, 1] as const, delay: 0.04 };
+
+  const ensureAuthenticated = () => {
+    if (session?.access_token) {
+      return true;
+    }
+
+    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(buildDetailPath(item.id)))}`);
+    return false;
+  };
+
+  const fetchLatestBundle = async () => {
+    const response = await fetch(`/api/posts/${item.id}/resource-bundle`, {
+      headers: session?.access_token
+        ? {
+            Authorization: `Bearer ${session.access_token}`,
+          }
+        : undefined,
+    });
+    const data = await response.json();
+
+    if (!response.ok || !data?.bundle) {
+      throw new Error(data.error || 'Failed to refresh the unlock.');
+    }
+
+    return data.bundle as ReelBundleRefreshPayload;
+  };
+
+  const finishReelUnlock = async () => {
+    const bundle = await fetchLatestBundle();
+    setUnlockSuccessItemId(item.id);
+    setUnlockedResources(bundle.resources);
+    setShowUnlockedDetails(false);
+    setUnlockError(null);
+  };
+
+  const openFreeUnlock = async () => {
+    if (!ensureAuthenticated()) {
+      return;
+    }
+
+    try {
+      setUnlockWorkingAction('free');
+      setUnlockError(null);
+      const response = await fetch(`/api/posts/${item.id}/resource-bundle/unlock-free`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to open the free unlock.');
+      }
+
+      await finishReelUnlock();
+    } catch (unlockError) {
+      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
+    } finally {
+      setUnlockWorkingAction(null);
+    }
+  };
+
+  const startCashCheckout = async () => {
+    if (!item.asset || !ensureAuthenticated()) {
+      return;
+    }
+
+    try {
+      setUnlockWorkingAction('cash');
+      setUnlockError(null);
+      const orderResponse = await fetch(`/api/posts/${item.id}/resource-bundle/order`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          locale: typeof navigator !== 'undefined' ? navigator.language : null,
+        }),
+      });
+      const orderData = await orderResponse.json();
+
+      if (!orderResponse.ok) {
+        throw new Error(orderData.error || 'Failed to start checkout.');
+      }
+
+      if (orderData.alreadyPurchased) {
+        await finishReelUnlock();
+        return;
+      }
+
+      if (!window.Razorpay) {
+        throw new Error('Razorpay checkout is still loading. Please try again.');
+      }
+
+      const razorpay = new window.Razorpay({
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: 'magicbooklet unlock',
+        description: orderData.bundleTitle || item.asset.title,
+        order_id: orderData.orderId,
+        handler: async (response: {
+          razorpay_payment_id: string;
+          razorpay_order_id: string;
+          razorpay_signature: string;
+        }) => {
+          try {
+            setUnlockWorkingAction('cash');
+            const verifyResponse = await fetch(`/api/posts/${item.id}/resource-bundle/verify`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${session?.access_token}`,
+              },
+              body: JSON.stringify(response),
+            });
+            const verifyData = await verifyResponse.json();
+
+            if (!verifyResponse.ok || !verifyData.success) {
+              throw new Error(verifyData.error || 'Payment verification failed.');
+            }
+
+            await finishReelUnlock();
+          } catch (verifyError) {
+            setUnlockError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
+          } finally {
+            setUnlockWorkingAction(null);
+          }
+        },
+        theme: {
+          color: '#34d399',
+        },
+      });
+
+      razorpay.on('payment.failed', (payload: unknown) => {
+        const errorPayload = payload as { error?: { description?: string } } | null;
+        setUnlockError(errorPayload?.error?.description || 'Payment failed. Please try again.');
+      });
+
+      razorpay.open();
+    } catch (checkoutError) {
+      setUnlockError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
+    } finally {
+      setUnlockWorkingAction(null);
+    }
+  };
+
+  const unlockWithTokens = async () => {
+    if (!ensureAuthenticated()) {
+      return;
+    }
+
+    if (hasKnownInsufficientTokens) {
+      setUnlockError(`This unlock needs ${tokenCost.toLocaleString()} tokens.`);
+      return;
+    }
+
+    try {
+      setUnlockWorkingAction('tokens');
+      setUnlockError(null);
+      const response = await fetch(`/api/posts/${item.id}/resource-bundle/unlock-with-credits`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data.error || 'Failed to unlock with tokens.');
+      }
+
+      if (typeof data.credits === 'number') {
+        updateCredits(data.credits);
+      }
+
+      await finishReelUnlock();
+    } catch (unlockError) {
+      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with tokens.');
+    } finally {
+      setUnlockWorkingAction(null);
+    }
+  };
 
   const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     touchStartYRef.current = event.touches[0]?.clientY ?? null;
@@ -371,6 +646,100 @@ export default function ShowcaseReelViewer({
       wheelCooldownRef.current = now;
       goPrevious();
     }
+  };
+
+  const renderCompactUnlockCard = () => {
+    if (!item.asset) {
+      return null;
+    }
+
+    return (
+      <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Unlock</div>
+            <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
+          </div>
+          <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
+            {isFreeUnlock ? 'Free' : priceLabel}
+          </span>
+        </div>
+
+        {includedKindLabels.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {includedKindLabels.map((label) => (
+              <span
+                key={`${item.id}:${label}`}
+                className="rounded-full border border-emerald-300/20 bg-black/25 px-2.5 py-1 text-xs font-medium text-emerald-50"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {hasReelUnlockAccess ? (
+          <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-black/25 p-4">
+            <div className="text-sm font-semibold text-emerald-100">Unlocked</div>
+            <p className="mt-1 text-sm leading-6 text-emerald-50/75">
+              Your unlock is ready here.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowUnlockedDetails((currentValue) => !currentValue)}
+              className="mt-3 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+              aria-expanded={showUnlockedDetails}
+            >
+              View unlocked details
+            </button>
+            {showUnlockedDetails ? (
+              <div className="mt-3 space-y-2 rounded-2xl border border-white/8 bg-black/30 p-3 text-sm text-zinc-200">
+                {(unlockedDetailLines.length > 0 ? unlockedDetailLines : ['Unlocked details are ready.']).map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : isFreeUnlock ? (
+          <button
+            type="button"
+            onClick={() => void openFreeUnlock()}
+            disabled={unlockWorkingAction !== null}
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {unlockWorkingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
+            Open free unlock
+          </button>
+        ) : (
+          <div className="mt-4 grid gap-2">
+            <button
+              type="button"
+              onClick={() => void startCashCheckout()}
+              disabled={unlockWorkingAction !== null}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {unlockWorkingAction === 'cash' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
+              Pay with cash
+            </button>
+            <button
+              type="button"
+              onClick={() => void unlockWithTokens()}
+              disabled={unlockWorkingAction !== null}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              {unlockWorkingAction === 'tokens' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Pay with tokens
+            </button>
+          </div>
+        )}
+
+        {unlockError ? (
+          <div className="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+            {unlockError}
+          </div>
+        ) : null}
+      </div>
+    );
   };
 
   const renderMedia = () => {
@@ -445,6 +814,10 @@ export default function ShowcaseReelViewer({
       onTouchEnd={handleTouchEnd}
       onWheel={handleWheel}
     >
+      {item.asset && isUnlockCheckoutOpen && !isFreeUnlock ? (
+        <Script id="showcase-reel-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
+      ) : null}
+
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute left-[14%] top-[-18%] h-[30rem] w-[30rem] rounded-full bg-purple-600/10 blur-[130px]" />
         <div className="absolute bottom-[-18%] right-[10%] h-[30rem] w-[30rem] rounded-full bg-emerald-500/10 blur-[130px]" />
@@ -591,14 +964,15 @@ export default function ShowcaseReelViewer({
           />
 
           {item.asset ? (
-            <Link
-              href={buildDetailPath(item.id, 'resources')}
-              prefetch={false}
+            <button
+              type="button"
+              onClick={openUnlockCheckout}
+              aria-label={unlockCtaLabel ?? 'Open unlock'}
               className="inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 lg:h-[70px] lg:w-[70px] lg:flex-none"
             >
               <ShoppingBag className="h-5 w-5" />
-              <span>Unlock</span>
-            </Link>
+              <span>{unlockCtaLabel}</span>
+            </button>
           ) : null}
 
           {item.canRemix ? (
@@ -660,7 +1034,7 @@ export default function ShowcaseReelViewer({
                   {summary}
                 </p>
 
-                {item.asset ? (
+                {item.asset && !isUnlockCheckoutOpen ? (
                   <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -686,15 +1060,19 @@ export default function ShowcaseReelViewer({
                         ))}
                       </div>
                     ) : null}
-                    <Link
-                      href={buildDetailPath(item.id, 'resources')}
-                      prefetch={false}
+                    <button
+                      type="button"
+                      onClick={openUnlockCheckout}
                       className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
                     >
                       <LockKeyhole className="h-4 w-4" />
-                      View unlock details
-                    </Link>
+                      {unlockCtaLabel}
+                    </button>
                   </div>
+                ) : null}
+
+                {item.asset && isUnlockCheckoutOpen ? (
+                  renderCompactUnlockCard()
                 ) : null}
 
                 {item.body.trim() ? (
