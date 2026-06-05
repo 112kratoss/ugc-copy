@@ -16,10 +16,14 @@ import {
   createServiceClient,
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
-import { getPostResourceBundlePriceQuote } from '@/lib/post-resource-bundles-server';
+import {
+  getPostResourceBundlePriceQuote,
+  getPublicGenerationRecipeAssetSummaryMap,
+} from '@/lib/post-resource-bundles-server';
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
   MAGICBOOKLET_SOURCE_KIND,
+  isGenerationRecipeAssetId,
   normalizeShowcaseSourceKind,
   sanitizeShowcaseFeedPage,
   type RawShowcaseSourceKind,
@@ -291,6 +295,10 @@ async function resolvePostRowsToFeedItems(
     visibleRows.map((row) => row.id),
     adminSupabase
   );
+  const recipeAssetMap = await getPublicGenerationRecipeAssetSummaryMap(
+    visibleRows.filter((row) => !assetMap.has(row.id)),
+    adminSupabase
+  );
 
   const resolvedItems = await Promise.all(
     visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
@@ -300,7 +308,7 @@ async function resolvePostRowsToFeedItems(
       }
 
       const profile = post.user_id ? profilesMap[post.user_id] : undefined;
-      const asset = assetMap.get(post.id) ?? null;
+      const asset = assetMap.get(post.id) ?? recipeAssetMap.get(post.id) ?? null;
       const body = post.body?.trim() || '';
       const model = post.generation_id
         ? generationModelMap.get(post.generation_id) ?? MAGICBOOKLET_SOURCE_KIND
@@ -315,7 +323,7 @@ async function resolvePostRowsToFeedItems(
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         resourceBundle: asset
           ? {
-              viewerCanAccess: false,
+              viewerCanAccess: isGenerationRecipeAssetId(asset.id),
               allowRemix: asset.allowRemix,
               items: asset.lockedPreview?.itemPreviews ?? [],
             }
@@ -747,7 +755,8 @@ async function attachViewerStateToFeed(
     items: feed.items.map((item) => {
       const viewerCanAccessBundle = Boolean(
         item.asset && (
-          item.creator.id === viewerUserId
+          isGenerationRecipeAssetId(item.asset.id)
+          || item.creator.id === viewerUserId
           || purchasedBundleIdSet.has(item.asset.id)
         )
       );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildGenerationRecipeResourceItems,
   buildGenerationPaywallNotes,
   buildGenerationPaywallPrefill,
   hasRecoverableGenerationRemixInputs,
@@ -33,6 +34,8 @@ describe('generation paywall helpers', () => {
       promptText: 'A polished creator product image with warm natural light.',
       allowRemix: true,
       resourceKinds: ['prompt', 'notes', 'remix'],
+      referenceCount: 0,
+      referenceKindCounts: {},
     });
     expect(prefill?.notesMarkdown).toContain('Saved generation setup');
     expect(prefill?.notesMarkdown).toContain('Model: Nano Banana 2.0');
@@ -118,5 +121,87 @@ describe('generation paywall helpers', () => {
         workflowSettings: null,
       })
     ).toBeNull();
+  });
+
+  it('adds safe saved reference metadata from durable input media', () => {
+    const prefill = buildGenerationPaywallPrefill({
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Use the saved references to rebuild the look.',
+      workflowSettings: {
+        model: 'nano-banana-2',
+      },
+      inputMedia: [
+        {
+          id: 'input-1',
+          generationId: 'gen-1',
+          mediaType: 'image',
+          role: 'reference_image',
+          label: 'Hero reference',
+          url: '/api/media/input-1',
+          storagePath: 'generation_inputs/user-1/gen-1/input-1.png',
+          sourceGenerationId: null,
+          sortOrder: 0,
+          metadata: {},
+        },
+        {
+          id: 'input-2',
+          generationId: 'gen-1',
+          mediaType: 'video',
+          role: 'reference_video',
+          label: 'Timing reference',
+          url: '/api/media/input-2',
+          storagePath: 'generation_inputs/user-1/gen-1/input-2.mp4',
+          sourceGenerationId: null,
+          sortOrder: 1,
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(prefill).toMatchObject({
+      resourceKinds: ['prompt', 'notes', 'files'],
+      referenceCount: 2,
+      referenceKindCounts: {
+        image: 1,
+        video: 1,
+      },
+    });
+  });
+
+  it('builds visible recipe items from prompt, saved references, and notes', () => {
+    const items = buildGenerationRecipeResourceItems({
+      promptText: 'Create the same portrait lighting.',
+      notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0',
+      allowRemix: false,
+      inputMedia: [{
+        id: 'input-1',
+        generationId: 'gen-1',
+        mediaType: 'image',
+        role: 'reference_image',
+        label: 'Image input',
+        url: null,
+        storagePath: 'generation_inputs/user-1/gen-1/00-reference-image.png',
+        sourceGenerationId: null,
+        sortOrder: 0,
+        metadata: {},
+      }],
+    });
+
+    expect(items.map((item) => item.type)).toEqual(['prompt', 'reference_image', 'note']);
+    expect(items[0]).toMatchObject({
+      title: 'Prompt',
+      textContent: 'Create the same portrait lighting.',
+    });
+    expect(items[1]).toMatchObject({
+      title: 'Image input',
+      storagePath: 'generation_inputs/user-1/gen-1/00-reference-image.png',
+      contentType: 'image/png',
+      remixUse: 'reference_only',
+    });
+    expect(items[2]).toMatchObject({
+      title: 'Notes',
+      textContent: 'Saved generation setup\nModel: Nano Banana 2.0',
+    });
   });
 });

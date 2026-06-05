@@ -32,6 +32,22 @@ type PostRow = {
 type GenerationModelRow = {
   id: string;
   model: string;
+  category?: string | null;
+  prompt?: string | null;
+  workflow_settings?: Record<string, unknown> | null;
+};
+
+type GenerationInputMediaRow = {
+  id: string;
+  generation_id: string;
+  user_id: string;
+  media_type: 'image' | 'video' | 'audio';
+  role: string;
+  label: string | null;
+  storage_path: string;
+  source_generation_id: string | null;
+  sort_order: number | null;
+  metadata: Record<string, unknown> | null;
 };
 
 type ResourceBundleRow = {
@@ -66,6 +82,7 @@ type PostResourceBundlePurchaseRow = {
 let profilesState: ProfileRow[] = [];
 let postsState: PostRow[] = [];
 let generationModelsState: GenerationModelRow[] = [];
+let generationInputMediaState: GenerationInputMediaRow[] = [];
 let resourceBundlesState: ResourceBundleRow[] = [];
 let postSavesState: PostSaveRow[] = [];
 let postResourceBundlePurchasesState: PostResourceBundlePurchaseRow[] = [];
@@ -113,6 +130,10 @@ function createServiceClientMock() {
       from: vi.fn(() => ({
         getPublicUrl: vi.fn((filePath: string) => ({
           data: { publicUrl: `https://cdn.example.com/${filePath}` },
+        })),
+        createSignedUrl: vi.fn(async (filePath: string) => ({
+          data: { signedUrl: `https://signed.example.com/${filePath}` },
+          error: null,
         })),
       })),
     },
@@ -199,6 +220,32 @@ function createServiceClientMock() {
             };
           },
         };
+      }
+
+      if (table === 'generation_input_media') {
+        let generationIds: unknown[] = [];
+
+        const query = {
+          select() {
+            return query;
+          },
+          in(column: string, values: unknown[]) {
+            if (column === 'generation_id') {
+              generationIds = values;
+            }
+            return query;
+          },
+          async order() {
+            return {
+              data: generationInputMediaState
+                .filter((row) => generationIds.includes(row.generation_id))
+                .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0)),
+              error: null,
+            };
+          },
+        };
+
+        return query;
       }
 
       if (table === 'post_resource_bundles' || table === 'marketplace_assets') {
@@ -343,6 +390,7 @@ describe('showcase feed', () => {
         model: 'nano-banana-2',
       },
     ];
+    generationInputMediaState = [];
     resourceBundlesState = [
       {
         id: 'asset-1',
@@ -414,6 +462,102 @@ describe('showcase feed', () => {
         ],
       }),
     });
+  });
+
+  it('adds a safe public recipe summary for generated posts without a saved bundle', async () => {
+    resourceBundlesState = [];
+    generationModelsState = [{
+      id: 'gen-1',
+      model: 'nano-banana-2',
+      category: 'image',
+      prompt: 'SECRET_GENERATION_PROMPT',
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+      },
+    }];
+    generationInputMediaState = [{
+      id: 'input-1',
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: 'Image input',
+      storage_path: 'generation_inputs/user-1/gen-1/00-reference-image.png',
+      source_generation_id: null,
+      sort_order: 0,
+      metadata: {},
+    }];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+    const asset = page.items[0].asset;
+    const serializedAsset = JSON.stringify(asset);
+
+    expect(asset).toMatchObject({
+      id: 'generation-recipe:post-1',
+      postId: 'post-1',
+      title: 'Creation recipe',
+      accessMode: 'free',
+      priceUsdCents: 0,
+      resourceKinds: ['prompt', 'files', 'notes'],
+      itemCounts: {
+        prompt: 1,
+        reference_image: 1,
+        note: 1,
+      },
+    });
+    expect(serializedAsset).not.toContain('SECRET_GENERATION_PROMPT');
+    expect(serializedAsset).not.toContain('generation_inputs/user-1');
+  });
+
+  it('adds safe public recipe reference counts from legacy workflow settings', async () => {
+    resourceBundlesState = [];
+    generationModelsState = [{
+      id: 'gen-1',
+      model: 'nano-banana-2',
+      category: 'image',
+      prompt: 'SECRET_LEGACY_PROMPT',
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        elements: [{
+          id: 'element-1',
+          displayName: 'Image input',
+          handle: '@alisa',
+          storagePath: 'generation_inputs/user-1/gen-1/legacy-reference.png',
+        }],
+      },
+    }];
+    generationInputMediaState = [];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+    const asset = page.items[0].asset;
+    const serializedAsset = JSON.stringify(asset);
+
+    expect(asset).toMatchObject({
+      id: 'generation-recipe:post-1',
+      accessMode: 'free',
+      resourceKinds: ['prompt', 'files', 'notes', 'remix'],
+      itemCounts: {
+        prompt: 1,
+        reference_image: 1,
+        note: 1,
+      },
+    });
+    expect(serializedAsset).not.toContain('SECRET_LEGACY_PROMPT');
+    expect(serializedAsset).not.toContain('generation_inputs/user-1');
   });
 
   it('does not expose raw paid unlock resources on public feed asset summaries', async () => {

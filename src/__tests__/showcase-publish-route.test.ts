@@ -14,7 +14,21 @@ type GenerationRow = {
   prompt: string | null;
 };
 
+type GenerationInputMediaRow = {
+  id: string;
+  generation_id: string;
+  user_id: string;
+  media_type: 'image' | 'video' | 'audio';
+  role: string;
+  label: string | null;
+  storage_path: string;
+  source_generation_id: string | null;
+  sort_order: number | null;
+  metadata: Record<string, unknown> | null;
+};
+
 let generationState: GenerationRow | null = null;
+let generationInputMediaRows: GenerationInputMediaRow[] = [];
 const generationUpdates: Array<Record<string, unknown>> = [];
 const postUpserts: Array<Record<string, unknown>> = [];
 const listingUpdateCalls: Array<{
@@ -27,6 +41,12 @@ const bundleUpdateCalls: Array<{
 }> = [];
 const publishRpcCalls: Array<Record<string, unknown>> = [];
 const removeMock = vi.fn(async () => ({ data: null, error: null }));
+const downloadMock = vi.fn(async () => ({
+  data: new Blob(['reference-image'], { type: 'image/png' }),
+  error: null,
+}));
+const uploadMock = vi.fn(async () => ({ data: null, error: null }));
+const getStoredMediaLocationMock = vi.fn();
 const createUserClientMock = vi.fn();
 const ensureDurableGenerationMediaMock = vi.fn();
 let publishRpcError: { message: string } | null = null;
@@ -68,6 +88,31 @@ vi.mock('@/lib/server-helpers', () => ({
         return query;
       }
 
+      if (table === 'generation_input_media') {
+        const query = {
+          select() {
+            return query;
+          },
+          eq(column: string, value: unknown) {
+            if (column === 'generation_id') {
+              generationInputMediaRows = generationInputMediaRows.filter((row) => row.generation_id === value);
+            }
+            if (column === 'user_id') {
+              generationInputMediaRows = generationInputMediaRows.filter((row) => row.user_id === value);
+            }
+            return query;
+          },
+          order() {
+            return Promise.resolve({
+              data: generationInputMediaRows,
+              error: null,
+            });
+          },
+        };
+
+        return query;
+      }
+
       throw new Error(`Unexpected service table access: ${table}`);
     },
     rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
@@ -96,13 +141,14 @@ vi.mock('@/lib/server-helpers', () => ({
       };
     }),
     storage: {
-      from: vi.fn(() => ({
+      from: vi.fn((bucket: string) => ({
         remove: removeMock,
-        upload: vi.fn(async () => ({ data: null, error: null })),
+        download: bucket === 'generation_inputs' || bucket === 'generated_images' ? downloadMock : vi.fn(async () => ({ data: null, error: null })),
+        upload: bucket === 'post_resource_files' ? uploadMock : vi.fn(async () => ({ data: null, error: null })),
       })),
     },
   }),
-  getStoredMediaLocation: vi.fn(),
+  getStoredMediaLocation: (value: string) => getStoredMediaLocationMock(value),
 }));
 
 describe('/api/showcase/publish route', () => {
@@ -120,6 +166,7 @@ describe('/api/showcase/publish route', () => {
       description: 'Original description',
       prompt: 'Original prompt',
     };
+    generationInputMediaRows = [];
     generationUpdates.length = 0;
     postUpserts.length = 0;
     listingUpdateCalls.length = 0;
@@ -127,6 +174,26 @@ describe('/api/showcase/publish route', () => {
     publishRpcCalls.length = 0;
     publishRpcError = null;
     removeMock.mockClear();
+    downloadMock.mockClear();
+    uploadMock.mockClear();
+    getStoredMediaLocationMock.mockReset();
+    getStoredMediaLocationMock.mockImplementation((value: string) => {
+      if (value.startsWith('generated_images/')) {
+        return {
+          bucket: 'generated_images',
+          filePath: value.replace('generated_images/', ''),
+        };
+      }
+
+      if (value.startsWith('generation_inputs/')) {
+        return {
+          bucket: 'generation_inputs',
+          filePath: value.replace('generation_inputs/', ''),
+        };
+      }
+
+      return null;
+    });
     ensureDurableGenerationMediaMock.mockReset();
     ensureDurableGenerationMediaMock.mockImplementation(async ({ generation }) => ({
       outputUrl: generation.outputUrl,
@@ -287,7 +354,7 @@ describe('/api/showcase/publish route', () => {
 
     const data = await response.json();
 
-    expect(response.status).toBe(200);
+    expect(response.status, JSON.stringify(data)).toBe(200);
     expect(data.success).toBe(true);
     expect(generationUpdates[0]).toMatchObject({
       is_public: false,
@@ -334,7 +401,9 @@ describe('/api/showcase/publish route', () => {
       }),
     }) as NextRequest);
 
-    expect(response.status).toBe(200);
+    const data = await response.json();
+
+    expect(response.status, JSON.stringify(data)).toBe(200);
     expect(ensureDurableGenerationMediaMock).toHaveBeenCalledWith(expect.objectContaining({
       generation: {
         id: 'gen-1',
@@ -449,7 +518,7 @@ describe('/api/showcase/publish route', () => {
 
     const data = await response.json();
 
-    expect(response.status).toBe(200);
+    expect(response.status, JSON.stringify(data)).toBe(200);
     expect(data.success).toBe(true);
     expect(generationUpdates[0]).toMatchObject({
       is_public: true,
@@ -566,5 +635,182 @@ describe('/api/showcase/publish route', () => {
     expect(data.resourceBundleStatus).toBe('published');
     expect(data.showcasePath).toBe('/showcase/post-1');
     expect(data.resourceBundlePath).toBe('/showcase/post-1#resources');
+  });
+
+  it('creates one free reference unlock when a public generated post has saved references and no paid bundle', async () => {
+    generationInputMediaRows = [{
+      id: 'input-1',
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: 'Hero reference',
+      storage_path: 'generation_inputs/user-1/gen-1/00-reference_image.png',
+      source_generation_id: null,
+      sort_order: 0,
+      metadata: { handle: '@hero' },
+    }];
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'public',
+        title: 'Reference-led portrait',
+        includeGenerationReferences: true,
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest);
+
+    const data = await response.json();
+    const publishedBundle = publishRpcCalls[0]?.p_bundle as Record<string, unknown>;
+    const resources = publishedBundle.resources as Record<string, unknown>;
+    const items = resources.items as Array<Record<string, unknown>>;
+
+    expect(response.status).toBe(200);
+    expect(data.resourceBundleStatus).toBe('published');
+    expect(publishRpcCalls[0]).toMatchObject({
+      p_has_bundle: true,
+    });
+    expect(publishedBundle).toMatchObject({
+      accessMode: 'free',
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: 'reference_image',
+      role: 'style_reference',
+      title: 'Hero reference',
+      storagePath: expect.stringMatching(/^user-1\/generation-references\/gen-1\/00-reference-image-input-1\.png$/),
+      remixUse: 'reference_only',
+    });
+    expect(JSON.stringify(publishedBundle)).not.toContain('generation_inputs/');
+    expect(downloadMock).toHaveBeenCalledWith('user-1/gen-1/00-reference_image.png');
+    expect(uploadMock).toHaveBeenCalledWith(
+      'user-1/generation-references/gen-1/00-reference-image-input-1.png',
+      expect.any(Blob),
+      expect.objectContaining({
+        contentType: 'image/png',
+        upsert: true,
+      })
+    );
+  });
+
+  it('enriches paid generated unlocks with saved references', async () => {
+    generationInputMediaRows = [{
+      id: 'input-2',
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'video',
+      role: 'reference_video',
+      label: 'Timing reference',
+      storage_path: 'generation_inputs/user-1/gen-1/01-reference_video.mp4',
+      source_generation_id: null,
+      sort_order: 1,
+      metadata: null,
+    }];
+    downloadMock.mockResolvedValueOnce({
+      data: new Blob(['reference-video'], { type: 'video/mp4' }),
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'public',
+        title: 'Reference-led video',
+        includeGenerationReferences: true,
+        resourceBundle: {
+          accessMode: 'paid',
+          summary: 'Reusable setup with saved references',
+          previewText: 'Includes prompt, notes, remix, and saved references.',
+          priceUsdCents: 900,
+          resources: {
+            promptText: 'Make a dramatic scene using the saved timing reference.',
+            notesMarkdown: 'Saved generation setup',
+            attachments: [],
+            allowRemix: true,
+          },
+        },
+      }),
+    }) as NextRequest);
+
+    const data = await response.json();
+
+    expect(response.status, JSON.stringify(data)).toBe(200);
+    const publishedBundle = publishRpcCalls[0]?.p_bundle as Record<string, unknown>;
+    const resources = publishedBundle.resources as Record<string, unknown>;
+    const items = resources.items as Array<Record<string, unknown>>;
+
+    expect(publishedBundle).toMatchObject({
+      accessMode: 'paid',
+      priceUsdCents: 900,
+    });
+    expect(resources).toMatchObject({
+      promptText: 'Make a dramatic scene using the saved timing reference.',
+      notesMarkdown: 'Saved generation setup',
+      allowRemix: true,
+    });
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'prompt' }),
+      expect.objectContaining({ type: 'note' }),
+      expect.objectContaining({ type: 'remix_access' }),
+    ]));
+    expect(items).toContainEqual(expect.objectContaining({
+      type: 'source_file',
+      role: 'supporting_workflow',
+      title: 'Timing reference',
+      contentType: 'video/mp4',
+      storagePath: 'user-1/generation-references/gen-1/01-reference-video-input-2.mp4',
+    }));
+  });
+
+  it('keeps references creator-only for private publishes without paid unlocks', async () => {
+    generationInputMediaRows = [{
+      id: 'input-3',
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: 'Private reference',
+      storage_path: 'generation_inputs/user-1/gen-1/00-reference_image.png',
+      source_generation_id: null,
+      sort_order: 0,
+      metadata: null,
+    }];
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'private',
+        includeGenerationReferences: true,
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest);
+
+    expect(response.status).toBe(200);
+    expect(publishRpcCalls[0]).toMatchObject({
+      p_bundle: {
+        accessMode: 'none',
+      },
+    });
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
   });
 });

@@ -196,6 +196,49 @@ const sectionedPreview: PostResourceBundleLockedPreview = {
   updatedAt: '2026-04-25T10:00:00.000Z',
 };
 
+const publicRecipeItems = normalizePostResourceItems([
+  {
+    type: 'prompt',
+    title: 'Prompt',
+    textContent: 'Public recipe prompt',
+  },
+  {
+    type: 'reference_image',
+    role: 'style_reference',
+    title: 'Image input',
+    storagePath: 'user-1/generation-references/gen-1/input.png',
+    contentType: 'image/png',
+  },
+  {
+    type: 'note',
+    title: 'Notes',
+    textContent: 'Public recipe notes',
+  },
+]);
+
+const publicRecipePreview: PostResourceBundleLockedPreview = {
+  resourceKinds: ['prompt', 'files', 'notes'],
+  attachmentPreviews: [],
+  itemCounts: {
+    prompt: 1,
+    reference_image: 1,
+    note: 1,
+  },
+  itemPreviews: publicRecipeItems.map((item) => ({
+    type: item.type,
+    title: item.title,
+    role: item.role,
+    contentType: item.contentType,
+    sizeBytes: item.sizeBytes,
+    remixUse: item.remixUse,
+  })),
+  hasPrompt: true,
+  hasNotes: true,
+  hasWorkflow: false,
+  hasRemix: false,
+  updatedAt: '2026-04-25T10:00:00.000Z',
+};
+
 describe('PostResourceBundlePanel', () => {
   beforeEach(() => {
     mockPush.mockClear();
@@ -207,12 +250,44 @@ describe('PostResourceBundlePanel', () => {
   });
 
   it('keeps locked prompt-only unlocks compact with one open action', () => {
-    renderPanel();
+    renderPanel({
+      isFree: false,
+      priceLabel: '$9.00',
+      priceUsdCents: 900,
+    });
 
-    expect(screen.getAllByRole('button', { name: /open free unlock/i })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeInTheDocument();
     expect(screen.getByText(/the prompt text stays locked until this unlock is opened/i)).toBeInTheDocument();
     expect(screen.queryByText(/labels and file types can be shown publicly/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
+  });
+
+  it('presents free public resources as a visible creation recipe', () => {
+    renderPanel({
+      title: 'Creation recipe',
+      summary: 'Prompt, notes, and references used for this result.',
+      resourceKinds: ['prompt', 'files', 'notes'],
+      lockedPreview: publicRecipePreview,
+      viewerCanAccess: true,
+      initialResources: {
+        promptText: null,
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+        items: publicRecipeItems,
+      },
+    });
+
+    expect(screen.getAllByText(/creation recipe/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/prompt, notes, references, and files are available here as a creation recipe/i)).toBeInTheDocument();
+    expect(screen.getByText(/available now/i)).toBeInTheDocument();
+    expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
+    expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
+    expect(screen.getByText('Image input')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open free unlock/i })).toBeNull();
+    expect(screen.queryByText(/buyer trust/i)).toBeNull();
+    expect(screen.queryByText(/digital unlocks are final sale/i)).toBeNull();
   });
 
   it('shows owner prompt access with buyer-facing context', () => {
@@ -262,7 +337,7 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.getByText('2 workflows, 2 reference images')).toBeInTheDocument();
+    expect(screen.getByText(/includes 2 workflows, 2 reference images/i)).toBeInTheDocument();
     expect(screen.getByText('Workflows')).toBeInTheDocument();
     expect(screen.getByText('Reference images')).toBeInTheDocument();
     expect(screen.getByText('Main workflow')).toBeInTheDocument();
@@ -285,7 +360,7 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.getByText('1 section, 1 prompt, 1 reference image')).toBeInTheDocument();
+    expect(screen.getByText(/includes 1 section, 1 prompt, 1 reference image/i)).toBeInTheDocument();
     expect(screen.getByText('Full post resources')).toBeInTheDocument();
     expect(screen.getByText('Hook')).toBeInTheDocument();
     expect(screen.getByText('Hook prompt')).toBeInTheDocument();

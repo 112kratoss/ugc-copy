@@ -19,8 +19,10 @@ import {
     type ShowcaseResourceFilter,
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
+    isGenerationRecipeAssetId,
 } from '@/lib/showcase';
 import {
+    formatPostResourceBundleCountSummary,
     getBundleAccessLabel,
     getPostResourceKindLabel,
     isPostResourceKind,
@@ -108,7 +110,10 @@ function getItemSummary(item: ShowcaseFeedItem): string {
 
     if (item.asset) {
         const kinds = getItemResourceKinds(item);
-        const unlockSummary = kinds.length > 0
+        const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
+        const unlockSummary = bundleCountSummary
+            ? `Unlock includes ${bundleCountSummary}.`
+            : kinds.length > 0
             ? `Unlock includes ${formatResourceKinds(kinds).toLowerCase()}.`
             : 'Reusable unlock attached.';
 
@@ -131,6 +136,10 @@ function formatResourceKinds(kinds: PostResourceKind[]): string {
 }
 
 function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+    if (isGenerationRecipeAssetId(asset.id)) {
+        return 'Public recipe';
+    }
+
     if (asset.priceQuote) {
         return formatBundleAccessLabel({
             accessMode: asset.accessMode,
@@ -142,6 +151,10 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+    if (isGenerationRecipeAssetId(asset.id)) {
+        return 'View recipe';
+    }
+
     if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
         return 'Open free unlock';
     }

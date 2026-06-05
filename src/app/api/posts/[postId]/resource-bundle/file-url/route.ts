@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getPostResourceBundleDetailByPostId } from '@/lib/post-resource-bundles-server';
+import { getStoredMediaLocation } from '@/lib/media-urls';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
@@ -15,12 +16,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const adminSupabase = createServiceClient();
   const {
     data: { user },
-    error: authError,
   } = await supabase.auth.getUser();
-
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
 
   const body = (await request.json()) as { storagePath?: unknown };
   const requestedPath = typeof body.storagePath === 'string' ? body.storagePath.trim().replace(/^\/+/, '') : '';
@@ -29,7 +25,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 
   const detail = await getPostResourceBundleDetailByPostId(postId, {
-    viewerUserId: user.id,
+    viewerUserId: user?.id ?? null,
     countryCode: request.headers.get('x-vercel-ip-country'),
   });
 
@@ -43,9 +39,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Resource file not found on this unlock.' }, { status: 404 });
   }
 
+  const storedLocation = getStoredMediaLocation(requestedPath);
+  const bucket = storedLocation?.bucket ?? RESOURCE_FILES_BUCKET;
+  const filePath = storedLocation?.filePath ?? requestedPath;
   const { data, error } = await adminSupabase.storage
-    .from(RESOURCE_FILES_BUCKET)
-    .createSignedUrl(requestedPath, 600, {
+    .from(bucket)
+    .createSignedUrl(filePath, 600, {
       download: attachment?.label ?? resourceItem?.title ?? 'Resource file',
     });
 

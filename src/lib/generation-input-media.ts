@@ -330,7 +330,7 @@ function mapInputMediaRow(row: GenerationInputMediaRow, url: string | null): Gen
 export async function loadGenerationInputMediaMap(params: {
   supabase: SupabaseClient;
   generationIds: string[];
-  urlMode: 'proxy' | 'signed';
+  urlMode: 'proxy' | 'signed' | 'none';
 }): Promise<Map<string, GenerationInputMediaItem[]>> {
   const generationIds = Array.from(new Set(params.generationIds.filter(Boolean)));
   const inputMap = new Map<string, GenerationInputMediaItem[]>();
@@ -351,7 +351,9 @@ export async function loadGenerationInputMediaMap(params: {
     }
 
     for (const row of (data ?? []) as GenerationInputMediaRow[]) {
-      const url = await buildStoredInputUrl(params.supabase, row.storage_path, params.urlMode);
+      const url = params.urlMode === 'none'
+        ? null
+        : await buildStoredInputUrl(params.supabase, row.storage_path, params.urlMode);
       const item = mapInputMediaRow(row, url);
       const nextItems = inputMap.get(row.generation_id) ?? [];
       nextItems.push(item);

@@ -27,6 +27,7 @@ export type ShowcasePostFormat = 'text' | 'media' | 'mixed';
 export type ShowcaseMediaKind = 'image' | 'video';
 export type ShowcaseAssetType = 'workflow' | 'prompt_pack' | 'guide';
 type ShowcaseResourceAccessMode = 'free' | 'paid';
+export const GENERATION_RECIPE_ASSET_ID_PREFIX = 'generation-recipe:';
 
 export interface ShowcaseCreator {
     id: string | null;
@@ -86,6 +87,10 @@ export interface ShowcaseFeedPage {
     items: ShowcaseFeedItem[];
     pageInfo: ShowcaseFeedPageInfo;
     availableTools?: Array<{ slug: string; label: string; count: number }>;
+}
+
+export function isGenerationRecipeAssetId(value: string | null | undefined): boolean {
+    return Boolean(value?.startsWith(GENERATION_RECIPE_ASSET_ID_PREFIX));
 }
 
 export function sanitizeShowcaseAssetSummary(

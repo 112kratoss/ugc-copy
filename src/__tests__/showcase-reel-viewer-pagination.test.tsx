@@ -227,6 +227,139 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.queryByRole('link', { name: /unlock for \$9\.00/i })).not.toBeInTheDocument();
   });
 
+  it('shows public generation recipes inline without purchase', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+
+      if (url.endsWith('/resource-bundle')) {
+        return new Response(JSON.stringify({
+          bundle: {
+            viewerCanAccess: true,
+            viewerIsOwner: false,
+            resources: {
+              promptText: 'public recipe prompt',
+              notesMarkdown: 'public recipe notes',
+              workflowShareUrl: null,
+              attachments: [],
+              allowRemix: true,
+              items: [
+                {
+                  type: 'prompt',
+                  role: 'primary',
+                  sectionId: null,
+                  title: 'Prompt',
+                  description: null,
+                  textContent: 'public recipe prompt',
+                  externalUrl: null,
+                  storagePath: null,
+                  contentType: null,
+                  sizeBytes: null,
+                  workflowSnapshot: null,
+                  sortOrder: 0,
+                  isPrimary: true,
+                  remixUse: 'none',
+                },
+                {
+                  type: 'reference_image',
+                  role: 'style_reference',
+                  sectionId: null,
+                  title: 'Image input',
+                  description: null,
+                  textContent: null,
+                  externalUrl: null,
+                  storagePath: 'generated_images/user-1/reference.png',
+                  contentType: 'image/png',
+                  sizeBytes: null,
+                  workflowSnapshot: null,
+                  sortOrder: 1,
+                  isPrimary: false,
+                  remixUse: 'reference_only',
+                },
+                {
+                  type: 'note',
+                  role: 'other',
+                  sectionId: null,
+                  title: 'Notes',
+                  description: null,
+                  textContent: 'public recipe notes',
+                  externalUrl: null,
+                  storagePath: null,
+                  contentType: null,
+                  sizeBytes: null,
+                  workflowSnapshot: null,
+                  sortOrder: 2,
+                  isPrimary: false,
+                  remixUse: 'none',
+                },
+              ],
+            },
+          },
+        }));
+      }
+
+      if (url.endsWith('/file-url')) {
+        return new Response(JSON.stringify({
+          success: true,
+          signedUrl: 'https://signed.example.com/reference.png',
+        }));
+      }
+
+      return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <ShowcaseReelViewer
+        isOpen
+        items={[
+          createShowcaseItem({
+            id: 'post-1',
+            title: 'Public Recipe Frame',
+            prompt: '',
+            asset: {
+              ...paidAsset,
+              id: 'generation-recipe:post-1',
+              title: 'Creation recipe',
+              accessMode: 'free',
+              priceUsdCents: 0,
+              priceQuote: {
+                currency: 'USD',
+                amountSubunits: 0,
+                formatted: '$0.00',
+                note: null,
+              },
+              resourceKinds: ['prompt', 'files', 'notes', 'remix'],
+              itemCounts: {
+                prompt: 1,
+                reference_image: 1,
+                note: 1,
+                remix_access: 1,
+              },
+            },
+            canRemix: true,
+          }),
+        ]}
+        selectedItemId="post-1"
+        savedItemIds={new Set()}
+        savingItemIds={new Set()}
+        accessToken={null}
+        hasMoreItems={false}
+        isLoadingMoreItems={false}
+        onLoadMoreItems={vi.fn()}
+        onClose={vi.fn()}
+        onSelectItemId={vi.fn()}
+        onToggleSave={vi.fn()}
+        onRemix={vi.fn()}
+        buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+      />
+    );
+
+    expect(await screen.findByText(/public recipe prompt/i)).toBeInTheDocument();
+    expect(screen.getByText(/public recipe notes/i)).toBeInTheDocument();
+    expect(screen.getByText(/image input/i)).toBeInTheDocument();
+    expect(screen.getByText(/remix access is included/i)).toBeInTheDocument();
+  });
+
   it('starts the existing cash checkout from the compact reel choice', async () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 1200;
@@ -310,7 +443,7 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(mockUpdateCredits).toHaveBeenCalledWith(300);
     expect(await screen.findByText('Unlocked')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /view unlocked details/i }));
-    expect(screen.getByText(/prompt is ready/i)).toBeInTheDocument();
-    expect(screen.getByText(/notes are ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/revealed prompt/i)).toBeInTheDocument();
+    expect(screen.getByText(/revealed notes/i)).toBeInTheDocument();
   });
 });

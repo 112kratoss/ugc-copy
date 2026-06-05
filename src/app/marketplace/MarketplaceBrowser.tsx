@@ -17,6 +17,7 @@ import {
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import {
   describePostResourceKinds,
+  formatPostResourceBundleCountSummary,
   formatUnlockCountLabel,
   getPostResourceKindLabel,
   type MarketplaceResourceFilter,
@@ -350,6 +351,10 @@ function MarketplaceCard({
     ? 'Open free unlock'
     : `Unlock for ${asset.priceQuote.formatted}`;
   const updatedLabel = formatMarketplaceDate(asset.updatedAt);
+  const bundleCountSummary = formatPostResourceBundleCountSummary(asset.lockedPreview);
+  const buyerPreviewText = bundleCountSummary
+    ? `Includes ${bundleCountSummary}.`
+    : asset.summary || asset.previewText || describePostResourceKinds(asset.resourceKinds);
   const detailHref = buildShowcaseDetailPath(asset.postId, {
     from: 'unlocks',
     returnTo: marketplaceReturnPath,
@@ -382,7 +387,7 @@ function MarketplaceCard({
         ) : asset.post?.postFormat === 'text' ? (
           <TextPostPreviewCard
             title={asset.post.title}
-            summary={asset.post.body || asset.summary || asset.previewText || describePostResourceKinds(asset.resourceKinds)}
+            summary={asset.post.body || buyerPreviewText}
             sourceLabel={asset.post.sourceTool || asset.post.sourceKind}
             dateLabel={updatedLabel}
             unlockLabel={accessLabel}
@@ -422,7 +427,7 @@ function MarketplaceCard({
         </div>
 
         <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">
-          {asset.summary || asset.previewText || describePostResourceKinds(asset.resourceKinds)}
+          {buyerPreviewText}
         </p>
 
         <div className="mt-4 flex flex-wrap gap-2">

@@ -43,6 +43,9 @@ function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined
   }
 
   const kinds = new Set<PostResourceKind>(prefill.resourceKinds);
+  if ((prefill.referenceCount ?? 0) > 0) {
+    kinds.add('files');
+  }
   if (prefill.promptText?.trim()) {
     kinds.add('prompt');
   }
@@ -54,6 +57,10 @@ function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined
   }
 
   return RESOURCE_KIND_ORDER.filter((kind) => kinds.has(kind));
+}
+
+function formatReferenceCountLabel(count: number): string {
+  return count === 1 ? '1 reference included' : `${count} references included`;
 }
 
 function buildAutoUnlockSummary(kinds: PostResourceKind[]): string {
@@ -149,6 +156,8 @@ export default function PublishToShowcaseModal({
   const [formError, setFormError] = useState<string | null>(null);
   const autoUnlockKinds = getAutoUnlockKinds(paywallPrefill);
   const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && autoUnlockKinds.length > 0;
+  const generationReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
+  const hasGenerationReferences = generationReferenceCount > 0;
   const parsedPriceUsdCents = parsePriceUsdToCents(priceUsd);
   const isPublishing = publishingVisibility !== null;
 
@@ -207,6 +216,7 @@ export default function PublishToShowcaseModal({
         title?: string;
         description?: string;
         shareInputMediaForRemix: boolean;
+        includeGenerationReferences?: boolean;
         resourceBundle?: PostResourceBundleInput;
       } = {
         generationId,
@@ -215,6 +225,10 @@ export default function PublishToShowcaseModal({
         description: normalizeOptionalText(publishDescription),
         shareInputMediaForRemix: false,
       };
+
+      if (hasGenerationReferences) {
+        requestBody.includeGenerationReferences = true;
+      }
 
       if (resourceBundle) {
         requestBody.resourceBundle = resourceBundle;
@@ -340,6 +354,11 @@ export default function PublishToShowcaseModal({
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-white">Saved system package</div>
+                    {hasGenerationReferences ? (
+                      <p className="mt-1 text-xs font-semibold text-emerald-100">
+                        {formatReferenceCountLabel(generationReferenceCount)}
+                      </p>
+                    ) : null}
                     {!hasAutoUnlock ? (
                       <p className="mt-1 text-sm leading-6 text-zinc-400">
                         Publish the media now; custom resources can be added from the post later if needed.

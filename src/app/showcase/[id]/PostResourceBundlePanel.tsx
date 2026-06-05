@@ -1,10 +1,11 @@
 'use client';
 
 import Script from 'next/script';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Copy,
+  Download,
   ExternalLink,
   FileText,
   Link2,
@@ -155,6 +156,7 @@ export default function PostResourceBundlePanel({
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
 
   const summaryLine = useMemo(
     () => summary || previewText || describePostResourceKinds(resourceKinds),
@@ -197,13 +199,16 @@ export default function PostResourceBundlePanel({
   );
   const hasSectionedResourceItems = (resources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
   const hasStructuredResourceItems = groupedResourceItems.length > 0;
+  const isRecipeVisible = hasAccess || viewerIsOwner;
   const accessLabel = useMemo(() => {
     if (viewerIsOwner) {
       return 'You own this unlock.';
     }
 
     if (hasAccess) {
-      return 'Unlock opened on this post.';
+      return isFree
+        ? 'Prompt, notes, references, and files are public on this post.'
+        : 'Unlock opened on this post.';
     }
 
     return isFree ? 'Open the full unlock for free.' : `Open the full unlock for ${priceLabel}.`;
@@ -409,33 +414,124 @@ export default function PostResourceBundlePanel({
     }
   };
 
-  const openResourceFile = async (storagePath: string) => {
-    if (!ensureAuthenticated()) {
-      return;
+  const fetchResourceFileUrl = useCallback(async (storagePath: string): Promise<string> => {
+    const response = await fetch(`/api/posts/${postId}/resource-bundle/file-url`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session?.access_token
+          ? {
+              Authorization: `Bearer ${session.access_token}`,
+            }
+          : {}),
+      },
+      body: JSON.stringify({ storagePath }),
+    });
+    const data = await response.json();
+
+    if (!response.ok || !data.signedUrl) {
+      throw new Error(data.error || 'Failed to open resource file.');
     }
 
+    return data.signedUrl as string;
+  }, [postId, session?.access_token]);
+
+  const resolveResourceFileUrl = async (storagePath: string): Promise<string | null> => {
+    if (!isFree && !ensureAuthenticated()) {
+      return null;
+    }
+
+    return fetchResourceFileUrl(storagePath);
+  };
+
+  const openResourceFile = async (storagePath: string) => {
     try {
       setWorkingAction('file');
       setFeedback(null);
       setError(null);
 
-      const response = await fetch(`/api/posts/${postId}/resource-bundle/file-url`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ storagePath }),
-      });
-      const data = await response.json();
-
-      if (!response.ok || !data.signedUrl) {
-        throw new Error(data.error || 'Failed to open resource file.');
+      const signedUrl = await resolveResourceFileUrl(storagePath);
+      if (signedUrl) {
+        window.open(signedUrl, '_blank', 'noopener,noreferrer');
       }
-
-      window.open(data.signedUrl as string, '_blank', 'noopener,noreferrer');
     } catch (fileError) {
       setError(fileError instanceof Error ? fileError.message : 'Failed to open resource file.');
+    } finally {
+      setWorkingAction(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!isRecipeVisible || !resources?.items?.length) {
+      return;
+    }
+
+    const previewItems = resources.items.filter((item) => {
+      if (!item.storagePath || resourceFileUrls[item.storagePath]) {
+        return false;
+      }
+
+      return Boolean(
+        item.contentType?.startsWith('image/') ||
+        item.contentType?.startsWith('video/') ||
+        item.contentType?.startsWith('audio/')
+      );
+    });
+
+    if (previewItems.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all(
+      previewItems.map(async (item) => {
+        try {
+          const signedUrl = await fetchResourceFileUrl(item.storagePath ?? '');
+          return [item.storagePath, signedUrl] as const;
+        } catch {
+          return null;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+
+      const resolvedEntries = entries.filter((entry): entry is readonly [string, string] => Boolean(entry));
+      if (resolvedEntries.length === 0) {
+        return;
+      }
+
+      setResourceFileUrls((currentUrls) => ({
+        ...currentUrls,
+        ...Object.fromEntries(resolvedEntries),
+      }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchResourceFileUrl, isRecipeVisible, resourceFileUrls, resources?.items]);
+
+  const downloadResourceFile = async (storagePath: string, filename: string) => {
+    try {
+      setWorkingAction('file');
+      setFeedback(null);
+      setError(null);
+
+      const signedUrl = await resolveResourceFileUrl(storagePath);
+      if (signedUrl) {
+        const anchor = document.createElement('a');
+        anchor.href = signedUrl;
+        anchor.download = filename;
+        anchor.rel = 'noreferrer';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
+    } catch (fileError) {
+      setError(fileError instanceof Error ? fileError.message : 'Failed to download resource file.');
     } finally {
       setWorkingAction(null);
     }
@@ -468,6 +564,46 @@ export default function PostResourceBundlePanel({
     return `${Math.round(sizeBytes / 1024 / 102.4) / 10} MB`;
   };
 
+  const renderResourceItemMediaPreview = (item: PostResourceItem) => {
+    const signedUrl = item.storagePath ? resourceFileUrls[item.storagePath] : null;
+    if (!signedUrl || !item.contentType) {
+      return null;
+    }
+
+    if (item.contentType.startsWith('image/')) {
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={signedUrl}
+          alt={item.title}
+          className="mb-3 max-h-64 w-full rounded-2xl border border-white/8 bg-black object-contain"
+        />
+      );
+    }
+
+    if (item.contentType.startsWith('video/')) {
+      return (
+        <video
+          src={signedUrl}
+          controls
+          className="mb-3 max-h-72 w-full rounded-2xl border border-white/8 bg-black"
+        />
+      );
+    }
+
+    if (item.contentType.startsWith('audio/')) {
+      return (
+        <audio
+          src={signedUrl}
+          controls
+          className="mb-3 w-full"
+        />
+      );
+    }
+
+    return null;
+  };
+
   return (
     <div
       id="resources"
@@ -478,13 +614,15 @@ export default function PostResourceBundlePanel({
       <div className="border-b border-emerald-300/10 p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-xl">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Unlock details</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">
+              {isRecipeVisible ? 'Creation recipe' : 'Unlock details'}
+            </div>
             <h2 className="mt-3 text-xl font-semibold tracking-tight text-white">{title}</h2>
             <p className="mt-2 text-sm leading-7 text-zinc-300">{summaryLine}</p>
           </div>
 
           <div className="rounded-full border border-emerald-300/25 bg-emerald-300 px-3.5 py-1.5 text-sm font-bold text-slate-950">
-            {isFree ? 'Free unlock' : priceLabel}
+            {isRecipeVisible ? (isFree ? 'Public recipe' : 'Unlocked') : isFree ? 'Free unlock' : priceLabel}
           </div>
         </div>
       </div>
@@ -590,6 +728,7 @@ export default function PostResourceBundlePanel({
         ) : null}
       </div>
 
+      {!isRecipeVisible ? (
       <div className="mx-5 rounded-[22px] border border-sky-300/12 bg-sky-500/[0.06] p-5 sm:mx-6">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
           <ShieldCheck className="h-4 w-4" />
@@ -621,11 +760,12 @@ export default function PostResourceBundlePanel({
           </div>
         </div>
       </div>
+      ) : null}
 
       <div className="m-5 rounded-[22px] border border-white/8 bg-black/35 p-5 sm:m-6">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
           {hasAccess || viewerIsOwner ? <FileText className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
-          {hasAccess || viewerIsOwner ? 'Included resources' : 'Preview before access'}
+          {hasAccess || viewerIsOwner ? 'Recipe contents' : 'Preview before access'}
         </div>
         {isPromptOnlyUnlock ? (
           <>
@@ -651,11 +791,13 @@ export default function PostResourceBundlePanel({
         ) : (
           <>
             <p className="mt-3 text-sm leading-7 text-zinc-400">
-              Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.
+              {isRecipeVisible
+                ? 'Prompt, notes, references, and files are available here as a creation recipe.'
+                : 'Labels and file types can be shown publicly. Prompt text, notes, workflow URLs, storage paths, and file links stay gated.'}
             </p>
             {bundleCountSummary ? (
               <div className="mt-4 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-50">
-                Includes {bundleCountSummary}
+                {`Includes ${bundleCountSummary}`}
               </div>
             ) : null}
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -675,7 +817,9 @@ export default function PostResourceBundlePanel({
                 </div>
               </div>
               <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Locked until access</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                  {isRecipeVisible ? 'Available now' : 'Locked until access'}
+                </div>
                 <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
                   {preview.hasPrompt ? <div>Prompt text</div> : null}
                   {preview.hasWorkflow ? <div>Workflow link or snapshot</div> : null}
@@ -756,6 +900,7 @@ export default function PostResourceBundlePanel({
 
                               return (
                                 <div key={key} className="rounded-2xl border border-white/8 bg-black/25 p-4">
+                                  {renderResourceItemMediaPreview(item)}
                                   <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                       <div className="text-sm font-semibold text-white">{item.title}</div>
@@ -793,14 +938,24 @@ export default function PostResourceBundlePanel({
                                       </a>
                                     ) : null}
                                     {item.storagePath ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => void openResourceFile(item.storagePath ?? '')}
-                                        className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
-                                      >
-                                        <ExternalLink className="h-4 w-4" />
-                                        Open file
-                                      </button>
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => void openResourceFile(item.storagePath ?? '')}
+                                          className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                                        >
+                                          <ExternalLink className="h-4 w-4" />
+                                          Open file
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => void downloadResourceFile(item.storagePath ?? '', item.title)}
+                                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                        >
+                                          <Download className="h-4 w-4" />
+                                          Download
+                                        </button>
+                                      </>
                                     ) : null}
                                   </div>
                                 </div>
@@ -832,6 +987,7 @@ export default function PostResourceBundlePanel({
 
                       return (
                         <div key={key} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                          {renderResourceItemMediaPreview(item)}
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-semibold text-white">{item.title}</div>
@@ -869,14 +1025,24 @@ export default function PostResourceBundlePanel({
                               </a>
                             ) : null}
                             {item.storagePath ? (
-                              <button
-                                type="button"
-                                onClick={() => void openResourceFile(item.storagePath ?? '')}
-                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
-                              >
-                                <ExternalLink className="h-4 w-4" />
-                                Open file
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => void openResourceFile(item.storagePath ?? '')}
+                                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                  Open file
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void downloadResourceFile(item.storagePath ?? '', item.title)}
+                                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                >
+                                  <Download className="h-4 w-4" />
+                                  Download
+                                </button>
+                              </>
                             ) : null}
                           </div>
                         </div>

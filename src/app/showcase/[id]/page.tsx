@@ -13,6 +13,7 @@ import {
 } from '@/lib/public-posts';
 import { createMetadata } from '@/lib/seo';
 import { buildShowcaseDetailPath, getShowcaseReturnContext } from '@/lib/share';
+import { isGenerationRecipeAssetId } from '@/lib/showcase';
 import { getServerAuthState } from '@/lib/supabase-server';
 import { formatUnlockCountLabel, getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
@@ -151,6 +152,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
   }
 
   const bundle = detail.resourceBundle;
+  const isPublicRecipeBundle = Boolean(bundle && isGenerationRecipeAssetId(bundle.id));
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const lockedViewer = Boolean(bundle && !bundle.viewerCanAccess && !bundle.viewerIsOwner);
@@ -198,6 +200,8 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
             workflowShareUrl: bundle.resources.workflowShareUrl,
             attachments: bundle.resources.attachments,
             allowRemix: bundle.resources.allowRemix,
+            sections: bundle.resources.sections,
+            items: bundle.resources.items,
           }
         : null}
     />
@@ -353,7 +357,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1 text-xs font-semibold">
                       <ShoppingBag className="h-3.5 w-3.5" />
-                      {bundle.accessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
+                      {isPublicRecipeBundle ? 'Public recipe' : bundle.accessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
                     </span>
                     <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs text-emerald-50/80">
                       {formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}
@@ -361,7 +365,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                   </div>
                   <div className="mt-4 text-xl font-semibold tracking-tight">
                     {bundle.accessMode === 'free'
-                      ? 'Free unlock available'
+                      ? isPublicRecipeBundle ? 'Creation recipe available' : 'Free unlock available'
                       : `${bundle.priceQuote.formatted} unlock available`}
                   </div>
                   <p className="mt-2 text-sm leading-6 text-emerald-50/80">
@@ -378,7 +382,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                     ))}
                   </div>
                   <div className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950">
-                    {bundle.accessMode === 'free' ? 'Open free unlock' : `Unlock for ${bundle.priceQuote.formatted}`}
+                    {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'Open free unlock' : `Unlock for ${bundle.priceQuote.formatted}`}
                     <ShoppingBag className="h-4 w-4" />
                   </div>
                 </Link>
@@ -457,7 +461,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
         >
           <span>
             <span className="block text-sm font-bold">
-              {bundle.accessMode === 'free' ? 'Open free unlock' : `Unlock for ${bundle.priceQuote.formatted}`}
+              {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'Open free unlock' : `Unlock for ${bundle.priceQuote.formatted}`}
             </span>
             <span className="block text-xs font-medium text-slate-800">{previewKindSummary}</span>
           </span>

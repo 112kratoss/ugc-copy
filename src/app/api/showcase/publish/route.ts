@@ -6,7 +6,10 @@ import {
 } from '@/lib/durable-generation-media';
 import { isAudioModel } from '@/lib/models';
 import {
+    buildFreeGenerationReferenceBundle,
+    buildGenerationReferenceResourceItems,
     getMarketplaceQualityErrorForPostBundle,
+    mergeGenerationReferenceItemsIntoBundle,
     publishGenerationPostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
 import {
@@ -139,6 +142,7 @@ export async function POST(request: NextRequest) {
             workflowSettings?: unknown;
             exposePromptPublic?: boolean;
             shareInputMediaForRemix?: boolean;
+            includeGenerationReferences?: boolean;
             resourceBundle?: PostResourceBundleInput | null;
         };
         const { generationId, isPublic, title, description, prompt, body, category, workflowSettings } = requestBody;
@@ -177,19 +181,48 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Cannot publish a generation that has not succeeded' }, { status: 400 });
         }
 
-        const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
-        const resourceBundleValidationError = hasResourceBundlePayload
-            ? validatePostResourceBundleInput(requestBody.resourceBundle ?? null, { ownerUserId: user.id })
-            : null;
-        if (resourceBundleValidationError) {
-            return NextResponse.json({ error: resourceBundleValidationError }, { status: 400 });
-        }
-        const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !hasResourceBundlePayload;
         const requestedVisibility = normalizeRequestedVisibility(requestBody.visibility, isPublic);
         const effectiveVisibility = requestedVisibility;
         const shouldExposePost = effectiveVisibility !== 'private';
         const effectiveIsPublic = effectiveVisibility === 'public';
         const effectiveShareInputMediaForRemix = effectiveIsPublic && requestBody.shareInputMediaForRemix === true;
+        const hasRequestedResourceBundlePayload = Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
+        const requestedResourceBundle = requestBody.resourceBundle ?? null;
+        const requestedAccessMode = requestedResourceBundle?.accessMode ?? 'none';
+        const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
+        let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
+        let effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
+
+        if (
+            shouldIncludeGenerationReferences &&
+            (requestedAccessMode !== 'none' || effectiveVisibility === 'public')
+        ) {
+            const referenceItems = await buildGenerationReferenceResourceItems({
+                supabase: adminSupabase,
+                ownerUserId: user.id,
+                generationId,
+            });
+
+            if (referenceItems.length > 0) {
+                if (requestedAccessMode === 'none') {
+                    if (effectiveVisibility === 'public') {
+                        effectiveResourceBundle = buildFreeGenerationReferenceBundle(referenceItems);
+                        effectiveHasResourceBundlePayload = true;
+                    }
+                } else if (effectiveResourceBundle) {
+                    effectiveResourceBundle = mergeGenerationReferenceItemsIntoBundle(effectiveResourceBundle, referenceItems);
+                    effectiveHasResourceBundlePayload = true;
+                }
+            }
+        }
+
+        const resourceBundleValidationError = effectiveHasResourceBundlePayload
+            ? validatePostResourceBundleInput(effectiveResourceBundle ?? null, { ownerUserId: user.id })
+            : null;
+        if (resourceBundleValidationError) {
+            return NextResponse.json({ error: resourceBundleValidationError }, { status: 400 });
+        }
+        const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !effectiveHasResourceBundlePayload;
 
         if (shouldExposePost && (generation.category === 'audio' || isAudioModel(generation.model))) {
             return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
@@ -224,7 +257,7 @@ export async function POST(request: NextRequest) {
                     outputUrl: generation.output_url,
                     hasMedia: Boolean(generation.output_url),
                 },
-                bundle: hasResourceBundlePayload ? requestBody.resourceBundle ?? null : null,
+                bundle: effectiveHasResourceBundlePayload ? effectiveResourceBundle : null,
             })
             : null;
 
@@ -319,8 +352,8 @@ export async function POST(request: NextRequest) {
                 ownerUserId: user.id,
                 generationUpdate: updatePayload,
                 post: postPayload,
-                bundle: requestBody.resourceBundle ?? null,
-                hasBundlePayload: hasResourceBundlePayload,
+                bundle: effectiveResourceBundle,
+                hasBundlePayload: effectiveHasResourceBundlePayload,
             });
             postId = publishResult.postId;
             resourceBundleStatus = publishResult.bundleStatus;

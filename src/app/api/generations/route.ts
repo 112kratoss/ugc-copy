@@ -189,6 +189,7 @@ export async function GET(request: NextRequest) {
                 model: generation.model,
                 prompt: generation.prompt,
                 workflowSettings,
+                inputMedia,
             });
             const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation);
 

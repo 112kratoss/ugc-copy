@@ -169,6 +169,50 @@ describe('PublishToShowcaseModal', () => {
     });
   });
 
+  it('includes saved generation references when publishing from the simple Studio modal', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Reference portrait setup"
+        accessToken="layout-session-token"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes', 'files'],
+          promptText: 'Create the portrait using the saved reference images.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0',
+          allowRemix: false,
+          referenceCount: 2,
+          referenceKindCounts: {
+            image: 2,
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText(/2 references included/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
+        body: expect.any(String),
+      }));
+    });
+
+    const request = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+
+    expect(body).toMatchObject({
+      generationId: 'gen-1',
+      visibility: 'public',
+      includeGenerationReferences: true,
+      resourceBundle: {
+        accessMode: 'none',
+      },
+    });
+  });
+
   it('opens unlock management with the saved package selected', async () => {
     render(
       <PublishToShowcaseModal

@@ -9,8 +9,13 @@ import {
 } from '@/lib/models';
 import {
   getPostResourceKinds,
+  type PostResourceItem,
+  type PostResourceItemRole,
+  type PostResourceItemType,
+  type PostResourceRemixUse,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import type { GenerationInputMediaItem, GenerationInputMediaType } from '@/lib/generation-input-media';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 
 export interface GenerationPaywallPrefill {
@@ -18,6 +23,8 @@ export interface GenerationPaywallPrefill {
   promptText: string | null;
   notesMarkdown: string | null;
   allowRemix: boolean;
+  referenceCount?: number;
+  referenceKindCounts?: Partial<Record<GenerationInputMediaType, number>>;
 }
 
 export interface GenerationPaywallPrefillSource {
@@ -25,11 +32,150 @@ export interface GenerationPaywallPrefillSource {
   model: string | null | undefined;
   prompt: string | null | undefined;
   workflowSettings: Record<string, unknown> | null | undefined;
+  inputMedia?: GenerationInputMediaItem[] | null;
 }
 
 function trimText(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function inferReferenceExtension(storagePath: string | null | undefined, mediaType: GenerationInputMediaType): string {
+  const candidate = storagePath?.split('?')[0]?.split('.').pop()?.toLowerCase();
+  if (candidate && /^[a-z0-9]{2,5}$/.test(candidate)) {
+    return candidate;
+  }
+
+  if (mediaType === 'image') return 'jpg';
+  if (mediaType === 'audio') return 'mp3';
+  return 'mp4';
+}
+
+function inferReferenceContentType(storagePath: string | null | undefined, mediaType: GenerationInputMediaType): string {
+  const extension = inferReferenceExtension(storagePath, mediaType);
+  if (extension === 'png') return 'image/png';
+  if (extension === 'webp') return 'image/webp';
+  if (extension === 'gif') return 'image/gif';
+  if (extension === 'mp4') return 'video/mp4';
+  if (extension === 'mov') return 'video/quicktime';
+  if (extension === 'webm') return 'video/webm';
+  if (extension === 'wav') return 'audio/wav';
+  if (extension === 'ogg') return 'audio/ogg';
+  if (extension === 'flac') return 'audio/flac';
+  if (extension === 'mp3') return 'audio/mpeg';
+  if (mediaType === 'image') return 'image/jpeg';
+  if (mediaType === 'audio') return 'audio/mpeg';
+  return 'video/mp4';
+}
+
+function mapGenerationInputResourceType(item: GenerationInputMediaItem): PostResourceItemType {
+  return item.mediaType === 'image' ? 'reference_image' : 'source_file';
+}
+
+function mapGenerationInputResourceRole(role: string): PostResourceItemRole {
+  if (role === 'character_image') return 'character_reference';
+  if (role === 'start_frame' || role === 'end_frame') return 'before_input';
+  if (role === 'reference_video' || role === 'reference_audio' || role === 'motion_reference_video') {
+    return 'supporting_workflow';
+  }
+  return 'style_reference';
+}
+
+function mapGenerationInputRemixUse(item: GenerationInputMediaItem): PostResourceRemixUse {
+  return item.mediaType === 'image' ? 'reference_only' : 'none';
+}
+
+export function buildGenerationRecipeResourceItems(source: {
+  promptText: string | null | undefined;
+  notesMarkdown: string | null | undefined;
+  allowRemix: boolean;
+  inputMedia?: GenerationInputMediaItem[] | null;
+}): PostResourceItem[] {
+  const items: PostResourceItem[] = [];
+  const promptText = trimText(source.promptText);
+  const notesMarkdown = trimText(source.notesMarkdown);
+
+  if (promptText) {
+    items.push({
+      type: 'prompt',
+      role: 'primary',
+      sectionId: null,
+      title: 'Prompt',
+      description: null,
+      textContent: promptText,
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: items.length,
+      isPrimary: true,
+      remixUse: 'none',
+    });
+  }
+
+  for (const [index, item] of (source.inputMedia ?? []).entries()) {
+    if (!item.storagePath) {
+      continue;
+    }
+
+    items.push({
+      type: mapGenerationInputResourceType(item),
+      role: mapGenerationInputResourceRole(item.role),
+      sectionId: null,
+      title: trimText(item.label) ?? `Reference ${index + 1}`,
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath: item.storagePath,
+      contentType: inferReferenceContentType(item.storagePath, item.mediaType),
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: items.length,
+      isPrimary: items.length === 0,
+      remixUse: mapGenerationInputRemixUse(item),
+    });
+  }
+
+  if (notesMarkdown) {
+    items.push({
+      type: 'note',
+      role: 'other',
+      sectionId: null,
+      title: 'Notes',
+      description: null,
+      textContent: notesMarkdown,
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: items.length,
+      isPrimary: items.length === 0,
+      remixUse: 'none',
+    });
+  }
+
+  if (source.allowRemix) {
+    items.push({
+      type: 'remix_access',
+      role: 'other',
+      sectionId: null,
+      title: 'Remix access',
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: items.length,
+      isPrimary: items.length === 0,
+      remixUse: 'direct_remix',
+    });
+  }
+
+  return items;
 }
 
 function formatBooleanLabel(value: boolean): string {
@@ -108,6 +254,26 @@ function hasRecoverableDescriptor(value: unknown, expectedKind: 'image' | 'video
 
 function countRecoverableDescriptors(value: unknown): number {
   return normalizeSubmittedElementDescriptors(value).filter((element) => element.storagePath || element.sourceGenerationId).length;
+}
+
+function getSavedReferenceKindCounts(
+  inputMedia: GenerationInputMediaItem[] | null | undefined
+): Partial<Record<GenerationInputMediaType, number>> {
+  const counts: Partial<Record<GenerationInputMediaType, number>> = {};
+
+  for (const item of inputMedia ?? []) {
+    if (!item.storagePath) {
+      continue;
+    }
+
+    counts[item.mediaType] = (counts[item.mediaType] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+function getSavedReferenceCount(kindCounts: Partial<Record<GenerationInputMediaType, number>>): number {
+  return Object.values(kindCounts).reduce((total, count) => total + (count ?? 0), 0);
 }
 
 export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPrefillSource): boolean {
@@ -302,20 +468,27 @@ export function buildGenerationPaywallPrefill(
   const promptText = trimText(source.prompt);
   const notesMarkdown = buildGenerationPaywallNotes(source);
   const allowRemix = hasRecoverableGenerationRemixInputs(source);
+  const referenceKindCounts = getSavedReferenceKindCounts(source.inputMedia);
+  const referenceCount = getSavedReferenceCount(referenceKindCounts);
   const resourceKinds = getPostResourceKinds({
     promptText,
     notesMarkdown,
     allowRemix,
   });
+  const effectiveResourceKinds: PostResourceKind[] = referenceCount > 0 && !resourceKinds.includes('files')
+    ? [...resourceKinds, 'files']
+    : resourceKinds;
 
-  if (!promptText && !notesMarkdown && !allowRemix) {
+  if (!promptText && !notesMarkdown && !allowRemix && referenceCount === 0) {
     return null;
   }
 
   return {
-    resourceKinds,
+    resourceKinds: effectiveResourceKinds,
     promptText,
     notesMarkdown,
     allowRemix,
+    referenceCount,
+    referenceKindCounts,
   };
 }

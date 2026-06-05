@@ -25,6 +25,7 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useAuth } from '@/app/components/AuthProvider';
 import {
+  formatPostResourceBundleCountSummary,
   getBundleAccessLabel,
   getPostResourceKindLabel,
   isPostResourceKind,
@@ -35,7 +36,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getCurrentInternalPath } from '@/lib/share';
-import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { isGenerationRecipeAssetId, type ShowcaseFeedItem } from '@/lib/showcase';
 
 declare global {
   interface Window {
@@ -94,6 +95,10 @@ function formatDate(value: string): string {
 }
 
 function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  if (isGenerationRecipeAssetId(asset.id)) {
+    return 'Public recipe';
+  }
+
   if (asset.priceQuote) {
     return formatBundleAccessLabel({
       accessMode: asset.accessMode,
@@ -105,6 +110,10 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  if (isGenerationRecipeAssetId(asset.id)) {
+    return 'View recipe';
+  }
+
   if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
     return 'Open free unlock';
   }
@@ -123,7 +132,10 @@ function getItemSummary(item: ShowcaseFeedItem): string {
 
   if (item.asset) {
     const kinds = getItemResourceKinds(item);
-    return kinds.length > 0
+    const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
+    return bundleCountSummary
+      ? `Unlock includes ${bundleCountSummary}.`
+      : kinds.length > 0
       ? `Unlock includes ${kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase()).join(', ')}.`
       : 'Reusable unlock attached.';
   }
@@ -174,6 +186,11 @@ export default function ShowcaseReelViewer({
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
   const [unlockedResources, setUnlockedResources] = useState<ReelBundleResources | null>(null);
   const [showUnlockedDetails, setShowUnlockedDetails] = useState(false);
+  const [publicRecipeItemId, setPublicRecipeItemId] = useState<string | null>(null);
+  const [publicRecipeResources, setPublicRecipeResources] = useState<ReelBundleResources | null>(null);
+  const [publicRecipeLoadingItemId, setPublicRecipeLoadingItemId] = useState<string | null>(null);
+  const [publicRecipeError, setPublicRecipeError] = useState<string | null>(null);
+  const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
   const selectedIndex = useMemo(
     () => selectedItemId ? items.findIndex((item) => item.id === selectedItemId) : -1,
     [items, selectedItemId]
@@ -181,6 +198,8 @@ export default function ShowcaseReelViewer({
   const item = selectedIndex >= 0 ? items[selectedIndex] : null;
   const previousItem = selectedIndex > 0 ? items[selectedIndex - 1] : null;
   const nextItem = selectedIndex >= 0 && selectedIndex < items.length - 1 ? items[selectedIndex + 1] : null;
+  const selectedAssetId = item?.asset?.id ?? null;
+  const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
 
   const moveToItem = useCallback((targetItem: ShowcaseFeedItem, direction: ReelTransitionDirection) => {
     setActiveUnlockCheckoutItemId(null);
@@ -230,8 +249,33 @@ export default function ShowcaseReelViewer({
     onClose();
   }, [onClose]);
 
+  const fetchBundleForItem = useCallback(async (postId: string) => {
+    const response = await fetch(`/api/posts/${postId}/resource-bundle`, {
+      headers: session?.access_token
+        ? {
+            Authorization: `Bearer ${session.access_token}`,
+          }
+        : undefined,
+    });
+    const data = await response.json();
+
+    if (!response.ok || !data?.bundle) {
+      throw new Error(data.error || 'Failed to refresh the unlock.');
+    }
+
+    return data.bundle as ReelBundleRefreshPayload;
+  }, [session?.access_token]);
+
   const openUnlockCheckout = () => {
     if (!item?.asset) {
+      return;
+    }
+
+    if (isGenerationRecipeAssetId(item.asset.id)) {
+      detailsScrollerRef.current?.scrollTo({
+        top: 220,
+        behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      });
       return;
     }
 
@@ -338,6 +382,111 @@ export default function ShowcaseReelViewer({
   }, [nextItem, onSelectItemId]);
 
   useEffect(() => {
+    if (!isOpen || !item?.id || !isPublicRecipeAsset) {
+      return;
+    }
+
+    let cancelled = false;
+
+    setPublicRecipeLoadingItemId(item.id);
+    setPublicRecipeError(null);
+
+    void fetchBundleForItem(item.id)
+      .then((bundle) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (bundle.viewerCanAccess && bundle.resources) {
+          setPublicRecipeItemId(item.id);
+          setPublicRecipeResources(bundle.resources);
+          return;
+        }
+
+        setPublicRecipeItemId(null);
+        setPublicRecipeResources(null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setPublicRecipeError(error instanceof Error ? error.message : 'Failed to load recipe.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPublicRecipeLoadingItemId(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchBundleForItem, isOpen, isPublicRecipeAsset, item?.id]);
+
+  const activeAccessibleResources =
+    item && unlockSuccessItemId === item.id
+      ? unlockedResources
+      : item && publicRecipeItemId === item.id
+        ? publicRecipeResources
+        : null;
+
+  useEffect(() => {
+    const storagePaths = Array.from(new Set([
+      ...(activeAccessibleResources?.items ?? [])
+        .map((resourceItem) => resourceItem.storagePath)
+        .filter((storagePath): storagePath is string => Boolean(storagePath)),
+      ...(activeAccessibleResources?.attachments ?? [])
+        .map((attachment) => attachment.storagePath)
+        .filter((storagePath): storagePath is string => Boolean(storagePath)),
+    ]));
+
+    setResourceFileUrls({});
+
+    if (!item?.id || storagePaths.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all(storagePaths.map(async (storagePath) => {
+      const response = await fetch(`/api/posts/${item.id}/resource-bundle/file-url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          storagePath,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || typeof data?.signedUrl !== 'string') {
+        return null;
+      }
+
+      return [storagePath, data.signedUrl] as const;
+    }))
+      .then((entries) => {
+        if (cancelled) {
+          return;
+        }
+
+        setResourceFileUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResourceFileUrls({});
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAccessibleResources, item?.id, session?.access_token]);
+
+  useEffect(() => {
     if (!isOpen) {
       return;
     }
@@ -385,13 +534,10 @@ export default function ShowcaseReelViewer({
   const tokenCost = item.asset ? Math.max(0, item.asset.priceUsdCents) : 0;
   const hasKnownInsufficientTokens = Boolean(session?.access_token && typeof credits === 'number' && credits < tokenCost);
   const includedKindLabels = resourceKinds.map(getPostResourceKindLabel);
-  const unlockedDetailLines = [
-    (unlockedResources?.promptText || resourceKinds.includes('prompt')) ? 'Prompt is ready.' : null,
-    (unlockedResources?.notesMarkdown || resourceKinds.includes('notes')) ? 'Notes are ready.' : null,
-    (unlockedResources?.workflowShareUrl || resourceKinds.includes('workflow')) ? 'Workflow is ready.' : null,
-    (unlockedResources?.allowRemix || resourceKinds.includes('remix')) ? 'Remix is ready.' : null,
-    ((unlockedResources?.attachments.length ?? 0) > 0 || resourceKinds.includes('files')) ? 'Files are ready.' : null,
-  ].filter((line): line is string => Boolean(line));
+  const bundleCountSummary = item.asset
+    ? formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null)
+    : '';
+  const publicRecipeIsLoading = publicRecipeLoadingItemId === item.id;
   const shouldWaitForMedia = item.postFormat !== 'text' && Boolean(item.mediaUrl);
   const currentMediaKey = shouldWaitForMedia ? `${item.id}:${item.mediaUrl}` : null;
   const isMediaReady = !currentMediaKey || loadedMediaKeys.has(currentMediaKey);
@@ -412,25 +558,8 @@ export default function ShowcaseReelViewer({
     return false;
   };
 
-  const fetchLatestBundle = async () => {
-    const response = await fetch(`/api/posts/${item.id}/resource-bundle`, {
-      headers: session?.access_token
-        ? {
-            Authorization: `Bearer ${session.access_token}`,
-          }
-        : undefined,
-    });
-    const data = await response.json();
-
-    if (!response.ok || !data?.bundle) {
-      throw new Error(data.error || 'Failed to refresh the unlock.');
-    }
-
-    return data.bundle as ReelBundleRefreshPayload;
-  };
-
   const finishReelUnlock = async () => {
-    const bundle = await fetchLatestBundle();
+    const bundle = await fetchBundleForItem(item.id);
     setUnlockSuccessItemId(item.id);
     setUnlockedResources(bundle.resources);
     setShowUnlockedDetails(false);
@@ -648,6 +777,162 @@ export default function ShowcaseReelViewer({
     }
   };
 
+  const renderRecipeResourcesCard = (
+    resources: ReelBundleResources,
+    options?: { title?: string; compact?: boolean }
+  ) => {
+    const resourceItems = resources.items ?? [];
+    const promptText = resources.promptText
+      || resourceItems.find((resourceItem) => resourceItem.type === 'prompt' && resourceItem.textContent)?.textContent
+      || null;
+    const notesMarkdown = resources.notesMarkdown
+      || resourceItems.find((resourceItem) => resourceItem.type === 'note' && resourceItem.textContent)?.textContent
+      || null;
+    const referenceItems = resourceItems.filter((resourceItem) =>
+      resourceItem.storagePath
+      || resourceItem.externalUrl
+      || resourceItem.type === 'reference_image'
+      || resourceItem.type === 'source_file'
+    );
+    const attachmentItems = resources.attachments.filter((attachment) => attachment.url || attachment.storagePath);
+    const hasRecipeContent = Boolean(
+      promptText
+      || notesMarkdown
+      || referenceItems.length > 0
+      || attachmentItems.length > 0
+      || resources.allowRemix
+    );
+
+    if (!hasRecipeContent) {
+      return null;
+    }
+
+    return (
+      <div className={`${options?.compact ? 'mt-3' : 'mt-5'} rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4`}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
+              {options?.title ?? 'Creation recipe'}
+            </div>
+            <p className="mt-1 text-sm leading-6 text-emerald-50/75">
+              Prompt, references, notes, and remix access available here.
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full border border-emerald-300/20 bg-black/25 px-2.5 py-1 text-xs font-medium text-emerald-50">
+            Ready
+          </span>
+        </div>
+
+        {promptText ? (
+          <div className="mt-4 rounded-2xl border border-white/8 bg-black/35 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(promptText)}
+                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08]"
+              >
+                Copy
+              </button>
+            </div>
+            <p className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere] app-scrollbar">
+              {promptText}
+            </p>
+          </div>
+        ) : null}
+
+        {referenceItems.length > 0 || attachmentItems.length > 0 ? (
+          <div className="mt-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">References</div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              {referenceItems.map((resourceItem, index) => {
+                const fileUrl = resourceItem.storagePath ? resourceFileUrls[resourceItem.storagePath] : resourceItem.externalUrl;
+                const isImage = resourceItem.type === 'reference_image' || resourceItem.contentType?.startsWith('image/');
+                const isVideo = resourceItem.contentType?.startsWith('video/');
+                const isAudio = resourceItem.contentType?.startsWith('audio/');
+
+                return (
+                  <div
+                    key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
+                    className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35"
+                  >
+                    <div className="flex aspect-square items-center justify-center bg-black">
+                      {fileUrl && isImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={fileUrl}
+                          alt={resourceItem.title}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : fileUrl && isVideo ? (
+                        <video src={fileUrl} controls className="h-full w-full object-contain" />
+                      ) : fileUrl && isAudio ? (
+                        <audio src={fileUrl} controls className="w-full px-2" />
+                      ) : (
+                        <div className="px-3 text-center text-xs text-zinc-500">Preparing preview</div>
+                      )}
+                    </div>
+                    <div className="p-2">
+                      <div className="truncate text-xs font-semibold text-zinc-100">{resourceItem.title}</div>
+                      {fileUrl ? (
+                        <a
+                          href={fileUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 inline-flex text-xs font-medium text-emerald-200 hover:text-emerald-100"
+                        >
+                          Open
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {attachmentItems.map((attachment, index) => {
+                const fileUrl = attachment.storagePath ? resourceFileUrls[attachment.storagePath] : attachment.url;
+
+                return (
+                  <div
+                    key={`${attachment.storagePath ?? attachment.url ?? attachment.label}:${index}`}
+                    className="min-w-0 rounded-2xl border border-white/10 bg-black/35 p-3"
+                  >
+                    <div className="truncate text-xs font-semibold text-zinc-100">{attachment.label}</div>
+                    {fileUrl ? (
+                      <a
+                        href={fileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-flex text-xs font-medium text-emerald-200 hover:text-emerald-100"
+                      >
+                        Open
+                      </a>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {notesMarkdown ? (
+          <div className="mt-4 rounded-2xl border border-white/8 bg-black/35 p-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere]">
+              {notesMarkdown}
+            </p>
+          </div>
+        ) : null}
+
+        {resources.allowRemix ? (
+          <div className="mt-4 rounded-2xl border border-purple-300/20 bg-purple-500/10 px-3 py-2 text-sm font-medium text-purple-100">
+            Remix access is included.
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderCompactUnlockCard = () => {
     if (!item.asset) {
       return null;
@@ -678,6 +963,12 @@ export default function ShowcaseReelViewer({
           </div>
         ) : null}
 
+        {bundleCountSummary ? (
+          <p className="mt-3 text-sm leading-6 text-emerald-50/75">
+            Includes {bundleCountSummary}.
+          </p>
+        ) : null}
+
         {hasReelUnlockAccess ? (
           <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-black/25 p-4">
             <div className="text-sm font-semibold text-emerald-100">Unlocked</div>
@@ -693,11 +984,10 @@ export default function ShowcaseReelViewer({
               View unlocked details
             </button>
             {showUnlockedDetails ? (
-              <div className="mt-3 space-y-2 rounded-2xl border border-white/8 bg-black/30 p-3 text-sm text-zinc-200">
-                {(unlockedDetailLines.length > 0 ? unlockedDetailLines : ['Unlocked details are ready.']).map((line) => (
-                  <div key={line}>{line}</div>
-                ))}
-              </div>
+              unlockedResources ? renderRecipeResourcesCard(unlockedResources, {
+                title: 'Unlocked details',
+                compact: true,
+              }) : null
             ) : null}
           </div>
         ) : isFreeUnlock ? (
@@ -1034,7 +1324,24 @@ export default function ShowcaseReelViewer({
                   {summary}
                 </p>
 
-                {item.asset && !isUnlockCheckoutOpen ? (
+                {isPublicRecipeAsset ? (
+                  publicRecipeIsLoading ? (
+                    <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-emerald-100">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading recipe
+                      </div>
+                    </div>
+                  ) : publicRecipeError ? (
+                    <div className="mt-5 rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-100">
+                      {publicRecipeError}
+                    </div>
+                  ) : activeAccessibleResources ? (
+                    renderRecipeResourcesCard(activeAccessibleResources)
+                  ) : null
+                ) : null}
+
+                {item.asset && !isUnlockCheckoutOpen && !isPublicRecipeAsset && !hasReelUnlockAccess ? (
                   <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -1071,8 +1378,14 @@ export default function ShowcaseReelViewer({
                   </div>
                 ) : null}
 
-                {item.asset && isUnlockCheckoutOpen ? (
+                {item.asset && isUnlockCheckoutOpen && !isPublicRecipeAsset ? (
                   renderCompactUnlockCard()
+                ) : null}
+
+                {item.asset && hasReelUnlockAccess && !isUnlockCheckoutOpen && !isPublicRecipeAsset && unlockedResources ? (
+                  renderRecipeResourcesCard(unlockedResources, {
+                    title: 'Unlocked details',
+                  })
                 ) : null}
 
                 {item.body.trim() ? (
