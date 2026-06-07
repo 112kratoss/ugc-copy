@@ -114,6 +114,36 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     );
   });
 
+  it('signs public legacy upload recipe references from the uploads bucket', async () => {
+    authState.user = null;
+    getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
+      viewerCanAccess: true,
+      resources: {
+        attachments: [],
+        items: [{
+          title: 'Element 1',
+          storagePath: 'uploads/user-1/legacy-reference.jpeg',
+        }],
+      },
+    });
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/file-url/route');
+    const response = await POST(
+      buildRequest('uploads/user-1/legacy-reference.jpeg'),
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(storageFromMock).toHaveBeenCalledWith('uploads');
+    expect(createSignedUrlMock).toHaveBeenCalledWith(
+      'user-1/legacy-reference.jpeg',
+      600,
+      expect.objectContaining({
+        download: 'Element 1',
+      })
+    );
+  });
+
   it('blocks locked buyers from fetching copied reference file URLs', async () => {
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       viewerCanAccess: false,

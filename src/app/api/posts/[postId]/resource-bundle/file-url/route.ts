@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getPostResourceBundleDetailByPostId } from '@/lib/post-resource-bundles-server';
+import { getUploadsBucketPath, isUploadsStoragePath } from '@/lib/image-elements';
 import { getStoredMediaLocation } from '@/lib/media-urls';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -40,8 +41,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 
   const storedLocation = getStoredMediaLocation(requestedPath);
-  const bucket = storedLocation?.bucket ?? RESOURCE_FILES_BUCKET;
-  const filePath = storedLocation?.filePath ?? requestedPath;
+  const isUploadReference = isUploadsStoragePath(requestedPath);
+  const bucket = isUploadReference ? 'uploads' : storedLocation?.bucket ?? RESOURCE_FILES_BUCKET;
+  const filePath = isUploadReference
+    ? getUploadsBucketPath(requestedPath)
+    : storedLocation?.filePath ?? requestedPath;
   const { data, error } = await adminSupabase.storage
     .from(bucket)
     .createSignedUrl(filePath, 600, {

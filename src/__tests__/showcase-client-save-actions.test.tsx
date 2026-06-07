@@ -14,7 +14,7 @@ vi.mock('next/navigation', () => ({
     replace: mockReplace,
   }),
   usePathname: () => '/showcase',
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock('next/link', () => ({
@@ -126,6 +126,7 @@ describe('ShowcaseClient save actions', () => {
   }> = [];
 
   beforeEach(() => {
+    window.history.replaceState(null, '', '/showcase');
     mockPush.mockReset();
     mockReplace.mockReset();
     intersectionObservers.length = 0;
@@ -334,6 +335,68 @@ describe('ShowcaseClient save actions', () => {
     const image = screen.getByRole('img', { name: 'Campaign Frame' });
     expect(image).toHaveAttribute('loading', 'lazy');
     expect(image).toHaveAttribute('decoding', 'async');
+  });
+
+  it('adds a shareable post URL when a feed card opens and returns through history on close', async () => {
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+
+    renderShowcase(createShowcaseItem());
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+    });
+    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-1');
+
+    fireEvent.click(screen.getByRole('button', { name: /feed/i }));
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads a shared post URL that is not present in the first feed page without pushing a duplicate history entry', async () => {
+    const sharedItem = createShowcaseItem({
+      id: 'post-shared',
+      title: 'Shared Campaign',
+      generationId: 'gen-shared',
+      mediaUrl: 'https://example.com/shared.jpg',
+    });
+    window.history.replaceState(null, '', '/showcase?post=post-shared');
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/showcase/posts/post-shared') {
+        return {
+          ok: true,
+          json: async () => ({ success: true, item: sharedItem }),
+        };
+      }
+
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => [],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ success: true }),
+      };
+    }));
+
+    renderShowcase(createShowcaseItem());
+
+    expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
+    expect(pushState).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /feed/i }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).has('post')).toBe(false);
+    });
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/showcase');
   });
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {

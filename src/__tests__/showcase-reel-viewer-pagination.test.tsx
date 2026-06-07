@@ -315,7 +315,7 @@ describe('ShowcaseReelViewer pagination', () => {
           createShowcaseItem({
             id: 'post-1',
             title: 'Public Recipe Frame',
-            prompt: '',
+            prompt: 'public recipe prompt',
             asset: {
               ...paidAsset,
               id: 'generation-recipe:post-1',
@@ -334,6 +334,54 @@ describe('ShowcaseReelViewer pagination', () => {
                 reference_image: 1,
                 note: 1,
                 remix_access: 1,
+              },
+              lockedPreview: {
+                resourceKinds: ['prompt', 'files', 'notes', 'remix'],
+                attachmentPreviews: [],
+                itemCounts: {
+                  prompt: 1,
+                  reference_image: 1,
+                  note: 1,
+                  remix_access: 1,
+                },
+                itemPreviews: [
+                  {
+                    type: 'prompt',
+                    title: 'Prompt',
+                    role: 'primary',
+                    sectionId: null,
+                    remixUse: 'none',
+                  },
+                  {
+                    type: 'reference_image',
+                    title: 'Image input',
+                    role: 'style_reference',
+                    sectionId: null,
+                    contentType: 'image/png',
+                    remixUse: 'reference_only',
+                  },
+                  {
+                    type: 'note',
+                    title: 'Notes',
+                    role: 'other',
+                    sectionId: null,
+                    remixUse: 'none',
+                  },
+                  {
+                    type: 'remix_access',
+                    title: 'Remix access',
+                    role: 'other',
+                    sectionId: null,
+                    remixUse: 'direct_remix',
+                  },
+                ],
+                sectionCount: 0,
+                sectionPreviews: [],
+                hasPrompt: true,
+                hasNotes: true,
+                hasWorkflow: false,
+                hasRemix: true,
+                updatedAt: '2026-04-02T10:00:00.000Z',
               },
             },
             canRemix: true,
@@ -354,10 +402,18 @@ describe('ShowcaseReelViewer pagination', () => {
       />
     );
 
+    expect(screen.getAllByText(/creation recipe includes 1 prompt, 1 reference image, 1 note, 1 remix access/i).length).toBeGreaterThan(0);
     expect(await screen.findByText(/public recipe prompt/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/public recipe prompt/i)).toHaveLength(1);
     expect(screen.getByText(/public recipe notes/i)).toBeInTheDocument();
-    expect(screen.getByText(/image input/i)).toBeInTheDocument();
     expect(screen.getByText(/remix access is included/i)).toBeInTheDocument();
+
+    expect(screen.queryByText(/^image input$/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /open preview for image input/i }));
+
+    expect(screen.getByRole('dialog', { name: /reference image preview/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close reference preview/i })).toBeInTheDocument();
   });
 
   it('starts the existing cash checkout from the compact reel choice', async () => {

@@ -83,6 +83,11 @@ interface ReelBundleRefreshPayload {
   resources: ReelBundleResources | null;
 }
 
+interface ActiveReferencePreview {
+  src: string;
+  alt: string;
+}
+
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
   return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
 }
@@ -122,6 +127,21 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
+  if (item.asset && isGenerationRecipeAssetId(item.asset.id)) {
+    const kinds = getItemResourceKinds(item);
+    const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
+
+    if (bundleCountSummary) {
+      return `Creation recipe includes ${bundleCountSummary}.`;
+    }
+
+    if (kinds.length > 0) {
+      return `Creation recipe includes ${kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase()).join(', ')}.`;
+    }
+
+    return item.asset.previewText || 'Creation recipe is available below.';
+  }
+
   if (item.body.trim()) {
     return item.body;
   }
@@ -191,6 +211,7 @@ export default function ShowcaseReelViewer({
   const [publicRecipeLoadingItemId, setPublicRecipeLoadingItemId] = useState<string | null>(null);
   const [publicRecipeError, setPublicRecipeError] = useState<string | null>(null);
   const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
+  const [activeReferencePreview, setActiveReferencePreview] = useState<ActiveReferencePreview | null>(null);
   const selectedIndex = useMemo(
     () => selectedItemId ? items.findIndex((item) => item.id === selectedItemId) : -1,
     [items, selectedItemId]
@@ -487,13 +508,26 @@ export default function ShowcaseReelViewer({
   }, [activeAccessibleResources, item?.id, session?.access_token]);
 
   useEffect(() => {
+    setActiveReferencePreview(null);
+  }, [item?.id]);
+
+  useEffect(() => {
     if (!isOpen) {
       return;
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (activeReferencePreview) {
+          setActiveReferencePreview(null);
+          return;
+        }
+
         handleClose();
+        return;
+      }
+
+      if (activeReferencePreview) {
         return;
       }
 
@@ -512,7 +546,51 @@ export default function ShowcaseReelViewer({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [goNext, goPrevious, handleClose, isOpen]);
+  }, [activeReferencePreview, goNext, goPrevious, handleClose, isOpen]);
+
+  // Auto-fetch free bundles so reference previews are visible immediately.
+  // Free published bundles return viewerCanAccess: true via GET (no POST unlock needed).
+  useEffect(() => {
+    if (!isOpen || !item?.id || !item?.asset) {
+      return;
+    }
+
+    const isPublicRecipe = Boolean(item.asset.id && isGenerationRecipeAssetId(item.asset.id));
+    const isFree = item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0;
+    const alreadyUnlocked = unlockSuccessItemId === item.id;
+
+    if (isPublicRecipe || !isFree || alreadyUnlocked) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void fetchBundleForItem(item.id)
+      .then((bundle) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (bundle.viewerCanAccess && bundle.resources) {
+          setUnlockSuccessItemId(item.id);
+          setUnlockedResources(bundle.resources);
+          setShowUnlockedDetails(false);
+          setUnlockError(null);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+
+        setUnlockError(err instanceof Error ? err.message : 'Failed to load free unlock.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, item?.id, item?.asset?.id, item?.asset?.accessMode, item?.asset?.priceUsdCents, unlockSuccessItemId, fetchBundleForItem]);
 
   if (!isOpen || !item) {
     return null;
@@ -846,46 +924,50 @@ export default function ShowcaseReelViewer({
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">References</div>
             <div className="mt-3 grid grid-cols-2 gap-3">
               {referenceItems.map((resourceItem, index) => {
-                const fileUrl = resourceItem.storagePath ? resourceFileUrls[resourceItem.storagePath] : resourceItem.externalUrl;
+                const hasFile = Boolean(resourceItem.storagePath || resourceItem.externalUrl);
+                const fileUrl = hasFile
+                  ? (resourceItem.storagePath ? resourceFileUrls[resourceItem.storagePath] : resourceItem.externalUrl)
+                  : null;
                 const isImage = resourceItem.type === 'reference_image' || resourceItem.contentType?.startsWith('image/');
                 const isVideo = resourceItem.contentType?.startsWith('video/');
                 const isAudio = resourceItem.contentType?.startsWith('audio/');
+                const showMediaPreview = hasFile && (isImage || isVideo || isAudio);
 
                 return (
-                  <div
-                    key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
-                    className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35"
-                  >
-                    <div className="flex aspect-square items-center justify-center bg-black">
-                      {fileUrl && isImage ? (
-                        // eslint-disable-next-line @next/next/no-img-element
+                  isImage && fileUrl ? (
+                    <button
+                      key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
+                      type="button"
+                      onClick={() => setActiveReferencePreview({
+                        src: fileUrl,
+                        alt: resourceItem.title,
+                      })}
+                      aria-label={`Open preview for ${resourceItem.title}`}
+                      className="group min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35 transition hover:border-white/20"
+                    >
+                      <div className="flex aspect-[3/4] items-center justify-center bg-black">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={fileUrl}
                           alt={resourceItem.title}
-                          className="h-full w-full object-contain"
+                          className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
                         />
-                      ) : fileUrl && isVideo ? (
+                      </div>
+                    </button>
+                  ) : (
+                    <div
+                      key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
+                      className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35 p-3"
+                    >
+                      {showMediaPreview && fileUrl && isVideo ? (
                         <video src={fileUrl} controls className="h-full w-full object-contain" />
-                      ) : fileUrl && isAudio ? (
-                        <audio src={fileUrl} controls className="w-full px-2" />
+                      ) : showMediaPreview && fileUrl && isAudio ? (
+                        <audio src={fileUrl} controls className="w-full" />
                       ) : (
-                        <div className="px-3 text-center text-xs text-zinc-500">Preparing preview</div>
+                        <div className="text-xs text-zinc-400">{resourceItem.title}</div>
                       )}
                     </div>
-                    <div className="p-2">
-                      <div className="truncate text-xs font-semibold text-zinc-100">{resourceItem.title}</div>
-                      {fileUrl ? (
-                        <a
-                          href={fileUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-1 inline-flex text-xs font-medium text-emerald-200 hover:text-emerald-100"
-                        >
-                          Open
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
+                  )
                 );
               })}
 
@@ -1107,6 +1189,44 @@ export default function ShowcaseReelViewer({
       {item.asset && isUnlockCheckoutOpen && !isFreeUnlock ? (
         <Script id="showcase-reel-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
       ) : null}
+
+      <AnimatePresence>
+        {activeReferencePreview ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0.12 : 0.18 }}
+            className="absolute inset-0 z-[120] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
+            onClick={() => setActiveReferencePreview(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Reference image preview"
+          >
+            <div
+              className="relative flex max-h-full w-full max-w-5xl items-center justify-center"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveReferencePreview(null)}
+                className="absolute right-3 top-3 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-black/65 text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
+                aria-label="Close reference preview"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <div className="flex min-h-[220px] w-full items-center justify-center rounded-[24px] border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={activeReferencePreview.src}
+                  alt={activeReferencePreview.alt}
+                  className="max-h-[calc(100dvh-7rem)] max-w-full object-contain"
+                />
+              </div>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute left-[14%] top-[-18%] h-[30rem] w-[30rem] rounded-full bg-purple-600/10 blur-[130px]" />
@@ -1397,7 +1517,7 @@ export default function ShowcaseReelViewer({
                   </div>
                 ) : null}
 
-                {item.prompt.trim() ? (
+                {item.prompt.trim() && !isPublicRecipeAsset ? (
                   <div className="mt-5 rounded-[20px] border border-white/8 bg-black/30 p-4">
                     <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                       {item.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}

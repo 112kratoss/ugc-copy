@@ -207,6 +207,10 @@ export default function ShowcaseClient({
     const isLoadingMoreRef = useRef(false);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+    const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
+        searchParams.get('post') ? 'direct' : null
+    );
+    const directPostRequestRef = useRef<string | null>(null);
 
     const registerPreviewVideo = (id: string, node: HTMLVideoElement | null) => {
         previewVideoRefs.current[id] = node;
@@ -225,10 +229,118 @@ export default function ShowcaseClient({
     const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
 
     useEffect(() => {
-        if (selectedItemId && !items.some((item) => item.id === selectedItemId)) {
+        const postParam = searchParams.get('post');
+
+        if (!postParam) {
+            directPostRequestRef.current = null;
+            reelHistoryModeRef.current = null;
             setSelectedItemId(null);
+            return;
         }
-    }, [items, selectedItemId]);
+
+        if (reelHistoryModeRef.current === null) {
+            reelHistoryModeRef.current = 'direct';
+        }
+
+        if (items.some((item) => item.id === postParam)) {
+            directPostRequestRef.current = postParam;
+            setSelectedItemId(postParam);
+            return;
+        }
+
+        if (directPostRequestRef.current === postParam) {
+            return;
+        }
+
+        directPostRequestRef.current = postParam;
+        const controller = new AbortController();
+
+        void fetch(`/api/showcase/posts/${encodeURIComponent(postParam)}`, {
+            headers: session?.access_token
+                ? {
+                    Authorization: `Bearer ${session.access_token}`,
+                }
+                : undefined,
+            signal: controller.signal,
+        })
+            .then(async (response) => {
+                const payload = await response.json();
+                if (!response.ok || !payload?.item) {
+                    throw new Error(payload?.error || 'Post not found.');
+                }
+
+                const sharedItem = payload.item as ShowcaseFeedItem;
+                setItems((currentItems) => currentItems.some((item) => item.id === sharedItem.id)
+                    ? currentItems
+                    : [...currentItems, sharedItem]);
+                setSelectedItemId(sharedItem.id);
+            })
+            .catch((error) => {
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    return;
+                }
+
+                console.error('Failed to load shared showcase post:', error);
+            });
+
+        return () => {
+            controller.abort();
+        };
+    }, [items, searchParams, session?.access_token, setItems]);
+
+    const updateReelUrl = useCallback((postId: string | null, mode: 'push' | 'replace') => {
+        const params = new URLSearchParams(window.location.search);
+        if (postId) {
+            params.set('post', postId);
+        } else {
+            params.delete('post');
+        }
+
+        const nextUrl = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
+        if (mode === 'push') {
+            window.history.pushState(null, '', nextUrl);
+        } else {
+            window.history.replaceState(null, '', nextUrl);
+        }
+    }, [pathname]);
+
+    const selectPreviewItem = useCallback((id: string) => {
+        updateReelUrl(id, 'replace');
+        setSelectedItemId(id);
+    }, [updateReelUrl]);
+
+    const openPreview = (item: ShowcaseFeedItem) => {
+        reelHistoryModeRef.current = 'pushed';
+        updateReelUrl(item.id, 'push');
+        setSelectedItemId(item.id);
+    };
+
+    const closePreview = () => {
+        setSelectedItemId(null);
+
+        if (reelHistoryModeRef.current === 'pushed') {
+            reelHistoryModeRef.current = null;
+            window.history.back();
+            return;
+        }
+
+        reelHistoryModeRef.current = null;
+        updateReelUrl(null, 'replace');
+    };
+
+    useEffect(() => {
+        const handlePopState = () => {
+            const postParam = new URLSearchParams(window.location.search).get('post');
+            reelHistoryModeRef.current = postParam ? 'direct' : null;
+
+            if (!postParam) {
+                setSelectedItemId(null);
+            }
+        };
+
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, []);
 
     useEffect(() => {
         setItems(initialFeed.items);
@@ -414,14 +526,6 @@ export default function ShowcaseClient({
         } catch (error) {
             console.error('Remix failed:', error);
         }
-    };
-
-    const openPreview = (item: ShowcaseFeedItem) => {
-        setSelectedItemId(item.id);
-    };
-
-    const closePreview = () => {
-        setSelectedItemId(null);
     };
 
     const activeFilterPills = [
@@ -856,7 +960,7 @@ export default function ShowcaseClient({
                 isLoadingMoreItems={isLoadingMore}
                 onLoadMoreItems={loadMore}
                 onClose={closePreview}
-                onSelectItemId={setSelectedItemId}
+                onSelectItemId={selectPreviewItem}
                 onToggleSave={toggleSave}
                 onRemix={handleRemix}
                 buildDetailPath={buildCommunityDetailPath}
