@@ -1373,7 +1373,7 @@ export default function ShowcaseReelViewer({
             className="inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:flex-none"
           />
 
-          {item.asset ? (
+          {item.asset && !isPublicRecipeAsset ? (
             <button
               type="button"
               onClick={openUnlockCheckout}
