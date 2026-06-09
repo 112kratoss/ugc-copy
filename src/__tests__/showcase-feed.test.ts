@@ -79,8 +79,23 @@ type PostResourceBundlePurchaseRow = {
   buyer_user_id: string;
 };
 
+type PostMediaRow = {
+  id: string;
+  post_id: string;
+  storage_path: string | null;
+  external_url: string | null;
+  media_kind: 'image' | 'video';
+  content_type: string | null;
+  original_name: string | null;
+  width: number | null;
+  height: number | null;
+  duration_seconds: number | null;
+  sort_order: number;
+};
+
 let profilesState: ProfileRow[] = [];
 let postsState: PostRow[] = [];
+let postMediaState: PostMediaRow[] = [];
 let generationModelsState: GenerationModelRow[] = [];
 let generationInputMediaState: GenerationInputMediaRow[] = [];
 let resourceBundlesState: ResourceBundleRow[] = [];
@@ -205,6 +220,32 @@ function createServiceClientMock() {
             };
           },
         };
+      }
+
+      if (table === 'post_media') {
+        let postIds: unknown[] = [];
+
+        const query = {
+          select() {
+            return query;
+          },
+          in(column: string, values: unknown[]) {
+            if (column === 'post_id') {
+              postIds = values;
+            }
+            return query;
+          },
+          async order() {
+            return {
+              data: postMediaState
+                .filter((row) => postIds.includes(row.post_id))
+                .sort((left, right) => left.sort_order - right.sort_order),
+              error: null,
+            };
+          },
+        };
+
+        return query;
       }
 
       if (table === 'generations') {
@@ -384,6 +425,7 @@ describe('showcase feed', () => {
         generation_id: 'gen-1',
       },
     ];
+    postMediaState = [];
     generationModelsState = [
       {
         id: 'gen-1',
@@ -462,6 +504,124 @@ describe('showcase feed', () => {
         ],
       }),
     });
+  });
+
+  it('returns ordered media items while keeping the first item as the legacy cover', async () => {
+    postMediaState = [
+      {
+        id: 'media-1',
+        post_id: 'post-1',
+        storage_path: 'posts/post-1/cover.png',
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/png',
+        original_name: 'cover.png',
+        width: 1080,
+        height: 1350,
+        duration_seconds: null,
+        sort_order: 0,
+      },
+      {
+        id: 'media-2',
+        post_id: 'post-1',
+        storage_path: 'posts/post-1/clip.mp4',
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        width: 1080,
+        height: 1920,
+        duration_seconds: 8,
+        sort_order: 1,
+      },
+    ];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].mediaUrl).toBe('https://cdn.example.com/posts/post-1/cover.png');
+    expect(page.items[0].mediaKind).toBe('image');
+    expect(page.items[0].mediaItems).toEqual([
+      expect.objectContaining({
+        id: 'media-1',
+        url: 'https://cdn.example.com/posts/post-1/cover.png',
+        mediaKind: 'image',
+        contentType: 'image/png',
+        originalName: 'cover.png',
+        sortOrder: 0,
+      }),
+      expect.objectContaining({
+        id: 'media-2',
+        url: 'https://cdn.example.com/posts/post-1/clip.mp4',
+        mediaKind: 'video',
+        contentType: 'video/mp4',
+        originalName: 'clip.mp4',
+        sortOrder: 1,
+      }),
+    ]);
+  });
+
+  it('includes mixed image and video posts in any matching media filter', async () => {
+    postsState = [
+      createPostRow({
+        id: 'mixed-post',
+        created_at: '2026-03-20T10:00:00.000Z',
+        showcase_asset_path: 'posts/mixed-post/cover.png',
+        output_url: null,
+        category: 'image',
+      }),
+    ];
+    postMediaState = [
+      {
+        id: 'media-cover',
+        post_id: 'mixed-post',
+        storage_path: 'posts/mixed-post/cover.png',
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/png',
+        original_name: 'cover.png',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      },
+      {
+        id: 'media-video',
+        post_id: 'mixed-post',
+        storage_path: 'posts/mixed-post/clip.mp4',
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        width: null,
+        height: null,
+        duration_seconds: 6,
+        sort_order: 1,
+      },
+    ];
+    resourceBundlesState = [];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const imagePage = await getShowcaseFeedPage({
+      category: 'image',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+    const videoPage = await getShowcaseFeedPage({
+      category: 'video',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(imagePage.items.map((item) => item.id)).toEqual(['mixed-post']);
+    expect(videoPage.items.map((item) => item.id)).toEqual(['mixed-post']);
   });
 
   it('adds a safe public recipe summary for generated posts without a saved bundle', async () => {

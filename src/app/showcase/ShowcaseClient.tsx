@@ -10,12 +10,14 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
 import {
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
     type ShowcaseFeedItem,
     type ShowcaseFeedPage,
+    type ShowcaseMediaItem,
     type ShowcaseResourceFilter,
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
@@ -75,22 +77,6 @@ interface ShowcaseClientProps {
     initialUnlock: ShowcaseUnlockFilter;
     initialResource: ShowcaseResourceFilter;
     sourceToolOptions: SourceToolOption[];
-}
-
-function primePreviewVideoFrame(video: HTMLVideoElement) {
-    const previewTime = Number.isFinite(video.duration) && video.duration > 0
-        ? Math.min(0.1, Math.max(video.duration * 0.05, 0.01))
-        : 0.1;
-
-    if (Math.abs(video.currentTime - previewTime) < 0.01) {
-        return;
-    }
-
-    try {
-        video.currentTime = previewTime;
-    } catch {
-        // Some browsers can reject seek requests before enough data is buffered.
-    }
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
@@ -171,6 +157,28 @@ function setNonDefaultParam(params: URLSearchParams, key: string, value: string,
     }
 }
 
+function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
+    if (item.mediaItems?.length) {
+        return item.mediaItems;
+    }
+
+    if (!item.mediaUrl || !item.mediaKind) {
+        return [];
+    }
+
+    return [{
+        id: `${item.id}:cover`,
+        url: item.mediaUrl,
+        mediaKind: item.mediaKind,
+        contentType: null,
+        originalName: null,
+        width: null,
+        height: null,
+        durationSeconds: null,
+        sortOrder: 0,
+    }];
+}
+
 export default function ShowcaseClient({
     initialFeed,
     initialCategory,
@@ -208,17 +216,16 @@ export default function ShowcaseClient({
     const [pageInfo, setPageInfo] = useState(initialFeed.pageInfo);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+    const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
+        const value = Number(searchParams.get('media'));
+        return Number.isInteger(value) && value >= 0 ? value : 0;
+    });
     const isLoadingMoreRef = useRef(false);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
-    const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
     );
     const directPostRequestRef = useRef<string | null>(null);
-
-    const registerPreviewVideo = (id: string, node: HTMLVideoElement | null) => {
-        previewVideoRefs.current[id] = node;
-    };
 
     const currentShowcasePath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
@@ -234,6 +241,8 @@ export default function ShowcaseClient({
 
     useEffect(() => {
         const postParam = searchParams.get('post');
+        const mediaParam = Number(searchParams.get('media'));
+        setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
 
         if (!postParam) {
             directPostRequestRef.current = null;
@@ -292,12 +301,22 @@ export default function ShowcaseClient({
         };
     }, [items, searchParams, session?.access_token, setItems]);
 
-    const updateReelUrl = useCallback((postId: string | null, mode: 'push' | 'replace') => {
+    const updateReelUrl = useCallback((
+        postId: string | null,
+        mode: 'push' | 'replace',
+        mediaIndex = 0
+    ) => {
         const params = new URLSearchParams(window.location.search);
         if (postId) {
             params.set('post', postId);
+            if (mediaIndex > 0) {
+                params.set('media', String(mediaIndex));
+            } else {
+                params.delete('media');
+            }
         } else {
             params.delete('post');
+            params.delete('media');
         }
 
         const nextUrl = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
@@ -309,13 +328,15 @@ export default function ShowcaseClient({
     }, [pathname]);
 
     const selectPreviewItem = useCallback((id: string) => {
-        updateReelUrl(id, 'replace');
+        setSelectedMediaIndex(0);
+        updateReelUrl(id, 'replace', 0);
         setSelectedItemId(id);
     }, [updateReelUrl]);
 
-    const openPreview = (item: ShowcaseFeedItem) => {
+    const openPreview = (item: ShowcaseFeedItem, mediaIndex = 0) => {
         reelHistoryModeRef.current = 'pushed';
-        updateReelUrl(item.id, 'push');
+        setSelectedMediaIndex(mediaIndex);
+        updateReelUrl(item.id, 'push', mediaIndex);
         setSelectedItemId(item.id);
     };
 
@@ -335,7 +356,9 @@ export default function ShowcaseClient({
     useEffect(() => {
         const handlePopState = () => {
             const postParam = new URLSearchParams(window.location.search).get('post');
+            const mediaParam = Number(new URLSearchParams(window.location.search).get('media'));
             reelHistoryModeRef.current = postParam ? 'direct' : null;
+            setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
 
             if (!postParam) {
                 setSelectedItemId(null);
@@ -358,34 +381,6 @@ export default function ShowcaseClient({
         setResource(initialResource);
         setSavedItemIds(new Set(initialFeed.items.filter((item) => item.isSaved).map((item) => item.id)));
     }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds]);
-
-    useEffect(() => {
-        const handleVisibilityChange = () => {
-            Object.values(previewVideoRefs.current).forEach((video) => {
-                if (!video) {
-                    return;
-                }
-
-                if (document.hidden) {
-                    video.pause();
-                    return;
-                }
-
-                if (video.readyState === 0) {
-                    video.load();
-                    return;
-                }
-
-                primePreviewVideoFrame(video);
-            });
-        };
-
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-
-        return () => {
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-        };
-    }, []);
 
     const navigateWithFilters = (
         nextCategory: ShowcaseCategory,
@@ -769,6 +764,8 @@ export default function ShowcaseClient({
                             {items.map((item) => {
                                 const resourceKinds = getItemResourceKinds(item);
                                 const isSaved = savedItemIds.has(item.id);
+                                const mediaItems = getItemMediaItems(item);
+                                const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
 
                                 return (
                                     <div
@@ -777,12 +774,13 @@ export default function ShowcaseClient({
                                     >
                                         {/* Pinterest Style Card Frame */}
                                         <div className="group relative overflow-hidden rounded-[1.5rem] bg-[#09090b] border border-white/[0.04] hover:border-purple-500/30 hover:shadow-[0_12px_40px_rgba(0,0,0,0.65)] transition-all duration-300">
-                                            <button
-                                                type="button"
-                                                onClick={() => openPreview(item)}
-                                                className="relative bg-black overflow-hidden block w-full text-left"
-                                            >
+                                            <div className="relative overflow-hidden bg-black">
                                                 {item.postFormat === 'text' ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openPreview(item)}
+                                                        className="block w-full text-left"
+                                                    >
                                                     <TextPostPreviewCard
                                                         title={item.title}
                                                         summary={getItemSummary(item)}
@@ -797,41 +795,26 @@ export default function ShowcaseClient({
                                                         resourceKinds={getItemResourceKinds(item)}
                                                         className="rounded-none border-0 shadow-none"
                                                     />
-                                                ) : item.mediaKind === 'video' && item.mediaUrl ? (
-                                                    <video
-                                                        ref={(node) => registerPreviewVideo(item.id, node)}
-                                                        src={item.mediaUrl}
-                                                        muted
-                                                        loop
-                                                        playsInline
-                                                        preload="metadata"
-                                                        className="w-full h-auto block object-cover"
-                                                        onLoadedData={(event) => {
-                                                            primePreviewVideoFrame(event.currentTarget);
-                                                        }}
-                                                    />
-                                                ) : item.mediaUrl ? (
-                                                    // eslint-disable-next-line @next/next/no-img-element
-                                                    <img
-                                                        src={item.mediaUrl}
-                                                        alt={item.title}
-                                                        loading="lazy"
-                                                        decoding="async"
-                                                        className="w-full h-auto block object-cover"
+                                                    </button>
+                                                ) : mediaItems.length > 0 ? (
+                                                    <ShowcaseMediaCarousel
+                                                        mediaItems={mediaItems}
+                                                        title={item.title}
+                                                        onOpen={(mediaIndex) => openPreview(item, mediaIndex)}
                                                     />
                                                 ) : (
                                                     <div className="flex min-h-[240px] items-center justify-center bg-zinc-950 text-zinc-500">
                                                         <BookText className="h-10 w-10" />
                                                     </div>
                                                 )}
-                                            </button>
+                                            </div>
 
                                             {/* Hover State Controls Overlay (Pinterest Style) */}
                                             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 flex flex-col justify-between p-4">
                                                 <div className="flex justify-between items-start pointer-events-auto">
                                                     {item.postFormat !== 'text' ? (
                                                         <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
-                                                            <span className="capitalize">{item.category}</span>
+                                                            <span>{isMixedMedia ? 'Mixed' : item.category}</span>
                                                         </div>
                                                     ) : <div />}
                                                 </div>
@@ -957,6 +940,7 @@ export default function ShowcaseClient({
                 isOpen={Boolean(selectedItemId)}
                 items={items}
                 selectedItemId={selectedItemId}
+                initialMediaIndex={selectedMediaIndex}
                 savedItemIds={savedItemIds}
                 savingItemIds={savingItemIds}
                 accessToken={session?.access_token ?? null}
@@ -965,6 +949,12 @@ export default function ShowcaseClient({
                 onLoadMoreItems={loadMore}
                 onClose={closePreview}
                 onSelectItemId={selectPreviewItem}
+                onMediaIndexChange={(mediaIndex) => {
+                    setSelectedMediaIndex(mediaIndex);
+                    if (selectedItemId) {
+                        updateReelUrl(selectedItemId, 'replace', mediaIndex);
+                    }
+                }}
                 onToggleSave={toggleSave}
                 onRemix={handleRemix}
                 buildDetailPath={buildCommunityDetailPath}

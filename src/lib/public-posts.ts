@@ -13,14 +13,17 @@ import {
 import { getPublicGenerationDetail } from '@/lib/public-generations';
 import {
   deriveTitleFromBody,
-  getPostMediaKind,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
   normalizeLegacyPostFormat,
-  resolvePostMediaUrl,
   summarizeBody,
   type PostReferenceRow,
 } from '@/lib/posts-server';
+import {
+  buildLegacyPostMediaItems,
+  loadPostMediaItemsMap,
+  type PostMediaSummary,
+} from '@/lib/post-media';
 import { createServiceClient } from '@/lib/server-helpers';
 import {
   MAGICBOOKLET_SOURCE_KIND,
@@ -69,6 +72,7 @@ export interface PublicPostDetail {
   visibility: 'public' | 'unlisted';
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
+  mediaItems: PostMediaSummary[];
   model: string;
   title: string;
   description: string;
@@ -222,6 +226,17 @@ export async function getPublicPostDetail(
       visibility: 'public',
       mediaUrl: generation.url,
       mediaKind: generation.category === 'image' ? 'image' : 'video',
+      mediaItems: [{
+        id: `${generation.id}:cover`,
+        url: generation.url,
+        mediaKind: generation.category === 'image' ? 'image' : 'video',
+        contentType: null,
+        originalName: null,
+        width: null,
+        height: null,
+        durationSeconds: null,
+        sortOrder: 0,
+      }],
       model: generation.model,
       title: generation.title,
       description: generation.description,
@@ -248,8 +263,15 @@ export async function getPublicPostDetail(
     return null;
   }
 
-  const mediaUrl = await resolvePostMediaUrl(adminSupabase, row);
-  const mediaKind = getPostMediaKind(row.category, row.post_format);
+  const mediaItemsMap = await loadPostMediaItemsMap(adminSupabase, [row.id]);
+  const mediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
+    supabase: adminSupabase,
+    postId: row.id,
+    row,
+  });
+  const coverMedia = mediaItems[0] ?? null;
+  const mediaUrl = coverMedia?.url ?? null;
+  const mediaKind = coverMedia?.mediaKind ?? null;
   if (row.post_format !== 'text' && !mediaUrl) {
     return null;
   }
@@ -335,6 +357,7 @@ export async function getPublicPostDetail(
     visibility: row.visibility === 'unlisted' ? 'unlisted' : 'public',
     mediaUrl,
     mediaKind,
+    mediaItems,
     model,
     title,
     description,

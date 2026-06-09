@@ -542,7 +542,7 @@ describe('NewPostClient', () => {
     ]));
   });
 
-  it('uploads media to Supabase before posting metadata to the API', async () => {
+  it('uploads media to Supabase before posting ordered metadata to the API', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
@@ -571,11 +571,57 @@ describe('NewPostClient', () => {
     });
 
     const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    const mediaItems = JSON.parse(String(request.body.get('mediaItems')));
 
-    expect(String(request.body.get('mediaStoragePath'))).toMatch(/^uploads\/user-1\/.+\.png$/);
-    expect(String(request.body.get('mediaOriginalName'))).toBe('proof.png');
-    expect(String(request.body.get('mediaContentType'))).toBe('image/png');
+    expect(mediaItems).toEqual([
+      expect.objectContaining({
+        storagePath: expect.stringMatching(/^uploads\/user-1\/.+\.png$/),
+        originalName: 'proof.png',
+        contentType: 'image/png',
+      }),
+    ]);
     expect(request.body.get('media')).toBeNull();
+  });
+
+  it('uploads and preserves the order of multiple image and video files', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-gallery-1',
+        showcasePath: '/showcase/post-gallery-1',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['cover'], 'cover.png', { type: 'image/png' }),
+          new File(['clip'], 'clip.mp4', { type: 'video/mp4' }),
+        ],
+      },
+    });
+
+    expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
+    expect(screen.getByLabelText('Post media order')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    await waitFor(() => {
+      expect(storageUploadMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    const mediaItems = JSON.parse(String(request.body.get('mediaItems')));
+    expect(mediaItems).toEqual([
+      expect.objectContaining({ originalName: 'cover.png', contentType: 'image/png' }),
+      expect.objectContaining({ originalName: 'clip.mp4', contentType: 'video/mp4' }),
+    ]);
   });
 
   it('prefills generated paid unlocks and focuses the price field', async () => {

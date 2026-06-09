@@ -210,6 +210,128 @@ describe('ShowcaseReelViewer pagination', () => {
     });
   });
 
+  it('moves horizontally through media without changing the selected post', () => {
+    const selectItem = vi.fn();
+    const changeMedia = vi.fn();
+
+    render(
+      <ShowcaseReelViewer
+        isOpen
+        items={[
+          createShowcaseItem({
+            mediaItems: [
+              {
+                id: 'media-1',
+                url: 'https://example.com/cover.jpg',
+                mediaKind: 'image',
+                contentType: 'image/jpeg',
+                originalName: 'cover.jpg',
+                width: 800,
+                height: 1000,
+                durationSeconds: null,
+                sortOrder: 0,
+              },
+              {
+                id: 'media-2',
+                url: 'https://example.com/second.jpg',
+                mediaKind: 'image',
+                contentType: 'image/jpeg',
+                originalName: 'second.jpg',
+                width: 1200,
+                height: 800,
+                durationSeconds: null,
+                sortOrder: 1,
+              },
+            ],
+          }),
+        ]}
+        selectedItemId="post-1"
+        savedItemIds={new Set()}
+        savingItemIds={new Set()}
+        accessToken={null}
+        hasMoreItems={false}
+        isLoadingMoreItems={false}
+        onLoadMoreItems={vi.fn()}
+        onClose={vi.fn()}
+        onSelectItemId={selectItem}
+        onMediaIndexChange={changeMedia}
+        onToggleSave={vi.fn()}
+        onRemix={vi.fn()}
+        buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next media' }));
+
+    expect(changeMedia).toHaveBeenCalledWith(1);
+    expect(selectItem).not.toHaveBeenCalled();
+    expect(screen.getByRole('img', { name: 'Campaign Frame' })).toHaveAttribute('src', 'https://example.com/second.jpg');
+  });
+
+  it('syncs the visible slide when browser history changes the media index', async () => {
+    const item = createShowcaseItem({
+      mediaItems: [
+        {
+          id: 'media-1',
+          url: 'https://example.com/cover.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'cover.jpg',
+          width: 800,
+          height: 1000,
+          durationSeconds: null,
+          sortOrder: 0,
+        },
+        {
+          id: 'media-2',
+          url: 'https://example.com/history-slide.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'history-slide.jpg',
+          width: 1200,
+          height: 800,
+          durationSeconds: null,
+          sortOrder: 1,
+        },
+      ],
+    });
+    const commonProps = {
+      isOpen: true,
+      items: [item],
+      selectedItemId: 'post-1',
+      savedItemIds: new Set<string>(),
+      savingItemIds: new Set<string>(),
+      accessToken: null,
+      hasMoreItems: false,
+      isLoadingMoreItems: false,
+      onLoadMoreItems: vi.fn(),
+      onClose: vi.fn(),
+      onSelectItemId: vi.fn(),
+      onToggleSave: vi.fn(),
+      onRemix: vi.fn(),
+      buildDetailPath: (id: string, section?: string) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`,
+    };
+
+    const { rerender } = render(
+      <ShowcaseReelViewer
+        {...commonProps}
+        initialMediaIndex={0}
+      />
+    );
+    expect(screen.getByRole('img', { name: 'Campaign Frame' })).toHaveAttribute('src', 'https://example.com/cover.jpg');
+
+    rerender(
+      <ShowcaseReelViewer
+        {...commonProps}
+        initialMediaIndex={1}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'Campaign Frame' })).toHaveAttribute('src', 'https://example.com/history-slide.jpg');
+    });
+  });
+
   it('opens a compact cash or token choice inside the reel viewer', () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 1200;

@@ -7,6 +7,34 @@ const sourceToolTableCalls = vi.hoisted(() => ({
   rpcCalls: [] as Array<Record<string, unknown>>,
   rpcError: null as { message?: string } | null,
 }));
+const postMediaRows = vi.hoisted(() => ({
+  value: [
+    {
+      id: 'media-1',
+      storage_path: 'posts/post-1/cover.jpg',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'cover.jpg',
+      width: 800,
+      height: 1000,
+      duration_seconds: null,
+      sort_order: 0,
+    },
+    {
+      id: 'media-2',
+      storage_path: 'posts/post-1/second.jpg',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'second.jpg',
+      width: 1200,
+      height: 800,
+      duration_seconds: null,
+      sort_order: 1,
+    },
+  ],
+}));
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
   { slug: 'higgsfield', label: 'Higgsfield', models: [{ slug: 'soul', label: 'Soul' }], supportedMediaKinds: ['image', 'video'] },
@@ -105,10 +133,29 @@ vi.mock('@/lib/server-helpers', () => ({
         return query;
       }
 
+      if (table === 'post_media') {
+        const query = {
+          select() {
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async order() {
+            return {
+              data: postMediaRows.value,
+              error: null,
+            };
+          },
+        };
+
+        return query;
+      }
+
       throw new Error(`Unexpected table access: ${table}`);
     },
     rpc(name: string, args: Record<string, unknown>) {
-      if (name !== 'save_post_source_tools_with_catalog') {
+      if (name !== 'save_post_source_tools_with_catalog' && name !== 'replace_post_media') {
         throw new Error(`Unexpected rpc call: ${name}`);
       }
       sourceToolTableCalls.rpcCalls.push(args);
@@ -162,6 +209,32 @@ describe('/api/posts/[postId] route', () => {
     }));
     sourceToolTableCalls.rpcCalls.length = 0;
     sourceToolTableCalls.rpcError = null;
+    postMediaRows.value = [
+      {
+        id: 'media-1',
+        storage_path: 'posts/post-1/cover.jpg',
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/jpeg',
+        original_name: 'cover.jpg',
+        width: 800,
+        height: 1000,
+        duration_seconds: null,
+        sort_order: 0,
+      },
+      {
+        id: 'media-2',
+        storage_path: 'posts/post-1/second.jpg',
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/jpeg',
+        original_name: 'second.jpg',
+        width: 1200,
+        height: 800,
+        duration_seconds: null,
+        sort_order: 1,
+      },
+    ];
   });
 
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
@@ -339,5 +412,49 @@ describe('/api/posts/[postId] route', () => {
 
     expect(response.status).toBe(500);
     expect(data.error).toMatch(/source tool/i);
+  });
+
+  it('reorders existing post media and promotes the first item to cover', async () => {
+    loadedPost.value = {
+      ...loadedPost.value,
+      body: '',
+      category: 'image',
+      post_format: 'media',
+      showcase_asset_path: 'posts/post-1/cover.jpg',
+    };
+
+    const { PUT } = await import('@/app/api/posts/[postId]/route');
+    const response = await PUT(new Request('http://localhost/api/posts/post-1', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        visibility: 'private',
+        mediaItems: [
+          { existingId: 'media-2' },
+          { existingId: 'media-1' },
+        ],
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest, {
+      params: Promise.resolve({ postId: 'post-1' }),
+    });
+
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(sourceToolTableCalls.rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        p_post_id: 'post-1',
+        p_owner_user_id: 'user-1',
+        p_media_items: [
+          expect.objectContaining({ storagePath: 'posts/post-1/second.jpg', sortOrder: 0 }),
+          expect.objectContaining({ storagePath: 'posts/post-1/cover.jpg', sortOrder: 1 }),
+        ],
+      }),
+    ]));
   });
 });

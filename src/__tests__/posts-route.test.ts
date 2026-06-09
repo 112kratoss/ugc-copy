@@ -6,9 +6,11 @@ const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const downloadMock = vi.fn();
 const insertPayloads: Array<Record<string, unknown>> = [];
+const postMediaRows: Array<Record<string, unknown>> = [];
 const sourceToolRows: Array<Record<string, unknown>> = [];
 const sourceToolRpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 let bundleUpsertError: { code?: string; message?: string } | null = null;
+let postMediaInsertError: { code?: string; message?: string } | null = null;
 let sourceToolInsertError: { code?: string; message?: string } | null = null;
 
 const sourceToolCatalog = vi.hoisted(() => [
@@ -122,6 +124,15 @@ vi.mock('@/lib/server-helpers', () => ({
         };
       }
 
+      if (table === 'post_media') {
+        return {
+          insert(payload: Array<Record<string, unknown>>) {
+            postMediaRows.push(...payload);
+            return Promise.resolve({ error: postMediaInsertError });
+          },
+        };
+      }
+
       if (table === 'posts') {
         const query = {
           delete() {
@@ -211,9 +222,11 @@ describe('/api/posts route', () => {
       error: null,
     });
     insertPayloads.length = 0;
+    postMediaRows.length = 0;
     sourceToolRows.length = 0;
     sourceToolRpcCalls.length = 0;
     bundleUpsertError = null;
+    postMediaInsertError = null;
     sourceToolInsertError = null;
   });
 
@@ -433,6 +446,125 @@ describe('/api/posts route', () => {
       body: 'Keep the product benefit visible before the hook resolves.',
       title: 'Keep the product benefit visible before the hook resolves.',
     });
+    expect(postMediaRows).toEqual([
+      expect.objectContaining({
+        post_id: expect.any(String),
+        storage_path: expect.stringContaining('posts/'),
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        sort_order: 0,
+      }),
+    ]);
+  });
+
+  it('creates ordered multi-media posts from uploaded storage references', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'media');
+    formData.set('visibility', 'public');
+    formData.set('category', 'image');
+    formData.set('sourceTool', 'Runway');
+    formData.set('mediaItems', JSON.stringify([
+      {
+        storagePath: 'uploads/user-1/cover.png',
+        originalName: 'cover.png',
+        contentType: 'image/png',
+      },
+      {
+        storagePath: 'uploads/user-1/clip.mp4',
+        originalName: 'clip.mp4',
+        contentType: 'video/mp4',
+      },
+    ]));
+
+    const response = await POST(createRouteRequest(formData));
+
+    expect(response.status).toBe(200);
+    expect(downloadMock).toHaveBeenCalledWith('user-1/cover.png');
+    expect(downloadMock).toHaveBeenCalledWith('user-1/clip.mp4');
+    expect(uploadMock).toHaveBeenCalledTimes(2);
+    expect(removeMock).toHaveBeenCalledWith(['user-1/cover.png', 'user-1/clip.mp4']);
+    expect(insertPayloads[0]).toMatchObject({
+      category: 'image',
+      post_format: 'media',
+      showcase_asset_path: expect.stringMatching(/posts\/.+\/cover\.png/),
+    });
+    expect(postMediaRows).toEqual([
+      expect.objectContaining({
+        storage_path: expect.stringMatching(/posts\/.+\/cover\.png/),
+        media_kind: 'image',
+        content_type: 'image/png',
+        original_name: 'cover.png',
+        sort_order: 0,
+      }),
+      expect.objectContaining({
+        storage_path: expect.stringMatching(/posts\/.+\/clip\.mp4/),
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        sort_order: 1,
+      }),
+    ]);
+  });
+
+  it('returns a schema-specific error when post media storage is not enabled', async () => {
+    postMediaInsertError = {
+      code: 'PGRST205',
+      message: "Could not find the table 'public.post_media' in the schema cache",
+    };
+
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'media');
+    formData.set('visibility', 'public');
+    formData.set('category', 'image');
+    formData.set('mediaItems', JSON.stringify([
+      {
+        storagePath: 'uploads/user-1/cover.png',
+        originalName: 'cover.png',
+        contentType: 'image/png',
+      },
+      {
+        storagePath: 'uploads/user-1/detail.png',
+        originalName: 'detail.png',
+        contentType: 'image/png',
+      },
+    ]));
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toMatch(/post media gallery migration/i);
+    expect(removeMock).toHaveBeenCalledWith([
+      expect.stringMatching(/^posts\/.+\/cover\.png$/),
+      expect.stringMatching(/^posts\/.+\/detail\.png$/),
+    ]);
+    expect(removeMock).toHaveBeenCalledWith(['user-1/cover.png', 'user-1/detail.png']);
+  });
+
+  it('rejects manual posts with more than five media items', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'media');
+    formData.set('visibility', 'public');
+    formData.set('mediaItems', JSON.stringify(
+      Array.from({ length: 6 }, (_, index) => ({
+        storagePath: `uploads/user-1/item-${index}.png`,
+        originalName: `item-${index}.png`,
+        contentType: 'image/png',
+      }))
+    ));
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/up to 5 media/i);
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(insertPayloads).toHaveLength(0);
+    expect(postMediaRows).toHaveLength(0);
   });
 
   it('rejects empty submissions', async () => {

@@ -51,10 +51,23 @@ export interface ShowcaseAssetSummary {
     itemCounts?: PostResourceItemCounts;
 }
 
+export interface ShowcaseMediaItem {
+    id: string;
+    url: string;
+    mediaKind: ShowcaseMediaKind;
+    contentType: string | null;
+    originalName: string | null;
+    width: number | null;
+    height: number | null;
+    durationSeconds: number | null;
+    sortOrder: number;
+}
+
 export interface ShowcaseFeedItem {
     id: string;
     mediaUrl: string | null;
     mediaKind: ShowcaseMediaKind | null;
+    mediaItems?: ShowcaseMediaItem[];
     model: string;
     title: string;
     prompt: string;

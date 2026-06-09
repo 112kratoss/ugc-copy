@@ -13,6 +13,10 @@ import {
   resolvePostMediaUrl,
 } from '@/lib/posts-server';
 import {
+  buildLegacyPostMediaItems,
+  loadPostMediaItemsMap,
+} from '@/lib/post-media';
+import {
   createServiceClient,
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
@@ -122,7 +126,7 @@ async function fetchPostRows(
 
   if (category === 'text') {
     query = query.or('category.eq.text,post_format.eq.mixed');
-  } else if (category !== 'all') {
+  } else if (category !== 'all' && category !== 'image' && category !== 'video') {
     query = query.eq('category', category);
   }
 
@@ -159,7 +163,7 @@ async function fetchPostRows(
       .eq('visibility', 'public')
       .is('archived_at', null);
 
-    if (category !== 'all') {
+    if (category !== 'all' && category !== 'image' && category !== 'video') {
       legacyQuery = legacyQuery.eq('category', category);
     }
 
@@ -206,6 +210,36 @@ async function fetchPostRows(
 }
 
 function itemMatchesFeedFilters(
+  item: ShowcaseFeedItem,
+  category: ShowcaseCategory,
+  unlockFilter: ShowcaseUnlockFilter,
+  resourceFilter: ShowcaseResourceFilter
+): boolean {
+  if (!itemMatchesCategory(item, category)) {
+    return false;
+  }
+
+  return itemMatchesUnlockFilters(item, unlockFilter, resourceFilter);
+}
+
+function itemMatchesCategory(item: ShowcaseFeedItem, category: ShowcaseCategory): boolean {
+  if (category === 'all') {
+    return true;
+  }
+
+  if (category === 'image' || category === 'video') {
+    return item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === category)
+      || item.mediaKind === category;
+  }
+
+  if (category === 'text') {
+    return item.category === 'text' || item.postFormat === 'mixed';
+  }
+
+  return item.category === category;
+}
+
+function itemMatchesUnlockFilters(
   item: ShowcaseFeedItem,
   unlockFilter: ShowcaseUnlockFilter,
   resourceFilter: ShowcaseResourceFilter
@@ -299,6 +333,10 @@ async function resolvePostRowsToFeedItems(
     visibleRows.filter((row) => !assetMap.has(row.id)),
     adminSupabase
   );
+  const mediaItemsMap = await loadPostMediaItemsMap(
+    adminSupabase,
+    visibleRows.map((row) => row.id)
+  );
 
   const sourceToolsMap = new Map<string, Array<{
     toolLabel: string;
@@ -338,7 +376,14 @@ async function resolvePostRowsToFeedItems(
 
   const resolvedItems = await Promise.all(
     visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
-      const mediaUrl = await resolvePostMediaUrl(adminSupabase, post);
+      const mediaItems = mediaItemsMap.get(post.id) ?? await buildLegacyPostMediaItems({
+        supabase: adminSupabase,
+        postId: post.id,
+        row: post,
+      });
+      const coverMedia = mediaItems[0] ?? null;
+      const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, post);
+      const mediaKind = coverMedia?.mediaKind ?? getPostMediaKind(post.category, post.post_format);
       if (post.post_format !== 'text' && !mediaUrl) {
         return null;
       }
@@ -369,7 +414,8 @@ async function resolvePostRowsToFeedItems(
       return {
         id: post.id,
         mediaUrl,
-        mediaKind: getPostMediaKind(post.category, post.post_format),
+        mediaKind,
+        mediaItems,
         model,
         title: post.title?.trim() || deriveTitleFromBody(body) || (post.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation'),
         prompt: post.prompt || '',
@@ -446,7 +492,7 @@ async function collectFilteredFeedItems(params: {
 
     const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
     matchingItems.push(
-      ...items.filter((item) => itemMatchesFeedFilters(item, unlockFilter, resourceFilter))
+      ...items.filter((item) => itemMatchesFeedFilters(item, category, unlockFilter, resourceFilter))
     );
   }
 
@@ -479,7 +525,12 @@ async function getShowcaseFeedPageBase(
   resourceFilter: ShowcaseResourceFilter
 ): Promise<ShowcaseFeedPage> {
   const adminSupabase = createServiceClient();
-  const needsFilteredScan = sort === 'top-sales' || unlockFilter !== 'all' || resourceFilter !== 'all';
+  const needsFilteredScan =
+    sort === 'top-sales' ||
+    unlockFilter !== 'all' ||
+    resourceFilter !== 'all' ||
+    category === 'image' ||
+    category === 'video';
 
   if (needsFilteredScan) {
     const filteredPage = await collectFilteredFeedItems({
@@ -506,7 +557,8 @@ async function getShowcaseFeedPageBase(
   }
 
   const hasMore = posts.length > limit;
-  const items = await resolvePostRowsToFeedItems(posts.slice(0, limit), adminSupabase);
+  const resolvedItems = await resolvePostRowsToFeedItems(posts.slice(0, limit), adminSupabase);
+  const items = resolvedItems.filter((item) => itemMatchesCategory(item, category));
 
   return {
     items,
@@ -625,6 +677,17 @@ async function getLegacyShowcaseFeedPageBase(
           id: generation.id,
           mediaUrl,
           mediaKind: getPostMediaKind(resolvedCategory, 'media'),
+          mediaItems: [{
+            id: `${generation.id}:cover`,
+            url: mediaUrl,
+            mediaKind: getPostMediaKind(resolvedCategory, 'media') ?? 'image',
+            contentType: null,
+            originalName: null,
+            width: null,
+            height: null,
+            durationSeconds: null,
+            sortOrder: 0,
+          }],
           model: generation.model,
           title: generation.title || 'Untitled Creation',
           prompt: generation.prompt || '',

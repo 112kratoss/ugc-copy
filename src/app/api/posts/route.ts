@@ -30,9 +30,17 @@ import {
 import {
   isShowcaseItemCategory,
   type ShowcaseItemCategory,
+  type ShowcaseMediaKind,
   type ShowcasePostFormat,
   type ShowcaseVisibility,
 } from '@/lib/showcase';
+import {
+  getMediaKindFromContentType,
+  insertPostMediaItems,
+  isMissingPostMediaSchemaError,
+  MAX_POST_MEDIA_ITEMS,
+  type PostMediaPersistInput,
+} from '@/lib/post-media';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
@@ -42,6 +50,8 @@ const MISSING_POSTS_SCHEMA_ERROR =
   'Posts are not enabled on the connected Supabase project yet. Apply the posts migrations and try again.';
 const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
   'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
+const MISSING_POST_MEDIA_SCHEMA_ERROR =
+  'Posts are working, but multi-media gallery storage is not enabled on the connected Supabase project yet. Apply the post media gallery migration 20260609094006_post_media_gallery.sql and try again.';
 
 function sanitizeFileStem(fileName: string): string {
   const stem = path.basename(fileName, path.extname(fileName)).toLowerCase();
@@ -128,6 +138,96 @@ function parseUploadedMediaLocation(params: {
     },
     error: null,
   };
+}
+
+type SubmittedPostMediaItem =
+  | {
+      source: 'file';
+      file: File;
+      originalName: string;
+      contentType: string;
+    }
+  | {
+      source: 'uploaded';
+      filePath: string;
+      temporaryStoragePath: string;
+      originalName: string;
+      contentType: string;
+    };
+
+function parseMediaItemsPayload(params: {
+  rawValue: FormDataEntryValue | null;
+  userId: string;
+}): { items: SubmittedPostMediaItem[] | null; error: string | null } {
+  if (typeof params.rawValue !== 'string' || !params.rawValue.trim()) {
+    return { items: null, error: null };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.rawValue);
+  } catch {
+    return { items: null, error: 'Post media metadata is invalid.' };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return { items: null, error: 'Post media metadata is invalid.' };
+  }
+
+  const items: SubmittedPostMediaItem[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== 'object') {
+      return { items: null, error: 'Post media metadata is invalid.' };
+    }
+
+    const descriptor = value as Record<string, unknown>;
+    const { location, error } = parseUploadedMediaLocation({
+      storagePath: typeof descriptor.storagePath === 'string' ? descriptor.storagePath : null,
+      userId: params.userId,
+      originalName: typeof descriptor.originalName === 'string' ? descriptor.originalName : null,
+      contentType: typeof descriptor.contentType === 'string' ? descriptor.contentType : null,
+    });
+
+    if (error) {
+      return { items: null, error };
+    }
+
+    if (!location) {
+      return { items: null, error: 'Each post media item needs an uploaded media file.' };
+    }
+
+    items.push({
+      source: 'uploaded',
+      filePath: location.filePath,
+      temporaryStoragePath: location.filePath,
+      originalName: location.originalName,
+      contentType: location.contentType,
+    });
+  }
+
+  return { items, error: null };
+}
+
+function validateSubmittedMediaItems(items: SubmittedPostMediaItem[]): string | null {
+  if (items.length > MAX_POST_MEDIA_ITEMS) {
+    return `Add up to ${MAX_POST_MEDIA_ITEMS} media items per post.`;
+  }
+
+  for (const item of items) {
+    if (item.contentType.startsWith('audio/')) {
+      return 'Audio uploads are not supported in the community feed yet.';
+    }
+
+    if (!getMediaKindFromContentType(item.contentType)) {
+      return 'Post media must be an image or video.';
+    }
+  }
+
+  return null;
+}
+
+function getSubmittedMediaKind(item: SubmittedPostMediaItem): ShowcaseMediaKind {
+  return getMediaKindFromContentType(item.contentType) ?? 'image';
 }
 
 function inferCategoryFromMimeType(mimeType: string): ShowcaseItemCategory | null {
@@ -267,13 +367,18 @@ export async function POST(request: NextRequest) {
     }
 
     const formData = await request.formData();
-    const media = formData.get('media');
-    const file = media instanceof File && media.size > 0 ? media : null;
-    const { location: uploadedMedia, error: uploadedMediaError } = parseUploadedMediaLocation({
+    const rawMediaFiles = formData
+      .getAll('media')
+      .filter((entry): entry is File => entry instanceof File && entry.size > 0);
+    const { location: legacyUploadedMedia, error: uploadedMediaError } = parseUploadedMediaLocation({
       storagePath: formData.get('mediaStoragePath'),
       userId: user.id,
       originalName: formData.get('mediaOriginalName'),
       contentType: formData.get('mediaContentType'),
+    });
+    const { items: parsedMediaItems, error: parsedMediaItemsError } = parseMediaItemsPayload({
+      rawValue: formData.get('mediaItems'),
+      userId: user.id,
     });
     const body = normalizeBody(formData.get('body'));
     const postFormat = normalizePostFormat(
@@ -284,7 +389,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: uploadedMediaError }, { status: 400 });
     }
 
-    if (!body && !file && !uploadedMedia) {
+    if (parsedMediaItemsError) {
+      return NextResponse.json({ error: parsedMediaItemsError }, { status: 400 });
+    }
+
+    const submittedMediaItems: SubmittedPostMediaItem[] = parsedMediaItems ?? (
+      legacyUploadedMedia
+        ? [{
+            source: 'uploaded' as const,
+            filePath: legacyUploadedMedia.filePath,
+            temporaryStoragePath: legacyUploadedMedia.filePath,
+            originalName: legacyUploadedMedia.originalName,
+            contentType: legacyUploadedMedia.contentType,
+          }]
+        : rawMediaFiles.map((mediaFile) => ({
+            source: 'file' as const,
+            file: mediaFile,
+            originalName: mediaFile.name,
+            contentType: mediaFile.type,
+          }))
+    );
+    const submittedMediaValidationError = validateSubmittedMediaItems(submittedMediaItems);
+    if (submittedMediaValidationError) {
+      return NextResponse.json({ error: submittedMediaValidationError }, { status: 400 });
+    }
+    const hasSubmittedMedia = submittedMediaItems.length > 0;
+
+    if (!body && !hasSubmittedMedia) {
       return NextResponse.json({ error: 'Add a note or upload media to publish a post.' }, { status: 400 });
     }
 
@@ -300,19 +431,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Media + note posts need both media and written context.' }, { status: 400 });
     }
 
-    if ((postFormat === 'media' || postFormat === 'mixed') && !file && !uploadedMedia) {
+    if ((postFormat === 'media' || postFormat === 'mixed') && !hasSubmittedMedia) {
       return NextResponse.json({ error: 'Upload an image or video for this post type.' }, { status: 400 });
     }
 
-    if (file?.type.startsWith('audio/')) {
-      return NextResponse.json({ error: 'Audio uploads are not supported in the community feed yet.' }, { status: 400 });
-    }
-
-    if (uploadedMedia?.contentType.startsWith('audio/')) {
-      return NextResponse.json({ error: 'Audio uploads are not supported in the community feed yet.' }, { status: 400 });
-    }
-
-    const mediaMimeType = file?.type ?? uploadedMedia?.contentType ?? '';
+    const coverSubmittedMedia = submittedMediaItems[0] ?? null;
+    const mediaMimeType = coverSubmittedMedia?.contentType ?? '';
 
     const category =
       postFormat === 'text'
@@ -332,7 +456,7 @@ export async function POST(request: NextRequest) {
     const title = resolveTitle(normalizeText(formData.get('title')), body, postFormat);
     const description = normalizeText(formData.get('description'));
     const sourceToolCatalog = await listSourceToolsCatalog();
-    const sourceTool = file || uploadedMedia ? normalizeText(formData.get('sourceTool')) : null;
+    const sourceTool = hasSubmittedMedia ? normalizeText(formData.get('sourceTool')) : null;
     const sourceToolSlugRaw = normalizeText(formData.get('sourceToolSlug'));
     const normalizedSourceTool = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
       label: sourceTool,
@@ -381,7 +505,7 @@ export async function POST(request: NextRequest) {
             visibility,
             archivedAt: null,
             reviewStatus: 'visible',
-            hasMedia: Boolean(file || uploadedMedia),
+            hasMedia: hasSubmittedMedia,
           },
           bundle: resourceBundle,
         })
@@ -392,18 +516,23 @@ export async function POST(request: NextRequest) {
     }
 
     const postId = randomUUID();
-    let storagePath: string | null = null;
-    let temporaryUploadPathToCleanup: string | null = null;
+    const persistedMediaItems: PostMediaPersistInput[] = [];
+    const storagePathsToCleanup: string[] = [];
+    const temporaryUploadPathsToCleanup: string[] = [];
     const cleanupUploadedMedia = async () => {
-      if (storagePath) {
-        const cleanupShowcase = await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove([storagePath]);
+      if (storagePathsToCleanup.length > 0) {
+        const cleanupShowcase = await adminSupabase.storage
+          .from(SHOWCASE_MEDIA_BUCKET)
+          .remove(storagePathsToCleanup);
         if (cleanupShowcase.error) {
           console.warn('Failed to remove uploaded showcase media after post failure:', cleanupShowcase.error);
         }
       }
 
-      if (temporaryUploadPathToCleanup) {
-        const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([temporaryUploadPathToCleanup]);
+      if (temporaryUploadPathsToCleanup.length > 0) {
+        const cleanupUpload = await adminSupabase.storage
+          .from(UPLOADS_BUCKET)
+          .remove(temporaryUploadPathsToCleanup);
         if (cleanupUpload.error) {
           console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
         }
@@ -426,47 +555,51 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    if (file) {
-      const extension = inferExtension(file.name, file.type);
-      storagePath = `posts/${postId}/${sanitizeFileStem(file.name)}.${extension}`;
+    try {
+      for (const [index, mediaItem] of submittedMediaItems.entries()) {
+        const extension = inferExtension(mediaItem.originalName, mediaItem.contentType);
+        const storagePath = `posts/${postId}/${index}/${sanitizeFileStem(mediaItem.originalName)}.${extension}`;
+        const mediaBody = mediaItem.source === 'file'
+          ? mediaItem.file
+          : await (async () => {
+              const downloadedMedia = await adminSupabase.storage
+                .from(UPLOADS_BUCKET)
+                .download(mediaItem.filePath);
+              if (downloadedMedia.error || !downloadedMedia.data) {
+                throw new Error('Failed to load uploaded media.');
+              }
+              temporaryUploadPathsToCleanup.push(mediaItem.temporaryStoragePath);
+              return downloadedMedia.data;
+            })();
 
-      const { error: uploadError } = await adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .upload(storagePath, file, {
-          cacheControl: '3600',
-          contentType: file.type || undefined,
-          upsert: false,
+        const showcaseUpload = await adminSupabase.storage
+          .from(SHOWCASE_MEDIA_BUCKET)
+          .upload(storagePath, mediaBody, {
+            cacheControl: '3600',
+            contentType: mediaBody.type || mediaItem.contentType || undefined,
+            upsert: false,
+          });
+
+        if (showcaseUpload.error) {
+          throw showcaseUpload.error;
+        }
+
+        storagePathsToCleanup.push(storagePath);
+        persistedMediaItems.push({
+          storagePath,
+          mediaKind: getSubmittedMediaKind(mediaItem),
+          contentType: mediaItem.contentType || mediaBody.type || null,
+          originalName: mediaItem.originalName,
+          sortOrder: index,
         });
-
-      if (uploadError) {
-        console.error('Failed to upload external post media:', uploadError);
-        return NextResponse.json({ error: 'Failed to upload media.' }, { status: 500 });
       }
-    } else if (uploadedMedia) {
-      const downloadedMedia = await adminSupabase.storage.from(UPLOADS_BUCKET).download(uploadedMedia.filePath);
-      if (downloadedMedia.error || !downloadedMedia.data) {
-        console.error('Failed to download uploaded post media:', downloadedMedia.error);
-        return NextResponse.json({ error: 'Failed to load uploaded media.' }, { status: 500 });
-      }
-
-      const extension = inferExtension(uploadedMedia.originalName, uploadedMedia.contentType);
-      storagePath = `posts/${postId}/${sanitizeFileStem(uploadedMedia.originalName)}.${extension}`;
-      const showcaseUpload = await adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .upload(storagePath, downloadedMedia.data, {
-          cacheControl: '3600',
-          contentType: downloadedMedia.data.type || uploadedMedia.contentType || undefined,
-          upsert: false,
-        });
-
-      if (showcaseUpload.error) {
-        console.error('Failed to copy uploaded post media into showcase storage:', showcaseUpload.error);
-        return NextResponse.json({ error: 'Failed to prepare uploaded media.' }, { status: 500 });
-      }
-
-      temporaryUploadPathToCleanup = uploadedMedia.filePath;
+    } catch (mediaUploadError) {
+      console.error('Failed to prepare uploaded post media:', mediaUploadError);
+      await cleanupUploadedMedia();
+      return NextResponse.json({ error: 'Failed to prepare uploaded media.' }, { status: 500 });
     }
 
+    const coverMedia = persistedMediaItems[0] ?? null;
     let post;
     try {
       post = await createPostWithResourceBundleAtomically({
@@ -484,7 +617,7 @@ export async function POST(request: NextRequest) {
         source_kind: sourceKind,
         source_tool: sourceTools.length > 0 ? sourceTools[0].toolLabel : normalizedSourceTool.label,
         source_tool_slug: sourceTools.length > 0 ? sourceTools[0].toolSlug : normalizedSourceTool.slug,
-        showcase_asset_path: storagePath,
+        showcase_asset_path: coverMedia?.storagePath ?? null,
         output_url: null,
         },
         bundle: resourceBundle,
@@ -501,8 +634,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create post.' }, { status: 500 });
     }
 
-    if (temporaryUploadPathToCleanup) {
-      const cleanupUpload = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([temporaryUploadPathToCleanup]);
+    try {
+      await insertPostMediaItems({
+        supabase: adminSupabase,
+        postId: post.postId,
+        mediaItems: persistedMediaItems,
+      });
+    } catch (mediaError) {
+      console.error('Failed to save post media:', mediaError);
+      await cleanupUploadedMedia();
+      await adminSupabase.from('posts').delete().eq('id', post.postId);
+      if (isMissingPostMediaSchemaError(mediaError)) {
+        return NextResponse.json({ error: MISSING_POST_MEDIA_SCHEMA_ERROR }, { status: 500 });
+      }
+      return NextResponse.json({ error: 'Failed to save post media.' }, { status: 500 });
+    }
+
+    if (temporaryUploadPathsToCleanup.length > 0) {
+      const cleanupUpload = await adminSupabase.storage
+        .from(UPLOADS_BUCKET)
+        .remove(temporaryUploadPathsToCleanup);
       if (cleanupUpload.error) {
         console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
       }

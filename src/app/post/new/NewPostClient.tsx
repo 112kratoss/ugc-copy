@@ -5,10 +5,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
+  ArrowRight,
   BadgePlus,
   BookText,
   Check,
   Film,
+  GripVertical,
   ImageIcon,
   Loader2,
   Plus,
@@ -68,6 +70,16 @@ interface CreatedPostState {
 interface ComposerError {
   section: 'post' | 'story' | 'resources' | 'publish';
   message: string;
+}
+
+interface ComposerMediaItem {
+  id: string;
+  existingId: string | null;
+  file: File | null;
+  existingUrl: string | null;
+  mediaKind: 'image' | 'video';
+  contentType: string | null;
+  originalName: string | null;
 }
 
 class ComposerSubmissionError extends Error {
@@ -224,20 +236,32 @@ function createResourceSectionRow(partial?: Partial<Omit<ResourceSectionRow, 'id
   };
 }
 
-function inferCategory(file: File | null): PostMediaCategory | null {
-  if (!file) {
+function inferCategoryFromContentType(contentType: string | null | undefined): PostMediaCategory | null {
+  if (!contentType) {
     return null;
   }
 
-  if (file.type.startsWith('image/')) {
+  if (contentType.startsWith('image/')) {
     return 'image';
   }
 
-  if (file.type.startsWith('video/')) {
+  if (contentType.startsWith('video/')) {
     return 'video';
   }
 
   return null;
+}
+
+function createComposerMediaItem(file: File, index: number): ComposerMediaItem {
+  return {
+    id: `new-${Date.now()}-${index}-${file.name}`,
+    existingId: null,
+    file,
+    existingUrl: null,
+    mediaKind: file.type.startsWith('video/') ? 'video' : 'image',
+    contentType: file.type || null,
+    originalName: file.name,
+  };
 }
 
 function serializeAttachmentRows(rows: AttachmentRow[]): PostResourceAttachment[] {
@@ -748,8 +772,39 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const initialResourceAccessMode = normalizePostResourceBundleAccessMode(requestedResourceMode ?? initialBundle.accessMode);
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
-  const [file, setFile] = useState<File | null>(null);
+  const [mediaItems, setMediaItems] = useState<ComposerMediaItem[]>(() => {
+    if (initialPost?.generationId) {
+      return [];
+    }
+
+    if (initialPost?.mediaItems?.length) {
+      return initialPost.mediaItems.map((item) => ({
+        id: `existing-${item.id}`,
+        existingId: item.id,
+        file: null,
+        existingUrl: item.url,
+        mediaKind: item.mediaKind,
+        contentType: item.contentType,
+        originalName: item.originalName,
+      }));
+    }
+
+    if (initialPost?.mediaUrl && initialPost.mediaKind) {
+      return [{
+        id: 'existing-cover',
+        existingId: `${initialPost.id}:cover`,
+        file: null,
+        existingUrl: initialPost.mediaUrl,
+        mediaKind: initialPost.mediaKind,
+        contentType: null,
+        originalName: null,
+      }];
+    }
+
+    return [];
+  });
   const [isDragging, setIsDragging] = useState(false);
+  const [draggedMediaId, setDraggedMediaId] = useState<string | null>(null);
   const [title, setTitle] = useState(initialPost?.title ?? '');
   const [description, setDescription] = useState(initialPost?.description ?? '');
   const [body, setBody] = useState(initialPost?.body ?? '');
@@ -851,8 +906,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const resourceSectionRef = useRef<HTMLDivElement | null>(null);
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
 
-  const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
-  const existingProofUrl = initialPost?.generationId ? null : initialPost?.mediaUrl ?? null;
+  const mediaPreviewItems = useMemo(
+    () => mediaItems.map((item) => ({
+      ...item,
+      previewUrl: item.file ? URL.createObjectURL(item.file) : item.existingUrl,
+    })),
+    [mediaItems]
+  );
+  const coverPreviewItem = mediaPreviewItems[0] ?? null;
   const hasGeneratedProof = Boolean(prefilledGeneration);
   const selectedResourceKinds = useMemo(
     () => RESOURCE_KIND_OPTIONS.filter((option) => resourceSelections[option.value]).map((option) => option.value),
@@ -860,7 +921,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   );
   const trimmedBody = body.trim();
   const bodyCount = body.length;
-  const hasMediaProof = proofMode === 'media' && (Boolean(file) || hasGeneratedProof || Boolean(existingProofUrl));
+  const hasMediaProof = proofMode === 'media' && (mediaItems.length > 0 || hasGeneratedProof);
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   const displayVisibility = visibility;
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
@@ -983,15 +1044,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   ]);
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
 
-  useEffect(() => {
-    if (!previewUrl) {
-      return;
+  useEffect(() => () => {
+    for (const item of mediaPreviewItems) {
+      if (item.file && item.previewUrl) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
     }
-
-    return () => {
-      URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
+  }, [mediaPreviewItems]);
 
   useEffect(() => {
     setDidApplyGenerationPaywallPrefill(false);
@@ -1198,8 +1257,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const inferredCategory = useMemo((): PostMediaCategory | null => {
     if (proofMode === 'text') return null;
     if (hasGeneratedProof) return prefilledGeneration?.category ?? 'image';
-    return inferCategory(file);
-  }, [file, hasGeneratedProof, prefilledGeneration, proofMode]);
+    return inferCategoryFromContentType(mediaItems[0]?.contentType)
+      ?? mediaItems[0]?.mediaKind
+      ?? null;
+  }, [hasGeneratedProof, mediaItems, prefilledGeneration, proofMode]);
 
   const sourceToolsForSubmit = useMemo(() => {
     return madeWithRows
@@ -1295,20 +1356,56 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setIsDragging(false);
   };
 
+  const appendMediaFiles = (files: File[]) => {
+    const supportedFiles = files.filter(
+      (candidate) => candidate.type.startsWith('image/') || candidate.type.startsWith('video/')
+    );
+    if (supportedFiles.length === 0) {
+      return;
+    }
+
+    setMediaItems((current) => [
+      ...current,
+      ...supportedFiles
+        .slice(0, Math.max(0, 5 - current.length))
+        .map((candidate, index) => createComposerMediaItem(candidate, current.length + index)),
+    ]);
+    resetFeedback();
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const droppedFile = e.dataTransfer.files?.[0];
-    if (droppedFile) {
-      if (droppedFile.type.startsWith('image/') || droppedFile.type.startsWith('video/')) {
-        setFile(droppedFile);
-        resetFeedback();
-      }
-    }
+    appendMediaFiles(Array.from(e.dataTransfer.files ?? []));
   };
 
   const handleMiddleClick = () => {
     mediaInputRef.current?.click();
+  };
+
+  const removeMediaItem = (id: string) => {
+    setMediaItems((current) => current.filter((item) => item.id !== id));
+    resetFeedback();
+  };
+
+  const moveMediaItem = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) {
+      return;
+    }
+
+    setMediaItems((current) => {
+      const sourceIndex = current.findIndex((item) => item.id === sourceId);
+      const targetIndex = current.findIndex((item) => item.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) {
+        return current;
+      }
+
+      const next = [...current];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+    resetFeedback();
   };
 
   const focusComposerSection = (section: 'post' | 'story' | 'resources' | 'publish') => {
@@ -1629,7 +1726,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
-    if (file?.type.startsWith('audio/')) {
+    if (mediaItems.some((item) => item.contentType?.startsWith('audio/'))) {
       stopWithError('Audio posts are not supported in the community feed yet.', 'post');
       return;
     }
@@ -1690,6 +1787,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
     try {
       setIsSubmitting(true);
+      const mediaItemsForSubmit = generationId
+        ? undefined
+        : await Promise.all(mediaItems.map(async (item) => {
+            if (item.existingId) {
+              return {
+                existingId: item.existingId,
+              };
+            }
+
+            if (!item.file) {
+              throw new Error('A selected media item is no longer available.');
+            }
+
+            const uploadedMedia = await uploadMediaToTemporaryStorage(item.file, session.user.id);
+            return {
+              storagePath: uploadedMedia.storagePath,
+              contentType: item.file.type,
+              originalName: item.file.name,
+            };
+          }));
 
       if (generationId) {
         const response = await fetch('/api/showcase/publish', {
@@ -1745,6 +1862,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
             visibility: effectiveVisibility,
             category: inferredCategory ?? undefined,
+            mediaItems: mediaItemsForSubmit,
             resourceBundle: resourceBundle ?? { accessMode: 'none' },
           }),
         });
@@ -1786,11 +1904,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       formData.set('postFormat', postFormat);
       formData.set('resourceBundle', JSON.stringify(resourceBundle ?? { accessMode: 'none' }));
 
-      if (hasMediaProof && file) {
-        const uploadedMedia = await uploadMediaToTemporaryStorage(file, session.user.id);
-        formData.set('mediaStoragePath', uploadedMedia.storagePath);
-        formData.set('mediaContentType', file.type);
-        formData.set('mediaOriginalName', file.name);
+      if (hasMediaProof && mediaItemsForSubmit?.length) {
+        formData.set('mediaItems', JSON.stringify(mediaItemsForSubmit));
         formData.set('category', inferredCategory ?? 'image');
       } else if (proofMode === 'text') {
         formData.set('category', 'text');
@@ -2122,9 +2237,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <div>
                     <h2 className="text-xl font-semibold text-white">Proof</h2>
                     <p className="mt-1 text-xs text-zinc-400">
-                      {isEditMode || hasGeneratedProof
+                      {hasGeneratedProof
                         ? 'Attached media is locked in.'
-                        : 'Share a result via image/video, or publish a text-only tip.'}
+                        : 'Add up to 5 images or videos and drag them into the order people should see.'}
                     </p>
                   </div>
                   {!hasGeneratedProof && !isEditMode ? (
@@ -2147,7 +2262,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         type="button"
                         onClick={() => {
                           setProofMode('text');
-                          setFile(null);
+                          setMediaItems([]);
                           resetFeedback();
                         }}
                         className={`rounded-full px-4 py-2 text-sm font-medium transition ${
@@ -2222,41 +2337,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           </div>
                         ) : null}
                       </div>
-                    ) : existingProofUrl ? (
-                      <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-5">
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Attached media</div>
-                            <div className="mt-2 text-lg font-semibold text-white">
-                              {title.trim() || 'Existing post media'}
-                            </div>
-                            <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
-                              This media is already saved on the post. Use the sections below to update the story or the unlock around it.
-                            </p>
-                          </div>
-                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">
-                            Media locked in
-                          </div>
-                        </div>
-
-                        <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
-                          {category === 'video' || category === 'motion' ? (
-                            <video
-                              src={existingProofUrl}
-                              controls
-                              playsInline
-                              className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
-                            />
-                          ) : (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={existingProofUrl}
-                              alt={title || 'Saved post preview'}
-                              className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
-                            />
-                          )}
-                        </div>
-                      </div>
                     ) : (
                       <div
                         onDragOver={handleDragOver}
@@ -2274,16 +2354,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               <UploadCloud className="h-6 w-6" />
                             </div>
                             <div>
-                              <div className="text-sm font-semibold text-white">Upload image or video</div>
+                              <div className="text-sm font-semibold text-white">
+                                {mediaItems.length > 0 ? `${mediaItems.length} of 5 media added` : 'Upload images or videos'}
+                              </div>
+                              <p className="mt-1 text-xs text-zinc-400">The first item is the feed cover.</p>
                             </div>
                           </div>
                           <button
                             type="button"
                             onClick={() => mediaInputRef.current?.click()}
+                            disabled={mediaItems.length >= 5}
                             className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-200"
                           >
                             <BadgePlus className="h-4 w-4" />
-                            Add media
+                            {mediaItems.length > 0 ? 'Add more' : 'Add media'}
                           </button>
                         </div>
 
@@ -2291,19 +2375,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           ref={mediaInputRef}
                           type="file"
                           accept="image/*,video/*"
+                          multiple
                           className="sr-only"
                           onChange={(event) => {
-                            const nextFile = event.target.files?.[0] ?? null;
-                            setFile(nextFile);
-                            resetFeedback();
+                            appendMediaFiles(Array.from(event.target.files ?? []));
+                            event.currentTarget.value = '';
                           }}
                         />
 
                         <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
-                          {previewUrl ? (
-                            file?.type.startsWith('video/') ? (
+                          {coverPreviewItem?.previewUrl ? (
+                            coverPreviewItem.mediaKind === 'video' ? (
                               <video
-                                src={previewUrl}
+                                src={coverPreviewItem.previewUrl}
                                 controls
                                 playsInline
                                 className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
@@ -2311,7 +2395,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             ) : (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
-                                src={previewUrl}
+                                src={coverPreviewItem.previewUrl}
                                 alt={title || 'Uploaded preview'}
                                 className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
                               />
@@ -2339,12 +2423,88 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                 <ImageIcon className="h-10 w-10 text-zinc-500" />
                               )}
                               <p className="mt-3 text-sm text-zinc-400 font-medium">
-                                Drag & drop file, or click to upload
+                                Drag & drop files, or click to upload
                               </p>
-                              <p className="mt-1.5 text-xs text-zinc-500">JPG, PNG, MP4, MOV</p>
+                              <p className="mt-1.5 text-xs text-zinc-500">Up to 5 images or videos</p>
                             </div>
                           )}
                         </div>
+
+                        {mediaPreviewItems.length > 0 ? (
+                          <div className="mt-4 flex gap-3 overflow-x-auto pb-1" aria-label="Post media order">
+                            {mediaPreviewItems.map((item, index) => (
+                              <div
+                                key={item.id}
+                                draggable
+                                onDragStart={() => setDraggedMediaId(item.id)}
+                                onDragEnd={() => setDraggedMediaId(null)}
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  if (draggedMediaId) {
+                                    moveMediaItem(draggedMediaId, item.id);
+                                  }
+                                  setDraggedMediaId(null);
+                                }}
+                                className={`relative w-28 shrink-0 rounded-lg border bg-zinc-950 p-1 ${
+                                  index === 0 ? 'border-sky-300/70' : 'border-white/10'
+                                }`}
+                              >
+                                <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-black">
+                                  {item.mediaKind === 'video' ? (
+                                    <video
+                                      src={item.previewUrl ?? undefined}
+                                      muted
+                                      playsInline
+                                      className="h-full w-full object-contain"
+                                    />
+                                  ) : (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={item.previewUrl ?? undefined}
+                                      alt={`Media ${index + 1}`}
+                                      className="h-full w-full object-contain"
+                                    />
+                                  )}
+                                  <div className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/75 text-zinc-200">
+                                    <GripVertical className="h-4 w-4" />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMediaItem(item.id)}
+                                    aria-label={`Remove media ${index + 1}`}
+                                    className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/75 text-zinc-200 hover:text-white"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                </div>
+                                <div className="mt-1 flex items-center justify-between gap-1 px-1 text-[11px] text-zinc-400">
+                                  <span>{index === 0 ? 'Cover' : `${index + 1}`}</span>
+                                  <div className="flex">
+                                    <button
+                                      type="button"
+                                      disabled={index === 0}
+                                      onClick={() => moveMediaItem(item.id, mediaPreviewItems[index - 1]?.id ?? item.id)}
+                                      aria-label={`Move media ${index + 1} left`}
+                                      className="flex h-6 w-6 items-center justify-center disabled:opacity-25"
+                                    >
+                                      <ArrowLeft className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={index === mediaPreviewItems.length - 1}
+                                      onClick={() => moveMediaItem(item.id, mediaPreviewItems[index + 1]?.id ?? item.id)}
+                                      aria-label={`Move media ${index + 1} right`}
+                                      className="flex h-6 w-6 items-center justify-center disabled:opacity-25"
+                                    >
+                                      <ArrowRight className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     )}
                   </div>

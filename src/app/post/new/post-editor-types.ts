@@ -2,6 +2,7 @@ import type { PostResourceBundleInput } from '@/lib/post-resource-bundles';
 import type {
   ShowcaseItemCategory,
   ShowcaseMediaKind,
+  ShowcaseMediaItem,
   ShowcasePostFormat,
   ShowcaseSourceKind,
   ShowcaseVisibility,
@@ -30,6 +31,7 @@ export interface EditablePostDraft {
   }> | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
+  mediaItems?: ShowcaseMediaItem[];
   archivedAt: string | null;
   resourceBundle: PostResourceBundleInput;
   hasPaidOrders: boolean;

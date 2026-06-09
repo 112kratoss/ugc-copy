@@ -359,6 +359,44 @@ describe('ShowcaseClient save actions', () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves the selected carousel slide when opening the reel', async () => {
+    renderShowcase(createShowcaseItem({
+      mediaItems: [
+        {
+          id: 'media-1',
+          url: 'https://example.com/cover.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'cover.jpg',
+          width: 800,
+          height: 1000,
+          durationSeconds: null,
+          sortOrder: 0,
+        },
+        {
+          id: 'media-2',
+          url: 'https://example.com/second.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'second.jpg',
+          width: 1200,
+          height: 800,
+          durationSeconds: null,
+          sortOrder: 1,
+        },
+      ],
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next media' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Campaign Frame' }));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('post')).toBe('post-1');
+      expect(params.get('media')).toBe('1');
+    });
+  });
+
   it('loads a shared post URL that is not present in the first feed page without pushing a duplicate history entry', async () => {
     const sharedItem = createShowcaseItem({
       id: 'post-shared',

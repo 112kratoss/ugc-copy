@@ -5,6 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { ArrowLeft, BarChart3, BookText, Eye, Heart, Share2, ShoppingBag, Tag, Wand2 } from 'lucide-react';
 
 import CreatorIdentity from '@/app/components/CreatorIdentity';
+import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import {
   getPostReferenceForShowcaseId,
@@ -163,6 +164,21 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
   });
   const isTextOnlyPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
   const sourceToolLabel = detail.sourceTool || (detail.model !== 'external' ? detail.model : null);
+  const detailMediaItems = detail.mediaItems?.length
+    ? detail.mediaItems
+    : detail.mediaUrl && detail.mediaKind
+      ? [{
+          id: `${detail.id}:cover`,
+          url: detail.mediaUrl,
+          mediaKind: detail.mediaKind,
+          contentType: null,
+          originalName: null,
+          width: null,
+          height: null,
+          durationSeconds: null,
+          sortOrder: 0,
+        }]
+      : [];
   const publicPostFallback = [
     detail.sourceTool ? `Made with ${detail.sourceTool}` : null,
     `${detail.category === 'text' ? 'Tip' : detail.category} by ${detail.creator.name}`,
@@ -287,22 +303,11 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                       {formatPostDate(detail.createdAt)}
                     </span>
                   </div>
-                  {detail.mediaKind === 'image' && detail.mediaUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={detail.mediaUrl}
-                      alt={detail.title}
-                      className="block max-h-[calc(100dvh-10rem)] min-h-[360px] w-full object-contain sm:min-h-[520px]"
-                    />
-                  ) : detail.mediaKind === 'video' && detail.mediaUrl ? (
-                    <video
-                      src={detail.mediaUrl}
-                      controls
-                      autoPlay
-                      loop
-                      playsInline
-                      preload="metadata"
-                      className="block max-h-[calc(100dvh-10rem)] min-h-[360px] w-full object-contain sm:min-h-[520px]"
+                  {detailMediaItems.length > 0 ? (
+                    <ShowcaseMediaCarousel
+                      mediaItems={detailMediaItems}
+                      title={detail.title}
+                      mode="detail"
                     />
                   ) : (
                     <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">

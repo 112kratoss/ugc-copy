@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getOwnerPostDetail } from '@/lib/owner-posts';
@@ -20,6 +22,12 @@ import {
   isMissingPostResourceBundlesSchemaError,
   isMissingPostResourceItemsColumnError,
 } from '@/lib/posts-server';
+import {
+  getMediaKindFromContentType,
+  MAX_POST_MEDIA_ITEMS,
+  replacePostMediaItems,
+  type PostMediaPersistInput,
+} from '@/lib/post-media';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
@@ -78,6 +86,48 @@ type BundleStatusRow = {
   access_mode: 'none' | 'free' | 'paid';
   status: 'draft' | 'published';
 };
+
+type ExistingPostMediaRow = {
+  id: string;
+  storage_path: string | null;
+  external_url: string | null;
+  media_kind: 'image' | 'video';
+  content_type: string | null;
+  original_name: string | null;
+  width: number | null;
+  height: number | null;
+  duration_seconds: number | null;
+  sort_order: number;
+};
+
+type SubmittedEditMediaItem =
+  | { source: 'existing'; row: ExistingPostMediaRow }
+  | {
+      source: 'uploaded';
+      filePath: string;
+      temporaryStoragePath: string;
+      originalName: string;
+      contentType: string;
+      mediaKind: 'image' | 'video';
+    };
+
+const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const UPLOADS_BUCKET = 'uploads';
+
+function sanitizeFileStem(fileName: string): string {
+  const stem = path.basename(fileName, path.extname(fileName)).toLowerCase();
+  const sanitized = stem.replace(/[^a-z0-9-_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return sanitized || 'upload';
+}
+
+function inferExtension(fileName: string, mimeType: string): string {
+  const extension = path.extname(fileName).replace('.', '').toLowerCase();
+  if (extension) {
+    return extension;
+  }
+
+  return mimeType.startsWith('video/') ? 'mp4' : 'jpg';
+}
 
 function normalizeText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -168,6 +218,92 @@ async function loadOwnedBundleStatus(postId: string, userId: string): Promise<Bu
   return (data as BundleStatusRow | null) ?? null;
 }
 
+async function loadOwnedPostMedia(postId: string): Promise<ExistingPostMediaRow[]> {
+  const adminSupabase = createServiceClient();
+  const { data, error } = await adminSupabase
+    .from('post_media')
+    .select('id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .eq('post_id', postId)
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as ExistingPostMediaRow[];
+}
+
+async function parseSubmittedEditMediaItems(params: {
+  value: unknown;
+  postId: string;
+  userId: string;
+}): Promise<{ items: SubmittedEditMediaItem[] | null; error: string | null }> {
+  if (params.value === undefined) {
+    return { items: null, error: null };
+  }
+
+  if (!Array.isArray(params.value)) {
+    return { items: null, error: 'Post media metadata is invalid.' };
+  }
+
+  if (params.value.length === 0) {
+    return { items: null, error: 'Media posts need at least one image or video.' };
+  }
+
+  if (params.value.length > MAX_POST_MEDIA_ITEMS) {
+    return { items: null, error: `Add up to ${MAX_POST_MEDIA_ITEMS} media items per post.` };
+  }
+
+  const existingRows = await loadOwnedPostMedia(params.postId);
+  const existingRowsMap = new Map(existingRows.map((row) => [row.id, row]));
+  const submitted: SubmittedEditMediaItem[] = [];
+
+  for (const value of params.value) {
+    if (!value || typeof value !== 'object') {
+      return { items: null, error: 'Post media metadata is invalid.' };
+    }
+
+    const descriptor = value as Record<string, unknown>;
+    if (typeof descriptor.existingId === 'string') {
+      const existingRow = existingRowsMap.get(descriptor.existingId);
+      if (!existingRow) {
+        return { items: null, error: 'An existing media item no longer belongs to this post.' };
+      }
+      submitted.push({ source: 'existing', row: existingRow });
+      continue;
+    }
+
+    const storagePath = typeof descriptor.storagePath === 'string'
+      ? descriptor.storagePath.trim().replace(/^\/+/, '')
+      : '';
+    const expectedPrefix = `${UPLOADS_BUCKET}/${params.userId}/`;
+    if (!storagePath.startsWith(expectedPrefix)) {
+      return { items: null, error: 'Uploaded media must belong to the authenticated user.' };
+    }
+
+    const contentType = typeof descriptor.contentType === 'string' ? descriptor.contentType.trim() : '';
+    const mediaKind = getMediaKindFromContentType(contentType);
+    if (!mediaKind) {
+      return { items: null, error: 'Post media must be an image or video.' };
+    }
+
+    const originalName = typeof descriptor.originalName === 'string' && descriptor.originalName.trim()
+      ? descriptor.originalName.trim()
+      : path.basename(storagePath);
+    const filePath = storagePath.slice(`${UPLOADS_BUCKET}/`.length);
+    submitted.push({
+      source: 'uploaded',
+      filePath,
+      temporaryStoragePath: filePath,
+      originalName,
+      contentType,
+      mediaKind,
+    });
+  }
+
+  return { items: submitted, error: null };
+}
+
 export async function GET(request: NextRequest, context: RouteContext) {
   const { postId } = await context.params;
   const supabase = createUserClient(request);
@@ -227,6 +363,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       sourceTool?: unknown;
       sourceToolSlug?: unknown;
       sourceTools?: unknown;
+      mediaItems?: unknown;
       resourceBundle?: unknown;
     };
 
@@ -236,7 +373,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
 
-    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools'].some((key) =>
+    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools', 'mediaItems'].some((key) =>
       Object.prototype.hasOwnProperty.call(body, key)
     );
 
@@ -245,6 +382,15 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         { error: 'Generation-backed posts should be updated through the generation publish flow.' },
         { status: 400 }
       );
+    }
+
+    const { items: submittedMediaItems, error: submittedMediaItemsError } = await parseSubmittedEditMediaItems({
+      value: body.mediaItems,
+      postId,
+      userId: user.id,
+    });
+    if (submittedMediaItemsError) {
+      return NextResponse.json({ error: submittedMediaItemsError }, { status: 400 });
     }
 
     const nextBody = Object.prototype.hasOwnProperty.call(body, 'body') ? normalizeBody(body.body) : post.body;
@@ -270,6 +416,10 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     const nextCategory =
       post.post_format === 'text'
         ? 'text'
+        : submittedMediaItems?.[0]
+          ? submittedMediaItems[0].source === 'existing'
+            ? submittedMediaItems[0].row.media_kind
+            : submittedMediaItems[0].mediaKind
         : Object.prototype.hasOwnProperty.call(body, 'category') && isShowcaseItemCategory(body.category as string)
           ? body.category
           : post.category;
@@ -378,6 +528,104 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       hasBundlePayload: hasResourceBundlePayload,
       bundle: resourceBundle,
     });
+
+    if (submittedMediaItems) {
+      const existingMediaRows = await loadOwnedPostMedia(postId);
+      const persistedMediaItems: PostMediaPersistInput[] = [];
+      const newStoragePaths: string[] = [];
+      const temporaryStoragePaths: string[] = [];
+
+      try {
+        for (const [index, item] of submittedMediaItems.entries()) {
+          if (item.source === 'existing') {
+            persistedMediaItems.push({
+              storagePath: item.row.storage_path,
+              externalUrl: item.row.external_url,
+              mediaKind: item.row.media_kind,
+              contentType: item.row.content_type,
+              originalName: item.row.original_name,
+              width: item.row.width,
+              height: item.row.height,
+              durationSeconds: item.row.duration_seconds,
+              sortOrder: index,
+            });
+            continue;
+          }
+
+          const downloadedMedia = await adminSupabase.storage
+            .from(UPLOADS_BUCKET)
+            .download(item.filePath);
+          if (downloadedMedia.error || !downloadedMedia.data) {
+            throw new Error('Failed to load uploaded media.');
+          }
+
+          const extension = inferExtension(item.originalName, item.contentType);
+          const storagePath = `posts/${postId}/${randomUUID()}/${sanitizeFileStem(item.originalName)}.${extension}`;
+          const uploadResult = await adminSupabase.storage
+            .from(SHOWCASE_MEDIA_BUCKET)
+            .upload(storagePath, downloadedMedia.data, {
+              cacheControl: '3600',
+              contentType: downloadedMedia.data.type || item.contentType || undefined,
+              upsert: false,
+            });
+          if (uploadResult.error) {
+            throw uploadResult.error;
+          }
+
+          newStoragePaths.push(storagePath);
+          temporaryStoragePaths.push(item.temporaryStoragePath);
+          persistedMediaItems.push({
+            storagePath,
+            externalUrl: null,
+            mediaKind: item.mediaKind,
+            contentType: item.contentType,
+            originalName: item.originalName,
+            sortOrder: index,
+          });
+        }
+
+        await replacePostMediaItems({
+          supabase: adminSupabase,
+          postId,
+          ownerUserId: user.id,
+          mediaItems: persistedMediaItems,
+        });
+
+        if (temporaryStoragePaths.length > 0) {
+          const temporaryCleanup = await adminSupabase.storage
+            .from(UPLOADS_BUCKET)
+            .remove(temporaryStoragePaths);
+          if (temporaryCleanup.error) {
+            console.warn('Failed to remove temporary post media after edit:', temporaryCleanup.error);
+          }
+        }
+
+        const retainedStoragePaths = new Set(
+          persistedMediaItems
+            .map((item) => item.storagePath)
+            .filter((storagePath): storagePath is string => Boolean(storagePath))
+        );
+        const removedStoragePaths = existingMediaRows
+          .map((row) => row.storage_path)
+          .filter((storagePath): storagePath is string =>
+            Boolean(storagePath) && !retainedStoragePaths.has(storagePath as string)
+          );
+        if (removedStoragePaths.length > 0) {
+          const removedMediaCleanup = await adminSupabase.storage
+            .from(SHOWCASE_MEDIA_BUCKET)
+            .remove(removedStoragePaths);
+          if (removedMediaCleanup.error) {
+            console.warn('Failed to remove deleted post media:', removedMediaCleanup.error);
+          }
+        }
+      } catch (mediaError) {
+        console.error('Failed to update post media:', mediaError);
+        if (newStoragePaths.length > 0) {
+          await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(newStoragePaths);
+        }
+        return NextResponse.json({ error: 'Failed to update post media.' }, { status: 500 });
+      }
+    }
 
     if (hasSourceToolsPayload) {
       try {

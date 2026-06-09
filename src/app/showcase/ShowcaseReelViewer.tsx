@@ -24,6 +24,7 @@ import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useAuth } from '@/app/components/AuthProvider';
+import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   formatPostResourceBundleCountSummary,
   getBundleAccessLabel,
@@ -36,7 +37,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getCurrentInternalPath } from '@/lib/share';
-import { isGenerationRecipeAssetId, type ShowcaseFeedItem } from '@/lib/showcase';
+import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem } from '@/lib/showcase';
 
 declare global {
   interface Window {
@@ -56,9 +57,11 @@ interface ShowcaseReelViewerProps {
   accessToken?: string | null;
   hasMoreItems: boolean;
   isLoadingMoreItems: boolean;
+  initialMediaIndex?: number;
   onLoadMoreItems: () => void | Promise<void>;
   onClose: () => void;
   onSelectItemId: (id: string) => void;
+  onMediaIndexChange?: (index: number) => void;
   onToggleSave: (id: string) => void | Promise<void>;
   onRemix: (id: string) => void | Promise<void>;
   buildDetailPath: (id: string, section?: string) => string;
@@ -168,11 +171,38 @@ function getMediaTypeLabel(item: ShowcaseFeedItem): string {
     return 'Tip / note';
   }
 
-  if (item.mediaKind === 'video') {
+  const mediaKinds = new Set((item.mediaItems ?? []).map((mediaItem) => mediaItem.mediaKind));
+  if (mediaKinds.size > 1) {
+    return 'Mixed media';
+  }
+
+  if (item.mediaKind === 'video' || mediaKinds.has('video')) {
     return 'Video';
   }
 
   return 'Image';
+}
+
+function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
+  if (item.mediaItems?.length) {
+    return item.mediaItems;
+  }
+
+  if (!item.mediaUrl || !item.mediaKind) {
+    return [];
+  }
+
+  return [{
+    id: `${item.id}:cover`,
+    url: item.mediaUrl,
+    mediaKind: item.mediaKind,
+    contentType: null,
+    originalName: null,
+    width: null,
+    height: null,
+    durationSeconds: null,
+    sortOrder: 0,
+  }];
 }
 
 export default function ShowcaseReelViewer({
@@ -184,21 +214,24 @@ export default function ShowcaseReelViewer({
   accessToken,
   hasMoreItems,
   isLoadingMoreItems,
+  initialMediaIndex = 0,
   onLoadMoreItems,
   onClose,
   onSelectItemId,
+  onMediaIndexChange,
   onToggleSave,
   onRemix,
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
   const router = useRouter();
   const { session, credits, updateCredits } = useAuth();
-  const touchStartYRef = useRef<number | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const wheelCooldownRef = useRef(0);
   const detailsScrollerRef = useRef<HTMLDivElement | null>(null);
   const pendingAdvanceAfterLoadRef = useRef(false);
   const prefersReducedMotion = useReducedMotion();
   const [transitionDirection, setTransitionDirection] = useState<ReelTransitionDirection>('neutral');
+  const [activeMediaIndex, setActiveMediaIndex] = useState(initialMediaIndex);
   const [loadedMediaKeys, setLoadedMediaKeys] = useState<Set<string>>(new Set());
   const [activeUnlockCheckoutItemId, setActiveUnlockCheckoutItemId] = useState<string | null>(null);
   const [unlockWorkingAction, setUnlockWorkingAction] = useState<ReelUnlockAction>(null);
@@ -221,15 +254,23 @@ export default function ShowcaseReelViewer({
   const nextItem = selectedIndex >= 0 && selectedIndex < items.length - 1 ? items[selectedIndex + 1] : null;
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
+  const mediaItems = item ? getItemMediaItems(item) : [];
+  const activeMediaItem = mediaItems[Math.min(activeMediaIndex, Math.max(0, mediaItems.length - 1))] ?? mediaItems[0] ?? null;
 
   const moveToItem = useCallback((targetItem: ShowcaseFeedItem, direction: ReelTransitionDirection) => {
     setActiveUnlockCheckoutItemId(null);
     setUnlockWorkingAction(null);
     setUnlockError(null);
     setShowUnlockedDetails(false);
+    setActiveMediaIndex(0);
     setTransitionDirection(direction);
     onSelectItemId(targetItem.id);
   }, [onSelectItemId]);
+
+  useEffect(() => {
+    const clampedIndex = Math.min(Math.max(initialMediaIndex, 0), Math.max(0, mediaItems.length - 1));
+    setActiveMediaIndex(clampedIndex);
+  }, [initialMediaIndex, item?.id, mediaItems.length]);
 
   const requestMoreItems = useCallback((advanceAfterLoad = false) => {
     if (!hasMoreItems || isLoadingMoreItems) {
@@ -616,8 +657,8 @@ export default function ShowcaseReelViewer({
     ? formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null)
     : '';
   const publicRecipeIsLoading = publicRecipeLoadingItemId === item.id;
-  const shouldWaitForMedia = item.postFormat !== 'text' && Boolean(item.mediaUrl);
-  const currentMediaKey = shouldWaitForMedia ? `${item.id}:${item.mediaUrl}` : null;
+  const shouldWaitForMedia = item.postFormat !== 'text' && Boolean(activeMediaItem);
+  const currentMediaKey = activeMediaItem ? `${item.id}:${activeMediaItem.id}` : null;
   const isMediaReady = !currentMediaKey || loadedMediaKeys.has(currentMediaKey);
   const showMediaLoading = shouldWaitForMedia && !isMediaReady;
   const transition = prefersReducedMotion
@@ -796,19 +837,25 @@ export default function ShowcaseReelViewer({
   };
 
   const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
-    touchStartYRef.current = event.touches[0]?.clientY ?? null;
+    const touch = event.touches[0];
+    touchStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
   };
 
   const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
-    const startY = touchStartYRef.current;
-    touchStartYRef.current = null;
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
 
-    if (startY === null) {
+    if (!start) {
       return;
     }
 
-    const endY = event.changedTouches[0]?.clientY ?? startY;
-    const deltaY = endY - startY;
+    const touch = event.changedTouches[0];
+    const deltaX = (touch?.clientX ?? start.x) - start.x;
+    const deltaY = (touch?.clientY ?? start.y) - start.y;
+
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      return;
+    }
 
     if (Math.abs(deltaY) < 60) {
       return;
@@ -1143,35 +1190,25 @@ export default function ShowcaseReelViewer({
       );
     }
 
-    if (item.mediaKind === 'video' && item.mediaUrl) {
-      const mediaKey = `${item.id}:${item.mediaUrl}`;
-
+    if (mediaItems.length > 0) {
       return (
-        <video
-          key={item.id}
-          src={item.mediaUrl}
-          controls
-          autoPlay
-          loop
-          playsInline
-          preload="metadata"
-          onLoadedData={() => markMediaReady(mediaKey)}
-          className="h-full w-full object-contain"
-        />
-      );
-    }
-
-    if (item.mediaUrl) {
-      const mediaKey = `${item.id}:${item.mediaUrl}`;
-
-      return (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          key={item.id}
-          src={item.mediaUrl}
-          alt={item.title}
-          onLoad={() => markMediaReady(mediaKey)}
-          className="h-full w-full object-contain"
+        <ShowcaseMediaCarousel
+          key={`${item.id}:${activeMediaIndex}`}
+          mediaItems={mediaItems}
+          title={item.title}
+          mode="reel"
+          initialIndex={activeMediaIndex}
+          className="h-full"
+          onIndexChange={(index) => {
+            setActiveMediaIndex(index);
+            onMediaIndexChange?.(index);
+          }}
+          onMediaReady={(index) => {
+            const readyItem = mediaItems[index];
+            if (readyItem) {
+              markMediaReady(`${item.id}:${readyItem.id}`);
+            }
+          }}
         />
       );
     }

@@ -22,6 +22,11 @@ import {
   resolvePostMediaUrl,
   type PostMediaRow,
 } from '@/lib/posts-server';
+import {
+  buildLegacyPostMediaItems,
+  loadPostMediaItemsMap,
+  type PostMediaSummary,
+} from '@/lib/post-media';
 import { createServiceClient } from '@/lib/server-helpers';
 import type { SourceToolSelection } from '@/lib/source-tools';
 import {
@@ -100,6 +105,7 @@ export interface OwnerPostListItem {
   archivedAt: string | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
+  mediaItems: PostMediaSummary[];
   title: string;
   description: string;
   prompt: string;
@@ -389,11 +395,18 @@ async function loadSourceToolsMap(postIds: string[]) {
 async function toOwnerPostListItem(
   row: OwnerPostRow,
   bundleMap: Map<string, BundleSummaryRow>,
-  sourceToolsMap: Map<string, SourceToolSelection[]>
+  sourceToolsMap: Map<string, SourceToolSelection[]>,
+  mediaItemsMap: Map<string, PostMediaSummary[]>
 ) {
   const adminSupabase = createServiceClient();
-  const mediaUrl = await resolvePostMediaUrl(adminSupabase, row);
-  const mediaKind = getPostMediaKind(row.category, row.post_format);
+  const mediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
+    supabase: adminSupabase,
+    postId: row.id,
+    row,
+  });
+  const coverMedia = mediaItems[0] ?? null;
+  const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, row);
+  const mediaKind = coverMedia?.mediaKind ?? getPostMediaKind(row.category, row.post_format);
   const sourceKind = normalizeShowcaseSourceKind(row.source_kind);
   const canShare = isShareablePost(row);
   const bundleRow = bundleMap.get(row.id) ?? null;
@@ -406,6 +419,7 @@ async function toOwnerPostListItem(
     archivedAt: row.archived_at,
     mediaUrl,
     mediaKind,
+    mediaItems,
     title:
       row.title?.trim() ||
       deriveTitleFromBody(row.body) ||
@@ -451,9 +465,10 @@ export async function getOwnerPostList(
   const visibility = options?.visibility ?? 'all';
   const rows = await fetchOwnerPostRows(userId, includeArchived);
   const postIds = rows.map((row) => row.id);
-  const [bundleMap, sourceToolsMap] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
     loadBundleMap(postIds),
     loadSourceToolsMap(postIds),
+    loadPostMediaItemsMap(createServiceClient(), postIds),
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -467,7 +482,9 @@ export async function getOwnerPostList(
     return row.archived_at === null && row.visibility === visibility;
   });
 
-  return Promise.all(filteredRows.map((row) => toOwnerPostListItem(row, bundleMap, sourceToolsMap)));
+  return Promise.all(filteredRows.map((row) =>
+    toOwnerPostListItem(row, bundleMap, sourceToolsMap, mediaItemsMap)
+  ));
 }
 
 export async function getOwnerPostDetail(
@@ -482,11 +499,12 @@ export async function getOwnerPostDetail(
     return null;
   }
 
-  const [bundleMap, sourceToolsMap] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
     loadBundleMap([row.id]),
     loadSourceToolsMap([row.id]),
+    loadPostMediaItemsMap(createServiceClient(), [row.id]),
   ]);
-  const listItem = await toOwnerPostListItem(row, bundleMap, sourceToolsMap);
+  const listItem = await toOwnerPostListItem(row, bundleMap, sourceToolsMap, mediaItemsMap);
   const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
     viewerUserId: userId,
     countryCode: options?.countryCode ?? null,

@@ -29,6 +29,7 @@ function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwne
     sourceTools: post.sourceTools ?? null,
     mediaUrl: post.mediaUrl,
     mediaKind: post.mediaKind,
+    mediaItems: post.mediaItems,
     archivedAt: post.archivedAt,
     resourceBundle: post.resourceBundleInput,
     hasPaidOrders: post.hasPaidOrders,
