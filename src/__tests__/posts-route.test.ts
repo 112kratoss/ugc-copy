@@ -6,7 +6,14 @@ const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const downloadMock = vi.fn();
 const insertPayloads: Array<Record<string, unknown>> = [];
+const sourceToolRows: Array<Record<string, unknown>> = [];
 let bundleUpsertError: { code?: string; message?: string } | null = null;
+let sourceToolInsertError: { code?: string; message?: string } | null = null;
+
+const sourceToolCatalog = vi.hoisted(() => [
+  { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+  { slug: 'higgsfield', label: 'Higgsfield', models: [{ slug: 'soul', label: 'Soul' }], supportedMediaKinds: ['image', 'video'] },
+]);
 
 function createRouteRequest(formData: FormData) {
   return {
@@ -105,6 +112,28 @@ vi.mock('@/lib/server-helpers', () => ({
         return query;
       }
 
+      if (table === 'post_source_tools') {
+        return {
+          insert(payload: Array<Record<string, unknown>>) {
+            sourceToolRows.push(...payload);
+            return Promise.resolve({ error: sourceToolInsertError });
+          },
+        };
+      }
+
+      if (table === 'posts') {
+        const query = {
+          delete() {
+            return query;
+          },
+          eq() {
+            return Promise.resolve({ error: null });
+          },
+        };
+
+        return query;
+      }
+
       throw new Error(`Unexpected service table access: ${table}`);
     },
     rpc(name: string, args: Record<string, unknown>) {
@@ -141,6 +170,10 @@ vi.mock('@/lib/server-helpers', () => ({
   }),
 }));
 
+vi.mock('@/lib/source-tools-server', () => ({
+  listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
+}));
+
 describe('/api/posts route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -160,7 +193,9 @@ describe('/api/posts route', () => {
       error: null,
     });
     insertPayloads.length = 0;
+    sourceToolRows.length = 0;
     bundleUpsertError = null;
+    sourceToolInsertError = null;
   });
 
   it('creates text-only posts without uploading media', async () => {
@@ -216,6 +251,79 @@ describe('/api/posts route', () => {
       body: 'This cutdown worked because the hook hits in under two seconds.',
       title: 'This cutdown worked because the hook hits in under two seconds.',
     });
+  });
+
+  it('persists structured source tools for media posts', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'mixed');
+    formData.set('body', 'This image was built with a specific external model.');
+    formData.set('visibility', 'public');
+    formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
+    formData.set('sourceTools', JSON.stringify([
+      {
+        toolLabel: 'Higgsfield',
+        toolSlug: 'higgsfield',
+        modelLabel: 'Soul',
+        modelSlug: 'soul',
+      },
+      {
+        toolLabel: 'Runway',
+        toolSlug: 'runway',
+        modelLabel: 'Gen-4',
+        modelSlug: 'gen-4',
+      },
+    ]));
+
+    const response = await POST(createRouteRequest(formData));
+
+    expect(response.status).toBe(200);
+    expect(insertPayloads[0]).toMatchObject({
+      source_tool: 'Higgsfield',
+      source_tool_slug: 'higgsfield',
+    });
+    expect(sourceToolRows).toEqual([
+      expect.objectContaining({
+        tool_label: 'Higgsfield',
+        tool_slug: 'higgsfield',
+        model_label: 'Soul',
+        model_slug: 'soul',
+        sort_order: 0,
+      }),
+      expect.objectContaining({
+        tool_label: 'Runway',
+        tool_slug: 'runway',
+        model_label: 'Gen-4',
+        model_slug: 'gen-4',
+        sort_order: 1,
+      }),
+    ]);
+  });
+
+  it('fails post creation when source tool metadata cannot be saved', async () => {
+    sourceToolInsertError = { message: 'source tool write failed' };
+
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'mixed');
+    formData.set('body', 'This image should not publish with missing source metadata.');
+    formData.set('visibility', 'public');
+    formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
+    formData.set('sourceTools', JSON.stringify([
+      {
+        toolLabel: 'Higgsfield',
+        toolSlug: 'higgsfield',
+        modelLabel: 'Soul',
+        modelSlug: 'soul',
+      },
+    ]));
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toMatch(/source tool/i);
+    expect(removeMock).toHaveBeenCalledWith([expect.stringContaining('posts/')]);
   });
 
   it('creates mixed posts from an uploaded storage reference without raw multipart media', async () => {

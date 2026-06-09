@@ -26,6 +26,7 @@ function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwne
     sourceKind: post.sourceKind,
     sourceTool: post.sourceTool,
     sourceToolSlug: post.sourceToolSlug,
+    sourceTools: post.sourceTools ?? null,
     mediaUrl: post.mediaUrl,
     mediaKind: post.mediaKind,
     archivedAt: post.archivedAt,

@@ -6,7 +6,7 @@ import {
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
-import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
+import { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket } from '@/lib/media-urls';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
 
@@ -291,13 +291,15 @@ async function buildStoredInputUrl(
   storagePath: string,
   mode: 'proxy' | 'signed'
 ): Promise<string | null> {
-  const location = getStoredMediaLocation(storagePath);
+  const location = normalizeStoragePath(storagePath);
   if (!location) {
     return isFetchableUrl(storagePath) ? storagePath : null;
   }
 
   if (mode === 'proxy') {
-    return buildMediaProxyUrl(location.bucket, location.filePath);
+    return isMediaBucket(location.bucket)
+      ? buildMediaProxyUrl(location.bucket, location.filePath)
+      : null;
   }
 
   const { data, error } = await supabase.storage

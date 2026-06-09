@@ -75,6 +75,36 @@ describe('generation paywall helpers', () => {
     expect(notes).not.toContain('"referenceVideoUrls"');
   });
 
+  it('prefers the named element handle for public recipe reference labels when available', () => {
+    const items = buildGenerationRecipeResourceItems({
+      promptText: 'Match @alisa in the final frame.',
+      notesMarkdown: null,
+      allowRemix: true,
+      inputMedia: [
+        {
+          id: 'input-1',
+          generationId: 'gen-1',
+          mediaType: 'image',
+          role: 'reference_image',
+          label: 'Element 1',
+          url: null,
+          storagePath: 'generation_inputs/user-1/gen-1/00-reference-image.png',
+          sourceGenerationId: null,
+          sortOrder: 0,
+          metadata: {
+            id: 'element-1',
+            displayName: 'Element 1',
+            handle: '@alisa',
+          },
+        },
+      ],
+    });
+
+    expect(items.find((item) => item.type === 'reference_image')).toMatchObject({
+      title: '@alisa',
+    });
+  });
+
   it('requires both motion source inputs before auto-enabling remix access', () => {
     expect(
       hasRecoverableGenerationRemixInputs({

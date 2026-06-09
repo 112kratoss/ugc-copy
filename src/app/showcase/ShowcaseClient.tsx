@@ -30,7 +30,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import { CURATED_SOURCE_TOOLS } from '@/lib/source-tools';
+import { formatSourceToolsCompact, type SourceToolOption } from '@/lib/source-tools';
 
 const CATEGORIES: Array<{
     id: ShowcaseCategory;
@@ -74,6 +74,7 @@ interface ShowcaseClientProps {
     initialTool: string | null;
     initialUnlock: ShowcaseUnlockFilter;
     initialResource: ShowcaseResourceFilter;
+    sourceToolOptions: SourceToolOption[];
 }
 
 function primePreviewVideoFrame(video: HTMLVideoElement) {
@@ -101,7 +102,9 @@ function getItemSummary(item: ShowcaseFeedItem): string {
         return item.prompt;
     }
 
-    const toolLabel = item.sourceTool ?? item.model;
+    const toolLabel = item.sourceTools && item.sourceTools.length > 0
+      ? formatSourceToolsCompact(item.sourceTools)
+      : item.sourceTool ?? item.model;
     const creatorLabel = item.creator.name;
     const metadata = [
         toolLabel ? `Made with ${toolLabel}` : null,
@@ -175,6 +178,7 @@ export default function ShowcaseClient({
     initialTool,
     initialUnlock,
     initialResource,
+    sourceToolOptions,
 }: ShowcaseClientProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -531,7 +535,7 @@ export default function ShowcaseClient({
     const activeFilterPills = [
         tool !== 'all' ? {
             key: 'tool',
-            label: CURATED_SOURCE_TOOLS.find((option) => option.slug === tool)?.label ?? tool,
+            label: sourceToolOptions.find((option) => option.slug === tool)?.label ?? tool,
             clear: () => {
                 setTool('all');
                 navigateWithFilters(category, sort, 'all', unlock, resource);
@@ -689,7 +693,7 @@ export default function ShowcaseClient({
                                         >
                                             All tools
                                         </button>
-                                        {CURATED_SOURCE_TOOLS.map((option) => (
+                                        {sourceToolOptions.map((option) => (
                                             <button
                                                 key={option.slug}
                                                 type="button"

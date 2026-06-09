@@ -37,14 +37,15 @@ import {
     setPersistedImageElementRecords,
 } from '@/lib/persisted-media';
 import {
+    buildElementHandle,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
+    isValidElementHandle,
     normalizeElementDisplayName,
-    reconcileElementDescriptors,
     replacePromptHandles,
     type ImageElementDescriptor,
     type PersistedImageElementDraft,
@@ -101,6 +102,7 @@ type ImageElementDraft = ImageElementDescriptor & {
 type ImageElementSeed = {
     id?: string;
     displayName?: string;
+    handle?: string | null;
     file?: File | null;
     previewUrl: string;
     providerUrl?: string | null;
@@ -110,49 +112,34 @@ type ImageElementSeed = {
 };
 
 function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
-    const baseElements = seeds.map((seed, index) => ({
-        id: seed.id ?? createElementId(),
-        displayName: normalizeElementDisplayName(seed.displayName, index + 1),
-        file: seed.file ?? null,
-        previewUrl: seed.previewUrl,
-        providerUrl: seed.providerUrl ?? null,
-        storagePath: seed.storagePath ?? null,
-        source: seed.source ?? 'upload',
-        sourceGenerationId: seed.sourceGenerationId ?? null,
-    }));
+    const usedHandles = new Set<string>();
 
-    const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
-        id: element.id,
-        displayName: element.displayName,
-    })));
-    const byId = new Map(baseElements.map((element) => [element.id, element]));
+    return seeds.map((seed, index) => {
+        const displayName = normalizeElementDisplayName(seed.displayName, index + 1);
+        const preferredHandle =
+            typeof seed.handle === 'string' && isValidElementHandle(seed.handle) && !usedHandles.has(seed.handle)
+                ? seed.handle
+                : buildElementHandle(displayName, usedHandles, index + 1);
 
-    return reconciled.map((element) => {
-        const existing = byId.get(element.id);
-        if (!existing) {
-            return {
-                id: element.id,
-                displayName: element.displayName,
-                handle: element.handle,
-                file: null,
-                previewUrl: '',
-                providerUrl: null,
-                storagePath: null,
-                source: 'upload' as const,
-                sourceGenerationId: null,
-            };
-        }
+        usedHandles.add(preferredHandle);
 
         return {
-            ...existing,
-            displayName: element.displayName,
-            handle: element.handle,
+            id: seed.id ?? createElementId(),
+            displayName,
+            handle: preferredHandle,
+            file: seed.file ?? null,
+            previewUrl: seed.previewUrl,
+            providerUrl: seed.providerUrl ?? null,
+            storagePath: seed.storagePath ?? null,
+            source: seed.source ?? 'upload',
+            sourceGenerationId: seed.sourceGenerationId ?? null,
         };
     });
 }
 
 export interface CreateImagePrefill {
     remixId?: string | null;
+    remixPostId?: string | null;
     prompt?: string | null;
     model?: string | null;
     aspectRatio?: string | null;
@@ -199,6 +186,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     
     // Remix State
     const remixId = prefill.remixId ?? null;
+    const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -313,7 +301,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
         const fetchRemixData = async () => {
             try {
-                const response = await fetch(`/api/remix-source?id=${remixId}`, {
+                const remixSourceParams = new URLSearchParams({ id: remixId });
+                if (remixPostId) {
+                    remixSourceParams.set('postId', remixPostId);
+                }
+
+                const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
                     headers: {
                         Authorization: `Bearer ${session.access_token}`,
                     },
@@ -381,7 +374,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         return () => {
             isCancelled = true;
         };
-    }, [remixId, session?.access_token]);
+    }, [remixId, remixPostId, session?.access_token]);
 
     useEffect(() => {
         elementRefs.current = elements;

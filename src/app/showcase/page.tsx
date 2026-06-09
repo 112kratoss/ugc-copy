@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
     SHOWCASE_PAGE_SIZE,
     normalizeShowcaseCategory,
@@ -70,7 +71,8 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         SHOWCASE_PAGE_SIZE
     );
 
-    const initialFeed = await getShowcaseFeedPage({
+    const [initialFeed, sourceToolOptions] = await Promise.all([
+      getShowcaseFeedPage({
         category,
         sort,
         offset,
@@ -80,7 +82,9 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         unlock,
         resource,
         countryCode: null,
-    });
+      }),
+      listSourceToolsCatalog(),
+    ]);
 
     return (
         <ShowcaseClient
@@ -90,6 +94,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
             initialTool={tool}
             initialUnlock={unlock}
             initialResource={resource}
+            sourceToolOptions={sourceToolOptions}
         />
     );
 }

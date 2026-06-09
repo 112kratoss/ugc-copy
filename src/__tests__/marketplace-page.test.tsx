@@ -5,6 +5,10 @@ import MarketplacePage, { revalidate } from '@/app/marketplace/page';
 
 const getMarketplaceResourceListMock = vi.fn();
 const headersMock = vi.fn();
+const sourceToolCatalog = vi.hoisted(() => [
+  { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+  { slug: 'runway', label: 'Runway', models: [], supportedMediaKinds: ['image', 'video'] },
+]);
 
 vi.mock('next/headers', () => ({
   headers: () => headersMock(),
@@ -18,6 +22,10 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   getMarketplaceResourceList: (...args: unknown[]) => getMarketplaceResourceListMock(...args),
+}));
+
+vi.mock('@/lib/source-tools-server', () => ({
+  listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
 }));
 
 describe('MarketplacePage', () => {

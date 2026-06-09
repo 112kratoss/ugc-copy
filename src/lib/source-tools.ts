@@ -1,30 +1,111 @@
-export interface SourceToolOption {
+export interface SourceToolModel {
   slug: string;
   label: string;
 }
 
-const APP_SOURCE_TOOL: SourceToolOption = { slug: 'magicbooklet', label: 'magicbooklet' };
+export interface SourceToolOption {
+  slug: string;
+  label: string;
+  models: SourceToolModel[];
+  supportedMediaKinds: Array<'image' | 'video'>;
+}
 
-export const CURATED_SOURCE_TOOLS: SourceToolOption[] = [
+export interface SourceToolSelection {
+  toolLabel: string;
+  toolSlug: string | null;
+  modelLabel?: string | null;
+  modelSlug?: string | null;
+}
+
+const MAX_SOURCE_TOOL_SELECTIONS = 5;
+const MAX_SOURCE_TOOL_LABEL_LENGTH = 80;
+const MAX_SOURCE_MODEL_LABEL_LENGTH = 80;
+
+const APP_SOURCE_TOOL: SourceToolOption = {
+  slug: 'magicbooklet',
+  label: 'magicbooklet',
+  models: [
+    { slug: 'nano-banana-2', label: 'Nano Banana 2.0' },
+    { slug: 'nano-banana-pro', label: 'Nano Banana Pro' },
+    { slug: 'gpt-image-2', label: 'GPT Image 2' },
+    { slug: 'grok-imagine-image', label: 'Grok Imagine' },
+    { slug: 'kling-2.6', label: 'Kling 2.6 Motion' },
+    { slug: 'kling-3.0', label: 'Kling 3.0 Motion' },
+    { slug: 'kling-3.0-video', label: 'Kling 3.0 Cinematic' },
+    { slug: 'seedance-1.5-pro', label: 'Seedance 1.5 Pro' },
+    { slug: 'seedance-2', label: 'Seedance 2' },
+    { slug: 'seedance-2-fast', label: 'Seedance 2 Fast' },
+    { slug: 'veo-3.1', label: 'Veo 3.1' },
+    { slug: 'grok-imagine-video', label: 'Grok Imagine Video' },
+  ],
+  supportedMediaKinds: ['image', 'video'],
+};
+
+export const FALLBACK_SOURCE_TOOLS: SourceToolOption[] = [
   APP_SOURCE_TOOL,
-  { slug: 'higgsfield', label: 'Higgsfield' },
-  { slug: 'freepik', label: 'Freepik' },
-  { slug: 'runway', label: 'Runway' },
-  { slug: 'midjourney', label: 'Midjourney' },
-  { slug: 'kling', label: 'Kling' },
-  { slug: 'sora', label: 'Sora' },
-  { slug: 'veo', label: 'Veo' },
-  { slug: 'capcut', label: 'CapCut' },
+  {
+    slug: 'higgsfield',
+    label: 'Higgsfield',
+    models: [
+      { slug: 'soul', label: 'Soul' },
+      { slug: 'k2', label: 'K2' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    slug: 'freepik',
+    label: 'Freepik',
+    models: [
+      { slug: 'mystic', label: 'Mystic' },
+      { slug: 'classic', label: 'Classic' },
+    ],
+    supportedMediaKinds: ['image'],
+  },
+  {
+    slug: 'runway',
+    label: 'Runway',
+    models: [
+      { slug: 'gen-3', label: 'Gen-3' },
+      { slug: 'gen-4', label: 'Gen-4' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    slug: 'midjourney',
+    label: 'Midjourney',
+    models: [],
+    supportedMediaKinds: ['image'],
+  },
+  {
+    slug: 'kling',
+    label: 'Kling',
+    models: [
+      { slug: 'kling-2.6', label: 'Kling 2.6' },
+      { slug: 'kling-3.0', label: 'Kling 3.0' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    slug: 'sora',
+    label: 'Sora',
+    models: [],
+    supportedMediaKinds: ['video'],
+  },
+  {
+    slug: 'veo',
+    label: 'Veo',
+    models: [
+      { slug: 'veo-3.1', label: 'Veo 3.1' },
+    ],
+    supportedMediaKinds: ['video'],
+  },
+  {
+    slug: 'capcut',
+    label: 'CapCut',
+    models: [],
+    supportedMediaKinds: ['image', 'video'],
+  },
 ];
-
-const SOURCE_TOOL_BY_SLUG = new Map<string, SourceToolOption>([
-  ...CURATED_SOURCE_TOOLS.map((tool) => [tool.slug, tool] as const),
-  ['emptybooklet', APP_SOURCE_TOOL],
-]);
-const SOURCE_TOOL_BY_LABEL = new Map<string, SourceToolOption>([
-  ...CURATED_SOURCE_TOOLS.map((tool) => [tool.label.toLowerCase(), tool] as const),
-  ['emptybooklet', APP_SOURCE_TOOL],
-]);
 
 export function slugifySourceTool(value: string | null | undefined): string | null {
   if (!value) {
@@ -41,25 +122,80 @@ export function slugifySourceTool(value: string | null | undefined): string | nu
   return normalized || null;
 }
 
-export function getSourceToolLabel(slug: string | null | undefined): string | null {
+function getSourceToolBySlug(
+  catalog: SourceToolOption[],
+  slug: string | null | undefined
+): SourceToolOption | null {
   if (!slug) {
     return null;
   }
 
-  return SOURCE_TOOL_BY_SLUG.get(slug)?.label ?? null;
+  const normalizedSlug = slugifySourceTool(slug);
+  if (!normalizedSlug) {
+    return null;
+  }
+
+  if (normalizedSlug === 'emptybooklet') {
+    return catalog.find((tool) => tool.slug === APP_SOURCE_TOOL.slug) ?? APP_SOURCE_TOOL;
+  }
+
+  return catalog.find((tool) => tool.slug === normalizedSlug) ?? null;
 }
 
-export function normalizeSourceToolInput(params: {
-  label?: string | null;
-  slug?: string | null;
-}): { label: string | null; slug: string | null } {
+function getSourceToolByLabel(
+  catalog: SourceToolOption[],
+  label: string | null | undefined
+): SourceToolOption | null {
+  const normalizedLabel = label?.trim().toLowerCase();
+  if (!normalizedLabel) {
+    return null;
+  }
+
+  if (normalizedLabel === 'emptybooklet') {
+    return catalog.find((tool) => tool.slug === APP_SOURCE_TOOL.slug) ?? APP_SOURCE_TOOL;
+  }
+
+  return catalog.find((tool) => tool.label.toLowerCase() === normalizedLabel) ?? null;
+}
+
+export function getSourceToolLabelFromCatalog(
+  catalog: SourceToolOption[],
+  slug: string | null | undefined
+): string | null {
+  return getSourceToolBySlug(catalog, slug)?.label ?? null;
+}
+
+export function getSourceToolOptionFromCatalog(
+  catalog: SourceToolOption[],
+  slug: string | null | undefined
+): SourceToolOption | null {
+  return getSourceToolBySlug(catalog, slug);
+}
+
+export function getSourceToolLabel(slug: string | null | undefined): string | null {
+  return getSourceToolLabelFromCatalog(FALLBACK_SOURCE_TOOLS, slug);
+}
+
+export function getSourceToolOption(slug: string | null | undefined): SourceToolOption | null {
+  return getSourceToolOptionFromCatalog(FALLBACK_SOURCE_TOOLS, slug);
+}
+
+export function normalizeSourceToolInputWithCatalog(
+  catalog: SourceToolOption[],
+  params: {
+    label?: string | null;
+    slug?: string | null;
+  }
+): { label: string | null; slug: string | null } {
   const requestedSlug = slugifySourceTool(params.slug);
-  if (requestedSlug && SOURCE_TOOL_BY_SLUG.has(requestedSlug)) {
-    const tool = SOURCE_TOOL_BY_SLUG.get(requestedSlug)!;
-    return {
-      label: tool.label,
-      slug: tool.slug,
-    };
+  if (requestedSlug) {
+    const tool = getSourceToolBySlug(catalog, requestedSlug);
+    if (tool) {
+      return {
+        label: tool.label,
+        slug: tool.slug,
+      };
+    }
   }
 
   const label = params.label?.trim() || null;
@@ -70,11 +206,11 @@ export function normalizeSourceToolInput(params: {
     };
   }
 
-  const curated = SOURCE_TOOL_BY_LABEL.get(label.toLowerCase());
-  if (curated) {
+  const catalogTool = getSourceToolByLabel(catalog, label);
+  if (catalogTool) {
     return {
-      label: curated.label,
-      slug: curated.slug,
+      label: catalogTool.label,
+      slug: catalogTool.slug,
     };
   }
 
@@ -82,4 +218,132 @@ export function normalizeSourceToolInput(params: {
     label,
     slug: slugifySourceTool(label),
   };
+}
+
+export function normalizeSourceToolInput(params: {
+  label?: string | null;
+  slug?: string | null;
+}): { label: string | null; slug: string | null } {
+  return normalizeSourceToolInputWithCatalog(FALLBACK_SOURCE_TOOLS, params);
+}
+
+function normalizeOptionalLabel(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.slice(0, maxLength);
+}
+
+function normalizeSourceModelInputWithCatalog(
+  catalog: SourceToolOption[],
+  params: {
+    toolSlug?: string | null;
+    label?: unknown;
+    slug?: unknown;
+  }
+): { label: string | null; slug: string | null } {
+  const rawLabel = normalizeOptionalLabel(params.label, MAX_SOURCE_MODEL_LABEL_LENGTH);
+  const rawSlug = slugifySourceTool(normalizeOptionalLabel(params.slug, MAX_SOURCE_MODEL_LABEL_LENGTH));
+  const tool = getSourceToolOptionFromCatalog(catalog, params.toolSlug);
+
+  if (tool && rawSlug) {
+    const model = tool.models.find((candidate) => candidate.slug === rawSlug);
+    if (model) {
+      return {
+        label: model.label,
+        slug: model.slug,
+      };
+    }
+  }
+
+  if (tool && rawLabel) {
+    const model = tool.models.find((candidate) => candidate.label.toLowerCase() === rawLabel.toLowerCase());
+    if (model) {
+      return {
+        label: model.label,
+        slug: model.slug,
+      };
+    }
+  }
+
+  return {
+    label: rawLabel ?? rawSlug,
+    slug: rawSlug,
+  };
+}
+
+export function normalizeSourceToolSelectionsWithCatalog(
+  catalog: SourceToolOption[],
+  value: unknown
+): SourceToolSelection[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .slice(0, MAX_SOURCE_TOOL_SELECTIONS)
+    .map((entry): SourceToolSelection | null => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      const row = entry as Record<string, unknown>;
+      const normalizedTool = normalizeSourceToolInputWithCatalog(catalog, {
+        label: normalizeOptionalLabel(row.toolLabel, MAX_SOURCE_TOOL_LABEL_LENGTH),
+        slug: normalizeOptionalLabel(row.toolSlug, MAX_SOURCE_TOOL_LABEL_LENGTH),
+      });
+
+      if (!normalizedTool.label) {
+        return null;
+      }
+
+      const normalizedModel = normalizeSourceModelInputWithCatalog(catalog, {
+        toolSlug: normalizedTool.slug,
+        label: row.modelLabel,
+        slug: row.modelSlug,
+      });
+
+      return {
+        toolLabel: normalizedTool.label,
+        toolSlug: normalizedTool.slug,
+        modelLabel: normalizedModel.label,
+        modelSlug: normalizedModel.slug,
+      };
+    })
+    .filter((entry): entry is SourceToolSelection => entry !== null);
+}
+
+export function normalizeSourceToolSelections(value: unknown): SourceToolSelection[] {
+  return normalizeSourceToolSelectionsWithCatalog(FALLBACK_SOURCE_TOOLS, value);
+}
+
+export function formatSourceToolWithModel(params: {
+  toolLabel: string | null | undefined;
+  modelLabel?: string | null;
+}): string | null {
+  const tool = params.toolLabel?.trim();
+  if (!tool) return null;
+
+  const model = params.modelLabel?.trim();
+  if (!model) return tool;
+
+  return `${tool} · ${model}`;
+}
+
+export function formatSourceToolsCompact(
+  tools: Array<{ toolLabel: string; modelLabel?: string | null }>
+): string | null {
+  const filled = tools.filter((t) => t.toolLabel.trim());
+  if (filled.length === 0) return null;
+
+  const first = formatSourceToolWithModel(filled[0]);
+  if (filled.length === 1) return first;
+
+  return `${first} + ${filled.length - 1} more`;
 }

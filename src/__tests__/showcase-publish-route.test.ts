@@ -50,6 +50,9 @@ const getStoredMediaLocationMock = vi.fn();
 const createUserClientMock = vi.fn();
 const ensureDurableGenerationMediaMock = vi.fn();
 let publishRpcError: { message: string } | null = null;
+const sourceToolCatalog = vi.hoisted(() => [
+  { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+]);
 
 vi.mock('@/lib/durable-generation-media', () => ({
   ensureDurableGenerationMedia: (...args: unknown[]) => ensureDurableGenerationMediaMock(...args),
@@ -149,6 +152,10 @@ vi.mock('@/lib/server-helpers', () => ({
     },
   }),
   getStoredMediaLocation: (value: string) => getStoredMediaLocationMock(value),
+}));
+
+vi.mock('@/lib/source-tools-server', () => ({
+  listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
 }));
 
 describe('/api/showcase/publish route', () => {

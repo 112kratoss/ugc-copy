@@ -1,4 +1,4 @@
-import { normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
+import { isValidElementHandle, normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
 import {
   IMAGE_MODELS,
   MOTION_MODELS,
@@ -85,6 +85,16 @@ function mapGenerationInputRemixUse(item: GenerationInputMediaItem): PostResourc
   return item.mediaType === 'image' ? 'reference_only' : 'none';
 }
 
+function getGenerationInputRecipeTitle(item: GenerationInputMediaItem, index: number): string {
+  const metadata = item.metadata ?? {};
+  const handle = typeof metadata.handle === 'string' ? metadata.handle.trim() : '';
+  if (isValidElementHandle(handle)) {
+    return handle;
+  }
+
+  return trimText(item.label) ?? `Reference ${index + 1}`;
+}
+
 export function buildGenerationRecipeResourceItems(source: {
   promptText: string | null | undefined;
   notesMarkdown: string | null | undefined;
@@ -123,7 +133,7 @@ export function buildGenerationRecipeResourceItems(source: {
       type: mapGenerationInputResourceType(item),
       role: mapGenerationInputResourceRole(item.role),
       sectionId: null,
-      title: trimText(item.label) ?? `Reference ${index + 1}`,
+      title: getGenerationInputRecipeTitle(item, index),
       description: null,
       textContent: null,
       externalUrl: null,

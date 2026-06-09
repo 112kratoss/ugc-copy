@@ -14,6 +14,7 @@ export default async function CreateImagePage({
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const prefill: CreateImagePrefill = {
     remixId: getFirstValue(resolvedSearchParams.remix),
+    remixPostId: getFirstValue(resolvedSearchParams.remixPost),
     prompt: getFirstValue(resolvedSearchParams.prompt),
     model: getFirstValue(resolvedSearchParams.model),
     aspectRatio: getFirstValue(resolvedSearchParams.aspectRatio),

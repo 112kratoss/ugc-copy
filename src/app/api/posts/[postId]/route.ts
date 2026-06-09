@@ -15,12 +15,14 @@ import {
   getMarketplaceQualityErrorForPostBundle,
   updatePostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
+import { replacePostSourceTools } from '@/lib/post-source-tools-server';
 import {
   isMissingPostResourceBundlesSchemaError,
   isMissingPostResourceItemsColumnError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-import { normalizeSourceToolInput } from '@/lib/source-tools';
+import { listSourceToolsCatalog } from '@/lib/source-tools-server';
+import { normalizeSourceToolInputWithCatalog, normalizeSourceToolSelectionsWithCatalog } from '@/lib/source-tools';
 import {
   isShowcaseItemCategory,
   normalizeShowcaseSourceKind,
@@ -220,6 +222,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       category?: unknown;
       sourceTool?: unknown;
       sourceToolSlug?: unknown;
+      sourceTools?: unknown;
       resourceBundle?: unknown;
     };
 
@@ -229,7 +232,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
 
-    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool', 'sourceToolSlug'].some((key) =>
+    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools'].some((key) =>
       Object.prototype.hasOwnProperty.call(body, key)
     );
 
@@ -267,6 +270,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
           ? body.category
           : post.category;
     const nextTitle = Object.prototype.hasOwnProperty.call(body, 'title') ? normalizeText(body.title) : post.title;
+    const sourceToolCatalog = await listSourceToolsCatalog();
 
     const updatePayload: Record<string, unknown> = {
       visibility: nextVisibility,
@@ -283,11 +287,44 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       updatePayload.body = nextBody;
       updatePayload.post_format = nextBody ? (post.post_format === 'media' ? 'mixed' : post.post_format) : post.post_format;
     }
-    if (
+    const hasSourceToolsPayload = Object.prototype.hasOwnProperty.call(body, 'sourceTools');
+    const sourceTools = (() => {
+      if (hasSourceToolsPayload) {
+        if (!Array.isArray(body.sourceTools)) {
+          return null;
+        }
+        return normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, body.sourceTools);
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(body, 'sourceTool') ||
+        Object.prototype.hasOwnProperty.call(body, 'sourceToolSlug')
+      ) {
+        const normalized = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
+          label: Object.prototype.hasOwnProperty.call(body, 'sourceTool') ? normalizeText(body.sourceTool) : post.source_tool,
+          slug: normalizeText(body.sourceToolSlug),
+        });
+        if (normalized.label) {
+          return [{ toolLabel: normalized.label, toolSlug: normalized.slug }];
+        }
+      }
+      return [];
+    })();
+
+    if (sourceTools === null) {
+      return NextResponse.json({ error: 'Source tool metadata is invalid.' }, { status: 400 });
+    }
+
+    if (hasSourceToolsPayload) {
+      updatePayload.source_tool = sourceTools[0]?.toolLabel ?? null;
+      updatePayload.source_tool_slug = sourceTools[0]?.toolSlug ?? null;
+    } else if (sourceTools.length > 0) {
+      updatePayload.source_tool = sourceTools[0].toolLabel;
+      updatePayload.source_tool_slug = sourceTools[0].toolSlug;
+    } else if (
       Object.prototype.hasOwnProperty.call(body, 'sourceTool') ||
       Object.prototype.hasOwnProperty.call(body, 'sourceToolSlug')
     ) {
-      const normalizedSourceTool = normalizeSourceToolInput({
+      const normalizedSourceTool = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
         label: Object.prototype.hasOwnProperty.call(body, 'sourceTool') ? normalizeText(body.sourceTool) : post.source_tool,
         slug: normalizeText(body.sourceToolSlug),
       });
@@ -325,6 +362,19 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       hasBundlePayload: hasResourceBundlePayload,
       bundle: resourceBundle,
     });
+
+    if (hasSourceToolsPayload) {
+      try {
+        await replacePostSourceTools({
+          supabase: adminSupabase,
+          postId,
+          sourceTools,
+        });
+      } catch (sourceToolsError) {
+        console.error('Failed to replace post_source_tools:', sourceToolsError);
+        return NextResponse.json({ error: 'Failed to save source tool metadata.' }, { status: 500 });
+      }
+    }
 
     return NextResponse.json({
       success: true,

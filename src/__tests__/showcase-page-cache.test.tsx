@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getServerAuthStateMock = vi.fn();
 const headersMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
+const sourceToolCatalog = vi.hoisted(() => [
+  { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+]);
 
 vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: () => getServerAuthStateMock(),
@@ -15,6 +18,10 @@ vi.mock('next/headers', () => ({
 
 vi.mock('@/lib/showcase-feed', () => ({
   getShowcaseFeedPage: (options: unknown) => getShowcaseFeedPageMock(options),
+}));
+
+vi.mock('@/lib/source-tools-server', () => ({
+  listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
 }));
 
 vi.mock('@/app/showcase/ShowcaseClient', () => ({

@@ -11,6 +11,7 @@ import {
   normalizeMarketplaceResourceSort,
 } from '@/lib/post-resource-bundles';
 import { slugifySourceTool } from '@/lib/source-tools';
+import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 
 interface MarketplacePageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -33,7 +34,8 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
   );
   const tool = slugifySourceTool(getParam(resolvedSearchParams.tool)) ?? '';
   const q = (getParam(resolvedSearchParams.q) ?? '').trim().slice(0, 80);
-  const assetPage = await getMarketplaceResourceList({
+  const [assetPage, sourceToolOptions] = await Promise.all([
+    getMarketplaceResourceList({
     filter,
     resource,
     tool,
@@ -42,7 +44,9 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
     limit: 24,
     offset: 0,
     countryCode: null,
-  });
+    }),
+    listSourceToolsCatalog(),
+  ]);
   const initialPage = {
     items: assetPage.items ?? [],
     pageInfo: assetPage.pageInfo ?? {
@@ -103,6 +107,7 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
             sort,
             q,
           }}
+          sourceToolOptions={sourceToolOptions}
         />
       </div>
     </div>

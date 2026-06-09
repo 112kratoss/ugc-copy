@@ -36,7 +36,7 @@ import {
   type ShowcaseSort,
   type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
-import { getSourceToolLabel, slugifySourceTool } from '@/lib/source-tools';
+import { slugifySourceTool } from '@/lib/source-tools';
 
 interface ProfileSummary {
   id: string;
@@ -244,7 +244,7 @@ function buildAvailableTools(items: ShowcaseFeedItem[]) {
 
   return Array.from(availableToolCounts.entries()).map(([slug, count]) => ({
     slug,
-    label: getSourceToolLabel(slug) ?? items.find((item) => item.sourceToolSlug === slug)?.sourceTool ?? slug,
+    label: items.find((item) => item.sourceToolSlug === slug)?.sourceTool ?? slug,
     count,
   }));
 }
@@ -299,6 +299,42 @@ async function resolvePostRowsToFeedItems(
     visibleRows.filter((row) => !assetMap.has(row.id)),
     adminSupabase
   );
+
+  const sourceToolsMap = new Map<string, Array<{
+    toolLabel: string;
+    toolSlug?: string | null;
+    modelLabel?: string | null;
+    modelSlug?: string | null;
+  }>>();
+  try {
+    const postIds = visibleRows.map((row) => row.id);
+    const { data: sourceToolsRows, error: sourceToolsError } = await adminSupabase
+      .from('post_source_tools')
+      .select('post_id, tool_label, tool_slug, model_label, model_slug')
+      .in('post_id', postIds)
+      .order('sort_order', { ascending: true });
+    if (sourceToolsError) {
+      // Table may not exist yet; skip silently.
+    } else {
+      for (const row of (sourceToolsRows ?? []) as Array<{
+        post_id: string; tool_label: string; tool_slug?: string | null;
+        model_label?: string | null; model_slug?: string | null;
+      }>) {
+        const list = sourceToolsMap.get(row.post_id) ?? [];
+        list.push({
+          toolLabel: row.tool_label,
+          toolSlug: row.tool_slug ?? null,
+          modelLabel: row.model_label ?? null,
+          modelSlug: row.model_slug ?? null,
+        });
+        if (!sourceToolsMap.has(row.post_id)) {
+          sourceToolsMap.set(row.post_id, list);
+        }
+      }
+    }
+  } catch {
+    // Non-critical; fall back to no source tools.
+  }
 
   const resolvedItems = await Promise.all(
     visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
@@ -355,6 +391,7 @@ async function resolvePostRowsToFeedItems(
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         sourceTool: post.source_tool,
         sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
+        sourceTools: sourceToolsMap.get(post.id),
         generationId: post.generation_id,
         asset,
         canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',

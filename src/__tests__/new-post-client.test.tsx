@@ -36,6 +36,26 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
+const SOURCE_TOOLS_RESPONSE = {
+  tools: [
+    { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+    { slug: 'higgsfield', label: 'Higgsfield', models: [{ slug: 'soul', label: 'Soul' }], supportedMediaKinds: ['image', 'video'] },
+    { slug: 'runway', label: 'Runway', models: [{ slug: 'gen-4', label: 'Gen-4' }], supportedMediaKinds: ['image', 'video'] },
+    { slug: 'midjourney', label: 'Midjourney', models: [], supportedMediaKinds: ['image'] },
+    { slug: 'kling', label: 'Kling', models: [], supportedMediaKinds: ['image', 'video'] },
+    { slug: 'sora', label: 'Sora', models: [], supportedMediaKinds: ['video'] },
+    { slug: 'veo', label: 'Veo', models: [], supportedMediaKinds: ['video'] },
+    { slug: 'capcut', label: 'CapCut', models: [], supportedMediaKinds: ['image', 'video'] },
+    { slug: 'freepik', label: 'Freepik', models: [], supportedMediaKinds: ['image'] },
+  ],
+};
+
+let queuedResponses: Array<{ ok: boolean; json: () => Promise<unknown>; status?: number }> = [];
+
+function enqueueResponse(response: { ok: boolean; json: () => Promise<unknown>; status?: number }) {
+  queuedResponses.push(response);
+}
+
 describe('NewPostClient', () => {
   beforeEach(() => {
     mockPush.mockReset();
@@ -43,6 +63,16 @@ describe('NewPostClient', () => {
     storageUploadMock.mockReset();
     storageUploadMock.mockResolvedValue({ error: null });
     searchParamsState.value = new URLSearchParams();
+    queuedResponses = [];
+    fetchMock.mockImplementation(async (url: string | Request, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
+      if (urlStr.startsWith('/api/source-tools')) {
+        return { ok: true, json: async () => SOURCE_TOOLS_RESPONSE };
+      }
+      const next = queuedResponses.shift();
+      if (next) return next;
+      throw new Error(`Unexpected fetch: ${urlStr} ${init?.method ?? 'GET'}`);
+    });
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -105,28 +135,119 @@ describe('NewPostClient', () => {
   it('shows section-local validation feedback near the failing composer section', () => {
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent(/upload an image or video/i);
     expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'post');
   });
 
-  it('keeps custom source tool suggestions inside the composer instead of using a native datalist', () => {
+  it('renders the Made With section with tool dropdowns fetched from the API', async () => {
     render(<NewPostClient />);
 
-    const customSourceToolInput = screen.getByRole('combobox', { name: /custom source tool/i });
-    fireEvent.focus(customSourceToolInput);
-    fireEvent.change(customSourceToolInput, { target: { value: 'Ru' } });
+    expect(screen.getByText(/made with/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add another tool/i })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Higgsfield' })).toBeInTheDocument();
+  });
 
-    const sourceToolSuggestions = screen.getByRole('listbox', { name: /source tool suggestions/i });
-    expect(sourceToolSuggestions).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Runway' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'Higgsfield' })).not.toBeInTheDocument();
+  it('serializes selected Made With tools with display labels and model labels', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-made-with-1',
+        showcasePath: '/showcase/post-made-with-1',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+
+    await screen.findByRole('option', { name: 'Higgsfield' });
+    fireEvent.change(screen.getByLabelText('Tool 1'), {
+      target: { value: 'higgsfield' },
+    });
+    fireEvent.change(screen.getByLabelText(/model for/i), {
+      target: { value: 'soul' },
+    });
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    const sourceTools = JSON.parse(String(request.body.get('sourceTools')));
+
+    expect(sourceTools).toEqual([
+      {
+        toolLabel: 'Higgsfield',
+        toolSlug: 'higgsfield',
+        modelLabel: 'Soul',
+        modelSlug: 'soul',
+      },
+    ]);
+  });
+
+  it('allows a custom Made With tool when the catalog is not enough', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-custom-tool-1',
+        showcasePath: '/showcase/post-custom-tool-1',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+
+    fireEvent.change(screen.getByLabelText('Tool 1'), {
+      target: { value: '__custom__' },
+    });
+    fireEvent.change(await screen.findByLabelText(/custom tool 1/i), {
+      target: { value: 'Pika Labs' },
+    });
+    fireEvent.change(screen.getByLabelText(/custom model for/i), {
+      target: { value: 'Pika 2.2' },
+    });
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    const sourceTools = JSON.parse(String(request.body.get('sourceTools')));
+
+    expect(sourceTools).toEqual([
+      {
+        toolLabel: 'Pika Labs',
+        toolSlug: 'pika-labs',
+        modelLabel: 'Pika 2.2',
+        modelSlug: null,
+      },
+    ]);
   });
 
   it('reveals only the selected resource sections and submits a resource bundle', async () => {
-    fetchMock.mockResolvedValueOnce({
+    enqueueResponse({
       ok: true,
       json: async () => ({
         postId: 'post-1',
@@ -156,13 +277,13 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
       target: { value: 'https://ugc.example.com/workflow' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /publish post \+ unlock/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    const request = fetchMock.mock.calls[0][1] as { body: FormData };
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
     const resourceBundle = JSON.parse(String(request.body.get('resourceBundle')));
 
     expect(resourceBundle).toMatchObject({
@@ -182,7 +303,7 @@ describe('NewPostClient', () => {
   });
 
   it('keeps visibility choices available for paid unlock drafts and serializes structured links', async () => {
-    fetchMock.mockResolvedValueOnce({
+    enqueueResponse({
       ok: true,
       json: async () => ({
         postId: 'post-2',
@@ -204,7 +325,6 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getByRole('button', { name: /^paid \(\$\)$/i }));
 
     expect(screen.queryByText(/public post required/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^private$/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /files \/ links/i }));
     fireEvent.change(screen.getByPlaceholderText(/label 1/i), {
@@ -216,13 +336,13 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByDisplayValue('9'), {
       target: { value: '12' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save draft/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    const request = fetchMock.mock.calls[0][1] as { body: FormData };
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
     const resourceBundle = JSON.parse(String(request.body.get('resourceBundle')));
 
     expect(String(request.body.get('visibility'))).toBe('private');
@@ -245,7 +365,7 @@ describe('NewPostClient', () => {
   });
 
   it('serializes optional resource sections and section-scoped items', async () => {
-    fetchMock.mockResolvedValueOnce({
+    enqueueResponse({
       ok: true,
       json: async () => ({
         postId: 'post-sectioned-1',
@@ -277,13 +397,13 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByLabelText(/section notes 1/i), {
       target: { value: 'Keep this first section under seven seconds.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /publish post \+ unlock/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    const request = fetchMock.mock.calls[0][1] as { body: FormData };
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
     const resourceBundle = JSON.parse(String(request.body.get('resourceBundle')));
     const [section] = resourceBundle.resources.sections;
 
@@ -310,7 +430,7 @@ describe('NewPostClient', () => {
   });
 
   it('uploads media to Supabase before posting metadata to the API', async () => {
-    fetchMock.mockResolvedValueOnce({
+    enqueueResponse({
       ok: true,
       json: async () => ({
         postId: 'post-3',
@@ -330,14 +450,14 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: /share post/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
       expect(storageUploadMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    const request = fetchMock.mock.calls[0][1] as { body: FormData };
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
 
     expect(String(request.body.get('mediaStoragePath'))).toMatch(/^uploads\/user-1\/.+\.png$/);
     expect(String(request.body.get('mediaOriginalName'))).toBe('proof.png');
@@ -353,40 +473,39 @@ describe('NewPostClient', () => {
       focus: 'price',
     });
 
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          generations: [
-            {
-              id: 'gen-paid-1',
-              output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
-              category: 'image',
-              model: 'nano-banana-2',
-              title: 'Launch still',
-              description: 'A polished creator-style launch image.',
-              prompt: 'A creator-style product image with warm natural light.',
-              paywallPrefill: {
-                resourceKinds: ['prompt', 'notes', 'remix'],
-                promptText: 'A creator-style product image with warm natural light.',
-                notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0',
-                allowRemix: true,
-              },
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [
+          {
+            id: 'gen-paid-1',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'Launch still',
+            description: 'A polished creator-style launch image.',
+            prompt: 'A creator-style product image with warm natural light.',
+            paywallPrefill: {
+              resourceKinds: ['prompt', 'notes', 'remix'],
+              promptText: 'A creator-style product image with warm natural light.',
+              notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0',
+              allowRemix: true,
             },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          success: true,
-          postId: 'post-paywall-1',
-          showcasePath: '/showcase/post-paywall-1',
-          resourceBundlePath: '/showcase/post-paywall-1#resources',
-          visibility: 'public',
-          resourceBundleStatus: 'published',
-        }),
-      });
+          },
+        ],
+      }),
+    });
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        success: true,
+        postId: 'post-paywall-1',
+        showcasePath: '/showcase/post-paywall-1',
+        resourceBundlePath: '/showcase/post-paywall-1#resources',
+        visibility: 'public',
+        resourceBundleStatus: 'published',
+      }),
+    });
 
     render(<NewPostClient />);
 
@@ -400,13 +519,13 @@ describe('NewPostClient', () => {
       expect(priceInput).toHaveFocus();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /publish post \+ unlock/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
-    const request = fetchMock.mock.calls[1][1] as { body: string };
+    const request = fetchMock.mock.calls[2][1] as { body: string };
     const payload = JSON.parse(request.body);
 
     expect(payload).toMatchObject({
@@ -431,7 +550,7 @@ describe('NewPostClient', () => {
       resourceMode: 'paid',
     });
 
-    fetchMock.mockResolvedValueOnce({
+    enqueueResponse({
       ok: true,
       json: async () => ({
         generations: [
@@ -496,5 +615,237 @@ describe('NewPostClient', () => {
       expect(priceInput).toHaveFocus();
     });
     expect(priceInput).not.toBeDisabled();
+  });
+
+  it('shows only Publish public and Save private buttons for new posts without an Unlisted option', () => {
+    render(<NewPostClient />);
+
+    expect(screen.getAllByRole('button', { name: /publish public/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /save private/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole('button', { name: /^unlisted$/i })).not.toBeInTheDocument();
+  });
+
+  it('sends visibility private when Save private is clicked', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-private-1',
+        showcasePath: null,
+        ownerPath: '/post/post-private-1/edit',
+        resourceBundlePath: null,
+        visibility: 'private',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+      target: { value: 'A private draft note.' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    expect(String(request.body.get('visibility'))).toBe('private');
+  });
+
+  it('sends visibility public when Publish public is clicked', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-public-1',
+        showcasePath: '/showcase/post-public-1',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+      target: { value: 'A public note for the community.' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    expect(String(request.body.get('visibility'))).toBe('public');
+  });
+
+  it('does not block Save private with public marketplace quality checks', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-private-paid-1',
+        showcasePath: null,
+        ownerPath: '/post/post-private-paid-1/edit',
+        resourceBundlePath: '/post/post-private-paid-1/edit#resources',
+        visibility: 'private',
+        resourceBundleStatus: 'draft',
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+      target: { value: 'test' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^paid \(\$\)$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i), {
+      target: { value: 'Use a simple private-only setup.' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    expect(String(request.body.get('visibility'))).toBe('private');
+  });
+
+  it('shows the make public button for unlisted paid posts and attempts submit', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        success: true,
+        postId: 'post-unlisted-paid-1',
+        showcasePath: '/showcase/post-unlisted-paid-1',
+        resourceBundlePath: '/showcase/post-unlisted-paid-1#resources',
+        visibility: 'public',
+        resourceBundleStatus: 'published',
+      }),
+    });
+
+    render(
+      <NewPostClient
+        initialPost={{
+          id: 'post-unlisted-paid-1',
+          generationId: null,
+          title: 'A proper post title for quality check',
+          description: 'Good description',
+          prompt: '',
+          body: 'This is sufficient body content for a quality check to pass.',
+          visibility: 'unlisted',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          mediaUrl: null,
+          mediaKind: null,
+          archivedAt: null,
+          resourceBundle: {
+            accessMode: 'paid',
+            priceUsdCents: 900,
+            resources: {
+              promptText: 'A detailed prompt that passes quality checks easily.',
+              notesMarkdown: null,
+              workflowShareUrl: null,
+              attachments: [],
+              allowRemix: false,
+            },
+          },
+          hasPaidOrders: false,
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /make public/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(fetchMock.mock.calls[1][1].body).toContain('"visibility":"public"');
+  });
+
+  it('shows unlisted management options when editing an unlisted post', () => {
+    render(
+      <NewPostClient
+        initialPost={{
+          id: 'post-unlisted-1',
+          generationId: null,
+          title: 'Unlisted link post',
+          description: '',
+          prompt: '',
+          body: 'Shareable by link only.',
+          visibility: 'unlisted',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          mediaUrl: null,
+          mediaKind: null,
+          archivedAt: null,
+          resourceBundle: { accessMode: 'none' },
+          hasPaidOrders: false,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: /update post/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save unlisted changes/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /make public/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /make private/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /publish public/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save private/i })).not.toBeInTheDocument();
+  });
+
+  it('preserves unlisted visibility when saving unlisted changes', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-unlisted-1',
+        showcasePath: null,
+        ownerPath: '/post/post-unlisted-1/edit',
+        resourceBundlePath: null,
+        visibility: 'unlisted',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    render(
+      <NewPostClient
+        initialPost={{
+          id: 'post-unlisted-1',
+          generationId: null,
+          title: 'Unlisted link post',
+          description: '',
+          prompt: '',
+          body: 'Shareable by link only.',
+          visibility: 'unlisted',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          mediaUrl: null,
+          mediaKind: null,
+          archivedAt: null,
+          resourceBundle: { accessMode: 'none' },
+          hasPaidOrders: false,
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save unlisted changes/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const call = fetchMock.mock.calls[1];
+    const body = JSON.parse(call[1].body);
+    expect(body.visibility).toBe('unlisted');
   });
 });

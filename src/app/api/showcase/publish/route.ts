@@ -18,7 +18,8 @@ import {
     isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient, getStoredMediaLocation } from '@/lib/server-helpers';
-import { normalizeSourceToolInput } from '@/lib/source-tools';
+import { listSourceToolsCatalog } from '@/lib/source-tools-server';
+import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
 import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showcase';
 import {
     validatePostResourceBundleInput,
@@ -328,6 +329,10 @@ export async function POST(request: NextRequest) {
 
         let postId: string | null = null;
         let resourceBundleStatus: 'draft' | 'published' | null = null;
+        const sourceToolCatalog = await listSourceToolsCatalog();
+        const normalizedAppSourceTool = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
+            slug: 'magicbooklet',
+        });
         const postPayload = {
             user_id: generation.user_id,
             visibility: effectiveVisibility,
@@ -338,8 +343,8 @@ export async function POST(request: NextRequest) {
             body: normalizedBody,
             post_format: normalizedBody ? 'mixed' : 'media',
             source_kind: MAGICBOOKLET_SOURCE_KIND,
-            source_tool: 'magicbooklet',
-            source_tool_slug: normalizeSourceToolInput({ slug: 'magicbooklet' }).slug,
+            source_tool: normalizedAppSourceTool.label ?? 'magicbooklet',
+            source_tool_slug: normalizedAppSourceTool.slug ?? 'magicbooklet',
             generation_id: generation.id,
             showcase_asset_path: nextShowcaseAssetPath,
             output_url: nextOutputUrl,

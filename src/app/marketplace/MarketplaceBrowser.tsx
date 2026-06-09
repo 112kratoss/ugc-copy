@@ -27,7 +27,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import { CURATED_SOURCE_TOOLS, getSourceToolLabel } from '@/lib/source-tools';
+import type { SourceToolOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 import { HoverVideo } from '@/app/components/HoverVideo';
 
@@ -52,6 +52,7 @@ interface MarketplaceBrowserProps {
     sort: MarketplaceResourceSort;
     q: string;
   };
+  sourceToolOptions: SourceToolOption[];
 }
 
 const SORT_LINKS: Array<{ label: string; value: MarketplaceResourceSort }> = [
@@ -73,6 +74,7 @@ const RESOURCE_LINKS: Array<{ label: string; value: MarketplaceResourceKindFilte
 export default function MarketplaceBrowser({
   initialPage,
   initialFilters,
+  sourceToolOptions,
 }: MarketplaceBrowserProps) {
   const router = useRouter();
   const [items, setItems] = useState(initialPage.items);
@@ -93,9 +95,9 @@ export default function MarketplaceBrowser({
   const activeFilterLabels = useMemo(() => [
     initialFilters.access !== 'all' ? (initialFilters.access === 'free' ? 'Free' : 'Paid') : null,
     initialFilters.resource !== 'all' ? getPostResourceKindLabel(initialFilters.resource) : null,
-    initialFilters.tool ? getSourceToolLabel(initialFilters.tool) : null,
+    initialFilters.tool ? sourceToolOptions.find((option) => option.slug === initialFilters.tool)?.label ?? initialFilters.tool : null,
     initialFilters.q ? `Search: ${initialFilters.q}` : null,
-  ].filter(Boolean), [initialFilters]);
+  ].filter(Boolean), [initialFilters, sourceToolOptions]);
 
   const hasActiveFilters = activeFilterLabels.length > 0 || initialFilters.sort !== 'recent';
   const marketplaceReturnPath = buildMarketplacePath(initialFilters);
@@ -226,7 +228,7 @@ export default function MarketplaceBrowser({
               label="Tool"
               links={[
                 { label: 'All tools', href: buildMarketplacePath({ ...initialFilters, tool: '' }), active: !initialFilters.tool },
-                ...CURATED_SOURCE_TOOLS.map((sourceTool) => ({
+                ...sourceToolOptions.map((sourceTool) => ({
                   label: sourceTool.label,
                   href: buildMarketplacePath({ ...initialFilters, tool: sourceTool.slug }),
                   active: initialFilters.tool === sourceTool.slug,

@@ -4,13 +4,14 @@ import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-serv
 
 export async function GET(request: NextRequest) {
   const generationId = request.nextUrl.searchParams.get('id');
+  const postId = request.nextUrl.searchParams.get('postId');
 
   if (!generationId) {
     return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
   }
 
   try {
-    const bundle = await loadRemixSourceBundle(request, generationId);
+    const bundle = await loadRemixSourceBundle(request, generationId, { postId });
     return NextResponse.json(bundle);
   } catch (error) {
     if (error instanceof RemixSourceError) {
@@ -21,4 +22,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to load remix source bundle' }, { status: 500 });
   }
 }
-

@@ -14,8 +14,32 @@ type GenerationRow = {
   workflow_settings: Record<string, unknown> | null;
 };
 
+type PostRow = {
+  id: string;
+  user_id: string | null;
+  generation_id: string | null;
+  title: string | null;
+  body?: string | null;
+  prompt: string | null;
+  category: string | null;
+  post_format?: string | null;
+  visibility: 'public' | 'unlisted' | 'private';
+  archived_at: string | null;
+  review_status?: 'visible' | 'flagged' | 'hidden' | null;
+  showcase_asset_path?: string | null;
+  output_url?: string | null;
+  source_kind: string | null;
+  source_tool?: string | null;
+  source_tool_slug?: string | null;
+  save_count?: number | null;
+  remix_count?: number | null;
+  share_visit_count?: number | null;
+  created_at: string;
+};
+
 let currentUserId: string | null = 'user-1';
 let generationRows = new Map<string, GenerationRow>();
+let postRows = new Map<string, PostRow>();
 let signedUploads = new Map<string, string | null>();
 let inputMediaRows: Array<{
   id: string;
@@ -55,6 +79,29 @@ function createAdminClientMock() {
                   order() {
                     return {
                       data: inputMediaRows.filter((row) => values.includes(row.generation_id)),
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'posts') {
+        return {
+          select() {
+            return {
+              eq(column: string, value: unknown) {
+                if (column !== 'id') {
+                  throw new Error(`Unexpected filter column: ${column}`);
+                }
+
+                return {
+                  async maybeSingle() {
+                    return {
+                      data: postRows.get(String(value)) ?? null,
                       error: null,
                     };
                   },
@@ -158,6 +205,7 @@ describe('/api/remix-source route', () => {
     vi.clearAllMocks();
     currentUserId = 'user-1';
     generationRows = new Map();
+    postRows = new Map();
     signedUploads = new Map();
     inputMediaRows = [];
   });
@@ -230,6 +278,93 @@ describe('/api/remix-source route', () => {
     });
     expect(data.inputs.image).toBeUndefined();
     expect(data.inputMedia).toEqual([]);
+    expect(data.workflowSettings.elements).toBeUndefined();
+    expect(data.restoreIssues).toEqual([]);
+  });
+
+  it('restores public recipe reference images when remix starts from the linked post', async () => {
+    currentUserId = 'user-2';
+
+    generationRows.set('source-1', {
+      id: 'source-1',
+      user_id: 'creator-1',
+      is_public: true,
+      share_input_media_for_remix: false,
+      output_url: 'generated_images/creator-1/source-1.png',
+      showcase_asset_path: null,
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Create a portrait like @alisa.',
+      title: 'Public recipe source',
+      workflow_settings: {
+        elements: [
+          {
+            id: 'el-1',
+            displayName: 'Alisa',
+            handle: '@alisa',
+            storagePath: 'uploads/creator-1/alisa.jpg',
+          },
+        ],
+      },
+    });
+
+    postRows.set('post-1', {
+      id: 'post-1',
+      user_id: 'creator-1',
+      generation_id: 'source-1',
+      title: 'Tryingg new',
+      body: '',
+      prompt: 'Create a portrait like @alisa.',
+      category: 'image',
+      post_format: 'media',
+      visibility: 'public',
+      archived_at: null,
+      review_status: 'visible',
+      showcase_asset_path: null,
+      output_url: 'generated_images/creator-1/source-1.png',
+      source_kind: 'magicbooklet',
+      source_tool: null,
+      source_tool_slug: 'magicbooklet',
+      save_count: 0,
+      remix_count: 0,
+      share_visit_count: 0,
+      created_at: '2026-06-04T00:00:00.000Z',
+    });
+
+    inputMediaRows = [
+      {
+        id: 'media-1',
+        generation_id: 'source-1',
+        user_id: 'creator-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Alisa',
+        storage_path: 'uploads/creator-1/alisa.jpg',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: {
+          id: 'el-1',
+          displayName: 'Alisa',
+          handle: '@alisa',
+        },
+      },
+    ];
+    signedUploads.set('creator-1/alisa.jpg', 'https://signed.example.com/uploads/creator-1/alisa.jpg');
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1&postId=post-1'));
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.inputs.image?.elements).toEqual([
+      expect.objectContaining({
+        id: 'el-1',
+        displayName: 'Alisa',
+        handle: '@alisa',
+        storagePath: 'uploads/creator-1/alisa.jpg',
+        url: 'https://signed.example.com/uploads/creator-1/alisa.jpg',
+      }),
+    ]);
     expect(data.workflowSettings.elements).toBeUndefined();
     expect(data.restoreIssues).toEqual([]);
   });

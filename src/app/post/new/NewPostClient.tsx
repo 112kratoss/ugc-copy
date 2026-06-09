@@ -21,7 +21,6 @@ import { useAuth } from '@/app/components/AuthProvider';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { assessMarketplaceListingQuality } from '@/lib/marketplace-trust';
 import {
-  formatUsdCents,
   getPostResourceKindLabel,
   normalizePostResourceBundleAccessMode,
   type PostResourceAttachment,
@@ -35,14 +34,24 @@ import {
   type PostResourceSection,
   type PostResourceSectionKind,
 } from '@/lib/post-resource-bundles';
-import { CURATED_SOURCE_TOOLS, normalizeSourceToolInput } from '@/lib/source-tools';
+import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+import type { ShowcaseItemCategory } from '@/lib/showcase';
 import type { EditablePostDraft } from './post-editor-types';
 
-type PostCategory = 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
 type PostVisibility = 'public' | 'unlisted' | 'private';
 type ProofMode = 'media' | 'text';
 type PostFormat = 'text' | 'media' | 'mixed';
+type PostMediaCategory = Exclude<ShowcaseItemCategory, 'text'>;
+const CUSTOM_SOURCE_TOOL_VALUE = '__custom__';
+
+interface MadeWithRow {
+  id: string;
+  toolLabel: string;
+  toolSlug: string;
+  modelLabel: string;
+  modelSlug: string;
+}
 
 interface CreatedPostState {
   postId: string;
@@ -91,46 +100,12 @@ interface GenerationDraft {
   description: string;
   prompt: string;
   outputUrl: string | null;
-  category: Exclude<PostCategory, 'text'>;
+  category: PostMediaCategory;
   model: string;
   paywallPrefill: GenerationPaywallPrefill | null;
 }
 
 const BODY_MAX_LENGTH = 2000;
-
-const CATEGORY_OPTIONS: Array<{
-  value: Exclude<PostCategory, 'text'>;
-  label: string;
-  description: string;
-}> = [
-  { value: 'image', label: 'Image', description: 'Still images, product frames, and visual tests' },
-  { value: 'video', label: 'Video', description: 'Standard video posts from any creation tool' },
-  { value: 'motion', label: 'Motion', description: 'Movement studies, animation, or motion transfer' },
-  { value: 'ugc-ad', label: 'UGC ad', description: 'Creator-style ad deliverables and examples' },
-];
-
-const VISIBILITY_OPTIONS: Array<{
-  value: PostVisibility;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: 'public',
-    label: 'Public',
-    description: 'Appears in the community and is shareable right away.',
-  },
-  {
-    value: 'unlisted',
-    label: 'Unlisted',
-    description: 'Share by direct link only.',
-  },
-  {
-    value: 'private',
-    label: 'Private',
-    description: 'Keep it private while you are still shaping the post.',
-  },
-];
-
 
 const RESOURCE_KIND_OPTIONS: Array<{
   value: PostResourceKind;
@@ -230,7 +205,7 @@ function createResourceSectionRow(partial?: Partial<Omit<ResourceSectionRow, 'id
   };
 }
 
-function inferCategory(file: File | null): Exclude<PostCategory, 'text'> | null {
+function inferCategory(file: File | null): PostMediaCategory | null {
   if (!file) {
     return null;
   }
@@ -244,22 +219,6 @@ function inferCategory(file: File | null): Exclude<PostCategory, 'text'> | null 
   }
 
   return null;
-}
-
-function acceptsCategory(file: File | null, category: Exclude<PostCategory, 'text'>): boolean {
-  if (!file) {
-    return true;
-  }
-
-  if (file.type.startsWith('image/')) {
-    return category === 'image' || category === 'ugc-ad';
-  }
-
-  if (file.type.startsWith('video/')) {
-    return category === 'video' || category === 'motion' || category === 'ugc-ad';
-  }
-
-  return false;
 }
 
 function serializeAttachmentRows(rows: AttachmentRow[]): PostResourceAttachment[] {
@@ -542,7 +501,7 @@ function buildSectionResourceItems(sections: ResourceSectionRow[], startingSortO
   return items;
 }
 
-function formatGeneratedCategory(value: string | null | undefined): Exclude<PostCategory, 'text'> {
+function formatGeneratedCategory(value: string | null | undefined): PostMediaCategory {
   if (value === 'video' || value === 'motion' || value === 'ugc-ad') {
     return value;
   }
@@ -556,6 +515,12 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
   }
 
   return selectedKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ');
+}
+
+function getVisibilityStatusLabel(v: PostVisibility): string {
+  if (v === 'public') return 'Visible in Feed';
+  if (v === 'unlisted') return 'Shareable by link only';
+  return 'Saved privately in Studio';
 }
 
 function buildDefaultResourceSummary(selectedKinds: PostResourceKind[], mode: PostResourceBundleAccessMode): string {
@@ -769,11 +734,33 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [title, setTitle] = useState(initialPost?.title ?? '');
   const [description, setDescription] = useState(initialPost?.description ?? '');
   const [body, setBody] = useState(initialPost?.body ?? '');
-  const [sourceTool, setSourceTool] = useState(initialPost?.sourceTool ?? '');
-  const [sourceToolSlug, setSourceToolSlug] = useState(initialPost?.sourceToolSlug ?? '');
-  const [isSourceToolSuggestionsOpen, setIsSourceToolSuggestionsOpen] = useState(false);
+  const [madeWithRows, setMadeWithRows] = useState<MadeWithRow[]>(() => {
+    if (initialPost?.sourceTools && initialPost.sourceTools.length > 0) {
+      return initialPost.sourceTools.map((st, i) => ({
+        id: `mw-${i}`,
+        toolLabel: st.toolLabel,
+        toolSlug: st.toolSlug ?? '',
+        modelLabel: st.modelLabel ?? '',
+        modelSlug: st.modelSlug ?? '',
+      }));
+    }
+    if (initialPost?.sourceTool) {
+      return [{
+        id: 'mw-0',
+        toolLabel: initialPost.sourceTool,
+        toolSlug: initialPost.sourceToolSlug ?? '',
+        modelLabel: '',
+        modelSlug: '',
+      }];
+    }
+    if (initialPost?.generationId || generationId) {
+      return [{ id: 'mw-0', toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: '', modelSlug: '' }];
+    }
+    return [{ id: 'mw-0', toolLabel: '', toolSlug: '', modelLabel: '', modelSlug: '' }];
+  });
+  const [sourceToolsData, setSourceToolsData] = useState<SourceToolOption[]>([]);
   const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
-  const [category, setCategory] = useState<Exclude<PostCategory, 'text'>>(initialCategory);
+  const [category, setCategory] = useState<PostMediaCategory>(initialCategory);
   const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost?.description));
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(
@@ -816,16 +803,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   );
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const submitVisibilityRef = useRef<PostVisibility>(initialPost?.visibility ?? 'public');
+  const formRef = useRef<HTMLFormElement | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
-  const sourceToolInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
   const storySectionRef = useRef<HTMLDivElement | null>(null);
   const resourceSectionRef = useRef<HTMLDivElement | null>(null);
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
 
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
-  const inferredCategory = useMemo(() => inferCategory(file), [file]);
   const existingProofUrl = initialPost?.generationId ? null : initialPost?.mediaUrl ?? null;
   const hasGeneratedProof = Boolean(prefilledGeneration);
   const selectedResourceKinds = useMemo(
@@ -836,20 +823,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const bodyCount = body.length;
   const hasMediaProof = proofMode === 'media' && (Boolean(file) || hasGeneratedProof || Boolean(existingProofUrl));
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
-  const effectiveVisibility = visibility;
+  const displayVisibility = visibility;
   const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
-  const normalizedSourceTool = useMemo(
-    () => normalizeSourceToolInput({ label: sourceTool, slug: sourceToolSlug }),
-    [sourceTool, sourceToolSlug]
-  );
-  const filteredSourceToolSuggestions = useMemo(() => {
-    const normalizedQuery = sourceTool.trim().toLowerCase();
-
-    return CURATED_SOURCE_TOOLS.filter((toolOption) => (
-      normalizedQuery.length === 0 || toolOption.label.toLowerCase().includes(normalizedQuery)
-    ));
-  }, [sourceTool]);
-  const shouldShowSourceToolSuggestions = isSourceToolSuggestionsOpen && filteredSourceToolSuggestions.length > 0;
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   const shouldFocusPriceInput =
@@ -943,30 +918,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resourceWorkflowUrl,
   ]);
   const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
-  const shouldRunMarketplaceQuality = resourceAccessMode !== 'none' && effectiveVisibility === 'public';
-  const marketplaceAssessment = useMemo(() => (
-    resourceBundleDraft && shouldRunMarketplaceQuality
-      ? assessMarketplaceListingQuality({
-          title: publicPostTitle,
-          summary: resourceBundleDraft.summary,
-          previewText: resourceBundleDraft.previewText,
-          accessMode: resourceBundleDraft.accessMode,
-          priceUsdCents: resourceBundleDraft.priceUsdCents,
-          resources: resourceBundleDraft.resources,
-          post: {
-            title: publicPostTitle,
-            body: trimmedBody,
-            visibility: effectiveVisibility,
-            archivedAt: initialPost?.archivedAt ?? null,
-            reviewStatus: 'visible',
-            hasMedia: hasMediaProof,
-          },
-          seller: {
-            name: 'Profile ready',
-          },
-        })
-      : { eligible: true, issues: [] }
-  ), [effectiveVisibility, hasMediaProof, initialPost?.archivedAt, publicPostTitle, resourceBundleDraft, shouldRunMarketplaceQuality, trimmedBody]);
   const completionChecklist = useMemo(() => [
     {
       label: 'Proof added',
@@ -1002,12 +953,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
-
-  useEffect(() => {
-    if (file && !acceptsCategory(file, category) && inferredCategory) {
-      setCategory(inferredCategory);
-    }
-  }, [category, file, inferredCategory]);
 
   useEffect(() => {
     setDidApplyGenerationPaywallPrefill(false);
@@ -1178,6 +1123,138 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     };
   }, [generationId, session?.access_token]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetch('/api/source-tools')
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!cancelled && Array.isArray(payload.tools)) {
+          setSourceToolsData(payload.tools as SourceToolOption[]);
+        }
+      })
+      .catch(() => {
+        // Source tools fetch is non-critical; use empty list as fallback.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (prefilledGeneration && madeWithRows.length === 1 && !madeWithRows[0].toolLabel) {
+      setMadeWithRows([{
+        id: 'mw-0',
+        toolLabel: 'magicbooklet',
+        toolSlug: 'magicbooklet',
+        modelLabel: prefilledGeneration.model || '',
+        modelSlug: prefilledGeneration.model || '',
+      }]);
+    }
+  }, [prefilledGeneration, madeWithRows]);
+
+  const inferredCategory = useMemo((): PostMediaCategory | null => {
+    if (proofMode === 'text') return null;
+    if (hasGeneratedProof) return prefilledGeneration?.category ?? 'image';
+    return inferCategory(file);
+  }, [file, hasGeneratedProof, prefilledGeneration, proofMode]);
+
+  const sourceToolsForSubmit = useMemo(() => {
+    return madeWithRows
+      .filter((row) => row.toolLabel.trim())
+      .map((row) => {
+        const requestedSlug = row.toolSlug === CUSTOM_SOURCE_TOOL_VALUE ? null : slugifySourceTool(row.toolSlug);
+        const selectedTool = sourceToolsData.find(
+          (tool) =>
+            (requestedSlug && tool.slug === requestedSlug) ||
+            tool.label.toLowerCase() === row.toolLabel.trim().toLowerCase()
+        );
+        const requestedModelSlug = slugifySourceTool(row.modelSlug);
+        const selectedModel = selectedTool?.models.find(
+          (model) =>
+            (requestedModelSlug && model.slug === requestedModelSlug) ||
+            model.label.toLowerCase() === row.modelLabel.trim().toLowerCase()
+        );
+
+        return {
+          toolLabel: selectedTool?.label ?? row.toolLabel.trim(),
+          toolSlug: selectedTool?.slug ?? requestedSlug ?? slugifySourceTool(row.toolLabel),
+          modelLabel: selectedModel?.label ?? (row.modelLabel.trim() || null),
+          modelSlug: selectedModel?.slug ?? slugifySourceTool(row.modelSlug),
+        };
+      });
+  }, [madeWithRows, sourceToolsData]);
+
+  const primarySourceTool = useMemo(() => {
+    if (sourceToolsForSubmit.length === 0) {
+      return { label: null, slug: null };
+    }
+    const first = sourceToolsForSubmit[0];
+    return { label: first.toolLabel, slug: first.toolSlug };
+  }, [sourceToolsForSubmit]);
+
+  const updateMadeWithRow = (id: string, field: keyof MadeWithRow, value: string) => {
+    setMadeWithRows((current) =>
+      current.map((row) => {
+        if (row.id !== id) return row;
+        if (field === 'toolLabel' || field === 'toolSlug') {
+          if (value === CUSTOM_SOURCE_TOOL_VALUE) {
+            return {
+              ...row,
+              toolLabel: '',
+              toolSlug: CUSTOM_SOURCE_TOOL_VALUE,
+              modelLabel: '',
+              modelSlug: '',
+            };
+          }
+          const toolOption = sourceToolsData.find(
+            (t) => t.slug === value || t.label === value
+          );
+          if (toolOption) {
+            return {
+              ...row,
+              toolLabel: toolOption.label,
+              toolSlug: toolOption.slug,
+              modelLabel: '',
+              modelSlug: '',
+            };
+          }
+          return {
+            ...row,
+            toolLabel: value,
+            toolSlug: slugifySourceTool(value) ?? '',
+            ...(field === 'toolLabel' ? { modelLabel: '', modelSlug: '' } : {}),
+          };
+        }
+        return { ...row, [field]: value };
+      })
+    );
+    resetFeedback();
+  };
+
+  const addMadeWithRow = () => {
+    setMadeWithRows((current) => [
+      ...current,
+      { id: `mw-${Date.now()}`, toolLabel: '', toolSlug: '', modelLabel: '', modelSlug: '' },
+    ]);
+    resetFeedback();
+  };
+
+  const removeMadeWithRow = (id: string) => {
+    setMadeWithRows((current) => {
+      const next = current.filter((row) => row.id !== id);
+      return next.length > 0 ? next : [{ id: 'mw-0', toolLabel: '', toolSlug: '', modelLabel: '', modelSlug: '' }];
+    });
+    resetFeedback();
+  };
+
+  const submitWithVisibility = (targetVisibility: PostVisibility) => {
+    submitVisibilityRef.current = targetVisibility;
+    setVisibility(targetVisibility);
+    resetFeedback();
+  };
+
   const resetFeedback = () => {
     setCreatedPost(null);
     setError(null);
@@ -1238,13 +1315,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         {error.message}
       </div>
     );
-  };
-
-  const applySourceToolSelection = (toolOption: { label: string; slug: string }) => {
-    setSourceTool(toolOption.label);
-    setSourceToolSlug(toolOption.slug);
-    setIsSourceToolSuggestionsOpen(false);
-    resetFeedback();
   };
 
   const updateResourceSelection = (kind: PostResourceKind) => {
@@ -1512,6 +1582,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setError(null);
     setCreatedPost(null);
 
+    const effectiveVisibility = submitVisibilityRef.current;
+
     if (!session?.access_token) {
       router.push('/login?returnUrl=/post/new');
       return;
@@ -1537,11 +1609,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
-    if (file && !acceptsCategory(file, category)) {
-      stopWithError('Choose a category that matches the file you uploaded.', 'post');
-      return;
-    }
-
     if (bodyCount > BODY_MAX_LENGTH) {
       stopWithError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`, 'story');
       return;
@@ -1564,8 +1631,31 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         return;
       }
 
-      if (shouldRunMarketplaceQuality && !marketplaceAssessment.eligible) {
-        const firstIssue = marketplaceAssessment.issues[0];
+      const shouldRunSubmittedMarketplaceQuality = effectiveVisibility === 'public';
+      const submittedMarketplaceAssessment = resourceBundleDraft && shouldRunSubmittedMarketplaceQuality
+        ? assessMarketplaceListingQuality({
+            title: publicPostTitle,
+            summary: resourceBundleDraft.summary,
+            previewText: resourceBundleDraft.previewText,
+            accessMode: resourceBundleDraft.accessMode,
+            priceUsdCents: resourceBundleDraft.priceUsdCents,
+            resources: resourceBundleDraft.resources,
+            post: {
+              title: publicPostTitle,
+              body: trimmedBody,
+              visibility: effectiveVisibility,
+              archivedAt: initialPost?.archivedAt ?? null,
+              reviewStatus: 'visible',
+              hasMedia: hasMediaProof,
+            },
+            seller: {
+              name: 'Profile ready',
+            },
+          })
+        : { eligible: true, issues: [] };
+
+      if (!submittedMarketplaceAssessment.eligible) {
+        const firstIssue = submittedMarketplaceAssessment.issues[0];
         stopWithError(`Improve this unlock before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
         return;
       }
@@ -1589,9 +1679,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             title: title.trim() || undefined,
             description: description.trim() || undefined,
             body: trimmedBody || undefined,
-            category,
-            sourceTool: normalizedSourceTool.label,
-            sourceToolSlug: normalizedSourceTool.slug,
+            category: inferredCategory ?? undefined,
+            sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
             resourceBundle: resourceBundle ?? { accessMode: 'none' },
           }),
         });
@@ -1628,10 +1717,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             title: title.trim() || null,
             description: description.trim() || null,
             body: trimmedBody || null,
-            sourceTool: sourceTool.trim() || null,
-            sourceToolSlug: normalizedSourceTool.slug,
+            sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
             visibility: effectiveVisibility,
-            category,
+            category: inferredCategory ?? undefined,
             resourceBundle: resourceBundle ?? { accessMode: 'none' },
           }),
         });
@@ -1660,9 +1748,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       formData.set('title', title);
       formData.set('description', description);
       formData.set('body', body);
-      formData.set('sourceTool', sourceTool);
-      if (normalizedSourceTool.slug) {
-        formData.set('sourceToolSlug', normalizedSourceTool.slug);
+      if (primarySourceTool.label) {
+        formData.set('sourceTool', primarySourceTool.label);
+      }
+      if (primarySourceTool.slug) {
+        formData.set('sourceToolSlug', primarySourceTool.slug);
+      }
+      if (sourceToolsForSubmit.length > 0) {
+        formData.set('sourceTools', JSON.stringify(sourceToolsForSubmit));
       }
       formData.set('visibility', effectiveVisibility);
       formData.set('postFormat', postFormat);
@@ -1673,7 +1766,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         formData.set('mediaStoragePath', uploadedMedia.storagePath);
         formData.set('mediaContentType', file.type);
         formData.set('mediaOriginalName', file.name);
-        formData.set('category', category);
+        formData.set('category', inferredCategory ?? 'image');
+      } else if (proofMode === 'text') {
+        formData.set('category', 'text');
       }
 
       const response = await fetch('/api/posts', {
@@ -1711,18 +1806,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const createdPostHasResources = createdPost ? createdPost.resourceAccessMode !== 'none' : false;
-  const selectedVisibilityOption = VISIBILITY_OPTIONS.find((option) => option.value === effectiveVisibility) ?? VISIBILITY_OPTIONS[0];
   const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
   const primaryPostLabel = createdPost?.resourceBundleStatus === 'draft'
     ? 'Continue editing'
     : createdPost?.showcasePath
       ? 'View post'
       : 'Open editor';
-  const primaryActionLabel = effectiveVisibility !== 'public'
-    ? 'Save draft'
-    : resourceAccessMode === 'none'
-      ? isEditMode ? 'Save changes' : 'Share post'
-      : 'Publish post + unlock';
+  const isEditingUnlisted = isEditMode && displayVisibility === 'unlisted';
   const backHref = isEditMode || entrySurface === 'creations' ? '/creations' : '/showcase';
   const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to studio' : 'Back to community';
 
@@ -1735,29 +1825,51 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
       {!createdPost ? (
         <div className="fixed inset-x-4 bottom-4 z-40 lg:hidden">
-          <div className="flex items-center justify-between gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                Ready when you are
+          {isEditingUnlisted ? (
+            <div className="flex items-center justify-between gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                  Unlisted post
+                </div>
+                <div className="mt-1 truncate text-sm font-semibold text-white">
+                  Shareable by link only
+                </div>
               </div>
-              <div className="mt-1 truncate text-sm font-semibold text-white">
-                {resourceAccessMode === 'paid'
-                  ? `Paid unlock · ${formatUsdCents(Math.round((Number.parseFloat(resourcePriceUsd.trim() || '0') || 0) * 100))}`
-                  : resourceAccessMode === 'free'
-                    ? 'Free unlock'
-                    : 'Public post'}
-              </div>
+              <button
+                type="submit"
+                form="post-composer-form"
+                disabled={isSubmitting || isLoadingGeneration}
+                onClick={() => submitWithVisibility('unlisted')}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full bg-sky-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Save unlisted
+              </button>
             </div>
-            <button
-              type="submit"
-              form="post-composer-form"
-              disabled={isSubmitting || isLoadingGeneration}
-              className="inline-flex shrink-0 items-center gap-2 rounded-full bg-sky-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-              {isEditMode ? 'Save now' : 'Share now'}
-            </button>
-          </div>
+          ) : (
+            <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+              <button
+                type="submit"
+                form="post-composer-form"
+                disabled={isSubmitting || isLoadingGeneration}
+                onClick={() => submitWithVisibility('private')}
+                className="inline-flex flex-1 shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Save private
+              </button>
+              <button
+                type="submit"
+                form="post-composer-form"
+                disabled={isSubmitting || isLoadingGeneration}
+                onClick={() => submitWithVisibility('public')}
+                className="inline-flex flex-1 shrink-0 items-center justify-center gap-2 rounded-full bg-sky-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
+                Publish public
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
 
@@ -1791,7 +1903,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               </p>
             </div>
 
-            <form id="post-composer-form" className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
+            <form id="post-composer-form" ref={formRef} className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
               {initialPost?.archivedAt ? (
                 <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
                   This post is archived. It stays out of public surfaces until you restore it from My Studio.
@@ -1818,165 +1930,127 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </label>
 
                 {proofMode === 'media' ? (
-                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                    {!hasGeneratedProof ? (
-                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
-                            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                              Tag the tool so people can understand how this result was made.
-                            </p>
-                          </div>
-                          <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-medium text-zinc-300">
-                            {normalizedSourceTool.label || 'Choose tool'}
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {CURATED_SOURCE_TOOLS.map((toolOption) => (
-                            <button
-                              key={toolOption.slug}
-                              type="button"
-                              onClick={() => {
-                                applySourceToolSelection(toolOption);
+                  <div className="mt-5 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Made With</div>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                          Add the tool and model you used.{hasGeneratedProof ? ' magicbooklet is already set.' : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {madeWithRows.map((row, index) => {
+                        const selectedTool = sourceToolsData.find((t) =>
+                          row.toolSlug ? t.slug === row.toolSlug : t.label === row.toolLabel
+                        );
+                        const isCustomTool = row.toolSlug === CUSTOM_SOURCE_TOOL_VALUE || Boolean(row.toolLabel && !selectedTool);
+                        const modelOptions = selectedTool?.models ?? [];
+
+                        return (
+                          <div key={row.id} className="flex flex-wrap items-center gap-2">
+                            <select
+                              aria-label={`Tool ${index + 1}`}
+                              value={isCustomTool ? CUSTOM_SOURCE_TOOL_VALUE : row.toolSlug || row.toolLabel}
+                              onChange={(event) => {
+                                updateMadeWithRow(row.id, 'toolLabel', event.target.value);
                               }}
-                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                                normalizedSourceTool.slug === toolOption.slug
-                                  ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                              }`}
+                              disabled={hasGeneratedProof}
+                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70 min-w-0 flex-1"
                             >
-                              {toolOption.label}
-                            </button>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSourceToolSlug('');
-                              setIsSourceToolSuggestionsOpen(true);
-                              sourceToolInputRef.current?.focus();
-                              resetFeedback();
-                            }}
-                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                              sourceTool && !normalizedSourceTool.slug
-                                ? 'border-sky-300/35 bg-sky-400/15 text-sky-50'
-                                : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
-                            }`}
-                          >
-                            Custom
-                          </button>
-                        </div>
-                        <label
-                          className="mt-3 block"
-                          onBlur={(event) => {
-                            const nextFocusedElement = event.relatedTarget;
-                            if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
-                              return;
-                            }
-
-                            setIsSourceToolSuggestionsOpen(false);
-                          }}
+                              <option value="" className="bg-zinc-950 text-white">Choose tool...</option>
+                              {sourceToolsData.map((tool) => (
+                                <option key={tool.slug} value={tool.slug} className="bg-zinc-950 text-white">
+                                  {tool.label}
+                                </option>
+                              ))}
+                              <option value={CUSTOM_SOURCE_TOOL_VALUE} className="bg-zinc-950 text-white">
+                                Custom tool
+                              </option>
+                            </select>
+                            {isCustomTool && !hasGeneratedProof ? (
+                              <input
+                                aria-label={`Custom tool ${index + 1}`}
+                                value={row.toolLabel}
+                                onChange={(event) => {
+                                  setMadeWithRows((current) =>
+                                    current.map((r) =>
+                                      r.id === row.id
+                                        ? { ...r, toolLabel: event.target.value, toolSlug: CUSTOM_SOURCE_TOOL_VALUE }
+                                        : r
+                                    )
+                                  );
+                                  resetFeedback();
+                                }}
+                                placeholder="Tool name"
+                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] min-w-0 flex-1"
+                              />
+                            ) : null}
+                            {modelOptions.length > 0 ? (
+                              <select
+                                aria-label={`Model for ${row.toolLabel || `tool ${index + 1}`}`}
+                                value={row.modelSlug || row.modelLabel}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  const model = modelOptions.find((m) => m.slug === value || m.label === value);
+                                  setMadeWithRows((current) =>
+                                    current.map((r) =>
+                                      r.id === row.id
+                                        ? { ...r, modelLabel: model?.label ?? value, modelSlug: model?.slug ?? '' }
+                                        : r
+                                    )
+                                  );
+                                  resetFeedback();
+                                }}
+                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] min-w-0 flex-1"
+                              >
+                                <option value="" className="bg-zinc-950 text-white">Any model</option>
+                                {modelOptions.map((model) => (
+                                  <option key={model.slug} value={model.slug} className="bg-zinc-950 text-white">
+                                    {model.label}
+                                  </option>
+                                ))}
+                                {row.modelLabel && !modelOptions.some((m) => m.slug === row.modelSlug || m.label === row.modelLabel) ? (
+                                  <option value={row.modelLabel} className="bg-zinc-950 text-white">
+                                    {row.modelLabel} (custom)
+                                  </option>
+                                ) : null}
+                              </select>
+                            ) : (
+                              <input
+                                aria-label={`Custom model for ${row.toolLabel || `tool ${index + 1}`}`}
+                                value={row.modelLabel}
+                                onChange={(event) => {
+                                  updateMadeWithRow(row.id, 'modelLabel', event.target.value);
+                                }}
+                                placeholder="Custom model"
+                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] min-w-0 flex-1"
+                              />
+                            )}
+                            {!hasGeneratedProof && madeWithRows.length > 1 ? (
+                              <button
+                                type="button"
+                                onClick={() => removeMadeWithRow(row.id)}
+                                className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                                aria-label={`Remove tool ${index + 1}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                      {!hasGeneratedProof ? (
+                        <button
+                          type="button"
+                          onClick={addMadeWithRow}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                         >
-                          <span className="sr-only">Custom source tool</span>
-                          <input
-                            ref={sourceToolInputRef}
-                            role="combobox"
-                            aria-label="Custom source tool"
-                            aria-autocomplete="list"
-                            aria-controls="source-tool-suggestions"
-                            aria-expanded={shouldShowSourceToolSuggestions}
-                            value={sourceTool}
-                            onChange={(event) => {
-                              setSourceTool(event.target.value);
-                              setSourceToolSlug('');
-                              setIsSourceToolSuggestionsOpen(true);
-                              resetFeedback();
-                            }}
-                            onFocus={() => {
-                              setIsSourceToolSuggestionsOpen(true);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Escape') {
-                                setIsSourceToolSuggestionsOpen(false);
-                              }
-                            }}
-                            placeholder="Runway, Midjourney, CapCut..."
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                          />
-                          {shouldShowSourceToolSuggestions ? (
-                            <div
-                              id="source-tool-suggestions"
-                              role="listbox"
-                              aria-label="Source tool suggestions"
-                              className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950/95 p-2 shadow-[0_20px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl"
-                            >
-                              {filteredSourceToolSuggestions.map((toolOption) => {
-                                const selected = normalizedSourceTool.slug === toolOption.slug;
-
-                                return (
-                                  <button
-                                    key={toolOption.slug}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    onMouseDown={(event) => {
-                                      event.preventDefault();
-                                    }}
-                                    onClick={() => {
-                                      applySourceToolSelection(toolOption);
-                                    }}
-                                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
-                                      selected
-                                        ? 'bg-sky-400/15 text-sky-50'
-                                        : 'text-zinc-200 hover:bg-white/[0.06] hover:text-white'
-                                    }`}
-                                  >
-                                    <span>{toolOption.label}</span>
-                                    {selected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : null}
-                        </label>
-                      </div>
-                    ) : (
-                      <div className="rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Source tool</div>
-                        <div className="mt-3 inline-flex rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-medium text-zinc-100">
-                          Created in magicbooklet
-                        </div>
-                      </div>
-                    )}
-
-                    <label className="block rounded-[24px] border border-white/8 bg-black/30 p-4">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Category</div>
-                      <select
-                        value={category}
-                        onChange={(event) => {
-                          setCategory(event.target.value as Exclude<PostCategory, 'text'>);
-                          resetFeedback();
-                        }}
-                        disabled={hasGeneratedProof}
-                        className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        {CATEGORY_OPTIONS.map((option) => (
-                          <option
-                            key={option.value}
-                            value={option.value}
-                            disabled={file ? !acceptsCategory(file, option.value) : false}
-                            className="bg-zinc-950 text-white"
-                          >
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-2 text-xs leading-5 text-zinc-500">
-                        {hasGeneratedProof
-                          ? 'Generated media keeps its category automatically.'
-                          : CATEGORY_OPTIONS.find((option) => option.value === category)?.description}
-                      </p>
-                    </label>
+                          <Plus className="h-4 w-4" />
+                          Add another tool
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 
@@ -2328,7 +2402,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   </div>
                 ) : null}
 
-                {resourceAccessMode !== 'none' && effectiveVisibility !== 'public' ? (
+                {resourceAccessMode !== 'none' && displayVisibility !== 'public' ? (
                   <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
                     This unlock will save as a draft until the post is public.
                   </div>
@@ -2906,72 +2980,80 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <div>
                     <h2 className="text-lg font-semibold text-white">Publish</h2>
                     <p className="mt-1 text-xs text-zinc-400">
-                      Configure visibility and submit your post.
+                      Choose who can see this post.
                     </p>
                   </div>
                   <div className="shrink-0 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold text-zinc-300">
                     {resourceAccessMode === 'none'
-                      ? selectedVisibilityOption.label
+                      ? getVisibilityStatusLabel(displayVisibility)
                       : resourceAccessMode === 'paid'
-                        ? `${selectedVisibilityOption.label} · paid unlock`
-                        : `${selectedVisibilityOption.label} · free unlock`}
+                        ? `${getVisibilityStatusLabel(displayVisibility)} · paid unlock`
+                        : `${getVisibilityStatusLabel(displayVisibility)} · free unlock`}
                   </div>
                 </div>
 
                 {renderSectionError('publish')}
 
-                <div className="mt-5">
-                  <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Visibility</div>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {VISIBILITY_OPTIONS.map((option) => {
-                      const active = visibility === option.value;
-                      const description = resourceAccessMode === 'none'
-                        ? option.description
-                        : option.value === 'public'
-                          ? 'Publishes the post and makes a complete unlock buyer-facing.'
-                          : option.value === 'unlisted'
-                            ? 'Saves the post by direct link and keeps the unlock as a draft.'
-                            : 'Saves everything as an owner-only draft.';
-
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          aria-label={option.label}
-                          onClick={() => {
-                            setVisibility(option.value);
-                            resetFeedback();
-                          }}
-                          className={`rounded-2xl border px-4 py-3 text-left transition ${
-                            active
-                              ? 'border-emerald-300/35 bg-emerald-400/12 text-white'
-                              : 'border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/20 hover:bg-white/[0.04] hover:text-white'
-                          }`}
-                        >
-                          <div className="text-sm font-semibold">{option.label}</div>
-                          <p className="mt-2 text-xs leading-5 text-zinc-400">{description}</p>
-                        </button>
-                      );
-                    })}
+                {isEditingUnlisted ? (
+                  <div className="mt-5 space-y-4">
+                    <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
+                      This post is currently <span className="font-semibold">Unlisted</span> — shareable by link only.
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="submit"
+                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                        onClick={() => submitWithVisibility('unlisted')}
+                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Save unlisted changes
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                        onClick={() => submitWithVisibility('public')}
+                        className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Make public
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                        onClick={() => submitWithVisibility('private')}
+                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Make private
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="mt-5">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                        onClick={() => submitWithVisibility('private')}
+                        className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 text-left transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        <div className="text-sm font-semibold text-zinc-200">Save private</div>
+                        <p className="mt-1.5 text-xs leading-5 text-zinc-500">Saved privately in Studio.</p>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                        onClick={() => submitWithVisibility('public')}
+                        className="rounded-2xl bg-sky-300 px-5 py-5 text-left transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        <div className="text-sm font-semibold text-slate-950">Publish public</div>
+                        <p className="mt-1.5 text-xs leading-5 text-slate-700">Visible in Feed.</p>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                <div className="mt-5 flex flex-wrap justify-end gap-3 border-t border-white/8 pt-5">
-                  <Link
-                    href={isEditMode ? '/creations' : '/showcase'}
-                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                  >
-                    {isEditMode ? 'Back to studio' : 'Back to community'}
-                  </Link>
-                  <button
-                    type="submit"
-                    disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                    className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-                    {primaryActionLabel}
-                  </button>
-                </div>
               </div>
             </form>
           </section>

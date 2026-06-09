@@ -69,6 +69,12 @@ export interface ShowcaseFeedItem {
     sourceKind: ShowcaseSourceKind;
     sourceTool: string | null;
     sourceToolSlug?: string | null;
+    sourceTools?: Array<{
+      toolLabel: string;
+      toolSlug?: string | null;
+      modelLabel?: string | null;
+      modelSlug?: string | null;
+    }>;
     generationId: string | null;
     asset: ShowcaseAssetSummary | null;
     canRemix: boolean;

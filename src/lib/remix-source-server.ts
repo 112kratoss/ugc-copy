@@ -20,6 +20,7 @@ import {
   type RemixSourceBundle,
   type RemixSourceResult,
 } from '@/lib/remix-source';
+import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
 import { createServiceClient, createUserClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 
@@ -161,7 +162,10 @@ async function fetchGenerationById(
 
 export async function loadRemixSourceBundle(
   request: NextRequest,
-  generationId: string
+  generationId: string,
+  options?: {
+    postId?: string | null;
+  }
 ): Promise<RemixSourceBundle> {
   const trimmedGenerationId = generationId.trim();
   if (!trimmedGenerationId) {
@@ -230,6 +234,15 @@ export async function loadRemixSourceBundle(
       workflowSettings,
     });
   }
+
+  const recipeInputMedia = !includeInputMedia && options?.postId
+    ? await loadGenerationRecipeRemixInputMediaByPostId({
+        postId: options.postId,
+        generationId: typedGeneration.id,
+        adminSupabase,
+      })
+    : [];
+  const accessibleInputMedia = includeInputMedia ? inputMedia : recipeInputMedia;
 
   const restoreIssues: string[] = [];
   const referencedGenerationCache = new Map<string, Promise<ResultGenerationRow | null>>();
@@ -337,13 +350,19 @@ export async function loadRemixSourceBundle(
     },
     result,
     inputs: {},
-    inputMedia: includeInputMedia ? inputMedia : [],
+    inputMedia: accessibleInputMedia,
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
   };
 
-  if (includeInputMedia && hasDurableInputMedia) {
-    const referenceImages = inputMedia.filter((item) => item.mediaType === 'image' && item.role === 'reference_image');
+  if (accessibleInputMedia.length > 0) {
+    const referenceImages = accessibleInputMedia.filter((item) => item.mediaType === 'image' && item.role === 'reference_image');
+
+    referenceImages.forEach((item, index) => {
+      if (!item.url) {
+        restoreIssues.push(`image-element:${item.label ?? `Reference image ${index + 1}`}`);
+      }
+    });
 
     if (category === 'image') {
       bundle.inputs.image = {
@@ -352,27 +371,39 @@ export async function loadRemixSourceBundle(
     }
 
     if (category === 'video' || category === 'ugc-ad') {
+      const startFrame = accessibleInputMedia.find((item) => item.role === 'start_frame');
+      const endFrame = accessibleInputMedia.find((item) => item.role === 'end_frame');
+      if (startFrame && !startFrame.url) {
+        restoreIssues.push('video-start-frame');
+      }
+      if (endFrame && !endFrame.url) {
+        restoreIssues.push('video-end-frame');
+      }
+
       bundle.inputs.video = {
         referenceMode: workflowSettings.referenceMode === 'elements' ? 'elements' : 'frames',
-        startFrame: inputMedia.find((item) => item.role === 'start_frame')
-          ? toRemixAssetDescriptor(inputMedia.find((item) => item.role === 'start_frame')!)
-          : null,
-        endFrame: inputMedia.find((item) => item.role === 'end_frame')
-          ? toRemixAssetDescriptor(inputMedia.find((item) => item.role === 'end_frame')!)
-          : null,
+        startFrame: startFrame ? toRemixAssetDescriptor(startFrame) : null,
+        endFrame: endFrame ? toRemixAssetDescriptor(endFrame) : null,
         elements: referenceImages.map((item, index) => toRemixImageElement(item, index)),
-        referenceVideos: inputMedia
+        referenceVideos: accessibleInputMedia
           .filter((item) => item.mediaType === 'video' && item.role === 'reference_video')
           .map((item) => toRemixAssetDescriptor(item)),
-        referenceAudios: inputMedia
+        referenceAudios: accessibleInputMedia
           .filter((item) => item.mediaType === 'audio' && item.role === 'reference_audio')
           .map((item) => toRemixAssetDescriptor(item)),
       };
     }
 
     if (category === 'motion') {
-      const characterImage = inputMedia.find((item) => item.role === 'character_image');
-      const referenceVideo = inputMedia.find((item) => item.role === 'motion_reference_video');
+      const characterImage = accessibleInputMedia.find((item) => item.role === 'character_image');
+      const referenceVideo = accessibleInputMedia.find((item) => item.role === 'motion_reference_video');
+      if (characterImage && !characterImage.url) {
+        restoreIssues.push('motion-character-image');
+      }
+      if (referenceVideo && !referenceVideo.url) {
+        restoreIssues.push('motion-reference-video');
+      }
+
       bundle.inputs.motion = {
         characterImage: characterImage ? toRemixAssetDescriptor(characterImage) : null,
         referenceVideo: referenceVideo ? toRemixAssetDescriptor(referenceVideo) : null,

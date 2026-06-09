@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
+import type { SourceToolOption } from '@/lib/source-tools';
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -58,6 +59,10 @@ vi.mock('framer-motion', () => ({
   },
   useReducedMotion: () => false,
 }));
+
+const SOURCE_TOOL_OPTIONS: SourceToolOption[] = [
+  { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+];
 
 function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
   return {
@@ -114,6 +119,7 @@ function renderShowcase(item: ShowcaseFeedItem) {
       initialTool={null}
       initialUnlock="all"
       initialResource="all"
+      sourceToolOptions={SOURCE_TOOL_OPTIONS}
     />
   );
 }
@@ -447,6 +453,7 @@ describe('ShowcaseClient save actions', () => {
         initialTool={null}
         initialUnlock="all"
         initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
       />
     );
 
@@ -502,6 +509,7 @@ describe('ShowcaseClient save actions', () => {
         initialTool={null}
         initialUnlock="all"
         initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
       />
     );
 

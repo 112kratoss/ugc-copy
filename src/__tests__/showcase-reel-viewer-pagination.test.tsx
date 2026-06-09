@@ -263,7 +263,7 @@ describe('ShowcaseReelViewer pagination', () => {
                   type: 'reference_image',
                   role: 'style_reference',
                   sectionId: null,
-                  title: 'Image input',
+                  title: '@alisa',
                   description: null,
                   textContent: null,
                   externalUrl: null,
@@ -354,7 +354,7 @@ describe('ShowcaseReelViewer pagination', () => {
                   },
                   {
                     type: 'reference_image',
-                    title: 'Image input',
+                    title: '@alisa',
                     role: 'style_reference',
                     sectionId: null,
                     contentType: 'image/png',
@@ -407,10 +407,12 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.getAllByText(/public recipe prompt/i)).toHaveLength(1);
     expect(screen.getByText(/public recipe notes/i)).toBeInTheDocument();
     expect(screen.getByText(/remix access is included/i)).toBeInTheDocument();
+    expect(screen.getByText('@alisa')).toBeInTheDocument();
 
-    expect(screen.queryByText(/^image input$/i)).not.toBeInTheDocument();
+    const referencePreviewButton = screen.getByRole('button', { name: /open preview for @alisa/i });
+    expect(referencePreviewButton.className).toContain('w-[112px]');
 
-    fireEvent.click(screen.getByRole('button', { name: /open preview for image input/i }));
+    fireEvent.click(referencePreviewButton);
 
     expect(screen.getByRole('dialog', { name: /reference image preview/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /close reference preview/i })).toBeInTheDocument();

@@ -20,6 +20,12 @@ export interface EditablePostDraft {
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
   sourceToolSlug?: string | null;
+  sourceTools?: Array<{
+    toolLabel: string;
+    toolSlug?: string | null;
+    modelLabel?: string | null;
+    modelSlug?: string | null;
+  }> | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
   archivedAt: string | null;

@@ -12,6 +12,7 @@ import {
   createPostWithResourceBundleAtomically,
   getMarketplaceQualityErrorForPostBundle,
 } from '@/lib/post-resource-bundles-server';
+import { insertPostSourceTools } from '@/lib/post-source-tools-server';
 import {
   isPostResourceBundleAccessMode,
   normalizePostResourceAttachments,
@@ -20,7 +21,8 @@ import {
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-import { normalizeSourceToolInput } from '@/lib/source-tools';
+import { listSourceToolsCatalog } from '@/lib/source-tools-server';
+import { normalizeSourceToolInputWithCatalog, normalizeSourceToolSelectionsWithCatalog } from '@/lib/source-tools';
 import {
   isShowcaseItemCategory,
   type ShowcaseItemCategory,
@@ -325,12 +327,29 @@ export async function POST(request: NextRequest) {
     );
     const title = resolveTitle(normalizeText(formData.get('title')), body, postFormat);
     const description = normalizeText(formData.get('description'));
+    const sourceToolCatalog = await listSourceToolsCatalog();
     const sourceTool = file || uploadedMedia ? normalizeText(formData.get('sourceTool')) : null;
     const sourceToolSlugRaw = normalizeText(formData.get('sourceToolSlug'));
-    const normalizedSourceTool = normalizeSourceToolInput({
+    const normalizedSourceTool = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
       label: sourceTool,
       slug: sourceToolSlugRaw,
     });
+    const sourceToolsRaw = normalizeText(formData.get('sourceTools'));
+    let parsedSourceTools: unknown = null;
+    if (sourceToolsRaw) {
+      try {
+        parsedSourceTools = JSON.parse(sourceToolsRaw);
+      } catch {
+        return NextResponse.json({ error: 'Source tool metadata is invalid.' }, { status: 400 });
+      }
+    }
+    const fallbackSourceTools = sourceTool || normalizedSourceTool.label
+      ? [{
+          toolLabel: normalizedSourceTool.label ?? sourceTool ?? '',
+          toolSlug: normalizedSourceTool.slug,
+      }]
+      : [];
+    const sourceTools = normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, parsedSourceTools ?? fallbackSourceTools);
     const sourceKind = postFormat === 'text' ? 'manual' : 'external';
     const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'), user.id);
 
@@ -451,8 +470,8 @@ export async function POST(request: NextRequest) {
         body,
         post_format: postFormat,
         source_kind: sourceKind,
-        source_tool: normalizedSourceTool.label,
-        source_tool_slug: normalizedSourceTool.slug,
+        source_tool: sourceTools.length > 0 ? sourceTools[0].toolLabel : normalizedSourceTool.label,
+        source_tool_slug: sourceTools.length > 0 ? sourceTools[0].toolSlug : normalizedSourceTool.slug,
         showcase_asset_path: storagePath,
         output_url: null,
         },
@@ -475,6 +494,25 @@ export async function POST(request: NextRequest) {
       if (cleanupUpload.error) {
         console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
       }
+    }
+
+    try {
+      await insertPostSourceTools({
+        supabase: adminSupabase,
+        postId: post.postId,
+        sourceTools,
+      });
+    } catch (sourceToolsError) {
+      console.error('Failed to insert post_source_tools:', sourceToolsError);
+      await cleanupUploadedMedia();
+      const cleanupPost = await adminSupabase
+        .from('posts')
+        .delete()
+        .eq('id', post.postId);
+      if (cleanupPost.error) {
+        console.warn('Failed to remove post after source tool metadata failure:', cleanupPost.error);
+      }
+      return NextResponse.json({ error: 'Failed to save source tool metadata.' }, { status: 500 });
     }
 
     return NextResponse.json({

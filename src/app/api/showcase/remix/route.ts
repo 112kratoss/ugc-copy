@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({ 
             success: true, 
-            redirectTo: `${redirectPath}?remix=${generation.id}`,
+            redirectTo: `${redirectPath}?remix=${generation.id}&remixPost=${post.id}`,
             prefill: {
                 prompt: generation.prompt || '',
                 settings: generation.workflow_settings || {}

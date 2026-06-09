@@ -702,6 +702,42 @@ async function loadGenerationRecipeInputMedia(params: {
   });
 }
 
+export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
+  postId: string;
+  generationId: string;
+  adminSupabase?: SupabaseClient;
+}): Promise<GenerationInputMediaItem[]> {
+  const adminSupabase = params.adminSupabase ?? createServiceClient();
+  const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
+  if (!post || !isGenerationRecipePostEligible(post) || !post.user_id || post.generation_id !== params.generationId) {
+    return [];
+  }
+
+  const generation = await loadGenerationRecipeRow(adminSupabase, params.generationId);
+  if (!generation) {
+    return [];
+  }
+
+  const inputMediaMap = await loadGenerationInputMediaMap({
+    supabase: adminSupabase,
+    generationIds: [params.generationId],
+    urlMode: 'signed',
+  });
+  const durableInputMedia = inputMediaMap.get(params.generationId) ?? [];
+
+  if (durableInputMedia.length > 0) {
+    return durableInputMedia;
+  }
+
+  return buildLegacyGenerationInputMedia({
+    supabase: adminSupabase,
+    generationId: generation.id,
+    ownerUserId: post.user_id,
+    category: generation.category ?? post.category,
+    workflowSettings: normalizeWorkflowSettings(generation.workflow_settings) ?? {},
+  });
+}
+
 async function loadGenerationRecipeInputMediaMap(params: {
   adminSupabase: SupabaseClient;
   generations: GenerationRecipeRow[];

@@ -922,7 +922,7 @@ export default function ShowcaseReelViewer({
         {referenceItems.length > 0 || attachmentItems.length > 0 ? (
           <div className="mt-4">
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">References</div>
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 flex flex-wrap gap-3">
               {referenceItems.map((resourceItem, index) => {
                 const hasFile = Boolean(resourceItem.storagePath || resourceItem.externalUrl);
                 const fileUrl = hasFile
@@ -943,21 +943,28 @@ export default function ShowcaseReelViewer({
                         alt: resourceItem.title,
                       })}
                       aria-label={`Open preview for ${resourceItem.title}`}
-                      className="group min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35 transition hover:border-white/20"
+                      className="group w-[112px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35 text-left transition hover:border-white/20"
                     >
-                      <div className="flex aspect-[3/4] items-center justify-center bg-black">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={fileUrl}
-                          alt={resourceItem.title}
-                          className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
-                        />
+                      <div className="flex h-full flex-col">
+                        <div className="flex aspect-[3/4] items-center justify-center bg-black">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={fileUrl}
+                            alt={resourceItem.title}
+                            className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
+                          />
+                        </div>
+                        <div className="border-t border-white/8 bg-black/45 px-3 py-2">
+                          <div className="truncate text-xs font-medium text-zinc-100">
+                            {resourceItem.title}
+                          </div>
+                        </div>
                       </div>
                     </button>
                   ) : (
                     <div
                       key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
-                      className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35 p-3"
+                      className="min-w-0 basis-[180px] overflow-hidden rounded-2xl border border-white/10 bg-black/35 p-3"
                     >
                       {showMediaPreview && fileUrl && isVideo ? (
                         <video src={fileUrl} controls className="h-full w-full object-contain" />
@@ -977,7 +984,7 @@ export default function ShowcaseReelViewer({
                 return (
                   <div
                     key={`${attachment.storagePath ?? attachment.url ?? attachment.label}:${index}`}
-                    className="min-w-0 rounded-2xl border border-white/10 bg-black/35 p-3"
+                    className="min-w-0 basis-[180px] rounded-2xl border border-white/10 bg-black/35 p-3"
                   >
                     <div className="truncate text-xs font-semibold text-zinc-100">{attachment.label}</div>
                     {fileUrl ? (
