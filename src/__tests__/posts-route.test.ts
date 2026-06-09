@@ -7,6 +7,7 @@ const removeMock = vi.fn();
 const downloadMock = vi.fn();
 const insertPayloads: Array<Record<string, unknown>> = [];
 const sourceToolRows: Array<Record<string, unknown>> = [];
+const sourceToolRpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 let bundleUpsertError: { code?: string; message?: string } | null = null;
 let sourceToolInsertError: { code?: string; message?: string } | null = null;
 
@@ -137,6 +138,23 @@ vi.mock('@/lib/server-helpers', () => ({
       throw new Error(`Unexpected service table access: ${table}`);
     },
     rpc(name: string, args: Record<string, unknown>) {
+      if (name === 'save_post_source_tools_with_catalog') {
+        sourceToolRpcCalls.push({ name, args });
+        const sourceTools = Array.isArray(args.p_source_tools)
+          ? args.p_source_tools as Array<Record<string, unknown>>
+          : [];
+        sourceToolRows.push(...sourceTools.map((sourceTool, index) => ({
+          tool_label: sourceTool.toolLabel,
+          tool_slug: sourceTool.toolSlug,
+          model_label: sourceTool.modelLabel ?? null,
+          model_slug: sourceTool.modelSlug ?? null,
+          sort_order: index,
+        })));
+        return Promise.resolve({
+          data: null,
+          error: sourceToolInsertError,
+        });
+      }
       if (name !== 'upsert_post_with_resource_bundle') {
         throw new Error(`Unexpected rpc call: ${name}`);
       }
@@ -194,6 +212,7 @@ describe('/api/posts route', () => {
     });
     insertPayloads.length = 0;
     sourceToolRows.length = 0;
+    sourceToolRpcCalls.length = 0;
     bundleUpsertError = null;
     sourceToolInsertError = null;
   });
@@ -298,6 +317,67 @@ describe('/api/posts route', () => {
         sort_order: 1,
       }),
     ]);
+  });
+
+  it('persists provisional catalog creation intent only after an image post is created', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'media');
+    formData.set('visibility', 'public');
+    formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
+    formData.set('sourceTools', JSON.stringify([
+      {
+        toolLabel: 'Pika Labs',
+        toolSlug: 'pika-labs',
+        modelLabel: 'Pika 2.2',
+        modelSlug: 'pika-2-2',
+        createTool: true,
+        createModel: true,
+      },
+    ]));
+
+    const response = await POST(createRouteRequest(formData));
+
+    expect(response.status).toBe(200);
+    expect(sourceToolRpcCalls).toEqual([
+      {
+        name: 'save_post_source_tools_with_catalog',
+        args: expect.objectContaining({
+          p_owner_user_id: 'user-1',
+          p_media_kind: 'image',
+          p_source_tools: [
+            expect.objectContaining({
+              toolLabel: 'Pika Labs',
+              createTool: true,
+              createModel: true,
+            }),
+          ],
+        }),
+      },
+    ]);
+  });
+
+  it('rejects invalid provisional catalog names before creating a post', async () => {
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'media');
+    formData.set('visibility', 'public');
+    formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
+    formData.set('sourceTools', JSON.stringify([
+      {
+        toolLabel: 'x'.repeat(81),
+        createTool: true,
+      },
+    ]));
+
+    const response = await POST(createRouteRequest(formData));
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/80 characters/i);
+    expect(payload.field).toBe('sourceTools');
+    expect(insertPayloads).toHaveLength(0);
+    expect(sourceToolRpcCalls).toHaveLength(0);
   });
 
   it('fails post creation when source tool metadata cannot be saved', async () => {

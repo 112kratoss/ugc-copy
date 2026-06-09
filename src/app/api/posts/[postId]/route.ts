@@ -15,14 +15,18 @@ import {
   getMarketplaceQualityErrorForPostBundle,
   updatePostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
-import { replacePostSourceTools } from '@/lib/post-source-tools-server';
+import { PostSourceToolsWriteError, replacePostSourceTools } from '@/lib/post-source-tools-server';
 import {
   isMissingPostResourceBundlesSchemaError,
   isMissingPostResourceItemsColumnError,
 } from '@/lib/posts-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
-import { normalizeSourceToolInputWithCatalog, normalizeSourceToolSelectionsWithCatalog } from '@/lib/source-tools';
+import {
+  normalizeSourceToolInputWithCatalog,
+  normalizeSourceToolSelectionsWithCatalog,
+  validateSourceToolSelections,
+} from '@/lib/source-tools';
 import {
   isShowcaseItemCategory,
   normalizeShowcaseSourceKind,
@@ -288,10 +292,16 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       updatePayload.post_format = nextBody ? (post.post_format === 'media' ? 'mixed' : post.post_format) : post.post_format;
     }
     const hasSourceToolsPayload = Object.prototype.hasOwnProperty.call(body, 'sourceTools');
+    let sourceToolsValidationError: string | null = null;
     const sourceTools = (() => {
       if (hasSourceToolsPayload) {
         if (!Array.isArray(body.sourceTools)) {
           return null;
+        }
+        const validationError = validateSourceToolSelections(body.sourceTools);
+        if (validationError) {
+          sourceToolsValidationError = validationError;
+          return [];
         }
         return normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, body.sourceTools);
       }
@@ -312,6 +322,12 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 
     if (sourceTools === null) {
       return NextResponse.json({ error: 'Source tool metadata is invalid.' }, { status: 400 });
+    }
+    if (sourceToolsValidationError) {
+      return NextResponse.json({
+        error: sourceToolsValidationError,
+        field: 'sourceTools',
+      }, { status: 400 });
     }
 
     if (hasSourceToolsPayload) {
@@ -368,11 +384,22 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         await replacePostSourceTools({
           supabase: adminSupabase,
           postId,
+          ownerUserId: user.id,
+          mediaKind: nextCategory === 'image'
+            ? 'image'
+            : nextCategory === 'video' || nextCategory === 'motion'
+              ? 'video'
+              : null,
           sourceTools,
         });
       } catch (sourceToolsError) {
         console.error('Failed to replace post_source_tools:', sourceToolsError);
-        return NextResponse.json({ error: 'Failed to save source tool metadata.' }, { status: 500 });
+        const isValidationError = sourceToolsError instanceof PostSourceToolsWriteError
+          && sourceToolsError.isValidationError;
+        return NextResponse.json({
+          error: isValidationError ? sourceToolsError.message : 'Failed to save source tool metadata.',
+          field: isValidationError ? 'sourceTools' : undefined,
+        }, { status: isValidationError ? 400 : 500 });
       }
     }
 

@@ -409,7 +409,7 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.getByText(/remix access is included/i)).toBeInTheDocument();
     expect(screen.getByText('@alisa')).toBeInTheDocument();
 
-    const referencePreviewButton = screen.getByRole('button', { name: /open preview for @alisa/i });
+    const referencePreviewButton = await screen.findByRole('button', { name: /open preview for @alisa/i });
     expect(referencePreviewButton.className).toContain('w-[112px]');
 
     fireEvent.click(referencePreviewButton);

@@ -25,6 +25,8 @@ export interface EditablePostDraft {
     toolSlug?: string | null;
     modelLabel?: string | null;
     modelSlug?: string | null;
+    createTool?: boolean;
+    createModel?: boolean;
   }> | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;

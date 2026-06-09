@@ -142,12 +142,113 @@ describe('NewPostClient', () => {
     expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'post');
   });
 
-  it('renders the Made With section with tool dropdowns fetched from the API', async () => {
+  it('renders searchable Made With comboboxes fetched from the API', async () => {
     render(<NewPostClient />);
 
     expect(screen.getByText(/made with/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add another tool/i })).toBeInTheDocument();
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+    expect(toolPicker).toHaveAttribute('aria-autocomplete', 'list');
+
+    fireEvent.focus(toolPicker);
     expect(await screen.findByRole('option', { name: 'Higgsfield' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /model for tool 1/i })).toBeDisabled();
+  });
+
+  it('creates provisional tools and models from the searchable Made With comboboxes', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-provisional-tool-1',
+        showcasePath: '/showcase/post-provisional-tool-1',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+
+    fireEvent.change(toolPicker, { target: { value: 'Pika Labs' } });
+    fireEvent.click(await screen.findByRole('option', { name: /create “pika labs”/i }));
+
+    const modelPicker = screen.getByRole('combobox', { name: /model for pika labs/i });
+    fireEvent.change(modelPicker, { target: { value: 'Pika 2.2' } });
+    fireEvent.click(await screen.findByRole('option', { name: /create “pika 2.2”/i }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    const sourceTools = JSON.parse(String(request.body.get('sourceTools')));
+    expect(sourceTools).toEqual([
+      {
+        toolLabel: 'Pika Labs',
+        toolSlug: 'pika-labs',
+        modelLabel: 'Pika 2.2',
+        modelSlug: 'pika-2-2',
+        createTool: true,
+        createModel: true,
+      },
+    ]);
+  });
+
+  it('supports keyboard selection and Escape in the Made With combobox', async () => {
+    render(<NewPostClient />);
+
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+    fireEvent.focus(toolPicker);
+    await screen.findByRole('option', { name: 'Higgsfield' });
+    fireEvent.keyDown(toolPicker, { key: 'ArrowDown' });
+    fireEvent.keyDown(toolPicker, { key: 'ArrowDown' });
+    fireEvent.keyDown(toolPicker, { key: 'Enter' });
+
+    expect(toolPicker).toHaveValue('Higgsfield');
+
+    fireEvent.focus(toolPicker);
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    fireEvent.keyDown(toolPicker, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('shows source catalog validation errors inside the Made With section', async () => {
+    enqueueResponse({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: 'You reached the source tool creation limit of 10 per 24 hours.',
+        field: 'sourceTools',
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+    fireEvent.change(toolPicker, { target: { value: 'Pika Labs' } });
+    fireEvent.click(await screen.findByRole('option', { name: /create “pika labs”/i }));
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/creation limit/i);
+    expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'post');
   });
 
   it('serializes selected Made With tools with display labels and model labels', async () => {
@@ -164,13 +265,12 @@ describe('NewPostClient', () => {
 
     const { container } = render(<NewPostClient />);
 
-    await screen.findByRole('option', { name: 'Higgsfield' });
-    fireEvent.change(screen.getByLabelText('Tool 1'), {
-      target: { value: 'higgsfield' },
-    });
-    fireEvent.change(screen.getByLabelText(/model for/i), {
-      target: { value: 'soul' },
-    });
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+    fireEvent.focus(toolPicker);
+    fireEvent.click(await screen.findByRole('option', { name: 'Higgsfield' }));
+    const modelPicker = screen.getByRole('combobox', { name: /model for higgsfield/i });
+    fireEvent.focus(modelPicker);
+    fireEvent.click(await screen.findByRole('option', { name: 'Soul' }));
 
     const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
     fireEvent.change(fileInput!, {
@@ -197,10 +297,11 @@ describe('NewPostClient', () => {
     ]);
   });
 
-  it('allows a custom Made With tool when the catalog is not enough', async () => {
+  it('keeps existing custom Made With metadata local unless Create is selected', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
+        success: true,
         postId: 'post-custom-tool-1',
         showcasePath: '/showcase/post-custom-tool-1',
         resourceBundlePath: null,
@@ -209,39 +310,51 @@ describe('NewPostClient', () => {
       }),
     });
 
-    const { container } = render(<NewPostClient />);
+    render(<NewPostClient initialPost={{
+      id: 'post-custom-tool-1',
+      generationId: null,
+      title: 'Custom metadata',
+      description: '',
+      prompt: '',
+      body: '',
+      visibility: 'private',
+      category: 'image',
+      postFormat: 'media',
+      sourceKind: 'external',
+      sourceTool: 'Pika Labs',
+      sourceToolSlug: 'pika-labs',
+      sourceTools: [{
+        toolLabel: 'Pika Labs',
+        toolSlug: 'pika-labs',
+        modelLabel: 'Pika 2.2',
+        modelSlug: 'pika-2-2',
+      }],
+      mediaUrl: '/proof.png',
+      mediaKind: 'image',
+      archivedAt: null,
+      resourceBundle: { accessMode: 'none' },
+      hasPaidOrders: false,
+    }} />);
 
-    fireEvent.change(screen.getByLabelText('Tool 1'), {
-      target: { value: '__custom__' },
-    });
-    fireEvent.change(await screen.findByLabelText(/custom tool 1/i), {
-      target: { value: 'Pika Labs' },
-    });
-    fireEvent.change(screen.getByLabelText(/custom model for/i), {
-      target: { value: 'Pika 2.2' },
-    });
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+    fireEvent.change(toolPicker, { target: { value: 'Pika Studio' } });
+    fireEvent.blur(toolPicker);
 
-    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
-    fireEvent.change(fileInput!, {
-      target: {
-        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
-      },
-    });
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    const request = fetchMock.mock.calls[1][1] as { body: FormData };
-    const sourceTools = JSON.parse(String(request.body.get('sourceTools')));
+    const request = fetchMock.mock.calls[1][1] as { body: string };
+    const sourceTools = JSON.parse(request.body).sourceTools;
 
     expect(sourceTools).toEqual([
       {
-        toolLabel: 'Pika Labs',
-        toolSlug: 'pika-labs',
+        toolLabel: 'Pika Studio',
+        toolSlug: 'pika-studio',
         modelLabel: 'Pika 2.2',
-        modelSlug: null,
+        modelSlug: 'pika-2-2',
       },
     ]);
   });

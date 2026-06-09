@@ -12,7 +12,7 @@ import {
   createPostWithResourceBundleAtomically,
   getMarketplaceQualityErrorForPostBundle,
 } from '@/lib/post-resource-bundles-server';
-import { insertPostSourceTools } from '@/lib/post-source-tools-server';
+import { insertPostSourceTools, PostSourceToolsWriteError } from '@/lib/post-source-tools-server';
 import {
   isPostResourceBundleAccessMode,
   normalizePostResourceAttachments,
@@ -22,7 +22,11 @@ import {
 } from '@/lib/post-resource-bundles';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
-import { normalizeSourceToolInputWithCatalog, normalizeSourceToolSelectionsWithCatalog } from '@/lib/source-tools';
+import {
+  normalizeSourceToolInputWithCatalog,
+  normalizeSourceToolSelectionsWithCatalog,
+  validateSourceToolSelections,
+} from '@/lib/source-tools';
 import {
   isShowcaseItemCategory,
   type ShowcaseItemCategory,
@@ -349,7 +353,15 @@ export async function POST(request: NextRequest) {
           toolSlug: normalizedSourceTool.slug,
       }]
       : [];
-    const sourceTools = normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, parsedSourceTools ?? fallbackSourceTools);
+    const sourceToolsInput = parsedSourceTools ?? fallbackSourceTools;
+    const sourceToolsValidationError = validateSourceToolSelections(sourceToolsInput);
+    if (sourceToolsValidationError) {
+      return NextResponse.json({
+        error: sourceToolsValidationError,
+        field: 'sourceTools',
+      }, { status: 400 });
+    }
+    const sourceTools = normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, sourceToolsInput);
     const sourceKind = postFormat === 'text' ? 'manual' : 'external';
     const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(formData.get('resourceBundle'), user.id);
 
@@ -500,6 +512,12 @@ export async function POST(request: NextRequest) {
       await insertPostSourceTools({
         supabase: adminSupabase,
         postId: post.postId,
+        ownerUserId: user.id,
+        mediaKind: mediaMimeType.startsWith('image/')
+          ? 'image'
+          : mediaMimeType.startsWith('video/')
+            ? 'video'
+            : null,
         sourceTools,
       });
     } catch (sourceToolsError) {
@@ -512,7 +530,12 @@ export async function POST(request: NextRequest) {
       if (cleanupPost.error) {
         console.warn('Failed to remove post after source tool metadata failure:', cleanupPost.error);
       }
-      return NextResponse.json({ error: 'Failed to save source tool metadata.' }, { status: 500 });
+      const isValidationError = sourceToolsError instanceof PostSourceToolsWriteError
+        && sourceToolsError.isValidationError;
+      return NextResponse.json({
+        error: isValidationError ? sourceToolsError.message : 'Failed to save source tool metadata.',
+        field: isValidationError ? 'sourceTools' : undefined,
+      }, { status: isValidationError ? 400 : 500 });
     }
 
     return NextResponse.json({

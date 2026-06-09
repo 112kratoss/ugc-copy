@@ -15,11 +15,14 @@ export interface SourceToolSelection {
   toolSlug: string | null;
   modelLabel?: string | null;
   modelSlug?: string | null;
+  createTool?: boolean;
+  createModel?: boolean;
 }
 
 const MAX_SOURCE_TOOL_SELECTIONS = 5;
 const MAX_SOURCE_TOOL_LABEL_LENGTH = 80;
 const MAX_SOURCE_MODEL_LABEL_LENGTH = 80;
+const RESERVED_SOURCE_CATALOG_SLUGS = new Set(['all', 'custom', 'unknown']);
 
 const APP_SOURCE_TOOL: SourceToolOption = {
   slug: 'magicbooklet',
@@ -314,6 +317,8 @@ export function normalizeSourceToolSelectionsWithCatalog(
         toolSlug: normalizedTool.slug,
         modelLabel: normalizedModel.label,
         modelSlug: normalizedModel.slug,
+        createTool: row.createTool === true,
+        createModel: row.createModel === true,
       };
     })
     .filter((entry): entry is SourceToolSelection => entry !== null);
@@ -321,6 +326,62 @@ export function normalizeSourceToolSelectionsWithCatalog(
 
 export function normalizeSourceToolSelections(value: unknown): SourceToolSelection[] {
   return normalizeSourceToolSelectionsWithCatalog(FALLBACK_SOURCE_TOOLS, value);
+}
+
+export function validateSourceToolSelections(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return 'Source tool metadata must be an array.';
+  }
+
+  if (value.length > MAX_SOURCE_TOOL_SELECTIONS) {
+    return `A post can include at most ${MAX_SOURCE_TOOL_SELECTIONS} source tools.`;
+  }
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') {
+      return 'Source tool metadata is invalid.';
+    }
+
+    const row = entry as Record<string, unknown>;
+    const toolLabel = typeof row.toolLabel === 'string' ? row.toolLabel.trim() : '';
+    const modelLabel = typeof row.modelLabel === 'string' ? row.modelLabel.trim() : '';
+
+    if (!toolLabel) {
+      return 'Source tool names cannot be empty.';
+    }
+    if (toolLabel.length > MAX_SOURCE_TOOL_LABEL_LENGTH) {
+      return `Source tool names must be ${MAX_SOURCE_TOOL_LABEL_LENGTH} characters or fewer.`;
+    }
+    if (modelLabel.length > MAX_SOURCE_MODEL_LABEL_LENGTH) {
+      return `Source model names must be ${MAX_SOURCE_MODEL_LABEL_LENGTH} characters or fewer.`;
+    }
+
+    const toolSlug = slugifySourceTool(
+      typeof row.toolSlug === 'string' && row.toolSlug.trim() ? row.toolSlug : toolLabel
+    );
+    if (!toolSlug) {
+      return 'Source tool names must include letters or numbers.';
+    }
+    if (RESERVED_SOURCE_CATALOG_SLUGS.has(toolSlug)) {
+      return `The source tool name "${toolLabel}" is reserved.`;
+    }
+
+    if (modelLabel) {
+      const modelSlug = slugifySourceTool(
+        typeof row.modelSlug === 'string' && row.modelSlug.trim() ? row.modelSlug : modelLabel
+      );
+      if (!modelSlug) {
+        return 'Source model names must include letters or numbers.';
+      }
+      if (RESERVED_SOURCE_CATALOG_SLUGS.has(modelSlug)) {
+        return `The source model name "${modelLabel}" is reserved.`;
+      }
+    } else if (row.createModel === true) {
+      return 'Choose a source model name before creating it.';
+    }
+  }
+
+  return null;
 }
 
 export function formatSourceToolWithModel(params: {

@@ -40,7 +40,9 @@ let inputMediaState: Array<{
   sort_order: number;
   metadata: Record<string, unknown> | null;
 }> = [];
-const syncGenerationStatusesMock = vi.fn(async (_params?: { generationIds: string[] }) => undefined);
+const syncGenerationStatusesMock = vi.fn(async (params?: { generationIds: string[] }) => {
+  void params;
+});
 
 function createSupabaseClientMock() {
   return {
@@ -318,7 +320,8 @@ describe('/api/generations route', () => {
     expect(data.generations[0].paywallPrefill).toMatchObject({
       promptText: 'A creator-style product image with warm natural light.',
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix'],
+      resourceKinds: ['prompt', 'notes', 'remix', 'files'],
+      referenceCount: 1,
     });
     expect(String(data.generations[0].paywallPrefill.notesMarkdown)).toContain('Model: Nano Banana 2.0');
   });
@@ -515,7 +518,8 @@ describe('/api/generations route', () => {
     expect(data.generations[0].workflow_settings).toBeUndefined();
     expect(data.generations[0].paywallPrefill).toMatchObject({
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix'],
+      resourceKinds: ['prompt', 'notes', 'remix', 'files'],
+      referenceCount: 1,
     });
   });
 });

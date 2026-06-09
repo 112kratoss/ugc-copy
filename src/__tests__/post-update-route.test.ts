@@ -4,10 +4,8 @@ import type { NextRequest } from 'next/server';
 const getMarketplaceQualityErrorForPostBundleMock = vi.hoisted(() => vi.fn());
 const updatePostWithResourceBundleAtomicallyMock = vi.hoisted(() => vi.fn());
 const sourceToolTableCalls = vi.hoisted(() => ({
-  deletes: [] as string[],
-  inserts: [] as Array<Record<string, unknown>>,
-  deleteError: null as { message?: string } | null,
-  insertError: null as { message?: string } | null,
+  rpcCalls: [] as Array<Record<string, unknown>>,
+  rpcError: null as { message?: string } | null,
 }));
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -107,25 +105,14 @@ vi.mock('@/lib/server-helpers', () => ({
         return query;
       }
 
-      if (table === 'post_source_tools') {
-        const query = {
-          delete() {
-            return query;
-          },
-          eq(_column: string, value: string) {
-            sourceToolTableCalls.deletes.push(value);
-            return Promise.resolve({ error: sourceToolTableCalls.deleteError });
-          },
-          insert(payload: Array<Record<string, unknown>>) {
-            sourceToolTableCalls.inserts.push(...payload);
-            return Promise.resolve({ error: sourceToolTableCalls.insertError });
-          },
-        };
-
-        return query;
-      }
-
       throw new Error(`Unexpected table access: ${table}`);
+    },
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name !== 'save_post_source_tools_with_catalog') {
+        throw new Error(`Unexpected rpc call: ${name}`);
+      }
+      sourceToolTableCalls.rpcCalls.push(args);
+      return Promise.resolve({ data: null, error: sourceToolTableCalls.rpcError });
     },
   }),
 }));
@@ -173,10 +160,8 @@ describe('/api/posts/[postId] route', () => {
       bundleId: 'bundle-1',
       bundleStatus: patch.visibility === 'public' ? 'published' : 'draft',
     }));
-    sourceToolTableCalls.deletes.length = 0;
-    sourceToolTableCalls.inserts.length = 0;
-    sourceToolTableCalls.deleteError = null;
-    sourceToolTableCalls.insertError = null;
+    sourceToolTableCalls.rpcCalls.length = 0;
+    sourceToolTableCalls.rpcError = null;
   });
 
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
@@ -323,11 +308,11 @@ describe('/api/posts/[postId] route', () => {
     expect(response.status).toBe(400);
     expect(data.error).toMatch(/generation-backed posts/i);
     expect(updatePostWithResourceBundleAtomicallyMock).not.toHaveBeenCalled();
-    expect(sourceToolTableCalls.inserts).toHaveLength(0);
+    expect(sourceToolTableCalls.rpcCalls).toHaveLength(0);
   });
 
   it('returns an error when replacing source tools fails', async () => {
-    sourceToolTableCalls.insertError = { message: 'source tools insert failed' };
+    sourceToolTableCalls.rpcError = { message: 'source tools insert failed' };
 
     const { PUT } = await import('@/app/api/posts/[postId]/route');
     const response = await PUT(new Request('http://localhost/api/posts/post-1', {

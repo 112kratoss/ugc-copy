@@ -37,13 +37,13 @@ import {
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
 
 type PostVisibility = 'public' | 'unlisted' | 'private';
 type ProofMode = 'media' | 'text';
 type PostFormat = 'text' | 'media' | 'mixed';
 type PostMediaCategory = Exclude<ShowcaseItemCategory, 'text'>;
-const CUSTOM_SOURCE_TOOL_VALUE = '__custom__';
 
 interface MadeWithRow {
   id: string;
@@ -51,6 +51,8 @@ interface MadeWithRow {
   toolSlug: string;
   modelLabel: string;
   modelSlug: string;
+  createTool: boolean;
+  createModel: boolean;
 }
 
 interface CreatedPostState {
@@ -66,6 +68,23 @@ interface CreatedPostState {
 interface ComposerError {
   section: 'post' | 'story' | 'resources' | 'publish';
   message: string;
+}
+
+class ComposerSubmissionError extends Error {
+  readonly section: ComposerError['section'];
+
+  constructor(message: string, section: ComposerError['section']) {
+    super(message);
+    this.name = 'ComposerSubmissionError';
+    this.section = section;
+  }
+}
+
+function getSubmissionError(data: { error?: string; field?: string }, fallback: string) {
+  return new ComposerSubmissionError(
+    data.error || fallback,
+    data.field === 'sourceTools' ? 'post' : 'publish'
+  );
 }
 
 interface AttachmentRow {
@@ -742,6 +761,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         toolSlug: st.toolSlug ?? '',
         modelLabel: st.modelLabel ?? '',
         modelSlug: st.modelSlug ?? '',
+        createTool: st.createTool === true,
+        createModel: st.createModel === true,
       }));
     }
     if (initialPost?.sourceTool) {
@@ -751,12 +772,30 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         toolSlug: initialPost.sourceToolSlug ?? '',
         modelLabel: '',
         modelSlug: '',
+        createTool: false,
+        createModel: false,
       }];
     }
     if (initialPost?.generationId || generationId) {
-      return [{ id: 'mw-0', toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: '', modelSlug: '' }];
+      return [{
+        id: 'mw-0',
+        toolLabel: 'magicbooklet',
+        toolSlug: 'magicbooklet',
+        modelLabel: '',
+        modelSlug: '',
+        createTool: false,
+        createModel: false,
+      }];
     }
-    return [{ id: 'mw-0', toolLabel: '', toolSlug: '', modelLabel: '', modelSlug: '' }];
+    return [{
+      id: 'mw-0',
+      toolLabel: '',
+      toolSlug: '',
+      modelLabel: '',
+      modelSlug: '',
+      createTool: false,
+      createModel: false,
+    }];
   });
   const [sourceToolsData, setSourceToolsData] = useState<SourceToolOption[]>([]);
   const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
@@ -1150,6 +1189,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         toolSlug: 'magicbooklet',
         modelLabel: prefilledGeneration.model || '',
         modelSlug: prefilledGeneration.model || '',
+        createTool: false,
+        createModel: false,
       }]);
     }
   }, [prefilledGeneration, madeWithRows]);
@@ -1164,7 +1205,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     return madeWithRows
       .filter((row) => row.toolLabel.trim())
       .map((row) => {
-        const requestedSlug = row.toolSlug === CUSTOM_SOURCE_TOOL_VALUE ? null : slugifySourceTool(row.toolSlug);
+        const requestedSlug = slugifySourceTool(row.toolSlug);
         const selectedTool = sourceToolsData.find(
           (tool) =>
             (requestedSlug && tool.slug === requestedSlug) ||
@@ -1181,7 +1222,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           toolLabel: selectedTool?.label ?? row.toolLabel.trim(),
           toolSlug: selectedTool?.slug ?? requestedSlug ?? slugifySourceTool(row.toolLabel),
           modelLabel: selectedModel?.label ?? (row.modelLabel.trim() || null),
-          modelSlug: selectedModel?.slug ?? slugifySourceTool(row.modelSlug),
+          modelSlug: selectedModel?.slug ?? slugifySourceTool(row.modelSlug || row.modelLabel),
+          ...(row.createTool ? { createTool: true } : {}),
+          ...(row.createModel ? { createModel: true } : {}),
         };
       });
   }, [madeWithRows, sourceToolsData]);
@@ -1194,49 +1237,23 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     return { label: first.toolLabel, slug: first.toolSlug };
   }, [sourceToolsForSubmit]);
 
-  const updateMadeWithRow = (id: string, field: keyof MadeWithRow, value: string) => {
-    setMadeWithRows((current) =>
-      current.map((row) => {
-        if (row.id !== id) return row;
-        if (field === 'toolLabel' || field === 'toolSlug') {
-          if (value === CUSTOM_SOURCE_TOOL_VALUE) {
-            return {
-              ...row,
-              toolLabel: '',
-              toolSlug: CUSTOM_SOURCE_TOOL_VALUE,
-              modelLabel: '',
-              modelSlug: '',
-            };
-          }
-          const toolOption = sourceToolsData.find(
-            (t) => t.slug === value || t.label === value
-          );
-          if (toolOption) {
-            return {
-              ...row,
-              toolLabel: toolOption.label,
-              toolSlug: toolOption.slug,
-              modelLabel: '',
-              modelSlug: '',
-            };
-          }
-          return {
-            ...row,
-            toolLabel: value,
-            toolSlug: slugifySourceTool(value) ?? '',
-            ...(field === 'toolLabel' ? { modelLabel: '', modelSlug: '' } : {}),
-          };
-        }
-        return { ...row, [field]: value };
-      })
-    );
+  const updateMadeWithRow = (id: string, patch: Partial<MadeWithRow>) => {
+    setMadeWithRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
     resetFeedback();
   };
 
   const addMadeWithRow = () => {
     setMadeWithRows((current) => [
       ...current,
-      { id: `mw-${Date.now()}`, toolLabel: '', toolSlug: '', modelLabel: '', modelSlug: '' },
+      {
+        id: `mw-${Date.now()}`,
+        toolLabel: '',
+        toolSlug: '',
+        modelLabel: '',
+        modelSlug: '',
+        createTool: false,
+        createModel: false,
+      },
     ]);
     resetFeedback();
   };
@@ -1244,7 +1261,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const removeMadeWithRow = (id: string) => {
     setMadeWithRows((current) => {
       const next = current.filter((row) => row.id !== id);
-      return next.length > 0 ? next : [{ id: 'mw-0', toolLabel: '', toolSlug: '', modelLabel: '', modelSlug: '' }];
+      return next.length > 0 ? next : [{
+        id: 'mw-0',
+        toolLabel: '',
+        toolSlug: '',
+        modelLabel: '',
+        modelSlug: '',
+        createTool: false,
+        createModel: false,
+      }];
     });
     resetFeedback();
   };
@@ -1688,7 +1713,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         const data = await response.json();
 
         if (!response.ok || !data.success) {
-          throw new Error(data.error || 'Failed to publish post.');
+          throw getSubmissionError(data, 'Failed to publish post.');
         }
 
         completePublish({
@@ -1726,7 +1751,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
         const data = await response.json();
         if (!response.ok || !data.success) {
-          throw new Error(data.error || 'Failed to save post.');
+          throw getSubmissionError(data, 'Failed to save post.');
         }
 
         completePublish({
@@ -1781,7 +1806,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to publish post.');
+        throw getSubmissionError(data, 'Failed to publish post.');
       }
 
       completePublish({
@@ -1797,7 +1822,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       }, { redirect: true });
     } catch (submitError) {
       setError({
-        section: 'publish',
+        section: submitError instanceof ComposerSubmissionError ? submitError.section : 'publish',
         message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
       });
     } finally {
@@ -1944,89 +1969,126 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         const selectedTool = sourceToolsData.find((t) =>
                           row.toolSlug ? t.slug === row.toolSlug : t.label === row.toolLabel
                         );
-                        const isCustomTool = row.toolSlug === CUSTOM_SOURCE_TOOL_VALUE || Boolean(row.toolLabel && !selectedTool);
-                        const modelOptions = selectedTool?.models ?? [];
+                        const provisionalToolRows = madeWithRows.filter((candidate) => candidate.createTool);
+                        const toolOptions: CreatableComboboxOption[] = [
+                          ...sourceToolsData.map((tool) => ({
+                            value: tool.slug,
+                            label: tool.label,
+                          })),
+                          ...provisionalToolRows
+                            .filter((candidate, candidateIndex, candidates) => (
+                              candidates.findIndex((item) => item.toolSlug === candidate.toolSlug) === candidateIndex
+                              && !sourceToolsData.some((tool) => tool.slug === candidate.toolSlug)
+                            ))
+                            .map((candidate) => ({
+                              value: candidate.toolSlug,
+                              label: candidate.toolLabel,
+                              provisional: true,
+                            })),
+                        ];
+                        const catalogModels = selectedTool?.models ?? [];
+                        const provisionalModelRows = madeWithRows.filter((candidate) => (
+                          candidate.toolSlug === row.toolSlug
+                          && candidate.createModel
+                          && candidate.modelLabel
+                        ));
+                        const modelOptions: CreatableComboboxOption[] = [
+                          ...catalogModels.map((model) => ({
+                            value: model.slug,
+                            label: model.label,
+                          })),
+                          ...provisionalModelRows
+                            .filter((candidate, candidateIndex, candidates) => (
+                              candidates.findIndex((item) => item.modelSlug === candidate.modelSlug) === candidateIndex
+                              && !catalogModels.some((model) => model.slug === candidate.modelSlug)
+                            ))
+                            .map((candidate) => ({
+                              value: candidate.modelSlug,
+                              label: candidate.modelLabel,
+                              provisional: true,
+                            })),
+                        ];
+                        const toolIsCatalogEntry = Boolean(selectedTool);
+                        const modelIsCatalogEntry = Boolean(catalogModels.some((model) => model.slug === row.modelSlug));
 
                         return (
                           <div key={row.id} className="flex flex-wrap items-center gap-2">
-                            <select
-                              aria-label={`Tool ${index + 1}`}
-                              value={isCustomTool ? CUSTOM_SOURCE_TOOL_VALUE : row.toolSlug || row.toolLabel}
-                              onChange={(event) => {
-                                updateMadeWithRow(row.id, 'toolLabel', event.target.value);
-                              }}
+                            <CreatableCombobox
+                              ariaLabel={`Tool ${index + 1}`}
+                              value={row.toolLabel}
+                              options={toolOptions}
+                              placeholder="Choose or search tool"
                               disabled={hasGeneratedProof}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-70 min-w-0 flex-1"
-                            >
-                              <option value="" className="bg-zinc-950 text-white">Choose tool...</option>
-                              {sourceToolsData.map((tool) => (
-                                <option key={tool.slug} value={tool.slug} className="bg-zinc-950 text-white">
-                                  {tool.label}
-                                </option>
-                              ))}
-                              <option value={CUSTOM_SOURCE_TOOL_VALUE} className="bg-zinc-950 text-white">
-                                Custom tool
-                              </option>
-                            </select>
-                            {isCustomTool && !hasGeneratedProof ? (
-                              <input
-                                aria-label={`Custom tool ${index + 1}`}
-                                value={row.toolLabel}
-                                onChange={(event) => {
-                                  setMadeWithRows((current) =>
-                                    current.map((r) =>
-                                      r.id === row.id
-                                        ? { ...r, toolLabel: event.target.value, toolSlug: CUSTOM_SOURCE_TOOL_VALUE }
-                                        : r
-                                    )
-                                  );
-                                  resetFeedback();
-                                }}
-                                placeholder="Tool name"
-                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] min-w-0 flex-1"
-                              />
-                            ) : null}
-                            {modelOptions.length > 0 ? (
-                              <select
-                                aria-label={`Model for ${row.toolLabel || `tool ${index + 1}`}`}
-                                value={row.modelSlug || row.modelLabel}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  const model = modelOptions.find((m) => m.slug === value || m.label === value);
-                                  setMadeWithRows((current) =>
-                                    current.map((r) =>
-                                      r.id === row.id
-                                        ? { ...r, modelLabel: model?.label ?? value, modelSlug: model?.slug ?? '' }
-                                        : r
-                                    )
-                                  );
-                                  resetFeedback();
-                                }}
-                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] min-w-0 flex-1"
-                              >
-                                <option value="" className="bg-zinc-950 text-white">Any model</option>
-                                {modelOptions.map((model) => (
-                                  <option key={model.slug} value={model.slug} className="bg-zinc-950 text-white">
-                                    {model.label}
-                                  </option>
-                                ))}
-                                {row.modelLabel && !modelOptions.some((m) => m.slug === row.modelSlug || m.label === row.modelLabel) ? (
-                                  <option value={row.modelLabel} className="bg-zinc-950 text-white">
-                                    {row.modelLabel} (custom)
-                                  </option>
-                                ) : null}
-                              </select>
-                            ) : (
-                              <input
-                                aria-label={`Custom model for ${row.toolLabel || `tool ${index + 1}`}`}
-                                value={row.modelLabel}
-                                onChange={(event) => {
-                                  updateMadeWithRow(row.id, 'modelLabel', event.target.value);
-                                }}
-                                placeholder="Custom model"
-                                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05] min-w-0 flex-1"
-                              />
-                            )}
+                              allowCustomEdit={!toolIsCatalogEntry && !row.createTool}
+                              onSelect={(option) => {
+                                if (!option) {
+                                  updateMadeWithRow(row.id, {
+                                    toolLabel: '',
+                                    toolSlug: '',
+                                    modelLabel: '',
+                                    modelSlug: '',
+                                    createTool: false,
+                                    createModel: false,
+                                  });
+                                  return;
+                                }
+                                updateMadeWithRow(row.id, {
+                                  toolLabel: option.label,
+                                  toolSlug: option.value,
+                                  modelLabel: '',
+                                  modelSlug: '',
+                                  createTool: option.provisional === true,
+                                  createModel: false,
+                                });
+                              }}
+                              onCreate={(label) => {
+                                updateMadeWithRow(row.id, {
+                                  toolLabel: label,
+                                  toolSlug: slugifySourceTool(label) ?? '',
+                                  modelLabel: '',
+                                  modelSlug: '',
+                                  createTool: true,
+                                  createModel: false,
+                                });
+                              }}
+                              onCustomEdit={(label) => {
+                                updateMadeWithRow(row.id, {
+                                  toolLabel: label,
+                                  toolSlug: slugifySourceTool(label) ?? '',
+                                  createTool: false,
+                                });
+                              }}
+                            />
+                            <CreatableCombobox
+                              ariaLabel={`Model for ${row.toolLabel || `tool ${index + 1}`}`}
+                              value={row.modelLabel}
+                              options={modelOptions}
+                              placeholder="Any model"
+                              emptyOptionLabel="Any model"
+                              disabled={hasGeneratedProof || !row.toolLabel}
+                              allowCustomEdit={Boolean(row.modelLabel && !modelIsCatalogEntry && !row.createModel)}
+                              onSelect={(option) => {
+                                updateMadeWithRow(row.id, {
+                                  modelLabel: option?.label ?? '',
+                                  modelSlug: option?.value ?? '',
+                                  createModel: option?.provisional === true,
+                                });
+                              }}
+                              onCreate={(label) => {
+                                updateMadeWithRow(row.id, {
+                                  modelLabel: label,
+                                  modelSlug: slugifySourceTool(label) ?? '',
+                                  createModel: true,
+                                });
+                              }}
+                              onCustomEdit={(label) => {
+                                updateMadeWithRow(row.id, {
+                                  modelLabel: label,
+                                  modelSlug: slugifySourceTool(label) ?? '',
+                                  createModel: false,
+                                });
+                              }}
+                            />
                             {!hasGeneratedProof && madeWithRows.length > 1 ? (
                               <button
                                 type="button"
@@ -2040,7 +2102,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           </div>
                         );
                       })}
-                      {!hasGeneratedProof ? (
+                      {!hasGeneratedProof && madeWithRows.length < 5 ? (
                         <button
                           type="button"
                           onClick={addMadeWithRow}

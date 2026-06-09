@@ -386,7 +386,7 @@ describe('post resource bundle server access', () => {
       note: 1,
     });
     expect(detail?.resources?.items?.find((item) => item.type === 'reference_image')).toMatchObject({
-      title: 'Image input',
+      title: '@alisa',
       storagePath: 'generation_inputs/owner-1/gen-1/legacy-reference.png',
       remixUse: 'reference_only',
     });

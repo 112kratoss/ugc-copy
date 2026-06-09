@@ -21,7 +21,7 @@ const resourceItemsMigrationPath = path.resolve(
 );
 const resourceSectionsMigrationPath = path.resolve(
   process.cwd(),
-  'supabase/migrations/20260529141721_post_resource_sections.sql'
+  'supabase/migrations/20260529144943_post_resource_sections.sql'
 );
 
 describe('post system marketplace reliability migration', () => {

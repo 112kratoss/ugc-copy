@@ -5,54 +5,54 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SourceToolSelection } from '@/lib/source-tools';
 
 export class PostSourceToolsWriteError extends Error {
-  constructor(message = 'Failed to save source tool metadata.') {
+  readonly isValidationError: boolean;
+
+  constructor(message = 'Failed to save source tool metadata.', isValidationError = false) {
     super(message);
     this.name = 'PostSourceToolsWriteError';
+    this.isValidationError = isValidationError;
   }
 }
 
-function buildSourceToolRows(postId: string, sourceTools: SourceToolSelection[]) {
-  return sourceTools.map((sourceTool, index) => ({
-    post_id: postId,
-    tool_label: sourceTool.toolLabel,
-    tool_slug: sourceTool.toolSlug,
-    model_label: sourceTool.modelLabel ?? null,
-    model_slug: sourceTool.modelSlug ?? null,
-    sort_order: index,
-  }));
+function isCatalogValidationError(message: string) {
+  return /must be 80 characters|is reserved|creation limit|requires image or video media|create the source tool before creating a model/i.test(message);
+}
+
+async function savePostSourceTools(params: {
+  supabase: SupabaseClient;
+  postId: string;
+  ownerUserId: string;
+  mediaKind: 'image' | 'video' | null;
+  sourceTools: SourceToolSelection[];
+}) {
+  const { error } = await params.supabase.rpc('save_post_source_tools_with_catalog', {
+    p_post_id: params.postId,
+    p_owner_user_id: params.ownerUserId,
+    p_media_kind: params.mediaKind,
+    p_source_tools: params.sourceTools,
+  });
+
+  if (error) {
+    throw new PostSourceToolsWriteError(error.message, isCatalogValidationError(error.message));
+  }
 }
 
 export async function insertPostSourceTools(params: {
   supabase: SupabaseClient;
   postId: string;
+  ownerUserId: string;
+  mediaKind: 'image' | 'video' | null;
   sourceTools: SourceToolSelection[];
 }) {
-  if (params.sourceTools.length === 0) {
-    return;
-  }
-
-  const { error } = await params.supabase
-    .from('post_source_tools')
-    .insert(buildSourceToolRows(params.postId, params.sourceTools));
-
-  if (error) {
-    throw new PostSourceToolsWriteError(error.message);
-  }
+  await savePostSourceTools(params);
 }
 
 export async function replacePostSourceTools(params: {
   supabase: SupabaseClient;
   postId: string;
+  ownerUserId: string;
+  mediaKind: 'image' | 'video' | null;
   sourceTools: SourceToolSelection[];
 }) {
-  const { error: deleteError } = await params.supabase
-    .from('post_source_tools')
-    .delete()
-    .eq('post_id', params.postId);
-
-  if (deleteError) {
-    throw new PostSourceToolsWriteError(deleteError.message);
-  }
-
-  await insertPostSourceTools(params);
+  await savePostSourceTools(params);
 }
