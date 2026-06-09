@@ -3095,7 +3095,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <div className="mt-5">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <button
-                        type="button"
+                        type="submit"
                         disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
                         onClick={() => submitWithVisibility('private')}
                         className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 text-left transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-70"
@@ -3104,7 +3104,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <p className="mt-1.5 text-xs leading-5 text-zinc-500">Saved privately in Studio.</p>
                       </button>
                       <button
-                        type="button"
+                        type="submit"
                         disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
                         onClick={() => submitWithVisibility('public')}
                         className="rounded-2xl bg-sky-300 px-5 py-5 text-left transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
