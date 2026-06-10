@@ -48,6 +48,36 @@ describe('mobile api client caching', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it('requests fresh signed generation media URLs that native media components can load', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      generations: [
+        {
+          id: 'gen-1',
+          output_url: 'https://storage.magicbooklet.test/generated_images/user-1/gen-1.jpg?token=signed',
+          output_urls: [
+            'https://storage.magicbooklet.test/generated_images/user-1/gen-1.jpg?token=signed',
+          ],
+        },
+      ],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.listGenerations(true);
+
+    const [url] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generations?includeArchived=true');
+    expect(response.generations[0].output_url).toBe(
+      'https://storage.magicbooklet.test/generated_images/user-1/gen-1.jpg?token=signed'
+    );
+    expect(response.generations[0].output_urls).toEqual([
+      'https://storage.magicbooklet.test/generated_images/user-1/gen-1.jpg?token=signed',
+    ]);
+  });
+
   it('posts FormData without forcing a JSON content type', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
       success: true,

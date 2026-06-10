@@ -41,24 +41,27 @@ import { useAuth } from '@/lib/auth';
 import {
   buildViewerItems,
   loadImmersiveSourceData,
+  normalizeParam,
   normalizeViewerSource,
+  readCachedImmersiveSourceData,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { getImmersiveInitialIndex, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import type { ShowcaseMediaItem } from '@/lib/types';
 
 export default function MediaFeedScreen() {
   const { user, isLoading: authLoading, api } = useAuth();
-  const params = useLocalSearchParams<{ source?: string; initialId?: string }>();
+  const params = useLocalSearchParams<{ source?: string | string[]; initialId?: string | string[] }>();
   const source = normalizeViewerSource(params.source);
-  const initialId = params.initialId;
+  const initialId = normalizeParam(params.initialId);
   const queryClient = useQueryClient();
 
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
+  const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
 
   const [activeVerticalIndex, setActiveVerticalIndex] = useState(0);
   const [selectedItemForActions, setSelectedItemForActions] = useState<ImmersivePreviewItem | null>(null);
@@ -76,9 +79,11 @@ export default function MediaFeedScreen() {
   const creatorAvatar = profileQuery.data?.avatarUrl ?? null;
 
   const sourceDataQuery = useQuery({
-    queryKey: ['media-feed-data', source, user?.id, initialId],
+    queryKey: ['media-feed-data', source, user?.id ?? 'guest', initialId],
     enabled: Boolean(user && source),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId: initialId ?? '' }),
+    initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId }),
+    staleTime: 1000 * 45,
   });
 
   const items = useMemo(() => {
@@ -86,18 +91,15 @@ export default function MediaFeedScreen() {
     return buildViewerItems(source, sourceDataQuery.data, { creatorLabel, creatorAvatar });
   }, [source, sourceDataQuery.data, creatorLabel, creatorAvatar]);
 
-  const orderedItems = useMemo(() => {
-    if (!initialId || items.length === 0) return items;
-    const idx = items.findIndex((item) => item.id === initialId);
-    if (idx <= 0) return items;
-    return [...items.slice(idx), ...items.slice(0, idx)];
-  }, [items, initialId]);
+  const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
 
   useEffect(() => {
-    if (orderedItems.length > 0) {
-      setActiveVerticalIndex(0);
-    }
-  }, [orderedItems.length, initialId, source]);
+    if (!items.length) return;
+    setActiveVerticalIndex(initialIndex);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
+    });
+  }, [initialIndex, items.length, source]);
 
   const title = useMemo(() => {
     if (source === 'profile-saved') return 'Saved';
@@ -161,16 +163,23 @@ export default function MediaFeedScreen() {
       </View>
 
       {/* Feed List */}
-      {orderedItems.length === 0 ? (
+      {items.length === 0 ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 16 }}>No items found in this section.</Text>
         </View>
       ) : (
         <FlatList
-          data={orderedItems}
+          ref={listRef}
+          data={items}
           keyExtractor={(item) => item.id}
           viewabilityConfig={viewabilityConfig.current}
           onViewableItemsChanged={onViewableItemsChanged.current}
+          onScrollToIndexFailed={({ averageItemLength, index }) => {
+            const offset = Math.max(0, averageItemLength * index);
+            requestAnimationFrame(() => {
+              listRef.current?.scrollToOffset({ offset, animated: false });
+            });
+          }}
           showsVerticalScrollIndicator={false}
           renderItem={({ item, index }) => (
             <MediaFeedCard
@@ -1264,7 +1273,7 @@ async function invalidateMediaFeedCaches(queryClient: QueryClient, userId: strin
     queryClient.invalidateQueries({ queryKey: ['media-feed-data'] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
     queryClient.invalidateQueries({ queryKey: ['post-new-generations', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['profile-saved-showcase', userId] }),
+    queryClient.invalidateQueries({ queryKey: ['profile-saved-media', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
   ]);

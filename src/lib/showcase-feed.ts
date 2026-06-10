@@ -283,7 +283,7 @@ function buildAvailableTools(items: ShowcaseFeedItem[]) {
   }));
 }
 
-async function resolvePostRowsToFeedItems(
+export async function resolvePostRowsToFeedItems(
   rows: PostRow[],
   adminSupabase: ReturnType<typeof createServiceClient>
 ): Promise<ShowcaseFeedItem[]> {

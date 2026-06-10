@@ -85,9 +85,9 @@ export function ProfileDashboard() {
   });
 
   const savedQuery = useQuery({
-    queryKey: ['profile-saved-showcase', user?.id],
+    queryKey: ['profile-saved-media', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.getShowcaseFeed({ limit: 24, sort: 'recent' }, { auth: true }),
+    queryFn: () => api.getSavedMedia({ limit: 24 }),
   });
 
   const savedCards = useMemo(
@@ -162,7 +162,7 @@ export function ProfileDashboard() {
     <ProfileShell topInset={topInset} contentBottomPadding={tabBarMetrics.contentBottomPadding} horizontalPadding={horizontalPadding}>
       <ProfileTitle />
 
-      {profileQuery.error ? (
+      {profileQuery.error && !profile ? (
         <StatusBlock tone="danger" title="Could not load profile" body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again.'} />
       ) : null}
 

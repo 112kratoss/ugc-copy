@@ -40,6 +40,7 @@ export interface ImmersivePreviewApi {
     params?: Record<string, QueryValue>,
     options?: { auth?: boolean }
   ) => Promise<ShowcaseFeedResponse>;
+  getSavedMedia: (params?: Record<string, QueryValue>) => Promise<ShowcaseFeedResponse>;
   getShowcasePost: (postId: string) => Promise<ShowcasePostResponse>;
   listGenerations: (includeCompleted?: boolean) => Promise<{ generations: GenerationListItem[] }>;
   listOwnerPosts: (params?: Record<string, QueryValue>) => Promise<OwnerPostsResponse>;
@@ -91,10 +92,22 @@ export async function loadImmersiveSourceData({
     return { ownerPosts: response.posts };
   }
 
-  const response = await api.getShowcaseFeed({ limit: 48, sort: 'recent' }, { auth: source === 'profile-saved' });
-  let showcaseItems = source === 'profile-saved'
-    ? response.items.filter((item) => item.isSaved || item.id === initialId)
-    : response.items;
+  if (source === 'profile-saved') {
+    const response = await api.getSavedMedia({ limit: 48 });
+    let showcaseItems = response.items;
+
+    if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
+      const detail = await api.getShowcasePost(initialId).catch(() => null);
+      if (detail?.item) {
+        showcaseItems = [detail.item, ...showcaseItems];
+      }
+    }
+
+    return { showcaseItems };
+  }
+
+  const response = await api.getShowcaseFeed({ limit: 48, sort: 'recent' });
+  let showcaseItems = response.items;
 
   if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
     const detail = await api.getShowcasePost(initialId).catch(() => null);
@@ -133,9 +146,17 @@ export function readCachedProfile(queryClient: QueryClient, userId: string | und
 
 function cachedShowcaseItems(queryClient: QueryClient, source: PreviewViewerSource, userId: string | undefined): ImmersiveSourceData | undefined {
   const items: ShowcaseFeedItem[] = [];
-  const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-showcase', userId]);
-  if (saved?.items.length) {
-    items.push(...saved.items);
+
+  if (source === 'profile-saved') {
+    const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
+    if (saved?.items.length) {
+      items.push(...saved.items);
+    }
+  } else {
+    const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
+    if (saved?.items.length) {
+      items.push(...saved.items);
+    }
   }
 
   const feedQueries = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: ['showcase-feed'] });

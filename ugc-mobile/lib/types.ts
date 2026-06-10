@@ -212,6 +212,7 @@ export interface ShowcaseFeedItem {
   generationId: string | null;
   asset: ShowcaseAssetSummary | null;
   canRemix: boolean;
+  savedAt?: string;
 }
 
 export interface ShowcaseFeedResponse {

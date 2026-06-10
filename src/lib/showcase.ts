@@ -93,6 +93,7 @@ export interface ShowcaseFeedItem {
     canRemix: boolean;
     remixCapability?: PostRemixCapability;
     remixTarget?: PostRemixTarget;
+    savedAt?: string;
 }
 
 interface ShowcaseFeedPageInfo {

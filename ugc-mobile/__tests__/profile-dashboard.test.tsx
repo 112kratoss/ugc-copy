@@ -93,8 +93,19 @@ const authState = vi.hoisted(() => ({
     getProfile: vi.fn(),
     listGenerations: vi.fn(),
     listOwnerPosts: vi.fn(),
+    getSavedMedia: vi.fn(),
     getShowcaseFeed: vi.fn(),
   },
+}));
+
+const queryState = vi.hoisted(() => ({
+  profileData: { id: 'user-123', username: 'luna_dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' } as null | {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string;
+  },
+  profileError: null as Error | null,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -106,7 +117,8 @@ vi.mock('@tanstack/react-query', () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
     if (queryKey[0] === 'profile') {
       return {
-        data: { id: 'user-123', username: 'luna_dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' },
+        data: queryState.profileData,
+        error: queryState.profileError,
         isLoading: false,
       };
     }
@@ -139,7 +151,7 @@ vi.mock('@tanstack/react-query', () => ({
         isLoading: false,
       };
     }
-    if (queryKey[0] === 'profile-saved-showcase') {
+    if (queryKey[0] === 'profile-saved-media') {
       return {
         data: {
           items: [
@@ -178,6 +190,8 @@ function findPressableByText(root: renderer.ReactTestInstance, text: string) {
 describe('ProfileDashboard media tiles routing', () => {
   beforeEach(() => {
     routerState.push.mockClear();
+    queryState.profileData = { id: 'user-123', username: 'luna_dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' };
+    queryState.profileError = null;
   });
 
   it('routes to /viewer with correct source and initialId for Saved tiles', () => {
@@ -262,5 +276,29 @@ describe('ProfileDashboard media tiles routing', () => {
         initialId: 'post-1',
       },
     });
+  });
+
+  it('does not show the profile error banner when cached profile data is available', () => {
+    queryState.profileError = new Error('Unauthorized');
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    expect(tree!.root.findAllByProps({ children: 'Could not load profile' })).toHaveLength(0);
+    expect(tree!.root.findByProps({ children: 'Luna Dreams' })).toBeTruthy();
+  });
+
+  it('shows the profile error banner when no profile data is available', () => {
+    queryState.profileData = null;
+    queryState.profileError = new Error('Unauthorized');
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    expect(tree!.root.findByProps({ children: 'Could not load profile' })).toBeTruthy();
   });
 });

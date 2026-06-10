@@ -214,6 +214,8 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
         cacheTtlMs: CONTENT_CACHE_TTL_MS,
         ...options,
       }),
+    getSavedMedia: (params?: Record<string, QueryValue>) =>
+      request<ShowcaseFeedResponse>(`/api/showcase/saved-media${buildQuery(params)}`),
     getShowcasePost: async (postId: string) => {
       try {
         return await request<ShowcasePostResponse>(`/api/showcase/posts/${postId}`);

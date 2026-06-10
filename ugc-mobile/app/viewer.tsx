@@ -96,7 +96,7 @@ export default function ImmersivePreviewViewerScreen() {
       await Haptics.selectionAsync();
       await queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
       await queryClient.invalidateQueries({ queryKey: ['showcase-post', postId] });
-      await queryClient.invalidateQueries({ queryKey: ['profile-saved-showcase', user?.id] });
+      await queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
     },
   });
 
