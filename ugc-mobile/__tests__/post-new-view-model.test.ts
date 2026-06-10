@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-
 import {
   buildCreatePostFormData,
   buildPostResourceBundleInput,
   buildPublishGenerationPayload,
   buildPublishGenerationPostPayload,
+  buildUpdatePostPayload,
   getDefaultPostComposerDraft,
   getPublishableGenerations,
   getPublishGenerationSubtitle,
@@ -171,6 +171,124 @@ describe('post new view model', () => {
           allowRemix: false,
         },
       },
+    });
+  });
+
+  describe('edit payload builder', () => {
+    it('preserves existing post fields when generation-backed', () => {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        title: 'New Title',
+        caption: 'New Caption',
+        visibility: 'private' as const,
+        resource: {
+          ...getDefaultPostComposerDraft().resource,
+          accessMode: 'free' as const,
+          promptText: 'New Prompt',
+          previewText: 'New Preview',
+        },
+      };
+
+      const payload = buildUpdatePostPayload(true, draft);
+      expect(payload).toEqual({
+        visibility: 'private',
+        resourceBundle: {
+          accessMode: 'free',
+          summary: 'Prompt',
+          previewText: 'New Preview',
+          priceUsdCents: 0,
+          resources: {
+            promptText: 'New Prompt',
+            notesMarkdown: null,
+            workflowShareUrl: null,
+            attachments: [],
+            allowRemix: false,
+          },
+        },
+      });
+    });
+
+    it('submits text post edits without duplicating the caption into the body', () => {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        title: 'New Title',
+        caption: 'New Caption',
+        contentText: 'New Content',
+        visibility: 'private' as const,
+        category: 'video' as const,
+        sourceTool: 'Manual',
+        sourceToolSlug: 'manual',
+        resource: {
+          ...getDefaultPostComposerDraft().resource,
+          accessMode: 'free' as const,
+          promptText: 'New Prompt',
+          previewText: 'New Preview',
+        },
+      };
+
+      const payload = buildUpdatePostPayload(false, draft);
+      expect(payload).toEqual({
+        title: 'New Title',
+        description: 'New Caption',
+        body: 'New Content',
+        visibility: 'private',
+        category: 'video',
+        sourceTool: 'Manual',
+        sourceToolSlug: 'manual',
+        resourceBundle: {
+          accessMode: 'free',
+          summary: 'Prompt',
+          previewText: 'New Preview',
+          priceUsdCents: 0,
+          resources: {
+            promptText: 'New Prompt',
+            notesMarkdown: null,
+            workflowShareUrl: null,
+            attachments: [],
+            allowRemix: false,
+          },
+        },
+      });
+    });
+
+    it('submits uploaded media edits with the caption as the post body', () => {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        mode: 'upload' as const,
+        title: 'Media Title',
+        caption: 'Media Caption',
+        contentText: 'Ignored media notes',
+        visibility: 'unlisted' as const,
+        category: 'image' as const,
+        upload: {
+          uri: 'file:///tmp/image.jpg',
+          name: 'image.jpg',
+          type: 'image/jpeg',
+        },
+      };
+
+      const payload = buildUpdatePostPayload(false, draft);
+      expect(payload).toMatchObject({
+        title: 'Media Title',
+        description: 'Media Caption',
+        body: 'Media Caption',
+        visibility: 'unlisted',
+        category: 'image',
+      });
+    });
+  });
+
+  describe('publishable generation selection', () => {
+    it('only allows publishable generations', () => {
+      const items = [
+        generation({ id: 'succeeded-unposted', status: 'succeeded', output_url: 'https://example.com', linked_post_id: null }),
+        generation({ id: 'succeeded-posted', status: 'succeeded', output_url: 'https://example.com', linked_post_id: 'post-1' }),
+        generation({ id: 'failed-unposted', status: 'failed', output_url: 'https://example.com', linked_post_id: null }),
+        generation({ id: 'no-output', status: 'succeeded', output_url: null, output_urls: [], linked_post_id: null }),
+      ];
+
+      const publishable = getPublishableGenerations(items);
+      expect(publishable.map((p) => p.id)).toEqual(['succeeded-unposted']);
     });
   });
 });

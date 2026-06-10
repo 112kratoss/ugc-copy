@@ -632,17 +632,36 @@ function ProfileMediaTile({
       : fallbackAvatarInitials;
   const countLabel = item.countLabel ?? '0';
   const isFallbackPreview = item.id.startsWith('preview-');
+  const isSavedTile = item.label === 'Saved';
+  const accessibilityLabel = isSavedTile
+    ? `${item.label}, ${item.title}, ${countLabel} likes`
+    : `${item.label}, ${item.title}`;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${item.label}, ${item.title}, ${countLabel} likes`}
+      accessibilityLabel={accessibilityLabel}
       onPress={() => {
         if (isFallbackPreview) {
           router.push(item.href as never);
           return;
         }
-        router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
+        if (isSavedTile) {
+          router.push(
+            immersiveViewerHref({
+              source: 'profile-saved',
+              initialId: item.sourceId,
+            }) as never
+          );
+          return;
+        }
+        router.push({
+          pathname: '/media-feed',
+          params: {
+            source: item.viewerSource,
+            initialId: item.sourceId,
+          },
+        } as never);
       }}
       style={({ pressed }) => ({
         width,
@@ -671,15 +690,145 @@ function ProfileMediaTile({
             <Play size={15} color="#ffffff" fill="#ffffff" strokeWidth={2.4} />
           </View>
         ) : null}
-        <GalleryAvatar uri={avatarUrl} initials={avatarInitials} />
-        <View style={{ position: 'absolute', right: 8, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-          <Heart size={16} color="#ff4d2d" fill="#ff4d2d" strokeWidth={2.2} />
-          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+        {isSavedTile ? (
+          <ProfileSavedFeedOverlay
+            item={item}
+            avatarUrl={avatarUrl}
+            avatarInitials={avatarInitials}
+            countLabel={countLabel}
+          />
+        ) : (
+          <ProfileWorkBadge item={item} />
+        )}
+      </View>
+    </Pressable>
+  );
+}
+
+function ProfileSavedFeedOverlay({
+  item,
+  avatarUrl,
+  avatarInitials,
+  countLabel,
+}: {
+  item: ProfileMediaCard;
+  avatarUrl: string | null;
+  avatarInitials: string;
+  countLabel: string;
+}) {
+  return (
+    <>
+      <View
+        style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          right: 8,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+          borderRadius: 14,
+          backgroundColor: 'rgba(3,4,13,0.66)',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.16)',
+          paddingHorizontal: 6,
+          paddingVertical: 5,
+        }}
+      >
+        <View
+          style={{
+            width: 21,
+            height: 21,
+            borderRadius: 10.5,
+            overflow: 'hidden',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#27272a',
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.24)',
+          }}
+        >
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+          ) : (
+            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '900' }}>{avatarInitials}</Text>
+          )}
+        </View>
+        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: '#ffffff', fontSize: 10, fontWeight: '900' }}>
+          {item.avatarLabel || item.meta}
+        </Text>
+      </View>
+
+      <View
+        style={{
+          position: 'absolute',
+          left: 8,
+          right: 8,
+          bottom: 8,
+          flexDirection: 'row',
+          alignItems: 'flex-end',
+          gap: 8,
+        }}
+      >
+        <Text
+          numberOfLines={2}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            color: '#ffffff',
+            fontSize: 12,
+            lineHeight: 15,
+            fontWeight: '900',
+          }}
+        >
+          {item.title}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 34, justifyContent: 'flex-end' }}>
+          <Heart size={15} color="#ff4d2d" fill="#ff4d2d" strokeWidth={2.2} />
+          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] }}>
             {countLabel}
           </Text>
         </View>
       </View>
-    </Pressable>
+    </>
+  );
+}
+
+function ProfileWorkBadge({ item }: { item: ProfileMediaCard }) {
+  const isCreation = item.label === 'Creation';
+  const tint = isCreation ? '#c084fc' : '#38bdf8';
+  const icon = isCreation
+    ? <Sparkles size={12} color={tint} />
+    : item.mediaKind === 'video'
+      ? <Play size={12} color={tint} fill={tint} />
+      : <ImageIcon size={12} color={tint} />;
+  const label = isCreation ? 'Creation' : item.badge ?? item.meta;
+
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        left: 8,
+        right: 8,
+        bottom: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        alignSelf: 'flex-start',
+        maxWidth: '86%',
+        borderRadius: 12,
+        backgroundColor: 'rgba(3,4,13,0.72)',
+        borderWidth: 1,
+        borderColor: isCreation ? 'rgba(192,132,252,0.30)' : 'rgba(56,189,248,0.28)',
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+      }}
+    >
+      {icon}
+      <Text numberOfLines={1} style={{ color: tint, fontSize: 11, fontWeight: '900' }}>
+        {label}
+      </Text>
+    </View>
   );
 }
 
@@ -722,33 +871,6 @@ function ProfileGalleryPreview({ item, height, videoActive }: { item: ProfileMed
   return (
     <View style={{ position: 'absolute', inset: 0 }}>
       <FantasyPortalArt variant={item.artVariant} muted />
-    </View>
-  );
-}
-
-function GalleryAvatar({ uri, initials }: { uri: string | null; initials: string }) {
-  return (
-    <View
-      style={{
-        position: 'absolute',
-        left: 8,
-        bottom: 8,
-        width: 25,
-        height: 25,
-        borderRadius: 12.5,
-        overflow: 'hidden',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#27272a',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.28)',
-      }}
-    >
-      {uri ? (
-        <Image source={{ uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-      ) : (
-        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900' }}>{initials}</Text>
-      )}
     </View>
   );
 }

@@ -255,7 +255,8 @@ describe('immersive preview view model', () => {
       recreateTool: 'motion',
       recreatePrompt: 'Animate the subject',
     });
-    expect(items[0].details).toBeUndefined();
+    expect(items[0].details).toBeDefined();
+    expect(items[0].details?.generationInfo).toBeDefined();
     expect(hasImmersiveDetailsPage(items[0])).toBe(false);
     expect(items[1]).toMatchObject({
       previewKind: 'text',
@@ -336,6 +337,62 @@ describe('immersive preview view model', () => {
         source: 'studio-creations',
         initialId: 'gen-1',
       },
+    });
+  });
+
+  describe('action builder available and disabled actions', () => {
+    it('returns correct actions for saved media', () => {
+      const [item] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({ id: 'saved-item' })]);
+      expect(item.availableActions).toEqual(['unsave', 'share', 'recreate', 'view-details', 'open-original']);
+      expect(item.disabledActions).toEqual({});
+    });
+
+    it('returns correct actions for unposted creation', () => {
+      const [item] = buildImmersiveGenerationItems('profile-creations', [
+        generation({ id: 'unposted-gen', linked_post_id: null, archived_at: null }),
+      ], { creatorLabel: '@batman' });
+      expect(item.availableActions).toEqual(['publish', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.disabledActions).toEqual({});
+    });
+
+    it('returns correct actions for linked creation', () => {
+      const [item] = buildImmersiveGenerationItems('profile-creations', [
+        generation({ id: 'linked-gen', linked_post_id: 'post-123', archived_at: null }),
+      ], { creatorLabel: '@batman' });
+      expect(item.availableActions).toEqual(['view-linked', 'edit-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.disabledActions).toEqual({});
+    });
+
+    it('returns correct actions for active owner post', () => {
+      const [item] = buildImmersiveOwnerPostItems('profile-posts', [
+        ownerPost({ id: 'active-post', archivedAt: null }),
+      ], { creatorLabel: '@batman' });
+      expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'share', 'download', 'view-details']);
+      expect(item.disabledActions).toEqual({});
+    });
+
+    it('returns correct actions for archived owner post', () => {
+      const [item] = buildImmersiveOwnerPostItems('profile-posts', [
+        ownerPost({ id: 'archived-post', archivedAt: '2026-06-10T00:00:00Z' }),
+      ], { creatorLabel: '@batman' });
+      expect(item.availableActions).toEqual(['restore', 'share', 'download', 'view-details']);
+      expect(item.disabledActions).toEqual({
+        'edit-post': 'This post is archived',
+        'change-visibility': 'This post is archived',
+      });
+    });
+
+    it('returns correct actions for archived creation', () => {
+      const [item] = buildImmersiveGenerationItems('profile-creations', [
+        generation({ id: 'archived-gen', archived_at: '2026-06-10T00:00:00Z' }),
+      ], { creatorLabel: '@batman' });
+      expect(item.availableActions).toEqual(['restore', 'view-details']);
+      expect(item.disabledActions).toEqual({
+        publish: 'This creation is archived',
+        recreate: 'This creation is archived',
+        archive: 'This creation is archived',
+        share: 'This creation is archived',
+      });
     });
   });
 });

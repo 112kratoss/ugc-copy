@@ -11,6 +11,7 @@ import type {
   MobilePushTokenRegistration,
   MobileCommerceSyncResponse,
   MotionGenerationRequest,
+  OwnerPostListItem,
   OwnerPostsResponse,
   ProfileResponse,
   PromptEnhancementRequest,
@@ -256,6 +257,14 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
     listPosts: (params?: Record<string, QueryValue>) => request(`/api/posts${buildQuery(params)}`),
     listOwnerPosts: (params?: Record<string, QueryValue>) =>
       request<OwnerPostsResponse>(`/api/posts${buildQuery({ ...params, scope: 'owner' })}`),
+    getOwnerPost: (postId: string) =>
+      request<{ success: boolean; post: OwnerPostListItem & { resourceBundleInput?: any } }>(`/api/posts/${postId}`),
+    updatePost: (postId: string, body: Record<string, unknown>) =>
+      request<{ success: boolean; postId: string; visibility: string }>(`/api/posts/${postId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    archivePost: (postId: string) =>
+      request<{ success: boolean; archived: boolean }>(`/api/posts/${postId}/archive`, { method: 'POST' }),
+    restorePost: (postId: string) =>
+      request<{ success: boolean; restored: boolean }>(`/api/posts/${postId}/restore`, { method: 'POST' }),
     listMarketplaceResources: (params?: Record<string, QueryValue>) =>
       request<MarketplaceResourceList>(`/api/marketplace/resources${buildQuery(params)}`, {}, {
         auth: false,

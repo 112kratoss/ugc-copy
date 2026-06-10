@@ -145,6 +145,28 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
   };
 }
 
+export function buildUpdatePostPayload(isGenerationBacked: boolean, draft: PostComposerDraft) {
+  if (isGenerationBacked) {
+    return {
+      visibility: draft.visibility,
+      resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' },
+    };
+  } else {
+    const body = draft.mode === 'text' ? draft.contentText.trim() : getCreatePostBody(draft);
+
+    return {
+      title: draft.title.trim(),
+      description: draft.caption.trim(),
+      body,
+      visibility: draft.visibility,
+      category: draft.category,
+      sourceTool: draft.sourceTool.trim(),
+      sourceToolSlug: draft.sourceToolSlug.trim(),
+      resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' },
+    };
+  }
+}
+
 export function validatePostComposerDraft(draft: PostComposerDraft): PostComposerValidationResult {
   if (!draft.title.trim()) {
     return { valid: false, message: 'Add a title before publishing.' };

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Redirect, router } from 'expo-router';
+import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { Check, FileText, ImageIcon, Lock, Play, Sparkles } from 'lucide-react-native';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -15,6 +15,7 @@ import { pickMedia } from '@/lib/media';
 import {
   buildCreatePostFormData,
   buildPublishGenerationPostPayload,
+  buildUpdatePostPayload,
   getDefaultPostComposerDraft,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
@@ -25,6 +26,8 @@ import {
   POST_COMPOSER_SOURCE_OPTIONS,
   POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
+  buildPostResourceBundleInput,
+  getCreatePostBody,
   type PostComposerCategory,
   type PostComposerDraft,
   type PostComposerMode,
@@ -34,9 +37,26 @@ import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
 import type { GenerationListItem, PostResourceBundleAccessMode } from '@/lib/types';
 
+const getDefaultResourceDraft = () => ({
+  accessMode: 'none' as const,
+  promptText: '',
+  notesMarkdown: '',
+  workflowShareUrl: '',
+  attachmentUrl: '',
+  attachmentLabel: '',
+  allowRemix: false,
+  summary: '',
+  previewText: '',
+  priceUsd: '9',
+});
+
 export default function NewPostScreen() {
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
+  const params = useLocalSearchParams<{ generationId?: string; postId?: string }>();
+  const generationId = params.generationId;
+  const postId = params.postId;
+
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -45,6 +65,7 @@ export default function NewPostScreen() {
   const [draft, setDraft] = useState<PostComposerDraft>(() => getDefaultPostComposerDraft());
   const [message, setMessage] = useState<{ tone: 'danger' | 'success'; title: string; body?: string } | null>(null);
   const [isPickingMedia, setIsPickingMedia] = useState(false);
+  const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
 
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id],
@@ -52,18 +73,96 @@ export default function NewPostScreen() {
     queryFn: () => api.listGenerations(true),
   });
 
+  const postQuery = useQuery({
+    queryKey: ['post-edit', postId],
+    enabled: Boolean(user && postId),
+    queryFn: () => api.getOwnerPost(postId!),
+  });
+
   const publishableGenerations = useMemo(
     () => getPublishableGenerations(generationsQuery.data?.generations),
     [generationsQuery.data?.generations]
   );
-  const selectedGeneration = publishableGenerations.find((item) => item.id === draft.selectedGenerationId) ?? null;
-  const canSubmit = !isPickingMedia;
+  const allGenerations = generationsQuery.data?.generations ?? [];
+  const selectedGeneration = allGenerations.find((item) => item.id === draft.selectedGenerationId) ?? null;
+  const isGenerationBacked = Boolean(postQuery.data?.post?.generationId) || draft.mode === 'creation';
+  const isEditMode = Boolean(postId);
+  const isFieldsLocked = isEditMode && isGenerationBacked;
+  const canSubmit = !isPickingMedia && (!isEditMode || !postQuery.isLoading);
+
+  // Prefill when generationId is provided and the creations list resolves
+  useEffect(() => {
+    if (generationId && publishableGenerations.length > 0) {
+      const found = publishableGenerations.find((g) => g.id === generationId);
+      if (found) {
+        setDraft((current) => {
+          if (current.selectedGenerationId === generationId) return current;
+          const category = found.category === 'video' || found.category === 'motion' || found.category === 'ugc-ad' ? found.category : 'image';
+          return {
+            ...current,
+            mode: 'creation',
+            selectedGenerationId: found.id,
+            title: current.title || found.title || found.prompt || 'Untitled creation',
+            contentText: '',
+            sourceTool: 'Magicbooklet',
+            sourceToolSlug: 'magicbooklet',
+            category,
+          };
+        });
+      }
+    }
+  }, [generationId, publishableGenerations]);
+
+  // Prefill when postId is provided and post detail resolves
+  useEffect(() => {
+    if (postId && postQuery.data?.post && !hasPrefilledEdit) {
+      const post = postQuery.data.post;
+      const resourceBundleInput = post.resourceBundleInput;
+      const mode = post.postFormat === 'text' ? 'text' : post.generationId ? 'creation' : 'upload';
+
+      setDraft({
+        mode,
+        title: post.title || '',
+        contentText: mode === 'text' ? post.body || '' : '',
+        caption: mode === 'text' ? post.description || '' : post.body || '',
+        sourceTool: post.sourceTool || 'Manual',
+        sourceToolSlug: post.sourceToolSlug || 'manual',
+        category: post.category || 'image',
+        visibility: (post.visibility as any) || 'public',
+        selectedGenerationId: post.generationId || null,
+        upload: post.mediaUrl ? {
+          uri: post.mediaUrl,
+          name: post.title || 'media',
+          type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
+        } : null,
+        resource: resourceBundleInput ? {
+          accessMode: resourceBundleInput.accessMode || 'none',
+          promptText: resourceBundleInput.resources?.promptText || '',
+          notesMarkdown: resourceBundleInput.resources?.notesMarkdown || '',
+          workflowShareUrl: resourceBundleInput.resources?.workflowShareUrl || '',
+          attachmentUrl: resourceBundleInput.resources?.attachments?.[0]?.url || resourceBundleInput.resources?.attachments?.[0]?.storagePath || '',
+          attachmentLabel: resourceBundleInput.resources?.attachments?.[0]?.label || '',
+          allowRemix: resourceBundleInput.resources?.allowRemix || false,
+          summary: resourceBundleInput.summary || '',
+          previewText: resourceBundleInput.previewText || '',
+          priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
+        } : getDefaultResourceDraft(),
+      });
+      setHasPrefilledEdit(true);
+    }
+  }, [postId, postQuery.data, hasPrefilledEdit]);
 
   const publishMutation = useMutation({
     mutationFn: async () => {
-      const validation = validateCurrentDraft(draft, selectedGeneration);
+      const validation = validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked);
       if (!validation.valid) {
         throw new Error(validation.message);
+      }
+
+      if (postId) {
+        const isGen = Boolean(postQuery.data?.post?.generationId);
+        const payload = buildUpdatePostPayload(isGen, draft);
+        return api.updatePost(postId, payload);
       }
 
       if (draft.mode === 'creation') {
@@ -74,16 +173,27 @@ export default function NewPostScreen() {
       return api.createPost(buildCreatePostFormData(draft));
     },
     onSuccess: (response) => {
-      setMessage({ tone: 'success', title: 'Posted', body: 'Your post is now live in your profile.' });
+      setMessage({
+        tone: 'success',
+        title: isEditMode ? 'Saved' : 'Posted',
+        body: isEditMode ? 'Your post has been updated.' : 'Your post is now live in your profile.',
+      });
       void invalidatePostCaches(queryClient, user?.id);
-      if (response.postId) {
-        router.replace(immersiveViewerHref({ source: 'profile-posts', initialId: response.postId }) as never);
+      const targetPostId = response.postId || postId;
+      if (targetPostId) {
+        router.replace({
+          pathname: '/media-feed',
+          params: {
+            source: 'profile-posts',
+            initialId: targetPostId,
+          },
+        } as never);
       }
     },
     onError: (error) => {
       setMessage({
         tone: 'danger',
-        title: 'Could not publish',
+        title: isEditMode ? 'Could not save' : 'Could not publish',
         body: error instanceof Error ? error.message : 'Try again.',
       });
     },
@@ -102,6 +212,7 @@ export default function NewPostScreen() {
   }
 
   const setMode = (mode: PostComposerMode) => {
+    if (isFieldsLocked) return;
     setMessage(null);
     setDraft((current) => ({
       ...current,
@@ -121,6 +232,7 @@ export default function NewPostScreen() {
   };
 
   const chooseMedia = async (kind: 'image' | 'video') => {
+    if (isFieldsLocked) return;
     setMessage(null);
     setIsPickingMedia(true);
     try {
@@ -144,6 +256,7 @@ export default function NewPostScreen() {
   };
 
   const chooseGeneration = (item: GenerationListItem) => {
+    if (isFieldsLocked) return;
     const category = generationToPostCategory(item);
     setMessage(null);
     setDraft((current) => ({
@@ -172,7 +285,11 @@ export default function NewPostScreen() {
           gap: 14,
         }}
       >
-        <PostIntro />
+        <PostIntro isEdit={isEditMode} isGenerationBacked={isGenerationBacked} />
+
+        {postQuery.isLoading && isEditMode ? (
+          <ActivityIndicator color="#d946ef" style={{ marginVertical: 20 }} />
+        ) : null}
 
         {message ? (
           <StatusBlock tone={message.tone} title={message.title} body={message.body} />
@@ -183,6 +300,7 @@ export default function NewPostScreen() {
             value={draft.title}
             onChangeText={(title) => updateDraft({ title })}
             placeholder="Name the idea, media, or resource"
+            editable={!isFieldsLocked}
           />
         </OrderedField>
 
@@ -194,6 +312,7 @@ export default function NewPostScreen() {
                 label={mode.label}
                 active={draft.mode === mode.id}
                 onPress={() => setMode(mode.id)}
+                disabled={isFieldsLocked}
               />
             ))}
           </SegmentedRow>
@@ -203,6 +322,7 @@ export default function NewPostScreen() {
               onChangeText={(contentText) => updateDraft({ contentText, category: 'text' })}
               placeholder="Write the reusable idea, prompt, teardown, or update..."
               multiline
+              editable={!isFieldsLocked}
             />
           ) : null}
           {draft.mode === 'upload' ? (
@@ -211,6 +331,7 @@ export default function NewPostScreen() {
               isPicking={isPickingMedia}
               onPickImage={() => chooseMedia('image')}
               onPickVideo={() => chooseMedia('video')}
+              disabled={isFieldsLocked}
             />
           ) : null}
           {draft.mode === 'creation' ? (
@@ -219,8 +340,10 @@ export default function NewPostScreen() {
               selectedId={draft.selectedGenerationId}
               loading={generationsQuery.isLoading}
               error={generationsQuery.error}
+              visibleItems={isFieldsLocked ? allGenerations : publishableGenerations}
               onSelect={chooseGeneration}
               onCreate={() => router.push('/(tabs)/creator' as never)}
+              disabled={isFieldsLocked}
             />
           ) : null}
         </OrderedField>
@@ -232,6 +355,7 @@ export default function NewPostScreen() {
             placeholder={draft.mode === 'text' ? 'Optional extra caption' : 'What should people know about this post?'}
             multiline
             minHeight={92}
+            editable={!isFieldsLocked}
           />
         </OrderedField>
 
@@ -244,6 +368,7 @@ export default function NewPostScreen() {
                   label={source.label}
                   active={draft.sourceToolSlug === source.slug}
                   onPress={() => updateDraft({ sourceTool: source.label, sourceToolSlug: source.slug })}
+                  disabled={isFieldsLocked}
                 />
               ))}
             </SegmentedRow>
@@ -256,6 +381,7 @@ export default function NewPostScreen() {
                   label={category.label}
                   active={draft.category === category.id}
                   onPress={() => updateDraft({ category: category.id })}
+                  disabled={isFieldsLocked}
                 />
               ))}
             </SegmentedRow>
@@ -289,7 +415,7 @@ export default function NewPostScreen() {
         <PreviewPanel draft={draft} selectedGeneration={selectedGeneration} />
 
         <PrimaryButton
-          label={publishMutation.isPending ? 'Publishing' : 'Post now'}
+          label={publishMutation.isPending ? (isEditMode ? 'Saving' : 'Publishing') : (isEditMode ? 'Save changes' : 'Post now')}
           loading={publishMutation.isPending}
           disabled={!canSubmit || publishMutation.isPending}
           onPress={() => {
@@ -303,12 +429,18 @@ export default function NewPostScreen() {
   );
 }
 
-function PostIntro() {
+function PostIntro({ isEdit, isGenerationBacked }: { isEdit: boolean; isGenerationBacked: boolean }) {
   return (
     <View style={{ gap: 7 }}>
-      <Text selectable style={{ color: '#fff', fontSize: 29, lineHeight: 34, fontWeight: '900' }}>Post</Text>
+      <Text selectable style={{ color: '#fff', fontSize: 29, lineHeight: 34, fontWeight: '900' }}>
+        {isEdit ? 'Edit Post' : 'Post'}
+      </Text>
       <Text selectable style={{ color: appTheme.colors.muted, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
-        Title, content, caption, source, category, unlockables, then publish.
+        {isEdit
+          ? isGenerationBacked
+            ? 'This post is backed by a creation. Title, category, source, and media cannot be changed.'
+            : 'Update your post details below.'
+          : 'Title, content, caption, source, category, unlockables, then publish.'}
       </Text>
     </View>
   );
@@ -357,12 +489,14 @@ function ComposerInput({
   placeholder,
   multiline,
   minHeight,
+  editable = true,
 }: {
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
   multiline?: boolean;
   minHeight?: number;
+  editable?: boolean;
 }) {
   return (
     <TextInput
@@ -372,14 +506,15 @@ function ComposerInput({
       placeholderTextColor="rgba(255,255,255,0.36)"
       multiline={multiline}
       textAlignVertical={multiline ? 'top' : 'center'}
+      editable={editable}
       style={{
         minHeight: multiline ? minHeight ?? 128 : 48,
         borderRadius: 16,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.10)',
-        backgroundColor: 'rgba(0,0,0,0.28)',
-        color: '#fff',
+        backgroundColor: editable ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.03)',
+        color: editable ? '#fff' : 'rgba(255,255,255,0.5)',
         fontSize: 15,
         lineHeight: 21,
         fontWeight: '700',
@@ -394,11 +529,12 @@ function SegmentedRow({ children, wrap }: { children: React.ReactNode; wrap?: bo
   return <View style={{ flexDirection: 'row', flexWrap: wrap ? 'wrap' : 'nowrap', gap: 8 }}>{children}</View>;
 }
 
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function Chip({ label, active, onPress, disabled = false }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ selected: active }}
+      accessibilityState={{ selected: active, disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         flex: 1,
@@ -407,9 +543,13 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: active ? 'rgba(217,70,239,0.72)' : 'rgba(255,255,255,0.11)',
-        backgroundColor: active ? 'rgba(217,70,239,0.28)' : 'rgba(255,255,255,0.07)',
-        opacity: pressed ? 0.75 : 1,
+        borderColor: active
+          ? disabled ? 'rgba(217,70,239,0.36)' : 'rgba(217,70,239,0.72)'
+          : 'rgba(255,255,255,0.11)',
+        backgroundColor: active
+          ? disabled ? 'rgba(217,70,239,0.14)' : 'rgba(217,70,239,0.28)'
+          : 'rgba(255,255,255,0.07)',
+        opacity: disabled ? 0.45 : pressed ? 0.75 : 1,
         paddingHorizontal: 10,
       })}
     >
@@ -420,11 +560,12 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
   );
 }
 
-function SmallChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function SmallChip({ label, active, onPress, disabled = false }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ selected: active }}
+      accessibilityState={{ selected: active, disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 32,
@@ -432,9 +573,13 @@ function SmallChip({ label, active, onPress }: { label: string; active: boolean;
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: active ? 'rgba(102,255,69,0.48)' : 'rgba(255,255,255,0.10)',
-        backgroundColor: active ? 'rgba(102,255,69,0.13)' : 'rgba(255,255,255,0.06)',
-        opacity: pressed ? 0.75 : 1,
+        borderColor: active
+          ? disabled ? 'rgba(102,255,69,0.24)' : 'rgba(102,255,69,0.48)'
+          : 'rgba(255,255,255,0.10)',
+        backgroundColor: active
+          ? disabled ? 'rgba(102,255,69,0.06)' : 'rgba(102,255,69,0.13)'
+          : 'rgba(255,255,255,0.06)',
+        opacity: disabled ? 0.45 : pressed ? 0.75 : 1,
         paddingHorizontal: 9,
       })}
     >
@@ -450,17 +595,40 @@ function UploadContent({
   isPicking,
   onPickImage,
   onPickVideo,
+  disabled = false,
 }: {
   draft: PostComposerDraft;
   isPicking: boolean;
   onPickImage: () => void;
   onPickVideo: () => void;
+  disabled?: boolean;
 }) {
+  if (disabled) {
+    return (
+      <View style={{ gap: 10 }}>
+        {draft.upload ? (
+          <View style={{ height: 190, borderRadius: 18, overflow: 'hidden', backgroundColor: '#080912', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', opacity: 0.8 }}>
+            {draft.upload.uri.startsWith('http') || draft.upload.type.startsWith('image/') ? (
+              <Image source={{ uri: draft.upload.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+            ) : (
+              <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <Play size={42} color="#fff" fill="#fff" />
+              </LinearGradient>
+            )}
+            <View style={{ position: 'absolute', left: 10, right: 10, bottom: 10, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.58)', padding: 10 }}>
+              <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>{draft.upload.name}</Text>
+            </View>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <View style={{ gap: 10 }}>
       {draft.upload ? (
         <View style={{ height: 190, borderRadius: 18, overflow: 'hidden', backgroundColor: '#080912', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }}>
-          {draft.upload.type.startsWith('image/') ? (
+          {draft.upload.uri.startsWith('http') || draft.upload.type.startsWith('image/') ? (
             <Image source={{ uri: draft.upload.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
             <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -485,22 +653,44 @@ function CreationContent({
   selectedId,
   loading,
   error,
+  visibleItems,
   onSelect,
   onCreate,
+  disabled = false,
 }: {
   items: GenerationListItem[];
   selectedId: string | null;
   loading: boolean;
   error: unknown;
+  visibleItems?: GenerationListItem[];
   onSelect: (item: GenerationListItem) => void;
   onCreate: () => void;
+  disabled?: boolean;
 }) {
+  const displayItems = visibleItems ?? items;
+
   if (loading) {
     return <ActivityIndicator color="#d946ef" />;
   }
 
   if (error) {
     return <StatusBlock tone="danger" title="Could not load creations" body={error instanceof Error ? error.message : 'Try again.'} />;
+  }
+
+  if (disabled) {
+    const selectedItem = displayItems.find((item) => item.id === selectedId);
+    if (!selectedItem) {
+      return (
+        <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19 }}>
+          No creation attached.
+        </Text>
+      );
+    }
+    return (
+      <View style={{ alignSelf: 'flex-start' }}>
+        <CreationCard item={selectedItem} selected={true} onPress={() => {}} disabled={true} />
+      </View>
+    );
   }
 
   if (items.length === 0) {
@@ -516,20 +706,21 @@ function CreationContent({
 
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-      {items.map((item) => (
+      {displayItems.map((item) => (
         <CreationCard key={item.id} item={item} selected={selectedId === item.id} onPress={() => onSelect(item)} />
       ))}
     </ScrollView>
   );
 }
 
-function CreationCard({ item, selected, onPress }: { item: GenerationListItem; selected: boolean; onPress: () => void }) {
+function CreationCard({ item, selected, onPress, disabled = false }: { item: GenerationListItem; selected: boolean; onPress: () => void; disabled?: boolean }) {
   const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
   const mediaKind = getPublishGenerationMediaKind(item);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         width: 150,
@@ -538,7 +729,7 @@ function CreationCard({ item, selected, onPress }: { item: GenerationListItem; s
         borderWidth: 1,
         borderColor: selected ? '#66ff45' : 'rgba(255,255,255,0.10)',
         backgroundColor: 'rgba(255,255,255,0.06)',
-        opacity: pressed ? 0.78 : 1,
+        opacity: disabled ? 0.8 : pressed ? 0.78 : 1,
       })}
     >
       <View style={{ height: 148, backgroundColor: '#080912' }}>
@@ -675,10 +866,10 @@ function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft;
   );
 }
 
-function validateCurrentDraft(draft: PostComposerDraft, selectedGeneration: GenerationListItem | null) {
+function validateCurrentDraft(draft: PostComposerDraft, selectedGeneration: GenerationListItem | null, skipGenerationSelection = false) {
   const result = validatePostComposerDraft(draft);
   if (!result.valid) return result;
-  if (draft.mode === 'creation' && !selectedGeneration) {
+  if (draft.mode === 'creation' && !selectedGeneration && !skipGenerationSelection) {
     return { valid: false, message: 'Choose a finished creation before publishing.' };
   }
   return result;

@@ -32,6 +32,10 @@ export interface GenerationListItem {
   prompt?: string | null;
   input_media?: Array<{ url?: string | null; kind?: string | null }>;
   linked_post_id?: string | null;
+  linked_post_title?: string | null;
+  linked_post_visibility?: string | null;
+  linked_post_archived_at?: string | null;
+  archived_at?: string | null;
 }
 
 export interface GenerationStartResponse {
@@ -328,6 +332,7 @@ export interface OwnerPostListItem {
   visibility: string;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
+  mediaItems?: ShowcaseMediaItem[];
   description?: string;
   prompt?: string;
   body?: string;
@@ -337,6 +342,10 @@ export interface OwnerPostListItem {
   publicPath?: string | null;
   ownerPath?: string;
   bundle: OwnerPostBundleSummary | null;
+  archivedAt?: string | null;
+  generationId?: string | null;
+  sourceTool?: string | null;
+  sourceToolSlug?: string | null;
 }
 
 export interface OwnerPostsResponse {

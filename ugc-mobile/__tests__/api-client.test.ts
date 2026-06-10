@@ -93,4 +93,82 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
+
+  it('requests owner post detail', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      post: { id: 'post-123', title: 'Post title' },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.getOwnerPost('post-123');
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-123');
+    expect(init.method ?? 'GET').toBe('GET');
+    expect(response.post.title).toBe('Post title');
+  });
+
+  it('sends PATCH request to update posts with JSON body', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      postId: 'post-123',
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.updatePost('post-123', { title: 'Updated title' });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-123');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(String(init.body))).toEqual({ title: 'Updated title' });
+  });
+
+  it('posts to archive post endpoint', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      archived: true,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.archivePost('post-123');
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-123/archive');
+    expect(init.method).toBe('POST');
+  });
+
+  it('posts to restore post endpoint', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      restored: true,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.restorePost('post-123');
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-123/restore');
+    expect(init.method).toBe('POST');
+  });
 });

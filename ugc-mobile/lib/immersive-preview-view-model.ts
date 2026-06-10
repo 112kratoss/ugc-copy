@@ -48,6 +48,13 @@ export interface ImmersivePostDetails {
   saveCount: number;
   remixCount: number;
   unlock: ImmersivePostUnlockDetails | null;
+  generationInfo?: {
+    model: string;
+    createdAt: string;
+    duration: number | null;
+    cost: number | null;
+    inputMedia: Array<{ url?: string | null; kind?: string | null }> | null;
+  } | null;
 }
 
 export interface ImmersivePreviewItem {
@@ -76,6 +83,13 @@ export interface ImmersivePreviewItem {
   ownerPostId: string | null;
   resource?: ImmersivePreviewResource;
   details?: ImmersivePostDetails;
+  linkedPostId?: string | null;
+  linkedPostTitle?: string | null;
+  linkedPostVisibility?: string | null;
+  archivedAt?: string | null;
+  visibility?: string | null;
+  availableActions: string[];
+  disabledActions: Record<string, string>;
 }
 
 export function immersiveViewerHref({
@@ -137,7 +151,7 @@ export function isImmersiveVideoItem(item: ImmersivePreviewItem) {
 }
 
 export function hasImmersiveDetailsPage(item: ImmersivePreviewItem) {
-  return Boolean(item.details);
+  return Boolean(item.details) && item.sourceType !== 'generation';
 }
 
 export function getImmersiveHorizontalPageIndex(detailsOpen: boolean) {
@@ -262,6 +276,13 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
         allowRemix: Boolean(item.asset.allowRemix),
       } : null,
     },
+    linkedPostId: null,
+    linkedPostTitle: null,
+    linkedPostVisibility: null,
+    archivedAt: null,
+    visibility: 'public',
+    availableActions: ['unsave', 'share', 'recreate', 'view-details', 'open-original'],
+    disabledActions: {},
   };
 }
 
@@ -299,6 +320,43 @@ function generationToImmersiveItem(
     showcasePostId: item.linked_post_id ?? null,
     generationId: item.id,
     ownerPostId: null,
+    details: {
+      title,
+      prompt: item.prompt?.trim() ?? '',
+      body: item.description?.trim() ?? '',
+      categoryLabel: kind === 'motion' ? 'Motion' : kind === 'video' ? 'Video' : kind === 'text' ? 'Text' : 'Image',
+      sourceLabel: 'Creations',
+      creatorLabel: owner.creatorLabel,
+      creatorAvatar: owner.creatorAvatar ?? null,
+      saveCount: 0,
+      remixCount: 0,
+      unlock: null,
+      generationInfo: {
+        model: item.model,
+        createdAt: item.created_at,
+        duration: item.duration ?? null,
+        cost: item.cost ?? null,
+        inputMedia: item.input_media ?? null,
+      },
+    },
+    linkedPostId: item.linked_post_id ?? null,
+    linkedPostTitle: item.linked_post_title ?? null,
+    linkedPostVisibility: item.linked_post_visibility ?? null,
+    archivedAt: item.archived_at ?? null,
+    visibility: null,
+    availableActions: item.archived_at
+      ? ['restore', 'view-details']
+      : item.linked_post_id
+        ? ['view-linked', 'edit-linked', 'recreate', 'archive', 'share', 'view-details']
+        : ['publish', 'recreate', 'archive', 'share', 'view-details'],
+    disabledActions: item.archived_at
+      ? {
+          publish: 'This creation is archived',
+          recreate: 'This creation is archived',
+          archive: 'This creation is archived',
+          share: 'This creation is archived',
+        }
+      : {},
   };
 }
 
@@ -358,6 +416,20 @@ function ownerPostToImmersiveItem(
         allowRemix: item.bundle.resourceKinds.includes('remix'),
       } : null,
     },
+    linkedPostId: null,
+    linkedPostTitle: null,
+    linkedPostVisibility: null,
+    archivedAt: item.archivedAt ?? null,
+    visibility: item.visibility,
+    availableActions: item.archivedAt
+      ? ['restore', 'share', 'download', 'view-details']
+      : ['edit-post', 'change-visibility', 'archive', 'share', 'download', 'view-details'],
+    disabledActions: item.archivedAt
+      ? {
+          'edit-post': 'This post is archived',
+          'change-visibility': 'This post is archived',
+        }
+      : {},
   };
 }
 

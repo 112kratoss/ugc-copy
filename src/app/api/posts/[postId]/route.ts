@@ -335,6 +335,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
 }
 
+export async function PATCH(request: NextRequest, context: RouteContext) {
+  return PUT(request, context);
+}
+
 export async function PUT(request: NextRequest, context: RouteContext) {
   const { postId } = await context.params;
   const supabase = createUserClient(request);
@@ -373,11 +377,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: resourceBundleError }, { status: 400 });
     }
 
-    const touchesPostFields = ['title', 'description', 'body', 'visibility', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools', 'mediaItems'].some((key) =>
+    const touchesGenerationLockedFields = ['title', 'description', 'body', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools', 'mediaItems'].some((key) =>
       Object.prototype.hasOwnProperty.call(body, key)
     );
 
-    if (post.generation_id && touchesPostFields) {
+    if (post.generation_id && touchesGenerationLockedFields) {
       return NextResponse.json(
         { error: 'Generation-backed posts should be updated through the generation publish flow.' },
         { status: 400 }
