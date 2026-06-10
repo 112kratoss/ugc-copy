@@ -5,9 +5,9 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Lock, Play, Repeat2, Share2 } from 'lucide-react-native';
+import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, Play, Repeat2, Share2 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Linking, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, FlatList, Linking, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
@@ -31,7 +31,7 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
-import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind } from '@/lib/types';
+import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseMediaItem } from '@/lib/types';
 
 type ViewerParams = {
   source?: string | string[];
@@ -51,6 +51,7 @@ export default function ImmersivePreviewViewerScreen() {
   const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [detailsOpenItemId, setDetailsOpenItemId] = useState<string | null>(null);
+  const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -189,6 +190,7 @@ export default function ImmersivePreviewViewerScreen() {
             height={height}
             item={item}
             onDetailsOpenChange={(open) => setDetailsOpenItemId(open ? item.id : null)}
+            onHorizontalScrollToggle={setIsHorizontalScrolling}
             onRecreate={recreateItem}
             onSave={saveItem}
             onShare={shareItem}
@@ -197,7 +199,7 @@ export default function ImmersivePreviewViewerScreen() {
             width={width}
           />
         )}
-        scrollEnabled={!detailsOpenItemId}
+        scrollEnabled={!detailsOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: '#000' }}
       />
@@ -245,6 +247,11 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
   );
 }
 
+type SlidePage = 
+  | { type: 'text' }
+  | { type: 'media'; mediaIndex: number; mediaItem: ShowcaseMediaItem }
+  | { type: 'details' };
+
 function ImmersiveSlide({
   active,
   activeVideoId,
@@ -259,6 +266,7 @@ function ImmersiveSlide({
   saveLoading,
   topInset,
   width,
+  onHorizontalScrollToggle,
 }: {
   active: boolean;
   activeVideoId: string | null;
@@ -273,181 +281,300 @@ function ImmersiveSlide({
   saveLoading: boolean;
   topInset: number;
   width: number;
+  onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
-  const horizontalRef = useRef<FlatList<'media' | 'details'>>(null);
-  const horizontalPageIndex = getImmersiveHorizontalPageIndex(detailsOpen);
+  const horizontalRef = useRef<FlatList<SlidePage>>(null);
+  const [currentHorizontalIndex, setCurrentHorizontalIndex] = useState(0);
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const prevActiveRef = useRef(active);
+
+  const pages = useMemo<SlidePage[]>(() => {
+    const list: SlidePage[] = [];
+    if (item.previewKind === 'text') {
+      list.push({ type: 'text' });
+    } else {
+      (item.mediaItems ?? []).forEach((mediaItem, index) => {
+        list.push({
+          type: 'media',
+          mediaIndex: index,
+          mediaItem,
+        });
+      });
+    }
+    if (hasImmersiveDetailsPage(item)) {
+      list.push({ type: 'details' });
+    }
+    return list;
+  }, [item]);
 
   useEffect(() => {
-    if (!active) return;
-    horizontalRef.current?.scrollToIndex({ index: horizontalPageIndex, animated: false });
-  }, [active, horizontalPageIndex]);
+    if (!active) {
+      prevActiveRef.current = active;
+      return;
+    }
+
+    const becameActive = !prevActiveRef.current;
+    prevActiveRef.current = active;
+
+    const onDetailsPage = currentHorizontalIndex === pages.length - 1;
+
+    if (becameActive) {
+      const targetIndex = detailsOpen ? pages.length - 1 : 0;
+      if (currentHorizontalIndex !== targetIndex) {
+        setCurrentHorizontalIndex(targetIndex);
+        horizontalRef.current?.scrollToIndex({ index: targetIndex, animated: false });
+      }
+    } else {
+      if (detailsOpen && !onDetailsPage) {
+        const targetIndex = pages.length - 1;
+        setCurrentHorizontalIndex(targetIndex);
+        horizontalRef.current?.scrollToIndex({ index: targetIndex, animated: false });
+      } else if (!detailsOpen && onDetailsPage) {
+        const targetIndex = 0;
+        setCurrentHorizontalIndex(targetIndex);
+        horizontalRef.current?.scrollToIndex({ index: targetIndex, animated: false });
+      }
+    }
+  }, [active, detailsOpen, pages.length]);
+
+  const mediaCount = item.mediaItems?.length ?? 0;
+  const visualPageCount = item.previewKind === 'text' ? 1 : Math.max(1, mediaCount);
+  const detailsStartOffset = width * (visualPageCount - 1);
+
+  // Opacity: 1 from 0 to detailsStartOffset, then fades to 0 at detailsStartOffset + width
+  const overlayOpacity = scrollX.interpolate({
+    inputRange: [detailsStartOffset, detailsStartOffset + width],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  // TranslateX: 0 from 0 to detailsStartOffset, then moves to -width
+  const overlayTranslateX = scrollX.interpolate({
+    inputRange: [detailsStartOffset, detailsStartOffset + width],
+    outputRange: [0, -width],
+    extrapolate: 'clamp',
+  });
+
+  const isTextPost = item.previewKind === 'text';
+
+  const renderOverlays = () => {
+    if (currentHorizontalIndex === pages.length - 1 && hasImmersiveDetailsPage(item)) {
+      return null;
+    }
+
+    return (
+      <Animated.View
+        pointerEvents="box-none"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          opacity: overlayOpacity,
+          transform: [{ translateX: overlayTranslateX }],
+        }}
+      >
+        <LinearGradient
+          pointerEvents="none"
+          colors={['rgba(0,0,0,0.36)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.82)']}
+          locations={[0, 0.48, 1]}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+
+        {/* Media count indicator */}
+        {!isTextPost && mediaCount > 1 ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              right: 18,
+              top: 68,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 5,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.14)',
+              backgroundColor: 'rgba(3,3,6,0.68)',
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+            }}
+          >
+            <Images size={14} color="#ffffff" />
+            <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
+              {Math.min(currentHorizontalIndex + 1, mediaCount)} / {mediaCount}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Right rail buttons */}
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: 'absolute',
+            right: 14,
+            bottom: bottomInset + 104,
+            alignItems: 'center',
+            gap: 17,
+          }}
+        >
+          <ViewerCreatorAvatar item={item} size={56} />
+          <RailActionButton
+            disabled={!item.canSave}
+            icon={<Heart size={27} color="#ffffff" fill={item.isSaved ? '#ffffff' : 'transparent'} strokeWidth={2.6} />}
+            label={item.isSaved ? 'Saved' : item.saveLabel}
+            loading={saveLoading}
+            onPress={() => onSave(item)}
+          />
+          <RailActionButton
+            icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
+            label="Share"
+            onPress={() => void onShare(item)}
+          />
+          <RailActionButton
+            primary
+            icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
+            label="Create"
+            onPress={() => void onRecreate(item)}
+          />
+        </View>
+
+        {/* Bottom text descriptions */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: 18,
+            right: 96,
+            bottom: bottomInset + 28,
+            gap: 8,
+          }}
+        >
+          <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
+            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
+              {item.badge}
+            </Text>
+          </View>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '900' }}>
+            {item.creatorLabel}
+          </Text>
+          <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '900' }}>
+            {item.title}
+          </Text>
+          <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
+            {item.displayText}
+          </Text>
+          {hasImmersiveDetailsPage(item) ? (
+            <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
+              {currentHorizontalIndex < mediaCount - 1
+                ? 'Swipe left for more media'
+                : 'Swipe left for details'}
+            </Text>
+          ) : null}
+        </View>
+      </Animated.View>
+    );
+  };
 
   if (!hasImmersiveDetailsPage(item)) {
     return (
-      <MediaSlidePage
-        active={active}
-        activeVideoId={activeVideoId}
-        bottomInset={bottomInset}
-        height={height}
-        item={item}
-        onRecreate={onRecreate}
-        onSave={onSave}
-        onShare={onShare}
-        saveLoading={saveLoading}
-        showDetailsHint={false}
-        width={width}
-      />
+      <View style={{ width, height }}>
+        <MediaSlidePage
+          active={active}
+          height={height}
+          item={item}
+          page={(pages[0] ?? { type: 'text' }) as Exclude<SlidePage, { type: 'details' }>}
+          width={width}
+        />
+        {renderOverlays()}
+      </View>
     );
   }
 
   return (
-    <FlatList
-      ref={horizontalRef}
-      data={['media', 'details'] as const}
-      decelerationRate="fast"
-      getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
-      horizontal
-      initialScrollIndex={0}
-      keyExtractor={(page) => page}
-      onMomentumScrollEnd={(event) => {
-        const page = Math.round(event.nativeEvent.contentOffset.x / width);
-        onDetailsOpenChange(isImmersiveDetailsHorizontalPage(page));
-      }}
-      onScrollToIndexFailed={({ index }) => {
-        requestAnimationFrame(() => {
-          horizontalRef.current?.scrollToOffset({ offset: width * index, animated: false });
-        });
-      }}
-      pagingEnabled
-      renderItem={({ item: page }) => page === 'media' ? (
-        <MediaSlidePage
-          active={active && !detailsOpen}
-          activeVideoId={activeVideoId}
-          bottomInset={bottomInset}
-          height={height}
-          item={item}
-          onRecreate={onRecreate}
-          onSave={onSave}
-          onShare={onShare}
-          saveLoading={saveLoading}
-          showDetailsHint
-          width={width}
-        />
-      ) : (
-        <PostDetailsPage
-          active={active && detailsOpen}
-          bottomInset={bottomInset}
-          height={height}
-          item={item}
-          onRecreate={onRecreate}
-          onSave={onSave}
-          onShare={onShare}
-          saveLoading={saveLoading}
-          topInset={topInset}
-          width={width}
-        />
-      )}
-      scrollEnabled={active}
-      showsHorizontalScrollIndicator={false}
-      style={{ width, height, backgroundColor: '#000' }}
-    />
+    <View style={{ width, height, backgroundColor: '#000' }}>
+      <Animated.FlatList
+        ref={horizontalRef}
+        data={pages}
+        decelerationRate="fast"
+        getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+        horizontal
+        initialScrollIndex={0}
+        keyExtractor={(page, index) => page.type === 'media' ? `media-${page.mediaItem.id}` : `${page.type}-${index}`}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+          { useNativeDriver: true }
+        )}
+        scrollEventThrottle={16}
+        onScrollBeginDrag={() => onHorizontalScrollToggle?.(true)}
+        onScrollEndDrag={() => onHorizontalScrollToggle?.(false)}
+        onMomentumScrollEnd={(event) => {
+          const page = Math.round(event.nativeEvent.contentOffset.x / width);
+          setCurrentHorizontalIndex(page);
+          const isDetailsPage = page === pages.length - 1 && hasImmersiveDetailsPage(item);
+          onDetailsOpenChange(isDetailsPage);
+          onHorizontalScrollToggle?.(false);
+        }}
+        onScrollToIndexFailed={({ index }) => {
+          requestAnimationFrame(() => {
+            horizontalRef.current?.scrollToOffset({ offset: width * index, animated: false });
+          });
+        }}
+        pagingEnabled
+        renderItem={({ item: page, index: pageIndex }) => page.type === 'details' ? (
+          <PostDetailsPage
+            active={active && detailsOpen}
+            bottomInset={bottomInset}
+            height={height}
+            item={item}
+            onRecreate={onRecreate}
+            onSave={onSave}
+            onShare={onShare}
+            saveLoading={saveLoading}
+            topInset={topInset}
+            width={width}
+          />
+        ) : (
+          <MediaSlidePage
+            active={active && currentHorizontalIndex === pageIndex}
+            height={height}
+            item={item}
+            page={page}
+            width={width}
+          />
+        )}
+        scrollEnabled={active}
+        showsHorizontalScrollIndicator={false}
+        style={{ width, height, backgroundColor: '#000' }}
+      />
+      {renderOverlays()}
+    </View>
   );
 }
 
 function MediaSlidePage({
   active,
-  activeVideoId,
-  bottomInset,
   height,
   item,
-  onRecreate,
-  onSave,
-  onShare,
-  saveLoading,
-  showDetailsHint,
+  page,
   width,
 }: {
   active: boolean;
-  activeVideoId: string | null;
-  bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
-  onRecreate: (item: ImmersivePreviewItem) => void;
-  onSave: (item: ImmersivePreviewItem) => void;
-  onShare: (item: ImmersivePreviewItem) => void;
-  saveLoading: boolean;
-  showDetailsHint: boolean;
+  page: Exclude<SlidePage, { type: 'details' }>;
   width: number;
 }) {
   return (
     <View style={{ width, height, backgroundColor: '#000' }}>
-      <ImmersiveMedia item={item} active={active && activeVideoId === item.id} width={width} height={height} />
-      <LinearGradient
-        pointerEvents="none"
-        colors={['rgba(0,0,0,0.36)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.82)']}
-        locations={[0, 0.48, 1]}
-        style={{ position: 'absolute', inset: 0 }}
-      />
-      <View
-        pointerEvents="box-none"
-        style={{
-          position: 'absolute',
-          right: 14,
-          bottom: bottomInset + 104,
-          alignItems: 'center',
-          gap: 17,
-        }}
-      >
-        <ViewerCreatorAvatar item={item} size={56} />
-        <RailActionButton
-          disabled={!item.canSave}
-          icon={<Heart size={27} color="#ffffff" fill={item.isSaved ? '#ffffff' : 'transparent'} strokeWidth={2.6} />}
-          label={item.isSaved ? 'Saved' : item.saveLabel}
-          loading={saveLoading}
-          onPress={() => onSave(item)}
+      {page.type === 'text' ? (
+        <TextSlide item={item} width={width} height={height} />
+      ) : (
+        <ImmersiveMedia
+          mediaItem={page.mediaItem}
+          active={active}
+          width={width}
+          height={height}
         />
-        <RailActionButton
-          icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
-          label="Share"
-          onPress={() => void onShare(item)}
-        />
-        <RailActionButton
-          primary
-          icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
-          label="Create"
-          onPress={() => void onRecreate(item)}
-        />
-      </View>
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          left: 18,
-          right: 96,
-          bottom: bottomInset + 28,
-          gap: 8,
-        }}
-      >
-        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
-            {item.badge}
-          </Text>
-        </View>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '900' }}>
-          {item.creatorLabel}
-        </Text>
-        <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '900' }}>
-          {item.title}
-        </Text>
-        <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
-          {item.displayText}
-        </Text>
-        {showDetailsHint ? (
-          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
-            Swipe left for details
-          </Text>
-        ) : null}
-      </View>
+      )}
     </View>
   );
 }
@@ -857,14 +984,10 @@ function formatCount(value: number) {
   return String(value);
 }
 
-function ImmersiveMedia({ item, active, width, height }: { item: ImmersivePreviewItem; active: boolean; width: number; height: number }) {
-  if (item.previewKind === 'text') {
-    return <TextSlide item={item} width={width} height={height} />;
-  }
-
-  if (item.mediaKind === 'video') {
-    if (active && item.mediaUrl) {
-      return <ActiveVideo url={item.mediaUrl} width={width} height={height} />;
+function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: ShowcaseMediaItem; active: boolean; width: number; height: number }) {
+  if (mediaItem.mediaKind === 'video') {
+    if (active && mediaItem.url) {
+      return <ActiveVideo url={mediaItem.url} width={width} height={height} />;
     }
 
     return (
@@ -876,10 +999,10 @@ function ImmersiveMedia({ item, active, width, height }: { item: ImmersivePrevie
     );
   }
 
-  if (item.mediaUrl) {
+  if (mediaItem.url) {
     return (
       <Image
-        source={{ uri: item.mediaUrl }}
+        source={{ uri: mediaItem.url }}
         contentFit="cover"
         transition={120}
         style={{ width, height, backgroundColor: '#000' }}
@@ -900,28 +1023,58 @@ function ImmersiveMedia({ item, active, width, height }: { item: ImmersivePrevie
 function ActiveVideo({ url, width, height }: { url: string; width: number; height: number }) {
   const player = useVideoPlayer(url, (instance) => {
     instance.loop = true;
-    instance.muted = true;
-    instance.volume = 0;
+    instance.muted = false;
+    instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
   });
 
+  const [isPlaying, setIsPlaying] = useState(player.playing);
+
   useEffect(() => {
     player.play();
+    setIsPlaying(player.playing);
   }, [player]);
 
+  useEffect(() => {
+    const subscription = player.addListener('playingChange', (event) => {
+      setIsPlaying(event.isPlaying);
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [player]);
+
+  const togglePlayback = () => {
+    if (player.playing) {
+      player.pause();
+    } else {
+      player.play();
+    }
+  };
+
   return (
-    <VideoView
-      player={player}
-      nativeControls={false}
-      contentFit="cover"
-      fullscreenOptions={{ enable: false }}
-      allowsPictureInPicture={false}
-      startsPictureInPictureAutomatically={false}
-      useExoShutter={false}
-      surfaceType="textureView"
-      style={{ width, height, backgroundColor: '#000' }}
-    />
+    <Pressable
+      onPress={togglePlayback}
+      style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
+    >
+      <VideoView
+        player={player}
+        nativeControls={false}
+        contentFit="cover"
+        fullscreenOptions={{ enable: false }}
+        allowsPictureInPicture={false}
+        startsPictureInPictureAutomatically={false}
+        useExoShutter={false}
+        surfaceType="textureView"
+        style={{ position: 'absolute', inset: 0, backgroundColor: '#000' }}
+      />
+      {!isPlaying && (
+        <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
+          <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
+        </View>
+      )}
+    </Pressable>
   );
 }
 

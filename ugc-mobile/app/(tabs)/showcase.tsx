@@ -3,11 +3,12 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { FileText, Heart, Play, RefreshCw, Search, SlidersHorizontal } from 'lucide-react-native';
+import { FileText, Heart, Images, Play, RefreshCw, Search, SlidersHorizontal } from 'lucide-react-native';
 import { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   Text,
   useWindowDimensions,
   View,
@@ -37,7 +38,7 @@ import {
 } from '@/lib/showcase-feed-view-model';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme } from '@/lib/theme';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
+import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem } from '@/lib/types';
 
 const FILTERS = ['For you', 'UGC', 'Beauty', 'Food', 'Prompts', 'Remixable'];
 const SKELETON_HEIGHTS = [
@@ -59,6 +60,7 @@ export default function ShowcaseScreen() {
   const gridLayout = getShowcaseGridLayout(width);
   const queryKey = useMemo(() => createShowcaseFeedQueryKey(), []);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
@@ -131,6 +133,7 @@ export default function ShowcaseScreen() {
           layout={gridLayout}
           activeVideoIds={target === 'Cell' ? activeVideoIds : []}
           onOpenPost={openPost}
+          onScrollToggle={setIsSwipingMedia}
         />
       </MasonryCardCell>
     );
@@ -154,6 +157,7 @@ export default function ShowcaseScreen() {
         onViewableItemsChanged={onViewableItemsChanged}
         refreshing={isRefreshing}
         renderItem={renderCard}
+        scrollEnabled={!isSwipingMedia}
         showsVerticalScrollIndicator={false}
         style={{
           flex: 1,
@@ -247,7 +251,7 @@ export default function ShowcaseScreen() {
         ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
         viewabilityConfig={viewabilityConfig}
       />
-      <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} />
+      <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia} />
     </View>
   );
 }
@@ -359,21 +363,153 @@ function BottomLoader() {
   );
 }
 
+function CardMediaCarousel({
+  mediaItems,
+  height,
+  radius,
+  accent,
+  activeVideoIds,
+  cardId,
+  onPress,
+  width,
+  onScrollToggle,
+}: {
+  mediaItems: ShowcaseMediaItem[];
+  height: number;
+  radius: number;
+  accent: string;
+  activeVideoIds: string[];
+  cardId: string;
+  onPress: () => void;
+  width: number;
+  onScrollToggle?: (scrolling: boolean) => void;
+}) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  return (
+    <View style={{ height, width, overflow: 'hidden' }}>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onScrollBeginDrag={() => onScrollToggle?.(true)}
+        onScrollEndDrag={() => onScrollToggle?.(false)}
+        onMomentumScrollEnd={(event) => {
+          const index = Math.round(event.nativeEvent.contentOffset.x / width);
+          setCurrentIndex(index);
+          onScrollToggle?.(false);
+        }}
+        style={{ flex: 1 }}
+      >
+        {mediaItems.map((item, index) => {
+          const isVideo = item.mediaKind === 'video';
+          const isActiveVideo = isVideo && activeVideoIds.includes(cardId) && currentIndex === index;
+
+          return (
+            <Pressable
+              key={item.id}
+              onPress={onPress}
+              style={{ width, height }}
+            >
+              {isVideo ? (
+                isActiveVideo ? (
+                  <FeedVideoPreview
+                    url={item.url}
+                    active={true}
+                    height={height}
+                    radius={radius}
+                    accent={accent}
+                  />
+                ) : (
+                  <VideoPinPreview accent={accent} height={height} radius={radius} />
+                )
+              ) : (
+                <Image
+                  source={{ uri: item.url }}
+                  contentFit="cover"
+                  transition={120}
+                  style={{ width: '100%', height: '100%', backgroundColor: '#050506' }}
+                />
+              )}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      {/* Top right indicator */}
+      <View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          right: 10,
+          top: 10,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 4,
+          borderRadius: 12,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.1)',
+          backgroundColor: 'rgba(3,3,6,0.68)',
+          paddingHorizontal: 8,
+          paddingVertical: 4,
+        }}
+      >
+        <Images size={12} color="#ffffff" />
+        <Text style={{ color: '#ffffff', fontSize: 10, fontWeight: '800' }}>
+          {currentIndex + 1}/{mediaItems.length}
+        </Text>
+      </View>
+
+      {/* Bottom dots */}
+      <View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          bottom: 10,
+          left: 0,
+          right: 0,
+          flexDirection: 'row',
+          justifyContent: 'center',
+          gap: 5,
+        }}
+      >
+        {mediaItems.map((_, index) => (
+          <View
+            key={index}
+            style={{
+              height: 5,
+              width: index === currentIndex ? 12 : 5,
+              borderRadius: 2.5,
+              backgroundColor: index === currentIndex ? '#ffffff' : 'rgba(255,255,255,0.45)',
+            }}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function MasonryPin({
   card,
   layout,
   activeVideoIds,
   onOpenPost,
+  onScrollToggle,
 }: {
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
   activeVideoIds: string[];
   onOpenPost: (item: ShowcaseFeedItem) => void;
+  onScrollToggle?: (scrolling: boolean) => void;
 }) {
+  const { width } = useWindowDimensions();
+  const columnWidth = (width - FEED_HORIZONTAL_PADDING * 2 - layout.columnGap) / 2;
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
+  const mediaItems = card.item.mediaItems ?? [];
+  const hasMultipleMedia = mediaItems.length > 1;
 
   return (
     <Pressable
@@ -404,6 +540,18 @@ function MasonryPin({
             height={card.height}
             prompt={card.prompt}
             title={card.title}
+          />
+        ) : hasMultipleMedia ? (
+          <CardMediaCarousel
+            mediaItems={mediaItems}
+            height={card.height}
+            radius={layout.mediaRadius}
+            accent={accent}
+            activeVideoIds={activeVideoIds}
+            cardId={card.id}
+            width={columnWidth}
+            onPress={() => onOpenPost(card.item)}
+            onScrollToggle={onScrollToggle}
           />
         ) : card.mediaUrl && !isVideoCard ? (
           <Image

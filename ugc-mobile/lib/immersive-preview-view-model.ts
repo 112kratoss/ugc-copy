@@ -1,4 +1,4 @@
-import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResourceKind, ShowcaseFeedItem } from '@/lib/types';
+import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResourceKind, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
 import { formatCompactCount } from './home-view-model';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
@@ -58,6 +58,7 @@ export interface ImmersivePreviewItem {
   displayText: string;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
+  mediaItems: ShowcaseMediaItem[];
   previewKind?: 'text';
   creatorLabel: string;
   creatorAvatar: string | null;
@@ -147,6 +148,66 @@ export function isImmersiveDetailsHorizontalPage(pageIndex: number) {
   return pageIndex === 1;
 }
 
+function getMediaItemsList(
+  id: string,
+  mediaUrl: string | null,
+  mediaKind: 'image' | 'video' | null,
+  mediaItems?: ShowcaseMediaItem[]
+): ShowcaseMediaItem[] {
+  if (mediaItems?.length) {
+    return mediaItems;
+  }
+  if (!mediaUrl || !mediaKind) {
+    return [];
+  }
+  return [{
+    id: `${id}:cover`,
+    url: mediaUrl,
+    mediaKind: mediaKind === 'video' ? 'video' : 'image',
+    contentType: null,
+    originalName: null,
+    width: null,
+    height: null,
+    durationSeconds: null,
+    sortOrder: 0,
+  }];
+}
+
+function getGenerationMediaItemsList(
+  id: string,
+  outputUrls: string[] | undefined,
+  outputUrl: string | null,
+  mediaKind: 'image' | 'video' | null
+): ShowcaseMediaItem[] {
+  if (outputUrls?.length && mediaKind) {
+    return outputUrls.map((url, index) => ({
+      id: `${id}:${index}`,
+      url,
+      mediaKind: mediaKind === 'video' ? 'video' : 'image',
+      contentType: null,
+      originalName: null,
+      width: null,
+      height: null,
+      durationSeconds: null,
+      sortOrder: index,
+    }));
+  }
+  if (!outputUrl || !mediaKind) {
+    return [];
+  }
+  return [{
+    id: `${id}:output`,
+    url: outputUrl,
+    mediaKind: mediaKind === 'video' ? 'video' : 'image',
+    contentType: null,
+    originalName: null,
+    width: null,
+    height: null,
+    durationSeconds: null,
+    sortOrder: 0,
+  }];
+}
+
 function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeedItem): ImmersivePreviewItem {
   const displayText = getShowcasePostDisplayText(item);
   const title = item.title.trim() || item.prompt.trim() || displayText;
@@ -161,6 +222,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     displayText,
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
+    mediaItems: getMediaItemsList(item.id, item.mediaUrl, item.mediaKind, item.mediaItems),
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel,
     creatorAvatar: item.creator.avatar,
@@ -211,6 +273,7 @@ function generationToImmersiveItem(
   const kind = generationKind(item);
   const displayText = item.prompt?.trim() || item.description?.trim() || item.title?.trim() || 'Saved Magicbooklet generation.';
   const title = item.title?.trim() || displayText;
+  const mediaKind = kind === 'text' ? null : kind === 'image' ? 'image' : 'video';
 
   return {
     id: item.id,
@@ -219,7 +282,8 @@ function generationToImmersiveItem(
     title,
     displayText,
     mediaUrl: item.output_urls?.[0] ?? item.output_url ?? null,
-    mediaKind: kind === 'text' ? null : kind === 'image' ? 'image' : 'video',
+    mediaKind,
+    mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind),
     previewKind: kind === 'text' ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
@@ -256,6 +320,7 @@ function ownerPostToImmersiveItem(
     displayText,
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
+    mediaItems: getMediaItemsList(item.id, item.mediaUrl, item.mediaKind),
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,

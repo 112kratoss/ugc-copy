@@ -81,7 +81,7 @@ function MediaFallback({ height, radius, label }: { height?: number; radius: num
 function VideoPreview({ url, height, radius }: { url: string; height?: number; radius: number }) {
   const player = useVideoPlayer(url, (instance) => {
     instance.loop = true;
-    instance.muted = true;
+    instance.muted = false;
   });
 
   return (

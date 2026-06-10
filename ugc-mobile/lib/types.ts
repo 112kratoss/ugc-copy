@@ -177,10 +177,23 @@ export interface ShowcaseAssetSummary {
   priceQuote?: { formatted?: string; amountSubunits?: number; currency?: string };
 }
 
+export interface ShowcaseMediaItem {
+  id: string;
+  url: string;
+  mediaKind: 'image' | 'video';
+  contentType: string | null;
+  originalName: string | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  sortOrder: number;
+}
+
 export interface ShowcaseFeedItem {
   id: string;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
+  mediaItems?: ShowcaseMediaItem[];
   model: string;
   title: string;
   prompt: string;
