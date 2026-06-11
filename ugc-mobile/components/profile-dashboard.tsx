@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { PrimaryButton, StatusBlock } from '@/components/ui';
@@ -841,11 +842,12 @@ function ProfileGalleryPreview({ item, height, videoActive }: { item: ProfileMed
 
   if (item.mediaUrl && item.mediaKind === 'image' && !imageFailed) {
     return (
-      <Image
-        source={{ uri: item.mediaUrl }}
-        contentFit="cover"
+      <FeedMediaFrame
+        kind="image"
+        url={item.mediaUrl}
         transition={120}
-        onError={() => setImageFailed(true)}
+        onImageError={() => setImageFailed(true)}
+        radius={12}
         style={{ width: '100%', height }}
       />
     );

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { useVideoPlayer } from 'expo-video';
 import {
   Archive,
   ArrowLeft,
@@ -37,6 +37,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { useAuth } from '@/lib/auth';
 import {
   buildViewerItems,
@@ -829,7 +830,11 @@ function MediaCarousel({
                 height={height}
               />
             ) : (
-              <Image source={{ uri: item.url }} style={{ width, height }} contentFit="cover" />
+              <FeedMediaFrame
+                kind="image"
+                url={item.url}
+                style={{ width, height }}
+              />
             )}
           </View>
         )}
@@ -927,17 +932,7 @@ function VideoPlayerItem({ url, isActive, width, height }: { url: string; isActi
 
   return (
     <Pressable onPress={handlePress} style={{ width, height, alignItems: 'center', justifyContent: 'center' }}>
-      <VideoView
-        player={player}
-        nativeControls={false}
-        contentFit="cover"
-        fullscreenOptions={{ enable: false }}
-        allowsPictureInPicture={false}
-        startsPictureInPictureAutomatically={false}
-        useExoShutter={false}
-        surfaceType="textureView"
-        style={{ position: 'absolute', inset: 0, backgroundColor: '#000' }}
-      />
+      <FeedMediaFrame kind="video" player={player} style={{ width, height }} />
       {!isPlaying && (
         <View
           style={{

@@ -24,6 +24,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { TextPreviewCard } from '@/components/text-preview-card';
@@ -580,7 +581,7 @@ function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: 
       {isText ? (
         <TextPreviewCard text={item.previewText} accent={accentColor('amber')} height={160} radius={18} lines={4} />
       ) : item.mediaUrl && item.kind === 'image' ? (
-        <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        <FeedMediaFrame kind="image" url={item.mediaUrl} radius={18} style={{ position: 'absolute', inset: 0 }} />
       ) : (
         <FantasyPortalArt variant={item.artVariant} muted />
       )}
@@ -662,7 +663,7 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
         {item.previewKind === 'text' ? (
           <TextPreviewCard text={item.body} accent={accentColor('workflow')} height={108} radius={0} lines={3} compact />
         ) : item.mediaUrl && item.mediaKind === 'image' ? (
-          <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+          <FeedMediaFrame kind="image" url={item.mediaUrl} style={{ position: 'absolute', inset: 0 }} />
         ) : (
           <FantasyPortalArt variant={item.artVariant} muted />
         )}
@@ -755,7 +756,7 @@ function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number })
       })}
     >
       {item.mediaUrl ? (
-        <Image source={{ uri: item.mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        <FeedMediaFrame kind="image" url={item.mediaUrl} radius={18} style={{ position: 'absolute', inset: 0 }} />
       ) : (
         <LinearGradient colors={['rgba(16,185,129,0.22)', 'rgba(124,58,237,0.12)', 'rgba(8,9,18,1)']} style={{ position: 'absolute', inset: 0 }} />
       )}

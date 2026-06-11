@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
@@ -424,11 +425,12 @@ function CardMediaCarousel({
                   <VideoPinPreview accent={accent} height={height} radius={radius} />
                 )
               ) : (
-                <Image
-                  source={{ uri: item.url }}
-                  contentFit="cover"
+                <FeedMediaFrame
+                  kind="image"
+                  url={item.url}
                   transition={120}
-                  style={{ width: '100%', height: '100%', backgroundColor: '#050506' }}
+                  radius={radius}
+                  style={{ width: '100%', height: '100%' }}
                 />
               )}
             </Pressable>
@@ -554,14 +556,14 @@ function MasonryPin({
             onScrollToggle={onScrollToggle}
           />
         ) : card.mediaUrl && !isVideoCard ? (
-          <Image
-            source={{ uri: card.mediaUrl }}
-            contentFit="cover"
+          <FeedMediaFrame
+            kind="image"
+            url={card.mediaUrl}
             transition={120}
+            radius={layout.mediaRadius}
             style={{
               width: '100%',
               height: card.height,
-              backgroundColor: '#050506',
             }}
           />
         ) : showActiveVideo && card.mediaUrl ? (

@@ -232,6 +232,69 @@ export interface ShowcasePostResponse {
 
 export type PostResourceKind = 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type PostResourceBundleAccessMode = 'none' | 'free' | 'paid';
+export type PostResourceSectionKind =
+  | 'global'
+  | 'scene'
+  | 'shot'
+  | 'frame'
+  | 'variation'
+  | 'workflow_step'
+  | 'asset_group'
+  | 'chapter'
+  | 'other';
+export type PostResourceItemType =
+  | 'prompt'
+  | 'workflow'
+  | 'reference_image'
+  | 'source_file'
+  | 'preset'
+  | 'settings'
+  | 'note'
+  | 'external_link'
+  | 'remix_access';
+export type PostResourceItemRole =
+  | 'primary'
+  | 'style_reference'
+  | 'product_reference'
+  | 'composition_reference'
+  | 'character_reference'
+  | 'color_reference'
+  | 'negative_reference'
+  | 'before_input'
+  | 'supporting_workflow'
+  | 'manual_import'
+  | 'other';
+export type PostResourceRemixUse =
+  | 'none'
+  | 'reference_only'
+  | 'import_source'
+  | 'direct_remix'
+  | 'text_template';
+
+export interface PostResourceItem {
+  type: PostResourceItemType;
+  role: PostResourceItemRole;
+  sectionId: string | null;
+  title: string;
+  description: string | null;
+  textContent: string | null;
+  externalUrl: string | null;
+  storagePath: string | null;
+  contentType: string | null;
+  sizeBytes: number | null;
+  workflowSnapshot: unknown | null;
+  sortOrder: number;
+  isPrimary: boolean;
+  remixUse: PostResourceRemixUse;
+}
+
+export interface PostResourceSection {
+  id: string;
+  title: string;
+  kind: PostResourceSectionKind;
+  description: string | null;
+  sortOrder: number;
+}
 
 export interface PostResourceAttachment {
   label: string;
@@ -249,6 +312,8 @@ export interface PostResourceBundleResources {
   workflowSnapshot: unknown | null;
   attachments: PostResourceAttachment[];
   allowRemix: boolean;
+  sections?: PostResourceSection[];
+  items?: PostResourceItem[];
 }
 
 export interface PostResourceBundleInput {

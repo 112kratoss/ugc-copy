@@ -1,7 +1,8 @@
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { useVideoPlayer } from 'expo-video';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
+import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { appTheme } from '@/lib/theme';
 
 export function FeedVideoPreview({
@@ -39,33 +40,18 @@ export function FeedVideoPreview({
   }, [active, player]);
 
   return (
-    <View
+    <FeedMediaFrame
+      kind="video"
+      player={player}
+      radius={radius}
+      borderWidth={1}
+      borderColor={`${accent}4d`}
+      backgroundColor="#050506"
+      onFirstFrameRender={() => setHasFrame(true)}
       style={{
         height,
-        borderRadius: radius,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: `${accent}4d`,
-        backgroundColor: '#050506',
-        overflow: 'hidden',
       }}
     >
-      <VideoView
-        player={player}
-        nativeControls={false}
-        contentFit="cover"
-        fullscreenOptions={{ enable: false }}
-        allowsPictureInPicture={false}
-        startsPictureInPictureAutomatically={false}
-        useExoShutter={false}
-        surfaceType="textureView"
-        onFirstFrameRender={() => setHasFrame(true)}
-        style={{
-          width: '100%',
-          height: '100%',
-          backgroundColor: '#050506',
-        }}
-      />
       {!hasFrame ? (
         <View
           pointerEvents="none"
@@ -80,6 +66,6 @@ export function FeedVideoPreview({
           <ActivityIndicator color={accent} />
         </View>
       ) : null}
-    </View>
+    </FeedMediaFrame>
   );
 }

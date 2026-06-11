@@ -54,6 +54,15 @@ vi.mock('expo-image', () => ({
   Image: (props: MockProps) => React.createElement('image', props),
 }));
 
+vi.mock('expo-blur', () => ({
+  BlurView: ({ children, ...props }: MockProps) =>
+    React.createElement('blur-view', props, children),
+}));
+
+vi.mock('expo-video', () => ({
+  VideoView: (props: MockProps) => React.createElement('video-view', props),
+}));
+
 vi.mock('expo-linear-gradient', () => ({
   LinearGradient: ({ children, ...props }: MockProps) =>
     React.createElement('linear-gradient', props, children),

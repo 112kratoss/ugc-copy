@@ -4,13 +4,15 @@ import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { useVideoPlayer } from 'expo-video';
 import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, Play, Repeat2, Share2 } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, FlatList, Linking, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
+import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { PostResourceReferences } from '@/components/post-resource-references';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import {
@@ -637,6 +639,17 @@ function PostDetailsPage({
     },
   });
 
+  const resolveReferenceFileUrl = useCallback(async (storagePath: string) => {
+    const postId = item.showcasePostId ?? item.ownerPostId ?? item.id;
+    const response = await api.getPostResourceFileUrl(postId, storagePath);
+    return response.signedUrl;
+  }, [api, item.id, item.ownerPostId, item.showcasePostId]);
+
+  const openReferenceUrl = useCallback(async (url: string) => {
+    setResourceError(null);
+    await Linking.openURL(url);
+  }, []);
+
   if (!details) {
     return <View style={{ width, height, backgroundColor: '#000' }} />;
   }
@@ -771,7 +784,10 @@ function PostDetailsPage({
                 <UnlockedResources
                   fileLoadingPath={fileLoadingPath}
                   onCopy={copyText}
+                  onOpenReferenceUrl={openReferenceUrl}
                   onOpenAttachment={openAttachment}
+                  onReferenceError={setResourceError}
+                  resolveReferenceFileUrl={resolveReferenceFileUrl}
                   resources={resources}
                 />
               ) : (
@@ -916,11 +932,17 @@ function UnlockedResources({
   fileLoadingPath,
   onCopy,
   onOpenAttachment,
+  onOpenReferenceUrl,
+  onReferenceError,
+  resolveReferenceFileUrl,
   resources,
 }: {
   fileLoadingPath: string | null;
   onCopy: (text: string) => Promise<void>;
   onOpenAttachment: (attachment: PostResourceAttachment) => Promise<void>;
+  onOpenReferenceUrl: (url: string) => Promise<void>;
+  onReferenceError: (message: string) => void;
+  resolveReferenceFileUrl: (storagePath: string) => Promise<string>;
   resources: NonNullable<MarketplaceResourceDetail['resources']>;
 }) {
   return (
@@ -930,6 +952,12 @@ function UnlockedResources({
           <CopyableText text={resources.promptText} onCopy={onCopy} />
         </DetailSection>
       ) : null}
+      <PostResourceReferences
+        items={resources.items}
+        onError={onReferenceError}
+        onOpenUrl={onOpenReferenceUrl}
+        resolveFileUrl={resolveReferenceFileUrl}
+      />
       {resources.notesMarkdown ? (
         <DetailSection title="Creator notes" emptyLabel="">
           <CopyableText text={resources.notesMarkdown} onCopy={onCopy} />
@@ -1001,11 +1029,11 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
 
   if (mediaItem.url) {
     return (
-      <Image
-        source={{ uri: mediaItem.url }}
-        contentFit="cover"
+      <FeedMediaFrame
+        kind="image"
+        url={mediaItem.url}
         transition={120}
-        style={{ width, height, backgroundColor: '#000' }}
+        style={{ width, height }}
       />
     );
   }
@@ -1058,17 +1086,7 @@ function ActiveVideo({ url, width, height }: { url: string; width: number; heigh
       onPress={togglePlayback}
       style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
     >
-      <VideoView
-        player={player}
-        nativeControls={false}
-        contentFit="cover"
-        fullscreenOptions={{ enable: false }}
-        allowsPictureInPicture={false}
-        startsPictureInPictureAutomatically={false}
-        useExoShutter={false}
-        surfaceType="textureView"
-        style={{ position: 'absolute', inset: 0, backgroundColor: '#000' }}
-      />
+      <FeedMediaFrame kind="video" player={player} style={{ width, height }} />
       {!isPlaying && (
         <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
           <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
