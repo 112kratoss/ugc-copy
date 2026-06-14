@@ -8,10 +8,13 @@ export const appTheme = {
     surface: 'rgba(255,255,255,0.04)',
     surfaceStrong: 'rgba(255,255,255,0.06)',
     surfaceInset: 'rgba(0,0,0,0.32)',
+    overlay: 'rgba(3,3,6,0.68)',
+    overlayStrong: 'rgba(3,3,6,0.86)',
     borderSubtle: 'rgba(255,255,255,0.08)',
     border: 'rgba(255,255,255,0.10)',
     borderStrong: 'rgba(255,255,255,0.18)',
     text: '#fafafa',
+    textInverse: '#050506',
     textSecondary: '#d4d4d8',
     muted: '#a1a1aa',
     faint: '#71717a',
@@ -109,11 +112,10 @@ export const appTheme = {
   },
   shadow: {
     panel: {
-      shadowColor: '#000000',
-      shadowOpacity: 0.28,
-      shadowRadius: 24,
-      shadowOffset: { width: 0, height: 12 },
-      elevation: 6,
+      boxShadow: '0 14px 34px rgba(0,0,0,0.28)',
+    },
+    soft: {
+      boxShadow: '0 10px 24px rgba(0,0,0,0.18)',
     },
   },
 } as const;

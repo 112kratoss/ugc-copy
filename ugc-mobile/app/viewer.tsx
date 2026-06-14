@@ -15,6 +15,7 @@ import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostResourceReferences } from '@/components/post-resource-references';
+import { Pill } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -42,6 +43,7 @@ import {
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
+import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseMediaItem } from '@/lib/types';
 
 type ViewerParams = {
@@ -864,26 +866,28 @@ function PostDetailsPage({
   };
 
   const unlockError = unlockMutation.error instanceof Error ? unlockMutation.error.message : null;
+  const unlockAccent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
+  const unlockPriceLabel = unlock ? bundle?.priceQuote?.formatted ?? unlock.priceLabel : null;
 
   return (
-    <View style={{ width, height, backgroundColor: '#050506' }}>
+    <View style={{ width, height, backgroundColor: appTheme.colors.app }}>
       <ScrollView
         contentContainerStyle={{
           paddingTop: sheet ? 20 : topInset + 80,
           paddingBottom: bottomInset + 36,
           paddingHorizontal: 22,
-          gap: 18,
+          gap: appTheme.spacing.panel,
         }}
         showsVerticalScrollIndicator={false}
       >
         <View style={{ gap: 8 }}>
-          <Text style={{ color: 'rgba(255,255,255,0.58)', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' }}>
+          <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
             Post details
           </Text>
-          <Text selectable style={{ color: '#fff', fontSize: 30, lineHeight: 35, fontWeight: '900' }}>
+          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '900' }}>
             {details.title}
           </Text>
-          <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 16, fontWeight: '700' }}>
+          <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm, fontWeight: '700' }}>
             {details.creatorLabel} · {details.categoryLabel}
           </Text>
         </View>
@@ -928,25 +932,21 @@ function PostDetailsPage({
           />
         </View>
 
-        <View style={{ borderRadius: 22, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.06)', padding: 16, gap: 14 }}>
+        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: unlock ? `${accentColor(unlockAccent)}55` : appTheme.colors.border, backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 5 }}>
-              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>Unlockables</Text>
+              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '900' }}>Creator unlocks</Text>
               {unlock ? (
-                <Text style={{ color: 'rgba(255,255,255,0.64)', fontSize: 14, lineHeight: 19 }}>
+                <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
                   {bundle?.previewText ?? unlock.previewText ?? 'Reusable resources are attached to this post.'}
                 </Text>
               ) : (
-                <Text style={{ color: 'rgba(255,255,255,0.64)', fontSize: 14, lineHeight: 19 }}>
+                <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
                   No unlock attached.
                 </Text>
               )}
             </View>
-            {unlock ? (
-              <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: unlock.accessMode === 'free' ? 'rgba(103,255,69,0.16)' : 'rgba(255,183,77,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
-                <Text style={{ color: unlock.accessMode === 'free' ? '#67ff45' : '#ffcf8a', fontSize: 12, fontWeight: '900' }}>{bundle?.priceQuote?.formatted ?? unlock.priceLabel}</Text>
-              </View>
-            ) : null}
+            {unlock && unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
           </View>
 
           {unlock ? (
@@ -985,6 +985,7 @@ function PostDetailsPage({
                   ) : null}
                   <DetailActionButton
                     label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Unlock free' : 'Unlock with credits'}
+                    accent={unlockAccent}
                     icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
                     loading={unlockMutation.isPending}
                     primary
@@ -1010,18 +1011,18 @@ function PostDetailsPage({
 
 function LockedPreviewText({ label, value }: { label: string; value: string }) {
   return (
-    <View style={{ borderRadius: 14, borderCurve: 'continuous', backgroundColor: 'rgba(255,255,255,0.07)', padding: 12, gap: 5 }}>
-      <Text style={{ color: 'rgba(255,255,255,0.52)', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
-      <Text selectable numberOfLines={4} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20 }}>{value}</Text>
+    <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.gap, gap: 5 }}>
+      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
+      <Text selectable numberOfLines={4} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{value}</Text>
     </View>
   );
 }
 
 function DetailStat({ label, value }: { label: string; value: string }) {
   return (
-    <View style={{ flex: 1, borderRadius: 14, borderCurve: 'continuous', backgroundColor: 'rgba(255,255,255,0.08)', padding: 12, gap: 4 }}>
-      <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.55)', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
-      <Text numberOfLines={1} style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{value}</Text>
+    <View style={{ flex: 1, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{value}</Text>
     </View>
   );
 }
@@ -1029,24 +1030,24 @@ function DetailStat({ label, value }: { label: string; value: string }) {
 function DetailSection({ title, emptyLabel, children }: { title: string; emptyLabel: string; children: React.ReactNode }) {
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>{title}</Text>
-      {children || <Text style={{ color: 'rgba(255,255,255,0.48)', fontSize: 15 }}>{emptyLabel}</Text>}
+      <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '900' }}>{title}</Text>
+      {children || <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>{emptyLabel}</Text>}
     </View>
   );
 }
 
 function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) => Promise<void> }) {
   return (
-    <View style={{ borderRadius: 16, borderCurve: 'continuous', backgroundColor: 'rgba(255,255,255,0.07)', padding: 14, gap: 12 }}>
-      <Text selectable style={{ color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 22 }}>{text}</Text>
+    <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.gap, gap: appTheme.spacing.gap }}>
+      <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Copy text"
         onPress={() => void onCopy(text)}
         style={({ pressed }) => ({ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? 0.7 : 1 })}
       >
-        <Copy size={15} color="#67ff45" strokeWidth={2.4} />
-        <Text style={{ color: '#67ff45', fontSize: 13, fontWeight: '900' }}>Copy</Text>
+        <Copy size={15} color={appTheme.colors.success} strokeWidth={2.4} />
+        <Text style={{ color: appTheme.colors.success, ...appTheme.type.caption, fontWeight: '900' }}>Copy</Text>
       </Pressable>
     </View>
   );
@@ -1059,7 +1060,9 @@ function DetailActionButton({
   loading,
   onPress,
   primary,
+  accent = 'workflow',
 }: {
+  accent?: ToolAccent;
   disabled?: boolean;
   icon: React.ReactNode;
   label: string;
@@ -1067,6 +1070,7 @@ function DetailActionButton({
   onPress: () => void;
   primary?: boolean;
 }) {
+  const primaryColor = accentColor(accent);
   return (
     <Pressable
       accessibilityRole="button"
@@ -1079,13 +1083,13 @@ function DetailActionButton({
         justifyContent: 'center',
         gap: 8,
         borderRadius: 22,
-        backgroundColor: primary ? '#67ff45' : 'rgba(255,255,255,0.1)',
+        backgroundColor: primary ? primaryColor : appTheme.colors.surfaceStrong,
         opacity: disabled ? 0.45 : pressed ? 0.76 : 1,
         paddingHorizontal: 15,
       })}
     >
-      {loading ? <ActivityIndicator color={primary ? '#050505' : '#fff'} /> : icon}
-      <Text numberOfLines={1} style={{ color: primary ? '#050505' : '#fff', fontSize: 14, fontWeight: '900' }}>{label}</Text>
+      {loading ? <ActivityIndicator color={primary ? appTheme.colors.textInverse : appTheme.colors.text} /> : icon}
+      <Text numberOfLines={1} style={{ color: primary ? appTheme.colors.textInverse : appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -1095,9 +1099,9 @@ function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
-        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={13} color="rgba(255,255,255,0.78)" strokeWidth={2.5} />
-          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
+        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 10, paddingVertical: 6 }}>
+          <FileText size={13} color={appTheme.colors.textSecondary} strokeWidth={2.5} />
+          <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}
     </View>

@@ -37,6 +37,11 @@ export interface PostComposerResourceDraft {
   priceUsd: string;
 }
 
+export interface PostComposerCreationPackageDraft {
+  attachGenerationReferences: boolean;
+  attachPromptResource: boolean;
+}
+
 export interface PostComposerDraft {
   mode: PostComposerMode;
   title: string;
@@ -49,11 +54,21 @@ export interface PostComposerDraft {
   selectedGenerationId: string | null;
   upload: PostComposerUpload | null;
   resource: PostComposerResourceDraft;
+  creationPackage: PostComposerCreationPackageDraft;
 }
 
 export interface PostComposerValidationResult {
   valid: boolean;
   message?: string;
+}
+
+export type PostComposerReadinessState = 'ready' | 'warning' | 'neutral';
+
+export interface PostComposerReadinessItem {
+  id: 'public-post' | 'unlock' | 'preview' | 'publish';
+  label: string;
+  body: string;
+  state: PostComposerReadinessState;
 }
 
 export const POST_COMPOSER_MODES: Array<{ id: PostComposerMode; label: string; body: string }> = [
@@ -88,9 +103,9 @@ export const POST_COMPOSER_VISIBILITY_OPTIONS: Array<{ id: PostComposerVisibilit
 ];
 
 export const POST_COMPOSER_UNLOCK_OPTIONS: Array<{ id: PostResourceBundleAccessMode; label: string }> = [
-  { id: 'none', label: 'No unlock' },
-  { id: 'free', label: 'Free unlock' },
-  { id: 'paid', label: 'Paid unlock' },
+  { id: 'none', label: 'None' },
+  { id: 'free', label: 'Free' },
+  { id: 'paid', label: 'Paid' },
 ];
 
 const BODY_MAX_LENGTH = 2000;
@@ -110,6 +125,13 @@ export function getDefaultResourceDraft(): PostComposerResourceDraft {
   };
 }
 
+export function getDefaultCreationPackageDraft(): PostComposerCreationPackageDraft {
+  return {
+    attachGenerationReferences: false,
+    attachPromptResource: false,
+  };
+}
+
 export function getDefaultPostComposerDraft(): PostComposerDraft {
   return {
     mode: 'text',
@@ -123,6 +145,7 @@ export function getDefaultPostComposerDraft(): PostComposerDraft {
     selectedGenerationId: null,
     upload: null,
     resource: getDefaultResourceDraft(),
+    creationPackage: getDefaultCreationPackageDraft(),
   };
 }
 
@@ -149,7 +172,7 @@ export function buildPublishGenerationPayload(item: GenerationListItem) {
 
 export function buildPublishGenerationPostPayload(item: GenerationListItem, draft: PostComposerDraft) {
   const resourceBundle = buildPostResourceBundleInput(draft.resource);
-  const includeGenerationReferences = shouldIncludeGenerationReferences(item, draft.visibility, resourceBundle);
+  const includeGenerationReferences = shouldIncludeGenerationReferences(item, draft);
   const sourceTools = buildSourceToolsPayload(draft, item);
 
   return {
@@ -294,18 +317,153 @@ export function getPostComposerPreviewStatusLabel(
   selectedGeneration?: GenerationListItem | null
 ) {
   if (draft.resource.accessMode === 'paid') {
-    return 'Paid unlock will appear in post details.';
+    return 'Paid resource package will appear in post details.';
   }
 
   if (draft.resource.accessMode === 'free') {
-    return 'Free unlock will appear in post details.';
+    return 'Free resource package will appear in post details.';
   }
 
-  if (willAttachFreeGenerationReferenceBundle(selectedGeneration, draft)) {
-    return 'Free reference package will appear in post details.';
+  if (willAttachGenerationReferences(selectedGeneration, draft)) {
+    return 'Creation references will appear in post details.';
   }
 
-  return 'No unlock attached.';
+  return 'No resource package configured.';
+}
+
+export function getPostComposerReadiness(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null,
+  skipGenerationSelection = false
+): PostComposerReadinessItem[] {
+  const publicReady = isPublicPostReady(draft, selectedGeneration, skipGenerationSelection);
+  const unlockBundle = buildPostResourceBundleInput(draft.resource);
+  const unlockActive = draft.resource.accessMode !== 'none';
+  const unlockReady = !unlockActive || Boolean(unlockBundle && draft.resource.previewText.trim());
+  const validation = validatePostComposerDraft(draft);
+
+  return [
+    {
+      id: 'public-post',
+      label: publicReady ? 'Public post ready' : 'Public post needs content',
+      body: publicReady
+        ? 'Title, content, attribution, and visibility are set.'
+        : publicPostMissingMessage(draft, selectedGeneration, skipGenerationSelection),
+      state: publicReady ? 'ready' : 'warning',
+    },
+    {
+      id: 'unlock',
+      label: unlockActive ? unlockReady ? 'Resource package ready' : 'Resource package needs resources' : 'Resource package optional',
+      body: unlockActive
+        ? unlockReady
+          ? getPostComposerPreviewStatusLabel(draft, selectedGeneration)
+          : 'Add a buyer preview and at least one prompt, workflow, file, note, or remix resource.'
+        : getPostComposerPreviewStatusLabel(draft, selectedGeneration),
+      state: unlockActive ? unlockReady ? 'ready' : 'warning' : 'neutral',
+    },
+    {
+      id: 'preview',
+      label: 'Preview updates live',
+      body: draft.title.trim() ? 'The preview reflects the public post and unlock cue.' : 'Add a title to make the preview meaningful.',
+      state: draft.title.trim() ? 'ready' : 'neutral',
+    },
+    {
+      id: 'publish',
+      label: validation.valid ? 'Ready to publish' : 'Publish blocked',
+      body: validation.valid ? 'The publish button will open the post in the viewer after success.' : validation.message ?? 'Complete the required fields.',
+      state: validation.valid ? 'ready' : 'warning',
+    },
+  ];
+}
+
+export function applyCreationPromptResource(
+  draft: PostComposerDraft,
+  selectedGeneration: GenerationListItem | null | undefined,
+  enabled: boolean
+): PostComposerDraft {
+  const creationPackage = getCreationPackageDraft(draft);
+  if (!enabled) {
+    return {
+      ...draft,
+      creationPackage: {
+        ...creationPackage,
+        attachPromptResource: false,
+      },
+    };
+  }
+
+  const prompt = selectedGeneration?.prompt?.trim() ?? '';
+
+  return {
+    ...draft,
+    creationPackage: {
+      ...creationPackage,
+      attachPromptResource: true,
+    },
+    resource: {
+      ...draft.resource,
+      accessMode: draft.resource.accessMode === 'none' ? 'free' : draft.resource.accessMode,
+      promptText: draft.resource.promptText.trim() ? draft.resource.promptText : prompt,
+      previewText: draft.resource.previewText.trim() ? draft.resource.previewText : 'Includes the exact reusable prompt.',
+    },
+  };
+}
+
+export function getPostComposerSectionSummary(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null
+) {
+  return {
+    publicPost: `${visibilityLabel(draft.visibility)} · ${contentModeSummary(draft, selectedGeneration)}`,
+    postSettings: `${draft.sourceTool.trim() || 'Source'} · ${getGenerationCategoryLabel(draft.category)}`,
+    resourcePackage: getResourcePackageSummary(draft, selectedGeneration),
+  };
+}
+
+export function getPostComposerPackageStatus(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null
+): PostComposerReadinessItem {
+  const resourceBundle = buildPostResourceBundleInput(draft.resource);
+  const resourceActive = draft.resource.accessMode !== 'none';
+  const referencesAttached = willAttachGenerationReferences(selectedGeneration, draft);
+
+  if (resourceActive) {
+    const ready = Boolean(resourceBundle && draft.resource.previewText.trim());
+    const promptResource = getCreationPackageDraft(draft).attachPromptResource && draft.resource.promptText.trim();
+    return {
+      id: 'unlock',
+      label: ready
+        ? promptResource
+          ? 'Prompt resource ready'
+          : draft.resource.accessMode === 'paid'
+            ? 'Paid package ready'
+            : 'Free package ready'
+        : 'Resource package needs resources',
+      body: ready
+        ? promptResource
+          ? draft.resource.previewText.trim()
+          : getPostComposerPreviewStatusLabel(draft, selectedGeneration)
+        : 'Add a buyer preview and at least one prompt, workflow, file, note, or remix resource.',
+      state: ready ? 'ready' : 'warning',
+    };
+  }
+
+  if (referencesAttached) {
+    return {
+      id: 'unlock',
+      label: 'References attached',
+      body: 'Creation input media will be available from the post details.',
+      state: 'ready',
+    };
+  }
+
+  return {
+    id: 'unlock',
+    label: 'Resource package optional',
+    body: 'No resource package configured.',
+    state: 'neutral',
+  };
 }
 
 export function getPostComposerSubmitLabel(params: {
@@ -330,6 +488,36 @@ export function getPostComposerSubmitLabel(params: {
   }
 
   return 'Publish public';
+}
+
+function isPublicPostReady(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null,
+  skipGenerationSelection = false
+) {
+  if (!draft.title.trim()) return false;
+  if (draft.mode === 'text') return Boolean(draft.contentText.trim() || draft.caption.trim());
+  if (draft.mode === 'upload') return Boolean(draft.upload);
+  if (draft.mode === 'creation') return skipGenerationSelection || Boolean(selectedGeneration ?? draft.selectedGenerationId);
+  return false;
+}
+
+function publicPostMissingMessage(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null,
+  skipGenerationSelection = false
+) {
+  if (!draft.title.trim()) return 'Add a title that people will understand in the feed.';
+  if (draft.mode === 'text' && !draft.contentText.trim() && !draft.caption.trim()) {
+    return 'Write the text post or add a caption.';
+  }
+  if (draft.mode === 'upload' && !draft.upload) {
+    return 'Upload an image or video before publishing.';
+  }
+  if (draft.mode === 'creation' && !skipGenerationSelection && !selectedGeneration && !draft.selectedGenerationId) {
+    return 'Choose a finished Magicbooklet creation.';
+  }
+  return 'Complete the required public post fields.';
 }
 
 export function getCreatePostBody(draft: PostComposerDraft) {
@@ -366,17 +554,14 @@ export function hasGenerationReferences(item: GenerationListItem | null | undefi
 
 export function shouldIncludeGenerationReferences(
   item: GenerationListItem,
-  visibility: PostComposerVisibility,
-  resourceBundle: PostResourceBundleInput | null
+  draft: PostComposerDraft
 ) {
-  if (!hasGenerationReferences(item)) {
-    return false;
-  }
-
-  return visibility === 'public' || Boolean(resourceBundle && resourceBundle.accessMode !== 'none');
+  return draft.mode === 'creation'
+    && getCreationPackageDraft(draft).attachGenerationReferences
+    && hasGenerationReferences(item);
 }
 
-export function willAttachFreeGenerationReferenceBundle(
+export function willAttachGenerationReferences(
   item: GenerationListItem | null | undefined,
   draft: PostComposerDraft
 ) {
@@ -384,15 +569,45 @@ export function willAttachFreeGenerationReferenceBundle(
     return false;
   }
 
-  return !buildPostResourceBundleInput(draft.resource)
-    && shouldIncludeGenerationReferences(item, draft.visibility, null);
+  return shouldIncludeGenerationReferences(item, draft);
 }
+
+export const willAttachFreeGenerationReferenceBundle = willAttachGenerationReferences;
 
 function normalizeGenerationCategory(category: string | null | undefined) {
   if (category === 'video' || category === 'motion' || category === 'ugc-ad' || category === 'text') {
     return category;
   }
   return 'image';
+}
+
+function getCreationPackageDraft(draft: PostComposerDraft): PostComposerCreationPackageDraft {
+  return draft.creationPackage ?? getDefaultCreationPackageDraft();
+}
+
+function visibilityLabel(visibility: PostComposerVisibility) {
+  if (visibility === 'unlisted') return 'Unlisted';
+  if (visibility === 'private') return 'Private';
+  return 'Public';
+}
+
+function contentModeSummary(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null
+) {
+  if (draft.mode === 'creation') return selectedGeneration || draft.selectedGenerationId ? 'Creation selected' : 'Choose creation';
+  if (draft.mode === 'upload') return draft.upload ? 'Upload selected' : 'Add media';
+  return draft.contentText.trim() || draft.caption.trim() ? 'Text ready' : 'Write text';
+}
+
+function getResourcePackageSummary(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null
+) {
+  if (draft.resource.accessMode === 'paid') return 'Paid package';
+  if (draft.resource.accessMode === 'free') return 'Free package';
+  if (willAttachGenerationReferences(selectedGeneration, draft)) return 'References attached';
+  return 'No package';
 }
 
 function trimOrUndefined(value: string | null | undefined) {

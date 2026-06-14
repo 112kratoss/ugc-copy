@@ -293,6 +293,17 @@ describe('ProfileMediaFeedScreen', () => {
     expect(tree.root.findByProps({ children: 'Change visibility' })).toBeTruthy();
   });
 
+  it('renders labeled media action chips instead of bare post icons', () => {
+    paramsState.source = 'profile-posts';
+    paramsState.initialId = 'post-1';
+
+    const tree = renderScreen();
+
+    expect(tree.root.findByProps({ children: 'Create' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Share' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Details' })).toBeTruthy();
+  });
+
   it('plays the active profile feed video with a contained frame and a single player', () => {
     const tree = renderScreen();
 

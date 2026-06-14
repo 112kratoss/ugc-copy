@@ -1,5 +1,4 @@
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import {
   AudioLines,
@@ -26,6 +25,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MediaPreview } from '@/components/media-preview';
+import {
+  AppText,
+  ChoiceChip,
+  DisclosureSection,
+  MetricCard,
+  PrimaryButton,
+  ReadinessRow,
+  SecondaryButton,
+  SurfaceSection,
+} from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
@@ -35,7 +44,8 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   defaultVideoMode,
-  getCreditEstimate,
+  getCreationReadiness,
+  getCreationSectionSummary,
   getDefaultVideoDuration,
   getImageResolutionOptions,
   getMotionDuration,
@@ -60,23 +70,20 @@ import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse } from '@/lib/types';
 
-const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; Icon: typeof ImageIcon; subtitle: string }> = {
+const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
     title: 'Image',
     accent: 'image',
-    Icon: ImageIcon,
     subtitle: 'Reference-aware image generation',
   },
   video: {
     title: 'Video',
     accent: 'video',
-    Icon: Video,
     subtitle: 'Frames, elements, sound, and shots',
   },
   motion: {
     title: 'Motion',
     accent: 'motion',
-    Icon: Sparkles,
     subtitle: 'Character image plus motion video',
   },
 };
@@ -121,16 +128,26 @@ export function MediaCreationScreen({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
+  const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const currentDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const validation = useMemo(() => validateCreationDraft(currentDraft, { credits }), [currentDraft, credits]);
+  const sectionSummary = useMemo(() => getCreationSectionSummary(currentDraft), [currentDraft]);
+  const readiness = useMemo(() => getCreationReadiness(currentDraft, validation), [currentDraft, validation]);
   const outputUrl = useMemo(() => (status ? getGenerationOutput(status) : null), [status]);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
+
+  const changeTool = (tool: CreatorToolId) => {
+    setActiveTool(tool);
+    setAdvancedExpanded(false);
+    setMessage(null);
+  };
 
   const replaceDraft = (draft: CreationDraft) => {
     const normalized = applyModelDefaults(draft);
@@ -285,19 +302,23 @@ export function MediaCreationScreen({
     }
     setMessage(null);
     setStatus(null);
+    setLastGenerationId(null);
     setIsGenerating(true);
     try {
       let started: GenerationStartResponse;
       if (currentDraft.tool === 'image') {
         started = await api.startImageGeneration(buildGenerationPayload(currentDraft));
+        setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus }));
       } else if (currentDraft.tool === 'video') {
         started = await api.startVideoGeneration(buildGenerationPayload(currentDraft));
+        setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus }));
       } else {
         started = await api.startMotionGeneration(buildGenerationPayload(currentDraft));
+        setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus }));
       }
@@ -311,11 +332,11 @@ export function MediaCreationScreen({
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#03040d' }}>
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: '#03040d' }} />
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.background }} />
       <View style={{ position: 'absolute', top: -120, right: -120, width: 260, height: 260, borderRadius: 130, backgroundColor: 'rgba(217,70,239,0.16)' }} />
       <View style={{ position: 'absolute', bottom: 80, left: -120, width: 250, height: 250, borderRadius: 125, backgroundColor: 'rgba(56,189,248,0.11)' }} />
-      <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset, backgroundColor: '#03040d', zIndex: 3 }} />
+      <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset, backgroundColor: appTheme.colors.background, zIndex: 3 }} />
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         keyboardShouldPersistTaps="handled"
@@ -327,59 +348,31 @@ export function MediaCreationScreen({
           gap: 18,
         }}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '700' }}>Magic Booklet</Text>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={{ color: '#ffffff', fontSize: isCompact ? 30 : 34, fontWeight: '900' }}>
-              Create
-            </Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push('/(tabs)/pricing')}
-            style={{
-              minHeight: 44,
-              borderRadius: appTheme.radii.pill,
-              borderWidth: 1,
-              borderColor: 'rgba(168,85,247,0.42)',
-              backgroundColor: 'rgba(25,18,46,0.92)',
-              paddingHorizontal: 14,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '900' }}>{credits ?? 0} credits</Text>
-          </Pressable>
-        </View>
-
-        <LinearGradient
-          colors={['rgba(217,70,239,0.18)', 'rgba(56,189,248,0.09)', 'rgba(6,8,24,0.96)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{
-            borderRadius: 30,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.12)',
-            padding: 16,
-            gap: 14,
-            overflow: 'hidden',
-          }}
+        <SurfaceSection
+          eyebrow="Magic Booklet"
+          title="Create"
+          body={`${meta.title} generation · ${meta.subtitle}`}
+          accent={meta.accent}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View style={{ width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentColor(meta.accent)}22` }}>
-              <meta.Icon size={26} color={accentColor(meta.accent)} strokeWidth={2.4} />
-            </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={{ color: '#ffffff', fontSize: 21, fontWeight: '900' }}>{meta.title} generation</Text>
-              <Text style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 18 }}>{meta.subtitle}</Text>
-            </View>
-            <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 10, paddingVertical: 6 }}>
-              <Text style={{ color: '#ffffff', fontWeight: '900' }}>{validation.cost}</Text>
-            </View>
+          <ToolSwitcher value={activeTool} onChange={changeTool} />
+          <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
+            <MetricCard
+              label="Credits"
+              value={String(credits ?? 0)}
+              body="available"
+              accent="amber"
+              compact
+              onPress={() => router.push('/(tabs)/pricing')}
+            />
+            <MetricCard
+              label="Cost"
+              value={String(validation.cost)}
+              body={`${meta.title.toLowerCase()} run`}
+              accent={meta.accent}
+              compact
+            />
           </View>
-          <ToolSwitcher value={activeTool} onChange={setActiveTool} />
-        </LinearGradient>
+        </SurfaceSection>
 
         <PromptPanel
           draft={currentDraft}
@@ -388,63 +381,117 @@ export function MediaCreationScreen({
           onEnhance={enhancePrompt}
         />
 
-        {activeTool === 'image' ? (
-          <ImageControls
-            draft={imageDraft}
-            onChange={(draft) => replaceDraft(draft)}
-            onUploadReferences={() => uploadImageReferences('image')}
-            onRemoveReference={(id) => setImageDraft((draft) => ({ ...draft, references: draft.references.filter((media) => media.id !== id) }))}
-            onUseHandle={(handle) => setImageDraft((draft) => ({ ...draft, prompt: appendHandle(draft.prompt, handle) }))}
-            isUploading={isUploading}
+        <SurfaceSection
+          eyebrow="Step 1"
+          title="Essentials"
+          body={sectionSummary.essentials}
+          accent={meta.accent}
+        >
+          <CreationEssentials
+            activeTool={activeTool}
+            imageDraft={imageDraft}
+            videoDraft={videoDraft}
+            motionDraft={motionDraft}
+            onChange={replaceDraft}
           />
-        ) : activeTool === 'video' ? (
-          <VideoControls
-            draft={videoDraft}
-            onChange={(draft) => replaceDraft(draft)}
-            onUploadReferences={() => uploadImageReferences('video')}
+        </SurfaceSection>
+
+        <SurfaceSection
+          eyebrow="Step 2"
+          title="References"
+          body={sectionSummary.references}
+          accent={activeTool === 'image' ? 'image' : activeTool === 'video' ? 'video' : 'motion'}
+        >
+          <CreationReferences
+            activeTool={activeTool}
+            imageDraft={imageDraft}
+            videoDraft={videoDraft}
+            motionDraft={motionDraft}
+            onImageChange={setImageDraft}
+            onVideoChange={setVideoDraft}
+            onMotionChange={setMotionDraft}
+            onUploadImageReferences={() => uploadImageReferences('image')}
+            onUploadVideoReferences={() => uploadImageReferences('video')}
             onUploadStart={() => uploadSingleImage('start')}
             onUploadEnd={() => uploadSingleImage('end')}
+            onUploadCharacter={() => uploadSingleImage('character')}
+            onUploadMotionReference={() => uploadReferenceVideo('motion')}
+            onUseImageHandle={(handle) => setImageDraft((draft) => ({ ...draft, prompt: appendHandle(draft.prompt, handle) }))}
+            onUseVideoHandle={(handle) => setVideoDraft((draft) => ({ ...draft, prompt: appendHandle(draft.prompt, handle), referenceMode: 'elements' }))}
+            isUploading={isUploading}
+          />
+        </SurfaceSection>
+
+        <DisclosureSection
+          title="Advanced"
+          body={sectionSummary.advanced}
+          accent={meta.accent}
+          expanded={advancedExpanded}
+          onToggle={() => setAdvancedExpanded((expanded) => !expanded)}
+        >
+          <CreationAdvanced
+            activeTool={activeTool}
+            imageDraft={imageDraft}
+            videoDraft={videoDraft}
+            motionDraft={motionDraft}
+            onChange={replaceDraft}
+            onVideoChange={setVideoDraft}
             onUploadVideo={() => uploadReferenceVideo('video')}
             onUploadAudio={uploadReferenceAudio}
-            onUseHandle={(handle) => setVideoDraft((draft) => ({ ...draft, prompt: appendHandle(draft.prompt, handle), referenceMode: 'elements' }))}
-            onRemoveReference={(id) => setVideoDraft((draft) => ({ ...draft, references: draft.references.filter((media) => media.id !== id) }))}
             onRemoveReferenceVideo={(id) => setVideoDraft((draft) => ({ ...draft, referenceVideos: draft.referenceVideos.filter((media) => media.id !== id) }))}
             onRemoveReferenceAudio={(id) => setVideoDraft((draft) => ({ ...draft, referenceAudios: draft.referenceAudios.filter((media) => media.id !== id) }))}
             isUploading={isUploading}
           />
-        ) : (
-          <MotionControls
-            draft={motionDraft}
-            onChange={(draft) => replaceDraft(draft)}
-            onUploadCharacter={() => uploadSingleImage('character')}
-            onUploadReference={() => uploadReferenceVideo('motion')}
-            isUploading={isUploading}
-          />
-        )}
+        </DisclosureSection>
 
-        <ValidationPanel validation={validation} message={message} />
-
-        <GenerateAction
-          label={isGenerating ? 'Generating...' : `Generate ${meta.title}`}
+        <SurfaceSection
+          eyebrow="Ready check"
+          title="Generate"
+          body="Review cost and blockers before starting the run."
           accent={meta.accent}
-          disabled={isGenerating || isUploading || validation.errors.length > 0}
-          loading={isGenerating}
-          onPress={generate}
-        />
+        >
+          {readiness.map((item) => (
+            <ReadinessRow key={item.id} label={item.label} body={item.body} state={item.state} />
+          ))}
+          <ValidationPanel validation={validation} message={message} />
+          <PrimaryButton
+            label={isGenerating ? 'Generating...' : `Generate ${meta.title}`}
+            accent={meta.accent}
+            disabled={isGenerating || isUploading || validation.errors.length > 0}
+            loading={isGenerating}
+            onPress={generate}
+          />
+        </SurfaceSection>
 
         {status && status.status !== 'succeeded' ? (
-          <GlassPanel>
-            <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>Generation {status.status}</Text>
-            <Text style={{ color: appTheme.colors.muted, lineHeight: 20 }}>You can leave this screen and watch Notifications if it takes longer.</Text>
-          </GlassPanel>
+          <SurfaceSection
+            eyebrow="Progress"
+            title={`Generation ${status.status}`}
+            body="You can leave this screen and watch Alerts if it takes longer."
+            accent={meta.accent}
+          />
         ) : null}
 
         {outputUrl ? (
-          <GlassPanel>
-            <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '900' }}>Result</Text>
-            <MediaPreview url={outputUrl} kind={activeTool === 'image' ? 'image' : 'video'} />
-            <SecondaryAction label="Open Notifications" onPress={() => router.push('/(tabs)/studio')} />
-          </GlassPanel>
+          <ResultPanel
+            outputUrl={outputUrl}
+            kind={activeTool === 'image' ? 'image' : 'video'}
+            generationId={lastGenerationId}
+            accent={meta.accent}
+            onPost={() => {
+              if (!lastGenerationId) return;
+              router.push({
+                pathname: '/post/new',
+                params: { generationId: lastGenerationId },
+              } as never);
+            }}
+            onOpenAlerts={() => router.push('/(tabs)/studio')}
+            onCreateAnother={() => {
+              setStatus(null);
+              setLastGenerationId(null);
+              setMessage(null);
+            }}
+          />
         ) : null}
       </ScrollView>
     </View>
@@ -453,51 +500,21 @@ export function MediaCreationScreen({
 
 function ToolSwitcher({ value, onChange }: { value: CreatorToolId; onChange: (tool: CreatorToolId) => void }) {
   return (
-    <View style={{ flexDirection: 'row', backgroundColor: 'rgba(3,4,13,0.68)', borderRadius: appTheme.radii.pill, padding: 4, gap: 4 }}>
+    <View style={{ flexDirection: 'row', backgroundColor: appTheme.colors.surfaceInset, borderRadius: appTheme.radii.pill, padding: 4, gap: 4 }}>
       {(['image', 'video', 'motion'] as const).map((tool) => {
         const active = value === tool;
         const meta = TOOL_META[tool];
-        const Icon = meta.Icon;
         return (
-          <Pressable
+          <ChoiceChip
             key={tool}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
+            label={meta.title}
+            active={active}
             onPress={() => onChange(tool)}
-            style={{
-              flex: 1,
-              minHeight: 42,
-              borderRadius: appTheme.radii.pill,
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexDirection: 'row',
-              gap: 7,
-              backgroundColor: active ? `${accentColor(meta.accent)}30` : 'transparent',
-            }}
-          >
-            <Icon size={18} color={active ? accentColor(meta.accent) : appTheme.colors.muted} strokeWidth={2.4} />
-            <Text style={{ color: active ? '#ffffff' : appTheme.colors.muted, fontWeight: '900', fontSize: 13 }}>{meta.title}</Text>
-          </Pressable>
+            accent={meta.accent}
+            grow
+          />
         );
       })}
-    </View>
-  );
-}
-
-function GlassPanel({ children }: { children: React.ReactNode }) {
-  return (
-    <View
-      style={{
-        gap: 14,
-        borderRadius: 26,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.12)',
-        backgroundColor: 'rgba(9,10,24,0.86)',
-        padding: 16,
-      }}
-    >
-      {children}
     </View>
   );
 }
@@ -515,11 +532,15 @@ function PromptPanel({
 }) {
   const optional = draft.tool === 'motion';
   return (
-    <GlassPanel>
+    <SurfaceSection
+      eyebrow="Prompt"
+      title="Prompt"
+      body={draft.tool === 'video' && draft.isMultiShot ? 'Shot prompts below drive multi-shot mode.' : 'Use @handles after adding named references.'}
+      accent={draft.tool === 'image' ? 'image' : draft.tool === 'video' ? 'video' : 'motion'}
+    >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '900' }}>{optional ? 'Prompt (optional)' : 'Prompt'}</Text>
-          <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 12 }}>{draft.tool === 'video' && draft.isMultiShot ? 'Shot prompts below drive multi-shot mode.' : 'Use @handles after adding named references.'}</Text>
+          <AppText variant="label" color="muted">{optional ? 'Optional for motion' : 'Required'}</AppText>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -564,223 +585,343 @@ function PromptPanel({
           paddingVertical: 14,
         }}
       />
-    </GlassPanel>
+    </SurfaceSection>
   );
 }
 
-function ImageControls({
-  draft,
+function CreationEssentials({
+  activeTool,
+  imageDraft,
+  videoDraft,
+  motionDraft,
   onChange,
-  onUploadReferences,
-  onRemoveReference,
-  onUseHandle,
-  isUploading,
 }: {
-  draft: ImageCreationDraft;
-  onChange: (draft: ImageCreationDraft) => void;
-  onUploadReferences: () => void;
-  onRemoveReference: (id: string) => void;
-  onUseHandle: (handle: string) => void;
-  isUploading: boolean;
+  activeTool: CreatorToolId;
+  imageDraft: ImageCreationDraft;
+  videoDraft: VideoCreationDraft;
+  motionDraft: MotionCreationDraft;
+  onChange: (draft: CreationDraft) => void;
 }) {
-  const model = IMAGE_MODELS[draft.model];
-  const resolutionOptions = getImageResolutionOptions(draft.model, draft.aspectRatio);
-  return (
-    <GlassPanel>
-      <SectionLabel title="Image Model" icon={<ImageIcon size={17} color={accentColor('image')} />} />
-      <ModelPicker
-        items={Object.values(IMAGE_MODELS)}
-        value={draft.model}
-        accent="image"
-        onChange={(modelId) => onChange({ ...draft, model: modelId as ImageModelId })}
-      />
-      <OptionRow title="Aspect Ratio">
-        {model.aspectRatios.map((ratio) => (
-          <Chip key={ratio} label={ratio} active={draft.aspectRatio === ratio} onPress={() => onChange({ ...draft, aspectRatio: ratio })} />
-        ))}
-      </OptionRow>
-      <OptionRow title="Resolution">
-        {resolutionOptions.map((resolution) => (
-          <Chip key={resolution} label={resolution} active={draft.resolution === resolution} onPress={() => onChange({ ...draft, resolution })} />
-        ))}
-      </OptionRow>
-      {model.supportsOutputFormat ? (
-        <OptionRow title="Output">
-          {model.outputFormats.map((format) => (
-            <Chip key={format} label={format.toUpperCase()} active={draft.outputFormat === format} onPress={() => onChange({ ...draft, outputFormat: format })} />
+  if (activeTool === 'image') {
+    const model = IMAGE_MODELS[imageDraft.model];
+    const resolutionOptions = getImageResolutionOptions(imageDraft.model, imageDraft.aspectRatio);
+    return (
+      <View style={{ gap: appTheme.spacing.gap }}>
+        <SectionLabel title="Model" icon={<ImageIcon size={17} color={accentColor('image')} />} />
+        <ModelPicker
+          items={Object.values(IMAGE_MODELS)}
+          value={imageDraft.model}
+          accent="image"
+          onChange={(modelId) => onChange({ ...imageDraft, model: modelId as ImageModelId })}
+        />
+        <OptionRow title="Aspect ratio">
+          {model.aspectRatios.map((ratio) => (
+            <Chip key={ratio} label={ratio} active={imageDraft.aspectRatio === ratio} onPress={() => onChange({ ...imageDraft, aspectRatio: ratio })} />
           ))}
         </OptionRow>
-      ) : null}
-      {draft.model === 'grok-imagine-image' ? (
-        <OptionRow title="Quality">
-          <Chip label="Standard" active={draft.qualityMode === 'standard'} onPress={() => onChange({ ...draft, qualityMode: 'standard' })} />
-          <Chip label="Quality" active={draft.qualityMode === 'quality'} onPress={() => onChange({ ...draft, qualityMode: 'quality' })} />
+        <OptionRow title="Resolution">
+          {resolutionOptions.map((resolution) => (
+            <Chip key={resolution} label={resolution} active={imageDraft.resolution === resolution} onPress={() => onChange({ ...imageDraft, resolution })} />
+          ))}
         </OptionRow>
-      ) : null}
-      {model.supportsGoogleSearch ? (
-        <ToggleRow title="Google Search" value={draft.googleSearch} onValueChange={(googleSearch) => onChange({ ...draft, googleSearch })} />
-      ) : null}
-      <UploadBlock
-        title={`Reference images (${draft.references.length}/${model.maxImages})`}
-        actionLabel="Add images"
-        onPress={onUploadReferences}
-        disabled={isUploading}
+      </View>
+    );
+  }
+
+  if (activeTool === 'video') {
+    const model = VIDEO_MODELS[videoDraft.model];
+    return (
+      <View style={{ gap: appTheme.spacing.gap }}>
+        <SectionLabel title="Model" icon={<Video size={17} color={accentColor('video')} />} />
+        <ModelPicker
+          items={Object.values(VIDEO_MODELS)}
+          value={videoDraft.model}
+          accent="video"
+          onChange={(modelId) => {
+            const nextModel = modelId as VideoModelId;
+            onChange({
+              ...videoDraft,
+              model: nextModel,
+              mode: defaultVideoMode(nextModel),
+              duration: getDefaultVideoDuration(nextModel),
+            });
+          }}
+        />
+        <OptionRow title="Aspect ratio">
+          {model.aspectRatios.map((ratio) => (
+            <Chip key={ratio} label={ratio} active={videoDraft.aspectRatio === ratio} onPress={() => onChange({ ...videoDraft, aspectRatio: ratio })} />
+          ))}
+        </OptionRow>
+        {model.resolutions.length > 0 ? (
+          <OptionRow title="Resolution">
+            {model.resolutions.map((resolution) => (
+              <Chip key={resolution} label={resolution} active={videoDraft.resolution === resolution} onPress={() => onChange({ ...videoDraft, resolution })} />
+            ))}
+          </OptionRow>
+        ) : null}
+        {model.provider !== 'veo' && !videoDraft.isMultiShot ? (
+          <OptionRow title="Duration">
+            {model.durations.map((duration) => (
+              <Chip key={duration} label={`${duration}s`} active={videoDraft.duration === duration} onPress={() => onChange({ ...videoDraft, duration })} />
+            ))}
+          </OptionRow>
+        ) : null}
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      <SectionLabel title="Model" icon={<Sparkles size={17} color={accentColor('motion')} />} />
+      <ModelPicker
+        items={Object.values(MOTION_MODELS)}
+        value={motionDraft.model}
+        accent="motion"
+        onChange={(modelId) => onChange({ ...motionDraft, model: modelId as MotionModelId })}
       />
-      <MediaList items={draft.references} onRemove={onRemoveReference} onUseHandle={onUseHandle} />
-    </GlassPanel>
+    </View>
   );
 }
 
-function VideoControls({
-  draft,
-  onChange,
-  onUploadReferences,
+function CreationReferences({
+  activeTool,
+  imageDraft,
+  videoDraft,
+  motionDraft,
+  onImageChange,
+  onVideoChange,
+  onMotionChange,
+  onUploadImageReferences,
+  onUploadVideoReferences,
   onUploadStart,
   onUploadEnd,
+  onUploadCharacter,
+  onUploadMotionReference,
+  onUseImageHandle,
+  onUseVideoHandle,
+  isUploading,
+}: {
+  activeTool: CreatorToolId;
+  imageDraft: ImageCreationDraft;
+  videoDraft: VideoCreationDraft;
+  motionDraft: MotionCreationDraft;
+  onImageChange: (updater: (draft: ImageCreationDraft) => ImageCreationDraft) => void;
+  onVideoChange: (updater: (draft: VideoCreationDraft) => VideoCreationDraft) => void;
+  onMotionChange: (updater: (draft: MotionCreationDraft) => MotionCreationDraft) => void;
+  onUploadImageReferences: () => void;
+  onUploadVideoReferences: () => void;
+  onUploadStart: () => void;
+  onUploadEnd: () => void;
+  onUploadCharacter: () => void;
+  onUploadMotionReference: () => void;
+  onUseImageHandle: (handle: string) => void;
+  onUseVideoHandle: (handle: string) => void;
+  isUploading: boolean;
+}) {
+  if (activeTool === 'image') {
+    const model = IMAGE_MODELS[imageDraft.model];
+    return (
+      <View style={{ gap: appTheme.spacing.gap }}>
+        <UploadBlock
+          title={`Reference images (${imageDraft.references.length}/${model.maxImages})`}
+          actionLabel="Add images"
+          onPress={onUploadImageReferences}
+          disabled={isUploading}
+        />
+        <MediaList
+          items={imageDraft.references}
+          onRemove={(id) => onImageChange((draft) => ({ ...draft, references: draft.references.filter((media) => media.id !== id) }))}
+          onUseHandle={onUseImageHandle}
+        />
+      </View>
+    );
+  }
+
+  if (activeTool === 'video') {
+    const elementSupport = getVideoElementSupport(videoDraft.model, { mode: videoDraft.mode, isMultiShot: videoDraft.isMultiShot });
+    return (
+      <View style={{ gap: appTheme.spacing.gap }}>
+        <OptionRow title="Reference mode">
+          <Chip label="Frames" active={videoDraft.referenceMode === 'frames'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'frames' }))} />
+          <Chip label="Elements" active={videoDraft.referenceMode === 'elements'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'elements' }))} />
+        </OptionRow>
+        {videoDraft.referenceMode === 'frames' ? (
+          <View style={{ gap: 10 }}>
+            <UploadBlock title="Start frame" actionLabel={videoDraft.startFrame ? 'Replace start' : 'Add start'} onPress={onUploadStart} disabled={isUploading} />
+            {videoDraft.startFrame ? <MediaList items={[videoDraft.startFrame]} onRemove={() => onVideoChange((draft) => ({ ...draft, startFrame: null }))} /> : null}
+            <UploadBlock title="End frame" actionLabel={videoDraft.endFrame ? 'Replace end' : 'Add end'} onPress={onUploadEnd} disabled={isUploading || videoDraft.isMultiShot} />
+            {videoDraft.endFrame ? <MediaList items={[videoDraft.endFrame]} onRemove={() => onVideoChange((draft) => ({ ...draft, endFrame: null }))} /> : null}
+          </View>
+        ) : (
+          <View style={{ gap: 10 }}>
+            <UploadBlock
+              title={`Named image elements (${videoDraft.references.length}/${elementSupport.maxElements})`}
+              actionLabel={elementSupport.enabled ? 'Add elements' : 'Unavailable'}
+              onPress={onUploadVideoReferences}
+              disabled={isUploading || !elementSupport.enabled}
+            />
+            {elementSupport.reason ? <AppText variant="bodySm" color="muted">{elementSupport.reason}</AppText> : null}
+            <MediaList
+              items={videoDraft.references}
+              onRemove={(id) => onVideoChange((draft) => ({ ...draft, references: draft.references.filter((media) => media.id !== id) }))}
+              onUseHandle={onUseVideoHandle}
+            />
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  const duration = getMotionDuration(motionDraft);
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      <UploadBlock title="Character image" actionLabel={motionDraft.characterImage ? 'Replace image' : 'Add image'} onPress={onUploadCharacter} disabled={isUploading} />
+      {motionDraft.characterImage ? <MediaList items={[motionDraft.characterImage]} onRemove={() => onMotionChange((draft) => ({ ...draft, characterImage: null }))} /> : null}
+      <UploadBlock title={`Reference motion video${duration ? ` • ${duration}s` : ''}`} actionLabel={motionDraft.referenceVideo ? 'Replace video' : 'Add video'} onPress={onUploadMotionReference} disabled={isUploading} />
+      {motionDraft.referenceVideo ? <MediaList items={[motionDraft.referenceVideo]} onRemove={() => onMotionChange((draft) => ({ ...draft, referenceVideo: null }))} /> : null}
+    </View>
+  );
+}
+
+function CreationAdvanced({
+  activeTool,
+  imageDraft,
+  videoDraft,
+  motionDraft,
+  onChange,
+  onVideoChange,
   onUploadVideo,
   onUploadAudio,
-  onUseHandle,
-  onRemoveReference,
   onRemoveReferenceVideo,
   onRemoveReferenceAudio,
   isUploading,
 }: {
-  draft: VideoCreationDraft;
-  onChange: (draft: VideoCreationDraft) => void;
-  onUploadReferences: () => void;
-  onUploadStart: () => void;
-  onUploadEnd: () => void;
+  activeTool: CreatorToolId;
+  imageDraft: ImageCreationDraft;
+  videoDraft: VideoCreationDraft;
+  motionDraft: MotionCreationDraft;
+  onChange: (draft: CreationDraft) => void;
+  onVideoChange: (updater: (draft: VideoCreationDraft) => VideoCreationDraft) => void;
   onUploadVideo: () => void;
   onUploadAudio: () => void;
-  onUseHandle: (handle: string) => void;
-  onRemoveReference: (id: string) => void;
   onRemoveReferenceVideo: (id: string) => void;
   onRemoveReferenceAudio: (id: string) => void;
   isUploading: boolean;
 }) {
-  const model = VIDEO_MODELS[draft.model];
-  const elementSupport = getVideoElementSupport(draft.model, { mode: draft.mode, isMultiShot: draft.isMultiShot });
-  return (
-    <GlassPanel>
-      <SectionLabel title="Video Model" icon={<Video size={17} color={accentColor('video')} />} />
-      <ModelPicker
-        items={Object.values(VIDEO_MODELS)}
-        value={draft.model}
-        accent="video"
-        onChange={(modelId) => {
-          const nextModel = modelId as VideoModelId;
-          onChange({
-            ...draft,
-            model: nextModel,
-            mode: defaultVideoMode(nextModel),
-            duration: getDefaultVideoDuration(nextModel),
-          });
-        }}
-      />
-      {model.supportsMultiShot ? (
-        <ToggleRow title="Multi-shot" value={draft.isMultiShot} onValueChange={(isMultiShot) => onChange({ ...draft, isMultiShot })} />
-      ) : null}
-      {draft.isMultiShot ? <ShotEditor draft={draft} onChange={onChange} /> : null}
-      <OptionRow title="Aspect Ratio">
-        {model.aspectRatios.map((ratio) => (
-          <Chip key={ratio} label={ratio} active={draft.aspectRatio === ratio} onPress={() => onChange({ ...draft, aspectRatio: ratio })} />
-        ))}
-      </OptionRow>
-      {model.modeOptions.length > 0 ? (
-        <OptionRow title="Mode">
-          {model.modeOptions.map((option) => (
-            <Chip key={option.value} label={option.label} active={draft.mode === option.value} onPress={() => onChange({ ...draft, mode: option.value })} />
-          ))}
-        </OptionRow>
-      ) : null}
-      {model.resolutions.length > 0 ? (
-        <OptionRow title="Resolution">
-          {model.resolutions.map((resolution) => (
-            <Chip key={resolution} label={resolution} active={draft.resolution === resolution} onPress={() => onChange({ ...draft, resolution })} />
-          ))}
-        </OptionRow>
-      ) : null}
-      {model.provider !== 'veo' && !draft.isMultiShot ? (
-        <OptionRow title="Duration">
-          {model.durations.map((duration) => (
-            <Chip key={duration} label={`${duration}s`} active={draft.duration === duration} onPress={() => onChange({ ...draft, duration })} />
-          ))}
-        </OptionRow>
-      ) : null}
-      {model.supportsSound ? <ToggleRow title="Generate sound" value={draft.sound} onValueChange={(sound) => onChange({ ...draft, sound })} /> : null}
-      {model.supportsFixedLens ? <ToggleRow title="Fixed lens" value={draft.fixedLens} onValueChange={(fixedLens) => onChange({ ...draft, fixedLens })} /> : null}
-      <OptionRow title="Reference Mode">
-        <Chip label="Frames" active={draft.referenceMode === 'frames'} onPress={() => onChange({ ...draft, referenceMode: 'frames' })} />
-        <Chip label="Elements" active={draft.referenceMode === 'elements'} onPress={() => onChange({ ...draft, referenceMode: 'elements' })} />
-      </OptionRow>
-      {draft.referenceMode === 'frames' ? (
-        <View style={{ gap: 10 }}>
-          <UploadBlock title="Start frame" actionLabel={draft.startFrame ? 'Replace start' : 'Add start'} onPress={onUploadStart} disabled={isUploading} />
-          {draft.startFrame ? <MediaList items={[draft.startFrame]} onRemove={() => onChange({ ...draft, startFrame: null })} /> : null}
-          <UploadBlock title="End frame" actionLabel={draft.endFrame ? 'Replace end' : 'Add end'} onPress={onUploadEnd} disabled={isUploading || draft.isMultiShot} />
-          {draft.endFrame ? <MediaList items={[draft.endFrame]} onRemove={() => onChange({ ...draft, endFrame: null })} /> : null}
-        </View>
-      ) : (
-        <View style={{ gap: 10 }}>
-          <UploadBlock
-            title={`Named image elements (${draft.references.length}/${elementSupport.maxElements})`}
-            actionLabel={elementSupport.enabled ? 'Add elements' : 'Unavailable'}
-            onPress={onUploadReferences}
-            disabled={isUploading || !elementSupport.enabled}
-          />
-          {elementSupport.reason ? <Text style={{ color: appTheme.colors.muted, lineHeight: 19 }}>{elementSupport.reason}</Text> : null}
-          <MediaList items={draft.references} onRemove={onRemoveReference} onUseHandle={onUseHandle} />
-        </View>
-      )}
-      {isSeedance2Family(draft.model) ? (
-        <View style={{ gap: 10 }}>
-          <UploadBlock title={`Reference videos (${draft.referenceVideos.length}/3)`} actionLabel="Add video" onPress={onUploadVideo} disabled={isUploading} />
-          <MediaList items={draft.referenceVideos} onRemove={onRemoveReferenceVideo} />
-          <UploadBlock title="Reference audio" actionLabel="Add audio" onPress={onUploadAudio} disabled={isUploading} />
-          <MediaList items={draft.referenceAudios} onRemove={onRemoveReferenceAudio} />
-        </View>
-      ) : null}
-    </GlassPanel>
-  );
-}
+  if (activeTool === 'image') {
+    const model = IMAGE_MODELS[imageDraft.model];
+    return (
+      <View style={{ gap: appTheme.spacing.gap }}>
+        {model.supportsOutputFormat ? (
+          <OptionRow title="Output format">
+            {model.outputFormats.map((format) => (
+              <Chip key={format} label={format.toUpperCase()} active={imageDraft.outputFormat === format} onPress={() => onChange({ ...imageDraft, outputFormat: format })} />
+            ))}
+          </OptionRow>
+        ) : null}
+        {imageDraft.model === 'grok-imagine-image' ? (
+          <OptionRow title="Quality">
+            <Chip label="Standard" active={imageDraft.qualityMode === 'standard'} onPress={() => onChange({ ...imageDraft, qualityMode: 'standard' })} />
+            <Chip label="Quality" active={imageDraft.qualityMode === 'quality'} onPress={() => onChange({ ...imageDraft, qualityMode: 'quality' })} />
+          </OptionRow>
+        ) : null}
+        {model.supportsGoogleSearch ? (
+          <ToggleRow title="Google Search" value={imageDraft.googleSearch} onValueChange={(googleSearch) => onChange({ ...imageDraft, googleSearch })} />
+        ) : null}
+      </View>
+    );
+  }
 
-function MotionControls({
-  draft,
-  onChange,
-  onUploadCharacter,
-  onUploadReference,
-  isUploading,
-}: {
-  draft: MotionCreationDraft;
-  onChange: (draft: MotionCreationDraft) => void;
-  onUploadCharacter: () => void;
-  onUploadReference: () => void;
-  isUploading: boolean;
-}) {
-  const duration = getMotionDuration(draft);
+  if (activeTool === 'video') {
+    const model = VIDEO_MODELS[videoDraft.model];
+    return (
+      <View style={{ gap: appTheme.spacing.gap }}>
+        {model.supportsMultiShot ? (
+          <ToggleRow title="Multi-shot" value={videoDraft.isMultiShot} onValueChange={(isMultiShot) => onChange({ ...videoDraft, isMultiShot })} />
+        ) : null}
+        {videoDraft.isMultiShot ? <ShotEditor draft={videoDraft} onChange={(draft) => onChange(draft)} /> : null}
+        {model.modeOptions.length > 0 ? (
+          <OptionRow title="Mode">
+            {model.modeOptions.map((option) => (
+              <Chip key={option.value} label={option.label} active={videoDraft.mode === option.value} onPress={() => onChange({ ...videoDraft, mode: option.value })} />
+            ))}
+          </OptionRow>
+        ) : null}
+        {model.supportsSound ? <ToggleRow title="Generate sound" value={videoDraft.sound} onValueChange={(sound) => onChange({ ...videoDraft, sound })} /> : null}
+        {model.supportsFixedLens ? <ToggleRow title="Fixed lens" value={videoDraft.fixedLens} onValueChange={(fixedLens) => onChange({ ...videoDraft, fixedLens })} /> : null}
+        {isSeedance2Family(videoDraft.model) ? (
+          <View style={{ gap: 10 }}>
+            <UploadBlock title={`Reference videos (${videoDraft.referenceVideos.length}/3)`} actionLabel="Add video" onPress={onUploadVideo} disabled={isUploading} />
+            <MediaList items={videoDraft.referenceVideos} onRemove={onRemoveReferenceVideo} />
+            <UploadBlock title="Reference audio" actionLabel="Add audio" onPress={onUploadAudio} disabled={isUploading} />
+            <MediaList items={videoDraft.referenceAudios} onRemove={onRemoveReferenceAudio} />
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
-    <GlassPanel>
-      <SectionLabel title="Motion Model" icon={<Sparkles size={17} color={accentColor('motion')} />} />
-      <ModelPicker
-        items={Object.values(MOTION_MODELS)}
-        value={draft.model}
-        accent="motion"
-        onChange={(modelId) => onChange({ ...draft, model: modelId as MotionModelId })}
-      />
+    <View style={{ gap: appTheme.spacing.gap }}>
       <OptionRow title="Resolution">
-        {MOTION_MODELS[draft.model].resolutions.map((resolution) => (
-          <Chip key={resolution} label={resolution} active={draft.mode === resolution} onPress={() => onChange({ ...draft, mode: resolution })} />
+        {MOTION_MODELS[motionDraft.model].resolutions.map((resolution) => (
+          <Chip key={resolution} label={resolution} active={motionDraft.mode === resolution} onPress={() => onChange({ ...motionDraft, mode: resolution })} />
         ))}
       </OptionRow>
       <OptionRow title="Orientation">
-        <Chip label="Video" active={draft.characterOrientation === 'video'} onPress={() => onChange({ ...draft, characterOrientation: 'video' })} />
-        <Chip label="Image" active={draft.characterOrientation === 'image'} onPress={() => onChange({ ...draft, characterOrientation: 'image' })} />
+        <Chip label="Video" active={motionDraft.characterOrientation === 'video'} onPress={() => onChange({ ...motionDraft, characterOrientation: 'video' })} />
+        <Chip label="Image" active={motionDraft.characterOrientation === 'image'} onPress={() => onChange({ ...motionDraft, characterOrientation: 'image' })} />
       </OptionRow>
-      <UploadBlock title="Character image" actionLabel={draft.characterImage ? 'Replace image' : 'Add image'} onPress={onUploadCharacter} disabled={isUploading} />
-      {draft.characterImage ? <MediaList items={[draft.characterImage]} onRemove={() => onChange({ ...draft, characterImage: null })} /> : null}
-      <UploadBlock title={`Reference motion video${duration ? ` • ${duration}s` : ''}`} actionLabel={draft.referenceVideo ? 'Replace video' : 'Add video'} onPress={onUploadReference} disabled={isUploading} />
-      {draft.referenceVideo ? <MediaList items={[draft.referenceVideo]} onRemove={() => onChange({ ...draft, referenceVideo: null })} /> : null}
-    </GlassPanel>
+    </View>
+  );
+}
+
+function ResultPanel({
+  outputUrl,
+  kind,
+  generationId,
+  accent,
+  onPost,
+  onOpenAlerts,
+  onCreateAnother,
+}: {
+  outputUrl: string;
+  kind: 'image' | 'video';
+  generationId: string | null;
+  accent: ToolAccent;
+  onPost: () => void;
+  onOpenAlerts: () => void;
+  onCreateAnother: () => void;
+}) {
+  return (
+    <SurfaceSection
+      eyebrow="Result"
+      title="Your generation is ready"
+      body="Continue into post setup to choose caption, visibility, references, and optional resources."
+      accent={accent}
+    >
+      <MediaPreview url={outputUrl} kind={kind} />
+      <View style={{ gap: appTheme.spacing.gap }}>
+        {generationId ? (
+          <>
+            <ReadinessRow
+              label="Post setup next"
+              body="Post this opens the composer first. Nothing publishes until you review the post."
+              state="ready"
+            />
+            <PrimaryButton label="Post this" onPress={onPost} accent="workflow" />
+          </>
+        ) : null}
+        <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
+          <View style={{ flex: 1 }}>
+            <SecondaryButton label="Open Alerts" onPress={onOpenAlerts} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <SecondaryButton label="Create another" onPress={onCreateAnother} />
+          </View>
+        </View>
+      </View>
+    </SurfaceSection>
   );
 }
 
@@ -920,22 +1061,13 @@ function OptionRow({ title, children }: { title: string; children: React.ReactNo
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
-    <Pressable
-      accessibilityRole="button"
+    <ChoiceChip
+      label={label}
+      active={active}
       onPress={onPress}
-      style={{
-        minHeight: 36,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: active ? 'rgba(217,70,239,0.7)' : 'rgba(255,255,255,0.12)',
-        backgroundColor: active ? 'rgba(168,85,247,0.28)' : 'rgba(255,255,255,0.05)',
-        paddingHorizontal: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <Text numberOfLines={1} style={{ color: active ? '#ffffff' : appTheme.colors.muted, fontSize: 12, fontWeight: '900' }}>{label}</Text>
-    </Pressable>
+      accent="motion"
+      compact
+    />
   );
 }
 
@@ -1078,45 +1210,6 @@ function SecondaryAction({
   );
 }
 
-function GenerateAction({
-  label,
-  accent,
-  disabled,
-  loading,
-  onPress,
-}: {
-  label: string;
-  accent: ToolAccent;
-  disabled?: boolean;
-  loading?: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={disabled || loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 58,
-        borderRadius: appTheme.radii.pill,
-        overflow: 'hidden',
-        opacity: pressed ? 0.88 : disabled || loading ? 0.58 : 1,
-        boxShadow: disabled ? 'none' : `0 16px 42px ${accentColor(accent)}44`,
-      })}
-    >
-      <LinearGradient
-        colors={['#f032d0', '#8b3dff', '#38bdf8']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ minHeight: 58, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 10 }}
-      >
-        {loading ? <ActivityIndicator color="#ffffff" /> : <Sparkles size={22} color="#ffffff" strokeWidth={2.5} />}
-        <Text style={{ color: '#ffffff', fontSize: 17, fontWeight: '900' }}>{label}</Text>
-      </LinearGradient>
-    </Pressable>
-  );
-}
-
 function ValidationPanel({
   validation,
   message,
@@ -1134,7 +1227,11 @@ function ValidationPanel({
   }
 
   return (
-    <GlassPanel>
+    <SurfaceSection
+      eyebrow="Needs attention"
+      title="Generation checks"
+      accent="danger"
+    >
       {message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '900', lineHeight: 20 }}>{message}</Text> : null}
       {validation.errors.map((error) => (
         <Text selectable key={error} style={{ color: appTheme.colors.danger, lineHeight: 20 }}>{error}</Text>
@@ -1144,6 +1241,6 @@ function ValidationPanel({
           {warning.message}
         </Text>
       ))}
-    </GlassPanel>
+    </SurfaceSection>
   );
 }

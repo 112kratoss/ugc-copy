@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
-import { PrimaryButton, StatusBlock } from '@/components/ui';
+import { AppText, ChoiceChip, IconButton, MetricCard, PrimaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref, profileMediaFeedHref } from '@/lib/immersive-preview-view-model';
@@ -254,7 +254,7 @@ function ProfileMediaList({
   );
 
   return (
-    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
+    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
       <FlashList
         data={isLoading ? [] : cards}
         drawDistance={400}
@@ -299,7 +299,7 @@ function ProfileMediaList({
           </View>
         )}
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: '#03040d' }}
+        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{
           paddingTop: 18,
@@ -314,7 +314,9 @@ function ProfileMediaList({
 function ProfileTitle() {
   return (
     <View style={{ minHeight: 42, alignItems: 'center', justifyContent: 'center' }}>
-      <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>Profile</Text>
+      <AppText variant="sectionTitle" style={{ fontWeight: '900' }}>
+        Profile
+      </AppText>
     </View>
   );
 }
@@ -338,10 +340,10 @@ function SignedOutCard() {
           <UserRound size={34} color="#ffffff" />
         </View>
         <View style={{ gap: 8 }}>
-          <Text style={{ color: '#fff', fontSize: 27, lineHeight: 32, fontWeight: '900' }}>Sign in to view your creator profile.</Text>
-          <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 15, lineHeight: 22 }}>
+          <AppText variant="pageTitle" style={{ fontSize: 27, lineHeight: 32 }}>Sign in to view your creator profile.</AppText>
+          <AppText variant="bodySm" color="muted">
             Saved media, creations, posts, credits, and wallet balance will appear here.
-          </Text>
+          </AppText>
         </View>
         <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="motion" />
       </View>
@@ -470,30 +472,13 @@ function ProfileAvatar({ profile, initials }: { profile?: ProfileResponse | null
 
 function BalanceCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <View
-      style={{
-        flex: 1,
-        minHeight: 96,
-        borderRadius: 22,
-        borderCurve: 'continuous',
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.12)',
-      }}
-    >
-      <LinearGradient
-        colors={label === 'Wallet' ? ['rgba(34,211,238,0.16)', 'rgba(124,58,237,0.12)'] : ['rgba(251,191,36,0.16)', 'rgba(124,58,237,0.14)']}
-        style={{ flex: 1, padding: 14, justifyContent: 'space-between' }}
-      >
-        <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' }}>
-          {icon}
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: '#fff', fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{value}</Text>
-        </View>
-      </LinearGradient>
-    </View>
+    <MetricCard
+      icon={icon}
+      label={label}
+      value={value}
+      accent={label === 'Wallet' ? 'workflow' : 'amber'}
+      compact
+    />
   );
 }
 
@@ -528,9 +513,9 @@ function SellerDashboardButton() {
         <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(217,70,239,0.18)', alignItems: 'center', justifyContent: 'center' }}>
           <Store size={21} color="#ffffff" />
         </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 17, fontWeight: '900' }}>Seller Dashboard</Text>
-          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 13 }}>Sales, paid unlocks, and seller listings</Text>
+        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+          <AppText variant="cardTitle" numberOfLines={1}>Seller Dashboard</AppText>
+          <AppText variant="caption" color="muted" numberOfLines={1}>Sales, paid unlocks, and seller listings</AppText>
         </View>
         <ChevronRight size={23} color="#ffffff" />
       </LinearGradient>
@@ -552,15 +537,17 @@ function ProfileMediaHeader({
   return (
     <View style={{ gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 25, fontWeight: '900', flex: 1 }}>{title ?? getProfileMediaSectionTitle(activeTab)}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Refresh media"
+        <AppText variant="sectionTitle" numberOfLines={1} style={{ flex: 1 }}>
+          {title ?? getProfileMediaSectionTitle(activeTab)}
+        </AppText>
+        <IconButton
+          icon={RefreshCw}
+          label="Refresh media"
+          disabled={!onRefresh}
           onPress={onRefresh}
-          style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' })}
-        >
-          <RefreshCw size={20} color="#a855f7" />
-        </Pressable>
+          accent="motion"
+          style={{ minHeight: 38, minWidth: 38 }}
+        />
       </View>
       <ProfileSegment value={activeTab} onChange={onTabChange} />
     </View>
@@ -575,8 +562,8 @@ function ProfileMediaEmpty({ title }: { title: string }) {
         borderRadius: 24,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.10)',
-        backgroundColor: 'rgba(255,255,255,0.045)',
+        borderColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.surface,
         alignItems: 'center',
         justifyContent: 'center',
         padding: 20,
@@ -584,10 +571,10 @@ function ProfileMediaEmpty({ title }: { title: string }) {
       }}
     >
       <ImageIcon size={30} color={appTheme.colors.faint} />
-      <Text style={{ color: '#fff', fontSize: 17, fontWeight: '900' }}>{title}</Text>
-      <Text style={{ color: appTheme.colors.muted, textAlign: 'center', lineHeight: 20 }}>
+      <AppText variant="cardTitle">{title}</AppText>
+      <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
         This section will fill as you save media, create generations, or publish posts.
-      </Text>
+      </AppText>
     </View>
   );
 }
@@ -615,26 +602,19 @@ function getProfileMediaSwipeDirection(gestureState: PanResponderGestureState): 
 
 function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange: (value: ProfileMediaTab) => void }) {
   return (
-    <View style={{ flexDirection: 'row', borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.06)', padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: appTheme.spacing.compact, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceInset, padding: 4 }}>
       {PROFILE_MEDIA_TABS.map((tab) => {
         const active = tab === value;
         return (
-          <Pressable
+          <ChoiceChip
             key={tab}
+            label={tab}
+            active={active}
             onPress={() => onChange(tab)}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 40,
-              borderRadius: 20,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: active ? 'rgba(124,58,237,0.74)' : 'transparent',
-              opacity: pressed ? 0.75 : 1,
-              paddingHorizontal: 10,
-            })}
-          >
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color: active ? '#fff' : appTheme.colors.muted, fontSize: 14, fontWeight: active ? '900' : '700' }}>{tab}</Text>
-          </Pressable>
+            accent={tab === 'Saved' ? 'image' : tab === 'Creations' ? 'motion' : 'workflow'}
+            grow
+            compact
+          />
         );
       })}
     </View>

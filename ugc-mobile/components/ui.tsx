@@ -214,6 +214,382 @@ export function Card({
   );
 }
 
+export function SurfaceSection({
+  children,
+  eyebrow,
+  title,
+  body,
+  accent,
+  action,
+  style,
+}: {
+  children?: React.ReactNode;
+  eyebrow?: string;
+  title: string;
+  body?: string;
+  accent?: ToolAccent;
+  action?: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <Card accent={accent} style={style}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
+        <View style={{ flex: 1, gap: 5 }}>
+          {eyebrow ? <Kicker color={accent ? accentColor(accent) : 'faint'}>{eyebrow}</Kicker> : null}
+          <AppText variant="cardTitle">{title}</AppText>
+          {body ? (
+            <AppText variant="bodySm" color="muted">
+              {body}
+            </AppText>
+          ) : null}
+        </View>
+        {action ? <View style={{ flexShrink: 0 }}>{action}</View> : null}
+      </View>
+      {children}
+    </Card>
+  );
+}
+
+export function DisclosureSection({
+  children,
+  expanded,
+  onToggle,
+  title,
+  body,
+  accent,
+}: {
+  children: React.ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  title: string;
+  body?: string;
+  accent?: ToolAccent;
+}) {
+  const color = accent ? accentColor(accent) : appTheme.colors.textSecondary;
+
+  return (
+    <SurfaceSection
+      eyebrow={expanded ? 'Expanded' : 'Collapsed'}
+      title={title}
+      body={body}
+      accent={accent}
+      action={(
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
+          accessibilityState={{ expanded }}
+          onPress={onToggle}
+          style={({ pressed }) => ({
+            minHeight: appTheme.touch.compact,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 1,
+            borderColor: `${color}55`,
+            borderRadius: appTheme.radii.pill,
+            backgroundColor: `${color}1f`,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+            paddingHorizontal: appTheme.spacing.gap,
+          })}
+        >
+          <AppText selectable={false} variant="label" color={color}>
+            {expanded ? 'Hide' : 'Show'}
+          </AppText>
+        </Pressable>
+      )}
+    >
+      {expanded ? children : null}
+    </SurfaceSection>
+  );
+}
+
+export function ChoiceChip({
+  label,
+  active,
+  onPress,
+  disabled = false,
+  accent = 'motion',
+  grow = false,
+  compact = false,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+  accent?: ToolAccent;
+  grow?: boolean;
+  compact?: boolean;
+}) {
+  const color = accentColor(accent);
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flex: grow ? 1 : undefined,
+        minHeight: compact ? 34 : appTheme.touch.compact,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: active ? `${color}8a` : appTheme.colors.border,
+        backgroundColor: active ? `${color}24` : appTheme.colors.surfaceStrong,
+        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: compact ? appTheme.spacing.gap : appTheme.spacing.card,
+      })}
+    >
+      <AppText
+        selectable={false}
+        variant={compact ? 'caption' : 'label'}
+        color={active ? appTheme.colors.text : appTheme.colors.muted}
+        numberOfLines={1}
+        style={{ fontWeight: active ? '900' : '800' }}
+      >
+        {label}
+      </AppText>
+    </Pressable>
+  );
+}
+
+export function MetricCard({
+  icon,
+  label,
+  value,
+  body,
+  accent,
+  onPress,
+  compact = false,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  value: string;
+  body?: string;
+  accent?: ToolAccent;
+  onPress?: () => void;
+  compact?: boolean;
+}) {
+  const content = (
+    <>
+      {icon ? (
+        <View
+          style={{
+            width: compact ? 34 : 42,
+            height: compact ? 34 : 42,
+            borderRadius: compact ? 17 : 21,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: accent ? `${accentColor(accent)}1f` : appTheme.colors.surfaceStrong,
+          }}
+        >
+          {icon}
+        </View>
+      ) : null}
+      <View style={{ gap: 4 }}>
+        <Kicker>{label}</Kicker>
+        <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>
+          {value}
+        </AppText>
+        {body ? (
+          <AppText variant="caption" color="muted">
+            {body}
+          </AppText>
+        ) : null}
+      </View>
+    </>
+  );
+
+  if (!onPress) {
+    return (
+      <Card accent={accent} padding="sm" style={{ flex: 1, minHeight: compact ? 76 : 104 }}>
+        {content}
+      </Card>
+    );
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => ({ flex: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <Card accent={accent} padding="sm" style={{ minHeight: compact ? 76 : 104 }}>
+        {content}
+      </Card>
+    </Pressable>
+  );
+}
+
+export function ReadinessRow({
+  label,
+  body,
+  state = 'neutral',
+}: {
+  label: string;
+  body: string;
+  state?: 'neutral' | 'ready' | 'warning' | 'danger';
+}) {
+  const color = state === 'ready'
+    ? appTheme.colors.success
+    : state === 'warning'
+      ? appTheme.colors.commerce
+      : state === 'danger'
+        ? appTheme.colors.danger
+        : appTheme.colors.muted;
+
+  return (
+    <View
+      style={{
+        minHeight: appTheme.touch.compact,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: appTheme.spacing.gap,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: `${color}55`,
+        backgroundColor: `${color}16`,
+        paddingHorizontal: appTheme.spacing.gap,
+        paddingVertical: appTheme.spacing.compact,
+      }}
+    >
+      <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: color }} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <AppText selectable={false} variant="label" color={color}>
+          {label}
+        </AppText>
+        <AppText variant="caption" color="muted">
+          {body}
+        </AppText>
+      </View>
+    </View>
+  );
+}
+
+export function ToggleRow({
+  label,
+  body,
+  value,
+  onValueChange,
+  disabled = false,
+  accent = 'workflow',
+}: {
+  label: string;
+  body?: string;
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+  disabled?: boolean;
+  accent?: ToolAccent;
+}) {
+  const color = accentColor(accent);
+
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value, disabled }}
+      disabled={disabled}
+      onPress={() => onValueChange(!value)}
+      style={({ pressed }) => ({
+        minHeight: 58,
+        borderRadius: appTheme.radii.lg,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: value ? `${color}66` : appTheme.colors.border,
+        backgroundColor: value ? `${color}18` : appTheme.colors.surfaceStrong,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: appTheme.spacing.gap,
+        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: appTheme.spacing.card,
+        paddingVertical: appTheme.spacing.gap,
+      })}
+    >
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <AppText selectable={false} variant="label" color={value ? color : appTheme.colors.text}>
+          {label}
+        </AppText>
+        {body ? (
+          <AppText variant="caption" color="muted">
+            {body}
+          </AppText>
+        ) : null}
+      </View>
+      <View
+        style={{
+          width: 46,
+          height: 28,
+          borderRadius: 14,
+          borderWidth: 1,
+          borderColor: value ? `${color}88` : appTheme.colors.borderStrong,
+          backgroundColor: value ? `${color}33` : appTheme.colors.surfaceInset,
+          justifyContent: 'center',
+          paddingHorizontal: 3,
+        }}
+      >
+        <View
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: value ? color : appTheme.colors.muted,
+            alignSelf: value ? 'flex-end' : 'flex-start',
+          }}
+        />
+      </View>
+    </Pressable>
+  );
+}
+
+export function BottomActionDock({
+  children,
+  eyebrow = 'Publish dock',
+  title,
+  body,
+  accent = 'motion',
+  style,
+}: {
+  children: React.ReactNode;
+  eyebrow?: string;
+  title: string;
+  body?: string;
+  accent?: ToolAccent;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const color = accentColor(accent);
+
+  return (
+    <View
+      style={[
+        {
+          borderRadius: appTheme.radii.xl,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: `${color}55`,
+          backgroundColor: appTheme.colors.panel,
+          padding: appTheme.spacing.card,
+          gap: appTheme.spacing.gap,
+        },
+        appTheme.shadow.panel as ViewStyle,
+        style,
+      ]}
+    >
+      <View style={{ gap: 4 }}>
+        <Kicker color={color}>{eyebrow}</Kicker>
+        <AppText variant="cardTitle">{title}</AppText>
+        {body ? (
+          <AppText variant="caption" color="muted">
+            {body}
+          </AppText>
+        ) : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
 export function PrimaryButton({
   label,
   onPress,
@@ -229,7 +605,7 @@ export function PrimaryButton({
 }) {
   const fillColor = accentColor(accent);
   const textColor = accent === 'image' || accent === 'amber' || accent === 'commerce'
-    ? appTheme.colors.app
+    ? appTheme.colors.textInverse
     : '#ffffff';
 
   return (

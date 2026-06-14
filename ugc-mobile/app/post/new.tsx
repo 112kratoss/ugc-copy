@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
-import { Check, FileText, ImageIcon, Lock, Play, Sparkles } from 'lucide-react-native';
+import { Check, FileText, ImageIcon, Lock, PackageCheck, Play, Sparkles } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PrimaryButton, StatusBlock } from '@/components/ui';
+import { AppText, BottomActionDock, ChoiceChip, DisclosureSection, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatRelativeTime } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
@@ -16,8 +16,12 @@ import {
   buildCreatePostFormData,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  applyCreationPromptResource,
   getDefaultPostComposerDraft,
+  getPostComposerPackageStatus,
   getPostComposerPreviewStatusLabel,
+  getPostComposerReadiness,
+  getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
@@ -36,7 +40,7 @@ import {
 } from '@/lib/post-new-view-model';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { appTheme } from '@/lib/theme';
+import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { GenerationListItem, PostResourceBundleAccessMode } from '@/lib/types';
 
 const getDefaultResourceDraft = () => ({
@@ -68,6 +72,7 @@ export default function NewPostScreen() {
   const [message, setMessage] = useState<{ tone: 'danger' | 'success'; title: string; body?: string } | null>(null);
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
+  const [postSettingsExpanded, setPostSettingsExpanded] = useState(false);
 
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id],
@@ -91,6 +96,18 @@ export default function NewPostScreen() {
   const isEditMode = Boolean(postId);
   const isFieldsLocked = isEditMode && isGenerationBacked;
   const canSubmit = !isPickingMedia && (!isEditMode || !postQuery.isLoading);
+  const readiness = useMemo(
+    () => getPostComposerReadiness(draft, selectedGeneration, isEditMode && isGenerationBacked),
+    [draft, isEditMode, isGenerationBacked, selectedGeneration]
+  );
+  const sectionSummary = useMemo(
+    () => getPostComposerSectionSummary(draft, selectedGeneration),
+    [draft, selectedGeneration]
+  );
+  const packageStatus = useMemo(
+    () => getPostComposerPackageStatus(draft, selectedGeneration),
+    [draft, selectedGeneration]
+  );
 
   // Prefill when generationId is provided and the creations list resolves
   useEffect(() => {
@@ -137,6 +154,7 @@ export default function NewPostScreen() {
           name: post.title || 'media',
           type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
         } : null,
+        creationPackage: getDefaultPostComposerDraft().creationPackage,
         resource: resourceBundleInput ? {
           accessMode: resourceBundleInput.accessMode || 'none',
           promptText: resourceBundleInput.resources?.promptText || '',
@@ -202,8 +220,8 @@ export default function NewPostScreen() {
 
   if (authLoading) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#03040d', alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color="#d946ef" />
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator color={appTheme.colors.motion} />
       </View>
     );
   }
@@ -230,6 +248,25 @@ export default function NewPostScreen() {
 
   const updateResource = (patch: Partial<PostComposerDraft['resource']>) => {
     setDraft((current) => ({ ...current, resource: { ...current.resource, ...patch } }));
+  };
+
+  const updateCreationPackage = (patch: Partial<PostComposerDraft['creationPackage']>) => {
+    setDraft((current) => ({ ...current, creationPackage: { ...current.creationPackage, ...patch } }));
+  };
+
+  const togglePromptResource = (enabled: boolean) => {
+    setDraft((current) => applyCreationPromptResource(current, selectedGeneration, enabled));
+  };
+
+  const changeCreation = () => {
+    if (isFieldsLocked) return;
+    setMessage(null);
+    setDraft((current) => ({
+      ...current,
+      mode: 'creation',
+      selectedGenerationId: null,
+      creationPackage: getDefaultPostComposerDraft().creationPackage,
+    }));
   };
 
   const chooseMedia = async (kind: 'image' | 'video') => {
@@ -269,20 +306,28 @@ export default function NewPostScreen() {
       sourceTool: 'Magicbooklet',
       sourceToolSlug: 'magicbooklet',
       category,
+      creationPackage: getDefaultPostComposerDraft().creationPackage,
     }));
   };
 
+  const publishLabel = getPostComposerSubmitLabel({
+    visibility: draft.visibility,
+    isEditMode,
+    isPending: publishMutation.isPending,
+  });
+  const publishReadiness = readiness.find((item) => item.id === 'publish') ?? readiness[readiness.length - 1];
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#03040d' }}>
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        style={{ flex: 1, backgroundColor: '#03040d' }}
+        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
           paddingTop: 18,
-          paddingBottom: tabBarMetrics.bottomInset + 42,
+          paddingBottom: tabBarMetrics.bottomInset + 150,
           gap: 14,
         }}
       >
@@ -296,132 +341,194 @@ export default function NewPostScreen() {
           <StatusBlock tone={message.tone} title={message.title} body={message.body} />
         ) : null}
 
-        <OrderedField step="1" label="Title">
-          <ComposerInput
-            value={draft.title}
-            onChangeText={(title) => updateDraft({ title })}
-            placeholder="Name the idea, media, or resource"
-            editable={!isFieldsLocked}
+        {selectedGeneration ? (
+          <SelectedCreationHero
+            item={selectedGeneration}
+            disabled={isFieldsLocked}
+            onChange={changeCreation}
           />
-        </OrderedField>
+        ) : null}
 
-        <OrderedField step="2" label="Content">
-          <SegmentedRow>
-            {POST_COMPOSER_MODES.map((mode) => (
-              <Chip
-                key={mode.id}
-                label={mode.label}
-                active={draft.mode === mode.id}
-                onPress={() => setMode(mode.id)}
-                disabled={isFieldsLocked}
-              />
-            ))}
-          </SegmentedRow>
-          {draft.mode === 'text' ? (
+        <SurfaceSection
+          eyebrow="Public post"
+          title="Public post"
+          body={sectionSummary.publicPost}
+          accent="image"
+        >
+          <FieldBlock label="Title">
             <ComposerInput
-              value={draft.contentText}
-              onChangeText={(contentText) => updateDraft({ contentText, category: 'text' })}
-              placeholder="Write the reusable idea, prompt, teardown, or update..."
-              multiline
+              value={draft.title}
+              onChangeText={(title) => updateDraft({ title })}
+              placeholder="Name the idea, media, or resource"
               editable={!isFieldsLocked}
             />
-          ) : null}
-          {draft.mode === 'upload' ? (
-            <UploadContent
-              draft={draft}
-              isPicking={isPickingMedia}
-              onPickImage={() => chooseMedia('image')}
-              onPickVideo={() => chooseMedia('video')}
-              disabled={isFieldsLocked}
-            />
-          ) : null}
-          {draft.mode === 'creation' ? (
-            <CreationContent
-              items={publishableGenerations}
-              selectedId={draft.selectedGenerationId}
-              loading={generationsQuery.isLoading}
-              error={generationsQuery.error}
-              visibleItems={isFieldsLocked ? allGenerations : publishableGenerations}
-              onSelect={chooseGeneration}
-              onCreate={() => router.push('/(tabs)/creator' as never)}
-              disabled={isFieldsLocked}
-            />
-          ) : null}
-        </OrderedField>
+          </FieldBlock>
 
-        <OrderedField step="3" label="Caption / Body">
-          <ComposerInput
-            value={draft.caption}
-            onChangeText={(caption) => updateDraft({ caption })}
-            placeholder={draft.mode === 'text' ? 'Optional extra caption' : 'What should people know about this post?'}
-            multiline
-            minHeight={92}
-            editable={!isFieldsLocked}
-          />
-        </OrderedField>
-
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <OrderedField step="4" label="Source" compact>
-            <SegmentedRow wrap>
-              {POST_COMPOSER_SOURCE_OPTIONS.map((source) => (
-                <SmallChip
-                  key={source.slug}
-                  label={source.label}
-                  active={draft.sourceToolSlug === source.slug}
-                  onPress={() => updateDraft({ sourceTool: source.label, sourceToolSlug: source.slug })}
+          {!selectedGeneration ? (
+            <FieldBlock label="Content">
+              <SegmentedRow>
+                {POST_COMPOSER_MODES.map((mode) => (
+                  <Chip
+                    key={mode.id}
+                    label={mode.label}
+                    active={draft.mode === mode.id}
+                    onPress={() => setMode(mode.id)}
+                    disabled={isFieldsLocked}
+                  />
+                ))}
+              </SegmentedRow>
+              {draft.mode === 'text' ? (
+                <ComposerInput
+                  value={draft.contentText}
+                  onChangeText={(contentText) => updateDraft({ contentText, category: 'text' })}
+                  placeholder="Write the reusable idea, prompt, teardown, or update..."
+                  multiline
+                  editable={!isFieldsLocked}
+                />
+              ) : null}
+              {draft.mode === 'upload' ? (
+                <UploadContent
+                  draft={draft}
+                  isPicking={isPickingMedia}
+                  onPickImage={() => chooseMedia('image')}
+                  onPickVideo={() => chooseMedia('video')}
                   disabled={isFieldsLocked}
+                />
+              ) : null}
+              {draft.mode === 'creation' ? (
+                <CreationContent
+                  items={publishableGenerations}
+                  selectedId={draft.selectedGenerationId}
+                  loading={generationsQuery.isLoading}
+                  error={generationsQuery.error}
+                  visibleItems={isFieldsLocked ? allGenerations : publishableGenerations}
+                  onSelect={chooseGeneration}
+                  onCreate={() => router.push('/(tabs)/creator' as never)}
+                  disabled={isFieldsLocked}
+                />
+              ) : null}
+            </FieldBlock>
+          ) : null}
+
+          <FieldBlock label="Caption / body">
+            <ComposerInput
+              value={draft.caption}
+              onChangeText={(caption) => updateDraft({ caption })}
+              placeholder={draft.mode === 'text' ? 'Optional extra caption' : 'What should people know about this post?'}
+              multiline
+              minHeight={92}
+              editable={!isFieldsLocked}
+            />
+          </FieldBlock>
+
+          <FieldBlock label="Visibility">
+            <SegmentedRow>
+              {POST_COMPOSER_VISIBILITY_OPTIONS.map((option) => (
+                <Chip
+                  key={option.id}
+                  label={option.label}
+                  active={draft.visibility === option.id}
+                  onPress={() => updateDraft({ visibility: option.id })}
                 />
               ))}
             </SegmentedRow>
-          </OrderedField>
-          <OrderedField step="5" label="Category" compact>
-            <SegmentedRow wrap>
-              {POST_COMPOSER_CATEGORY_OPTIONS.filter((item) => draft.mode === 'text' ? item.id === 'text' : item.id !== 'text').map((category) => (
-                <SmallChip
-                  key={category.id}
-                  label={category.label}
-                  active={draft.category === category.id}
-                  onPress={() => updateDraft({ category: category.id })}
-                  disabled={isFieldsLocked}
-                />
-              ))}
-            </SegmentedRow>
-          </OrderedField>
-        </View>
+            <AppText variant="bodySm" color="muted">
+              {POST_COMPOSER_VISIBILITY_OPTIONS.find((option) => option.id === draft.visibility)?.body ?? 'Choose who can see this post.'}
+            </AppText>
+          </FieldBlock>
+        </SurfaceSection>
 
-        <OrderedField step="6" label="Visibility">
-          <SegmentedRow>
-            {POST_COMPOSER_VISIBILITY_OPTIONS.map((option) => (
-              <Chip
-                key={option.id}
-                label={option.label}
-                active={draft.visibility === option.id}
-                onPress={() => updateDraft({ visibility: option.id })}
+        <DisclosureSection
+          title="Post settings"
+          body={sectionSummary.postSettings}
+          accent="workflow"
+          expanded={postSettingsExpanded}
+          onToggle={() => setPostSettingsExpanded((expanded) => !expanded)}
+        >
+          <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
+            <FieldBlock label="Source" compact>
+              <SegmentedRow wrap>
+                {POST_COMPOSER_SOURCE_OPTIONS.map((source) => (
+                  <SmallChip
+                    key={source.slug}
+                    label={source.label}
+                    active={draft.sourceToolSlug === source.slug}
+                    onPress={() => updateDraft({ sourceTool: source.label, sourceToolSlug: source.slug })}
+                    disabled={isFieldsLocked}
+                  />
+                ))}
+              </SegmentedRow>
+            </FieldBlock>
+            <FieldBlock label="Category" compact>
+              <SegmentedRow wrap>
+                {POST_COMPOSER_CATEGORY_OPTIONS.filter((item) => draft.mode === 'text' ? item.id === 'text' : item.id !== 'text').map((category) => (
+                  <SmallChip
+                    key={category.id}
+                    label={category.label}
+                    active={draft.category === category.id}
+                    onPress={() => updateDraft({ category: category.id })}
+                    disabled={isFieldsLocked}
+                  />
+                ))}
+              </SegmentedRow>
+            </FieldBlock>
+          </View>
+        </DisclosureSection>
+
+        <SurfaceSection
+          eyebrow="Package"
+          title="Resource package"
+          body={sectionSummary.resourcePackage}
+          accent={draft.resource.accessMode === 'paid' ? 'commerce' : 'workflow'}
+        >
+          {draft.mode === 'creation' && selectedGeneration ? (
+            <View style={{ gap: appTheme.spacing.compact }}>
+              {hasGenerationReferences(selectedGeneration) ? (
+                <ToggleRow
+                  label="Attach creation references"
+                  body="Include the saved input media in post details."
+                  value={draft.creationPackage.attachGenerationReferences}
+                  onValueChange={(attachGenerationReferences) => updateCreationPackage({ attachGenerationReferences })}
+                  accent="image"
+                />
+              ) : null}
+              <ToggleRow
+                label="Use exact prompt as resource"
+                body="Turn the generation prompt into a free resource package."
+                value={draft.creationPackage.attachPromptResource}
+                onValueChange={togglePromptResource}
+                accent="workflow"
+                disabled={!selectedGeneration.prompt?.trim()}
               />
-            ))}
-          </SegmentedRow>
-          <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, fontWeight: '700' }}>
-            {POST_COMPOSER_VISIBILITY_OPTIONS.find((option) => option.id === draft.visibility)?.body ?? 'Choose who can see this post.'}
-          </Text>
-        </OrderedField>
-
-        <OrderedField step="7" label="Unlockables">
+            </View>
+          ) : null}
           <SegmentedRow>
             {POST_COMPOSER_UNLOCK_OPTIONS.map((option) => (
               <Chip
-                key={option.id}
-                label={option.label}
-                active={draft.resource.accessMode === option.id}
-                onPress={() => updateResource({ accessMode: option.id })}
-              />
-            ))}
+                  key={option.id}
+                  label={option.label}
+                  active={draft.resource.accessMode === option.id}
+                  onPress={() => {
+                    updateResource({ accessMode: option.id });
+                    if (option.id === 'none') updateCreationPackage({ attachPromptResource: false });
+                  }}
+                  accent={option.id === 'paid' ? 'commerce' : option.id === 'free' ? 'workflow' : 'motion'}
+                />
+              ))}
           </SegmentedRow>
           {draft.resource.accessMode !== 'none' ? (
             <>
+              <ReadinessRow
+                label={packageStatus.label}
+                body={packageStatus.body}
+                state={packageStatus.state}
+              />
               {draft.visibility !== 'public' ? (
-                <Text selectable style={{ color: '#fbbf24', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
-                  This unlock will save as a draft until the post is public.
-                </Text>
+                <ReadinessRow
+                  label="Draft package"
+                  body="This package stays quieter until the post is public."
+                  state="warning"
+                />
               ) : null}
               <UnlockFields
                 accessMode={draft.resource.accessMode}
@@ -430,27 +537,37 @@ export default function NewPostScreen() {
               />
             </>
           ) : (
-            <View style={{ gap: 6 }}>
-              <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19 }}>
-                Publish a normal community post. You can add free or paid resources when the post has reusable value.
-              </Text>
-              {selectedGeneration && hasGenerationReferences(selectedGeneration) ? (
-                <Text selectable style={{ color: '#66ff45', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
-                  Saved creation inputs will attach to public posts as a free reference package.
-                </Text>
-              ) : null}
+            <View style={{ gap: appTheme.spacing.compact }}>
+              <AppText variant="bodySm" color="muted">
+                Publish a normal community post. Add free or paid resources only when this post has reusable value.
+              </AppText>
+              <ReadinessRow
+                label={packageStatus.label}
+                body={packageStatus.body}
+                state={packageStatus.state}
+              />
             </View>
           )}
-        </OrderedField>
+        </SurfaceSection>
 
         <PreviewPanel draft={draft} selectedGeneration={selectedGeneration} />
-
+      </ScrollView>
+      <BottomActionDock
+        title={isEditMode ? 'Save changes' : 'Ready to publish'}
+        body={publishReadiness?.body ?? 'Complete the required fields before publishing.'}
+        accent="motion"
+        style={{
+          position: 'absolute',
+          left: horizontalPadding,
+          right: horizontalPadding,
+          bottom: bottomInset + 12,
+        }}
+      >
+        {readiness.slice(0, 2).map((item) => (
+          <ReadinessRow key={item.id} label={item.label} body={item.body} state={item.state} />
+        ))}
         <PrimaryButton
-          label={getPostComposerSubmitLabel({
-            visibility: draft.visibility,
-            isEditMode,
-            isPending: publishMutation.isPending,
-          })}
+          label={publishLabel}
           loading={publishMutation.isPending}
           disabled={!canSubmit || publishMutation.isPending}
           onPress={() => {
@@ -459,35 +576,91 @@ export default function NewPostScreen() {
           }}
           accent="motion"
         />
-      </ScrollView>
+      </BottomActionDock>
     </View>
   );
 }
 
 function PostIntro({ isEdit, isGenerationBacked }: { isEdit: boolean; isGenerationBacked: boolean }) {
   return (
-    <View style={{ gap: 7 }}>
-      <Text selectable style={{ color: '#fff', fontSize: 29, lineHeight: 34, fontWeight: '900' }}>
-        {isEdit ? 'Edit Post' : 'Post'}
-      </Text>
-      <Text selectable style={{ color: appTheme.colors.muted, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
-        {isEdit
-          ? isGenerationBacked
-            ? 'This post is backed by a creation. Title, category, source, and media cannot be changed.'
-            : 'Update your post details below.'
-          : 'Title, content, caption, source, category, unlockables, then publish.'}
-      </Text>
-    </View>
+    <SurfaceSection
+      eyebrow={isEdit ? 'Composer' : 'Guided composer'}
+      title={isEdit ? 'Edit Post' : 'Post to Feed'}
+      body={isEdit
+        ? isGenerationBacked
+          ? 'This post is backed by a creation. Title, category, source, and media cannot be changed.'
+          : 'Update your post details below.'
+        : 'Publish media, prompts, or reusable unlockables into the feed. One page, clear sections, quick publish.'}
+      accent="motion"
+    />
   );
 }
 
-function OrderedField({
-  step,
+function SelectedCreationHero({
+  item,
+  disabled,
+  onChange,
+}: {
+  item: GenerationListItem;
+  disabled: boolean;
+  onChange: () => void;
+}) {
+  const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
+  const previewUrl = getGenerationPreviewImageUrl(item);
+  const mediaKind = getPublishGenerationMediaKind(item);
+  const visualUrl = mediaKind === 'video' ? previewUrl : mediaUrl;
+
+  return (
+    <SurfaceSection
+      eyebrow="Selected creation"
+      title={getPublishGenerationTitle(item)}
+      body={`${getPublishGenerationSubtitle(item)} · Configure post settings, references, and resources below.`}
+      accent="motion"
+      action={!disabled ? <SecondaryButton label="Change creation" onPress={onChange} /> : null}
+    >
+      <View
+        style={{
+          minHeight: 210,
+          borderRadius: appTheme.radii.xl,
+          borderCurve: 'continuous',
+          overflow: 'hidden',
+          borderWidth: 1,
+          borderColor: appTheme.colors.border,
+          backgroundColor: appTheme.colors.surfaceInset,
+        }}
+      >
+        {visualUrl ? (
+          <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        ) : (
+          <LinearGradient colors={['#17131d', '#0b0c12', '#1d1020']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.gap }}>
+            <Sparkles size={34} color={appTheme.colors.motion} />
+            <AppText variant="cardTitle">Creation ready</AppText>
+          </LinearGradient>
+        )}
+        {mediaKind === 'video' ? (
+          <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.16)' }}>
+            <Play size={44} color="#fff" fill="#fff" />
+          </View>
+        ) : null}
+        <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, borderRadius: appTheme.radii.lg, backgroundColor: 'rgba(0,0,0,0.62)', padding: appTheme.spacing.gap, gap: 6 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
+            <PackageCheck size={17} color={appTheme.colors.success} />
+            <AppText variant="label" color="text" numberOfLines={1}>Creation selected</AppText>
+          </View>
+          <AppText variant="caption" color="textSecondary" numberOfLines={2}>
+            Normal post by default. Turn on references or resources only if you want a package.
+          </AppText>
+        </View>
+      </View>
+    </SurfaceSection>
+  );
+}
+
+function FieldBlock({
   label,
   children,
   compact,
 }: {
-  step: string;
   label: string;
   children: React.ReactNode;
   compact?: boolean;
@@ -496,23 +669,13 @@ function OrderedField({
     <View
       style={{
         flex: compact ? 1 : undefined,
-        gap: 10,
-        borderRadius: 22,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.10)',
-        backgroundColor: 'rgba(255,255,255,0.055)',
-        padding: 13,
+        minWidth: compact ? 0 : undefined,
+        gap: appTheme.spacing.compact,
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <View style={{ width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(102,255,69,0.18)' }}>
-          <Text style={{ color: '#66ff45', fontSize: 11, fontWeight: '900' }}>{step}</Text>
-        </View>
-        <Text selectable style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>
-          {label}
-        </Text>
-      </View>
+      <AppText variant="label" color="muted" style={{ textTransform: 'uppercase' }}>
+        {label}
+      </AppText>
       {children}
     </View>
   );
@@ -544,17 +707,16 @@ function ComposerInput({
       editable={editable}
       style={{
         minHeight: multiline ? minHeight ?? 128 : 48,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.10)',
-        backgroundColor: editable ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.03)',
-        color: editable ? '#fff' : 'rgba(255,255,255,0.5)',
-        fontSize: 15,
-        lineHeight: 21,
+        borderColor: appTheme.colors.border,
+        backgroundColor: editable ? appTheme.colors.surfaceInset : appTheme.colors.surface,
+        color: editable ? appTheme.colors.text : appTheme.colors.faint,
+        ...appTheme.type.bodySm,
         fontWeight: '700',
-        paddingHorizontal: 13,
-        paddingVertical: 11,
+        paddingHorizontal: appTheme.spacing.gap,
+        paddingVertical: appTheme.spacing.gap,
       }}
     />
   );
@@ -564,64 +726,41 @@ function SegmentedRow({ children, wrap }: { children: React.ReactNode; wrap?: bo
   return <View style={{ flexDirection: 'row', flexWrap: wrap ? 'wrap' : 'nowrap', gap: 8 }}>{children}</View>;
 }
 
-function Chip({ label, active, onPress, disabled = false }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
+function Chip({
+  label,
+  active,
+  onPress,
+  disabled = false,
+  accent = 'motion',
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+  accent?: ToolAccent;
+}) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: active, disabled }}
+    <ChoiceChip
+      accent={accent}
+      active={active}
       disabled={disabled}
+      grow
+      label={label}
       onPress={onPress}
-      style={({ pressed }) => ({
-        flex: 1,
-        minHeight: 40,
-        borderRadius: 20,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: active
-          ? disabled ? 'rgba(217,70,239,0.36)' : 'rgba(217,70,239,0.72)'
-          : 'rgba(255,255,255,0.11)',
-        backgroundColor: active
-          ? disabled ? 'rgba(217,70,239,0.14)' : 'rgba(217,70,239,0.28)'
-          : 'rgba(255,255,255,0.07)',
-        opacity: disabled ? 0.45 : pressed ? 0.75 : 1,
-        paddingHorizontal: 10,
-      })}
-    >
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color: active ? '#fff' : appTheme.colors.muted, fontSize: 13, fontWeight: '900' }}>
-        {label}
-      </Text>
-    </Pressable>
+    />
   );
 }
 
 function SmallChip({ label, active, onPress, disabled = false }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: active, disabled }}
+    <ChoiceChip
+      accent="workflow"
+      active={active}
+      compact
       disabled={disabled}
+      label={label}
       onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 32,
-        borderRadius: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: active
-          ? disabled ? 'rgba(102,255,69,0.24)' : 'rgba(102,255,69,0.48)'
-          : 'rgba(255,255,255,0.10)',
-        backgroundColor: active
-          ? disabled ? 'rgba(102,255,69,0.06)' : 'rgba(102,255,69,0.13)'
-          : 'rgba(255,255,255,0.06)',
-        opacity: disabled ? 0.45 : pressed ? 0.75 : 1,
-        paddingHorizontal: 9,
-      })}
-    >
-      <Text numberOfLines={1} style={{ color: active ? '#66ff45' : appTheme.colors.muted, fontSize: 11, fontWeight: '900' }}>
-        {label}
-      </Text>
-    </Pressable>
+    />
   );
 }
 
@@ -885,9 +1024,15 @@ function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft;
       ? generationPreviewUrl
       : mediaUrl;
   const showVideoOverlay = draft.mode !== 'text' && !isUploadImage && (selectedGenerationKind === 'video' || draft.upload?.type.startsWith('video/'));
+  const hasResourcePackage = statusLabel !== 'No resource package configured.';
 
   return (
-    <OrderedField step="8" label="Preview">
+    <SurfaceSection
+      eyebrow="Preview"
+      title="How the post will read"
+      body="Check the public card and the unlock cue before publishing."
+      accent="image"
+    >
       <View style={{ minHeight: 190, borderRadius: 20, overflow: 'hidden', backgroundColor: '#050506', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }}>
         {visualUrl && (isUploadImage || isGenerationImage || selectedGenerationKind === 'video') ? (
           <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
@@ -897,9 +1042,9 @@ function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft;
           </LinearGradient>
         ) : (
           <LinearGradient colors={['#17131d', '#0b0c12', '#1d1020']} style={{ flex: 1, justifyContent: 'center', padding: 18, gap: 12 }}>
-            <FileText size={28} color="#d946ef" />
-            <Text selectable style={{ color: '#fff', fontSize: 22, lineHeight: 27, fontWeight: '900' }}>{title}</Text>
-            {body ? <Text selectable numberOfLines={4} style={{ color: 'rgba(255,255,255,0.76)', fontSize: 14, lineHeight: 20 }}>{body}</Text> : null}
+            <FileText size={28} color={appTheme.colors.motion} />
+            <AppText variant="sectionTitle">{title}</AppText>
+            {body ? <AppText variant="bodySm" color="textSecondary" numberOfLines={4}>{body}</AppText> : null}
           </LinearGradient>
         )}
         {visualUrl && showVideoOverlay ? (
@@ -909,15 +1054,17 @@ function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft;
         ) : null}
         {mediaUrl ? (
           <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.62)', padding: 12, gap: 5 }}>
-            <Text selectable numberOfLines={1} style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{title}</Text>
-            {body ? <Text selectable numberOfLines={2} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 17 }}>{body}</Text> : null}
+            <AppText variant="body" numberOfLines={1} style={{ fontWeight: '900' }}>{title}</AppText>
+            {body ? <AppText variant="caption" color="textSecondary" numberOfLines={2}>{body}</AppText> : null}
           </View>
         ) : null}
       </View>
-      <Text selectable style={{ color: statusLabel === 'No unlock attached.' ? appTheme.colors.muted : '#66ff45', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
-        {statusLabel}
-      </Text>
-    </OrderedField>
+      <ReadinessRow
+        label={hasResourcePackage ? 'Resource cue' : 'Public post'}
+        body={statusLabel}
+        state={hasResourcePackage ? 'ready' : 'neutral'}
+      />
+    </SurfaceSection>
   );
 }
 

@@ -96,6 +96,27 @@ describe('showcase feed query helpers', () => {
     expect(createShowcasePostQueryKey('post-1', undefined)).toEqual(['showcase-post', 'post-1', undefined]);
   });
 
+  it('serializes unlock and resource filters for the mobile feed', () => {
+    expect(getShowcaseFeedPageParams({
+      offset: 12,
+      sort: 'top-sales',
+      unlock: 'paid',
+      resource: 'remix',
+    })).toEqual({
+      limit: 12,
+      offset: 12,
+      sort: 'top-sales',
+      resource: 'remix',
+      unlock: 'paid',
+    });
+
+    expect(createShowcaseFeedQueryKey({ unlock: 'free', resource: 'remix' })).toEqual([
+      'showcase-feed',
+      'infinite',
+      { category: 'all', resource: 'remix', sort: 'recent', tool: 'all', unlock: 'free' },
+    ]);
+  });
+
   it('returns nextOffset only while the API has more pages', () => {
     expect(
       getNextShowcaseFeedOffset({

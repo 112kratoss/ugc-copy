@@ -16,12 +16,20 @@ export interface ShowcaseMasonryCard {
   mediaKind: 'image' | 'video' | null;
   badge: string;
   accent: ToolAccent;
+  unlock: ShowcaseMasonryUnlock | null;
   aspectRatio: number | null;
   height: number;
   saveLabel: string;
   remixLabel: string;
   viewerSource: PreviewViewerSource;
   sourceId: string;
+}
+
+export interface ShowcaseMasonryUnlock {
+  label: string;
+  summary: string;
+  ctaLabel: string;
+  accent: ToolAccent;
 }
 
 export interface ShowcaseGridLayout {
@@ -47,6 +55,7 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
 export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCard {
   const accent = categoryAccent(item.category);
   const textOnly = (item.category === 'text' || item.postFormat === 'text') && !item.mediaUrl;
+  const unlock = cardUnlock(item);
 
   return {
     id: item.id,
@@ -59,8 +68,9 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
     mediaUrl: item.mediaUrl,
     previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
     mediaKind: item.mediaKind,
-    badge: cardBadge(item),
+    badge: unlock?.label ?? cardBadge(item),
     accent,
+    unlock,
     aspectRatio: getCardAspectRatio(item),
     height: cardHeight(item),
     saveLabel: formatCompactCount(item.saveCount),
@@ -85,6 +95,45 @@ function cardBadge(item: ShowcaseFeedItem) {
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   if (item.category === 'motion') return 'Motion';
   return 'Image';
+}
+
+function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null {
+  if (item.asset) {
+    const free = item.asset.accessMode === 'free';
+    return {
+      label: free ? 'Free unlock' : item.asset.priceQuote?.formatted ?? 'Paid unlock',
+      summary: resourceSummary(item.asset.resourceKinds, item.asset.allowRemix),
+      ctaLabel: free ? 'Unlock free' : 'View unlock',
+      accent: free ? 'workflow' : 'commerce',
+    };
+  }
+
+  if (item.canRemix) {
+    return {
+      label: 'Remixable',
+      summary: 'Use this post as a starting point',
+      ctaLabel: 'Remix',
+      accent: 'motion',
+    };
+  }
+
+  return null;
+}
+
+function resourceSummary(kinds: string[] | undefined, allowRemix: boolean) {
+  const labels = (kinds ?? []).map(resourceKindLabel).filter(Boolean);
+  const unique = Array.from(new Set(labels));
+  if (allowRemix && !unique.includes('Remix')) unique.push('Remix');
+  return unique.length ? unique.join(' + ') : 'Creator resources';
+}
+
+function resourceKindLabel(kind: string) {
+  if (kind === 'prompt') return 'Prompt';
+  if (kind === 'workflow') return 'Workflow';
+  if (kind === 'files') return 'Files';
+  if (kind === 'notes') return 'Notes';
+  if (kind === 'remix') return 'Remix';
+  return '';
 }
 
 function cardHeight(item: ShowcaseFeedItem) {

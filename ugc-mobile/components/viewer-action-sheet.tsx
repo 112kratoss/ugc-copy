@@ -6,7 +6,7 @@ import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { appTheme } from '@/lib/theme';
-import { getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
+import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
 
 export function ViewerActionSheet({
   item,
@@ -193,43 +193,78 @@ export function ViewerActionSheet({
             }}
           />
           <ScrollView showsVerticalScrollIndicator={false}>
-            {item.availableActions.map((action) => {
-              const disabledReason = item.disabledActions[action];
-              return (
-                <Pressable
-                  key={action}
-                  accessibilityRole="button"
-                  accessibilityLabel={getViewerActionLabel(action)}
-                  disabled={Boolean(disabledReason)}
-                  onPress={() => handleAction(action)}
-                  style={({ pressed }) => ({
-                    minHeight: 56,
+            {groupViewerActions(item.availableActions).map((group) => (
+              <View key={group.label} style={{ paddingBottom: appTheme.spacing.compact }}>
+                <AppText
+                  selectable={false}
+                  variant="caption"
+                  color="faint"
+                  style={{
                     paddingHorizontal: appTheme.spacing.panel,
-                    paddingVertical: appTheme.spacing.gap,
-                    justifyContent: 'center',
-                    backgroundColor: pressed ? appTheme.colors.surface : 'transparent',
-                    opacity: disabledReason ? appTheme.opacity.disabled : 1,
-                  })}
+                    paddingTop: appTheme.spacing.gap,
+                    paddingBottom: 4,
+                    textTransform: 'uppercase',
+                    fontWeight: '900',
+                    letterSpacing: 0.8,
+                  }}
                 >
-                  <AppText
-                    selectable={false}
-                    variant="body"
-                    color={isDestructiveViewerAction(action) ? appTheme.colors.danger : appTheme.colors.text}
-                    style={{ fontWeight: '800' }}
-                  >
-                    {getViewerActionLabel(action)}
-                  </AppText>
-                  {disabledReason ? (
-                    <AppText variant="caption" color="faint" style={{ marginTop: 3 }}>
-                      {disabledReason}
-                    </AppText>
-                  ) : null}
-                </Pressable>
-              );
-            })}
+                  {group.label}
+                </AppText>
+                {group.actions.map((action) => {
+                  const disabledReason = item.disabledActions[action];
+                  return (
+                    <Pressable
+                      key={action}
+                      accessibilityRole="button"
+                      accessibilityLabel={getViewerActionLabel(action)}
+                      disabled={Boolean(disabledReason)}
+                      onPress={() => handleAction(action)}
+                      style={({ pressed }) => ({
+                        minHeight: 56,
+                        paddingHorizontal: appTheme.spacing.panel,
+                        paddingVertical: appTheme.spacing.gap,
+                        justifyContent: 'center',
+                        backgroundColor: pressed ? appTheme.colors.surface : 'transparent',
+                        opacity: disabledReason ? appTheme.opacity.disabled : 1,
+                      })}
+                    >
+                      <AppText
+                        selectable={false}
+                        variant="body"
+                        color={isDestructiveViewerAction(action) ? appTheme.colors.danger : appTheme.colors.text}
+                        style={{ fontWeight: '800' }}
+                      >
+                        {getViewerActionLabel(action)}
+                      </AppText>
+                      {disabledReason ? (
+                        <AppText variant="caption" color="faint" style={{ marginTop: 3 }}>
+                          {disabledReason}
+                        </AppText>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ))}
           </ScrollView>
         </View>
       </View>
     </Modal>
   );
+}
+
+function groupViewerActions(actions: string[]) {
+  const groups: Array<{ label: string; actions: string[] }> = [];
+
+  for (const action of actions) {
+    const label = getViewerActionGroupLabel(action);
+    const existing = groups.find((group) => group.label === label);
+    if (existing) {
+      existing.actions.push(action);
+    } else {
+      groups.push({ label, actions: [action] });
+    }
+  }
+
+  return groups;
 }

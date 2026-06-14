@@ -40,6 +40,7 @@ describe('showcase feed view model', () => {
           priceUsdCents: 0,
           previewText: 'Unlock',
           allowRemix: true,
+          resourceKinds: ['prompt', 'files'],
         },
         canRemix: true,
       }),
@@ -56,6 +57,12 @@ describe('showcase feed view model', () => {
       previewKind: 'media',
       saveLabel: '1.2K',
       remixLabel: '92',
+      unlock: {
+        accent: 'workflow',
+        ctaLabel: 'Unlock free',
+        label: 'Free unlock',
+        summary: 'Prompt + Files + Remix',
+      },
       viewerSource: 'showcase-feed',
       sourceId: 'image-post',
     });
@@ -69,6 +76,42 @@ describe('showcase feed view model', () => {
       previewKind: 'text',
     });
     expect(new Set(cards.map((card) => card.height)).size).toBeGreaterThan(1);
+  });
+
+  it('describes paid unlocks and remixable posts for feed card CTAs', () => {
+    const cards = buildShowcaseMasonry([
+      item({
+        id: 'paid-post',
+        asset: {
+          id: 'asset-paid',
+          postId: 'paid-post',
+          title: 'Launch kit',
+          accessMode: 'paid',
+          priceUsdCents: 900,
+          previewText: 'Includes prompt and notes',
+          allowRemix: false,
+          resourceKinds: ['prompt', 'notes'],
+          priceQuote: { formatted: '$9' },
+        },
+      }),
+      item({
+        id: 'remix-post',
+        canRemix: true,
+      }),
+    ]);
+
+    expect(cards[0]?.unlock).toEqual({
+      accent: 'commerce',
+      ctaLabel: 'View unlock',
+      label: '$9',
+      summary: 'Prompt + Notes',
+    });
+    expect(cards[1]?.unlock).toEqual({
+      accent: 'motion',
+      ctaLabel: 'Remix',
+      label: 'Remixable',
+      summary: 'Use this post as a starting point',
+    });
   });
 
   it('keeps mobile masonry columns visually separated', () => {

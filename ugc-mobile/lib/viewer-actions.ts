@@ -34,3 +34,15 @@ export function getViewerActionLabel(action: string) {
 export function isDestructiveViewerAction(action: string) {
   return action === 'unsave' || action === 'archive';
 }
+
+export function getViewerActionGroupLabel(action: string) {
+  if (action === 'publish' || action === 'view-linked' || action === 'edit-linked' || action === 'edit-post' || action === 'change-visibility') {
+    return 'Creation to post';
+  }
+
+  if (action === 'archive' || action === 'restore' || action === 'unsave') {
+    return 'Library';
+  }
+
+  return 'Media actions';
+}

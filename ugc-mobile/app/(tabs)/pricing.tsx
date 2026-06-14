@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Platform, Text, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import type { PurchasesPackage } from 'react-native-purchases';
 
-import { Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
+import { AppText, Card, MetricCard, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
   configureIapForUser,
@@ -110,6 +110,8 @@ export default function PricingScreen() {
     }
   };
 
+  const storeLabel = os === 'ios' ? 'App Store' : os === 'android' ? 'Play Store' : 'Native only';
+
   const restore = async () => {
     if (!user) {
       router.push('/auth');
@@ -158,6 +160,23 @@ export default function PricingScreen() {
       ) : null}
       {notice ? <StatusBlock title="Purchase status" body={notice} /> : null}
 
+      <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
+        <MetricCard
+          label="Balance"
+          value={String(credits ?? 0)}
+          body="credits available"
+          accent="amber"
+          compact
+        />
+        <MetricCard
+          label="Store"
+          value={isConfigured ? 'Ready' : 'Setup'}
+          body={storeLabel}
+          accent={isConfigured ? 'workflow' : 'motion'}
+          compact
+        />
+      </View>
+
       <View style={{ gap: 14 }}>
         {MOBILE_PRICING_PLANS.map((plan) => {
           const nativePackage = packagesByProductId.get(plan.productId);
@@ -166,12 +185,15 @@ export default function PricingScreen() {
           return (
             <Card key={plan.id} accent={plan.popular ? 'motion' : 'amber'}>
               <View style={{ gap: 6 }}>
-                <Text style={{ color: appTheme.colors.text, fontSize: 22, fontWeight: '800' }}>{plan.name}</Text>
-                <Text style={{ color: appTheme.colors.success, fontSize: 28, fontWeight: '900', fontVariant: ['tabular-nums'] }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
+                  <AppText variant="cardTitle">{plan.name}</AppText>
+                  {plan.popular ? <Pill label="Popular" accent="motion" /> : null}
+                </View>
+                <AppText variant="sectionTitle" color="success" style={{ fontSize: 28, fontVariant: ['tabular-nums'] }}>
                   {plan.credits.toLocaleString()} credits
-                </Text>
-                <Text style={{ color: appTheme.colors.muted, lineHeight: 21 }}>{plan.description}</Text>
-                <Text style={{ color: appTheme.colors.faint, fontWeight: '700' }}>{price}</Text>
+                </AppText>
+                <AppText variant="bodySm" color="muted">{plan.description}</AppText>
+                <AppText variant="label" color="faint">{price}</AppText>
               </View>
               <PrimaryButton
                 label={busyProductId === plan.productId ? 'Processing...' : 'Buy with App Store / Play'}

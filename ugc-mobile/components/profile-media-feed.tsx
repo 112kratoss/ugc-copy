@@ -367,11 +367,11 @@ function ProfileFeedPage({
         saveLoading={saveLoading}
       />
       <View style={{ paddingHorizontal: 14, paddingTop: 8, gap: 8 }}>
-        <Text selectable numberOfLines={2} style={{ color: '#fff', fontSize: 17, lineHeight: 21, fontWeight: '900' }}>
+        <Text selectable numberOfLines={2} style={{ color: '#fff', ...appTheme.type.sectionTitle, fontWeight: '900' }}>
           {item.title}
         </Text>
         {displayText ? (
-          <Text selectable numberOfLines={4} style={{ color: 'rgba(255,255,255,0.76)', fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
+          <Text selectable numberOfLines={4} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm, fontWeight: '600' }}>
             {displayText}
           </Text>
         ) : null}
@@ -672,20 +672,24 @@ function ProfileFeedActionRow({
   return (
     <View style={{ paddingHorizontal: 14, paddingTop: 12, gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-          <ProfileFeedIconButton
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact, flexWrap: 'wrap', flex: 1 }}>
+          <ProfileFeedActionChip
             accessibilityLabel="Recreate media"
-            icon={<Repeat2 size={28} color="#ffffff" strokeWidth={2.6} />}
+            icon={<Repeat2 size={18} color="#050506" strokeWidth={2.8} />}
+            label="Create"
             onPress={onRecreate}
+            primary
           />
-          <ProfileFeedIconButton
+          <ProfileFeedActionChip
             accessibilityLabel="Share media"
-            icon={<Share2 size={27} color="#ffffff" strokeWidth={2.5} />}
+            icon={<Share2 size={18} color="#ffffff" strokeWidth={2.5} />}
+            label="Share"
             onPress={onShare}
           />
-          <ProfileFeedIconButton
+          <ProfileFeedActionChip
             accessibilityLabel="View media details"
-            icon={<FileText size={27} color="#ffffff" strokeWidth={2.4} />}
+            icon={<FileText size={18} color="#ffffff" strokeWidth={2.4} />}
+            label="Details"
             onPress={onDetails}
           />
         </View>
@@ -713,29 +717,58 @@ function ProfileFeedActionRow({
   );
 }
 
-function ProfileFeedIconButton({ accessibilityLabel, icon, onPress }: { accessibilityLabel: string; icon: React.ReactNode; onPress: () => void }) {
+function ProfileFeedActionChip({
+  accessibilityLabel,
+  icon,
+  label,
+  onPress,
+  primary = false,
+}: {
+  accessibilityLabel: string;
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+  primary?: boolean;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       onPress={onPress}
       style={({ pressed }) => ({
-        width: 34,
-        height: 34,
+        minHeight: appTheme.touch.compact,
+        minWidth: primary ? 96 : 84,
         alignItems: 'center',
         justifyContent: 'center',
-        opacity: pressed ? 0.68 : 1,
+        flexDirection: 'row',
+        gap: 7,
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: primary ? 'rgba(255,255,255,0.22)' : appTheme.colors.borderStrong,
+        backgroundColor: primary ? appTheme.colors.text : appTheme.colors.surfaceStrong,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: appTheme.spacing.gap,
       })}
     >
       {icon}
+      <Text
+        numberOfLines={1}
+        style={{
+          color: primary ? appTheme.colors.textInverse : appTheme.colors.text,
+          ...appTheme.type.label,
+          fontWeight: '900',
+        }}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
 
 function ProfileFeedMetaPill({ label }: { label: string }) {
   return (
-    <View style={{ borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.09)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', paddingHorizontal: 9, paddingVertical: 5 }}>
-      <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.74)', fontSize: 11, fontWeight: '900' }}>
+    <View style={{ minHeight: 32, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceStrong, borderWidth: 1, borderColor: appTheme.colors.border, paddingHorizontal: appTheme.spacing.gap, alignItems: 'center', justifyContent: 'center' }}>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '900' }}>
         {label}
       </Text>
     </View>

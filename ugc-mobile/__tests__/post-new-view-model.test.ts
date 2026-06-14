@@ -5,8 +5,12 @@ import {
   buildPublishGenerationPayload,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  applyCreationPromptResource,
   getDefaultPostComposerDraft,
+  getPostComposerPackageStatus,
   getPostComposerPreviewStatusLabel,
+  getPostComposerReadiness,
+  getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishableGenerations,
   getPublishGenerationMediaKind,
@@ -194,7 +198,7 @@ describe('post new view model', () => {
     });
   });
 
-  it('requests generation references for public creation posts with saved inputs', () => {
+  it('keeps normal creation posts from auto-attaching saved generation references', () => {
     const item = generation({
       id: 'gen-with-inputs',
       input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
@@ -214,10 +218,43 @@ describe('post new view model', () => {
     expect(payload).toMatchObject({
       generationId: 'gen-with-inputs',
       visibility: 'public',
+      resourceBundle: { accessMode: 'none' },
+    });
+    expect(payload).not.toHaveProperty('includeGenerationReferences');
+    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No resource package configured.');
+  });
+
+  it('requests generation references only when the explicit creation package toggle is enabled', () => {
+    const item = generation({
+      id: 'gen-with-inputs',
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+    });
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      title: 'Reference post',
+      category: 'image',
+      visibility: 'public',
+      selectedGenerationId: 'gen-with-inputs',
+      sourceTool: 'Magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+      creationPackage: {
+        ...getDefaultPostComposerDraft().creationPackage,
+        attachGenerationReferences: true,
+      },
+    } as const;
+    const payload = buildPublishGenerationPostPayload(item, draft);
+
+    expect(payload).toMatchObject({
+      generationId: 'gen-with-inputs',
+      visibility: 'public',
       includeGenerationReferences: true,
       resourceBundle: { accessMode: 'none' },
     });
-    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('Free reference package will appear in post details.');
+    expect(getPostComposerPackageStatus(draft, item)).toEqual(expect.objectContaining({
+      label: 'References attached',
+      state: 'ready',
+    }));
   });
 
   it('keeps non-public creation posts without unlocks from auto-attaching generation references', () => {
@@ -240,8 +277,80 @@ describe('post new view model', () => {
       const payload = buildPublishGenerationPostPayload(item, draft);
 
       expect(payload).not.toHaveProperty('includeGenerationReferences');
-      expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No unlock attached.');
+      expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No resource package configured.');
     }
+  });
+
+  it('prefills a free resource package from a creation prompt when enabled', () => {
+    const item = generation({
+      id: 'gen-prompt-package',
+      prompt: 'Exact cinematic product prompt',
+    });
+
+    const draft = applyCreationPromptResource({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      title: 'Prompt package',
+      category: 'image',
+      selectedGenerationId: 'gen-prompt-package',
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'none',
+        promptText: '',
+        previewText: '',
+      },
+    }, item, true);
+
+    expect(draft.creationPackage.attachPromptResource).toBe(true);
+    expect(draft.resource.accessMode).toBe('free');
+    expect(draft.resource.promptText).toBe('Exact cinematic product prompt');
+    expect(draft.resource.previewText).toBe('Includes the exact reusable prompt.');
+    expect(buildPublishGenerationPostPayload(item, draft).resourceBundle).toEqual({
+      accessMode: 'free',
+      summary: 'Prompt',
+      previewText: 'Includes the exact reusable prompt.',
+      priceUsdCents: 0,
+      resources: {
+        promptText: 'Exact cinematic product prompt',
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+      },
+    });
+  });
+
+  it('summarizes post sections and creation package state for the Phase 4 composer', () => {
+    const item = generation({
+      id: 'gen-summary',
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+    });
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation' as const,
+      title: 'Creator card',
+      caption: 'Post caption',
+      visibility: 'public' as const,
+      category: 'image' as const,
+      selectedGenerationId: 'gen-summary',
+      sourceTool: 'Magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+      creationPackage: {
+        attachGenerationReferences: true,
+        attachPromptResource: false,
+      },
+    };
+
+    expect(getPostComposerSectionSummary(draft, item)).toEqual({
+      publicPost: 'Public · Creation selected',
+      postSettings: 'Magicbooklet · Image',
+      resourcePackage: 'References attached',
+    });
+    expect(getPostComposerPackageStatus(draft, item)).toEqual(expect.objectContaining({
+      label: 'References attached',
+      body: 'Creation input media will be available from the post details.',
+      state: 'ready',
+    }));
   });
 
   it('uses explicit unlock preview labels before auto generation reference labels', () => {
@@ -261,7 +370,7 @@ describe('post new view model', () => {
         promptText: 'Prompt',
         previewText: 'Prompt included.',
       },
-    }, item)).toBe('Free unlock will appear in post details.');
+    }, item)).toBe('Free resource package will appear in post details.');
 
     expect(getPostComposerPreviewStatusLabel({
       ...getDefaultPostComposerDraft(),
@@ -274,7 +383,47 @@ describe('post new view model', () => {
         promptText: 'Prompt',
         previewText: 'Prompt included.',
       },
-    }, item)).toBe('Paid unlock will appear in post details.');
+    }, item)).toBe('Paid resource package will appear in post details.');
+  });
+
+  it('summarizes guided composer readiness for public post, unlock, preview, and publish', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'text' as const,
+      title: 'Prompt teardown',
+      contentText: 'A reusable breakdown.',
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'paid' as const,
+        promptText: 'Exact prompt',
+        previewText: 'Prompt, notes, and usage included.',
+        priceUsd: '9',
+      },
+    };
+
+    expect(getPostComposerReadiness(draft)).toEqual([
+      expect.objectContaining({
+        id: 'public-post',
+        label: 'Public post ready',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'unlock',
+        label: 'Resource package ready',
+        body: 'Paid resource package will appear in post details.',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'preview',
+        label: 'Preview updates live',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'publish',
+        label: 'Ready to publish',
+        state: 'ready',
+      }),
+    ]);
   });
 
   it('adds structured source tool metadata for uploaded media posts', () => {

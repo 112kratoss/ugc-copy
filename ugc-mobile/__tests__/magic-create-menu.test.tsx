@@ -63,9 +63,9 @@ import { MagicCreateMenu } from '../components/magic-create-menu';
 import { CREATE_MENU_ACTIONS, getCreateMenuActionHref } from '../lib/create-menu-view-model';
 
 describe('create menu view model', () => {
-  it('exposes exactly Create and Post actions', () => {
-    expect(CREATE_MENU_ACTIONS.map((action) => action.id)).toEqual(['create', 'post']);
-    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Create', 'Post']);
+  it('exposes exactly Post and Create actions in feed-first order', () => {
+    expect(CREATE_MENU_ACTIONS.map((action) => action.id)).toEqual(['post', 'create']);
+    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Post', 'Create']);
   });
 
   it('maps actions to their mobile routes', () => {

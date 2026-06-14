@@ -298,6 +298,21 @@ export interface CreationValidationResult {
   canGenerate: boolean;
 }
 
+export type CreationReadinessState = 'ready' | 'warning' | 'neutral';
+
+export interface CreationReadinessItem {
+  id: 'prompt' | 'media' | 'settings' | 'cost';
+  label: string;
+  body: string;
+  state: CreationReadinessState;
+}
+
+export interface CreationSectionSummary {
+  essentials: string;
+  references: string;
+  advanced: string;
+}
+
 const HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
 function createDraftId(prefix: string, seed: string) {
@@ -791,6 +806,161 @@ export function validateCreationDraft(draft: CreationDraft, options: { credits?:
   if (draft.tool === 'image') return validateImageDraft(draft, options.credits);
   if (draft.tool === 'video') return validateVideoDraft(draft, options.credits);
   return validateMotionDraft(draft, options.credits);
+}
+
+export function getCreationSectionSummary(draft: CreationDraft): CreationSectionSummary {
+  if (draft.tool === 'image') {
+    return {
+      essentials: `${IMAGE_MODELS[draft.model].displayName} · ${draft.aspectRatio} · ${draft.resolution}`,
+      references: imageReferenceSummary(draft.references.length),
+      advanced: `${draft.outputFormat.toUpperCase()} · Search ${draft.googleSearch ? 'on' : 'off'}`,
+    };
+  }
+
+  if (draft.tool === 'video') {
+    const model = VIDEO_MODELS[draft.model];
+    const duration = draft.isMultiShot
+      ? draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
+      : draft.duration;
+
+    return {
+      essentials: `${model.displayName} · ${draft.aspectRatio} · ${duration}s`,
+      references: videoReferenceSummary(draft),
+      advanced: videoAdvancedSummary(draft),
+    };
+  }
+
+  return {
+    essentials: `${MOTION_MODELS[draft.model].displayName} · ${draft.mode} · ${getMotionDuration(draft)}s`,
+    references: `${draft.characterImage ? 'Character ready' : 'Character missing'} · ${draft.referenceVideo ? 'motion ready' : 'motion missing'}`,
+    advanced: `${draft.characterOrientation === 'video' ? 'Video' : 'Image'} orientation`,
+  };
+}
+
+export function getCreationReadiness(
+  draft: CreationDraft,
+  validation: CreationValidationResult
+): CreationReadinessItem[] {
+  const summary = getCreationSectionSummary(draft);
+  return [
+    promptReadiness(draft),
+    mediaReadiness(draft),
+    {
+      id: 'settings',
+      label: settingsHasBlockingError(draft, validation) ? 'Settings need review' : 'Settings ready',
+      body: settingsHasBlockingError(draft, validation)
+        ? validation.errors.find((error) => isSettingsError(draft, error)) ?? summary.essentials
+        : summary.essentials,
+      state: settingsHasBlockingError(draft, validation) ? 'warning' : 'ready',
+    },
+    {
+      id: 'cost',
+      label: validation.errors.some((error) => error.startsWith('Insufficient credits.')) ? 'Credits needed' : 'Cost ready',
+      body: validation.errors.find((error) => error.startsWith('Insufficient credits.'))
+        ?? `${validation.cost} credits available for this generation.`,
+      state: validation.errors.some((error) => error.startsWith('Insufficient credits.')) ? 'warning' : 'ready',
+    },
+  ];
+}
+
+function imageReferenceSummary(count: number) {
+  if (count === 0) return 'No references';
+  return `${count} reference image${count === 1 ? '' : 's'}`;
+}
+
+function videoReferenceSummary(draft: VideoCreationDraft) {
+  if (draft.referenceMode === 'elements') {
+    return `Elements mode · ${draft.references.length === 0 ? 'no image elements' : `${draft.references.length} image element${draft.references.length === 1 ? '' : 's'}`}`;
+  }
+
+  const frameCount = [draft.startFrame, draft.endFrame].filter(Boolean).length;
+  return `Frames mode · ${frameCount === 0 ? 'no frames' : `${frameCount} frame${frameCount === 1 ? '' : 's'}`}`;
+}
+
+function videoAdvancedSummary(draft: VideoCreationDraft) {
+  const modeLabel = VIDEO_MODELS[draft.model].modeOptions.find((option) => option.value === draft.mode)?.label;
+  const parts = [
+    modeLabel,
+    VIDEO_MODELS[draft.model].resolutions.length > 0 ? draft.resolution : null,
+    VIDEO_MODELS[draft.model].supportsSound ? `sound ${draft.sound ? 'on' : 'off'}` : null,
+    VIDEO_MODELS[draft.model].supportsFixedLens ? `fixed lens ${draft.fixedLens ? 'on' : 'off'}` : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(' · ') || 'Default model settings';
+}
+
+function promptReadiness(draft: CreationDraft): CreationReadinessItem {
+  if (draft.tool === 'motion') {
+    return {
+      id: 'prompt',
+      label: draft.prompt.trim() ? 'Prompt ready' : 'Prompt optional',
+      body: draft.prompt.trim()
+        ? 'Motion direction will be sent with the required media.'
+        : 'Motion transfer can run from the character image and reference video.',
+      state: draft.prompt.trim() ? 'ready' : 'neutral',
+    };
+  }
+
+  if (draft.tool === 'video' && draft.isMultiShot) {
+    const ready = draft.multiPrompts.length > 0 && draft.multiPrompts.every((shot) => shot.prompt.trim());
+    return {
+      id: 'prompt',
+      label: ready ? 'Shots ready' : 'Shot prompts needed',
+      body: ready ? `${draft.multiPrompts.length} shot prompt${draft.multiPrompts.length === 1 ? '' : 's'} ready.` : 'Add text to every shot before generating.',
+      state: ready ? 'ready' : 'warning',
+    };
+  }
+
+  return {
+    id: 'prompt',
+    label: draft.prompt.trim() ? 'Prompt ready' : 'Prompt needed',
+    body: draft.prompt.trim() ? 'The main generation prompt is ready.' : 'Add a prompt before generating.',
+    state: draft.prompt.trim() ? 'ready' : 'warning',
+  };
+}
+
+function mediaReadiness(draft: CreationDraft): CreationReadinessItem {
+  if (draft.tool === 'motion') {
+    const hasCharacter = Boolean(draft.characterImage);
+    const hasReference = Boolean(draft.referenceVideo);
+    return {
+      id: 'media',
+      label: hasCharacter && hasReference ? 'Motion media ready' : 'Motion media needed',
+      body: hasCharacter && hasReference
+        ? 'Character image and reference motion video are attached.'
+        : 'Add a character image and reference motion video.',
+      state: hasCharacter && hasReference ? 'ready' : 'warning',
+    };
+  }
+
+  if (draft.tool === 'video') {
+    const attachedCount = draft.referenceMode === 'elements'
+      ? draft.references.length
+      : [draft.startFrame, draft.endFrame].filter(Boolean).length;
+    return {
+      id: 'media',
+      label: 'References optional',
+      body: attachedCount > 0 ? `${attachedCount} video reference item${attachedCount === 1 ? '' : 's'} attached.` : 'Generate from text, or attach frames/elements for more control.',
+      state: attachedCount > 0 ? 'ready' : 'neutral',
+    };
+  }
+
+  return {
+    id: 'media',
+    label: 'References optional',
+    body: draft.references.length > 0 ? `${draft.references.length} reference image${draft.references.length === 1 ? '' : 's'} attached.` : 'Generate from text, or add reference images for more control.',
+    state: draft.references.length > 0 ? 'ready' : 'neutral',
+  };
+}
+
+function settingsHasBlockingError(draft: CreationDraft, validation: CreationValidationResult) {
+  return validation.errors.some((error) => isSettingsError(draft, error));
+}
+
+function isSettingsError(draft: CreationDraft, error: string) {
+  if (error.startsWith('Insufficient credits.')) return false;
+  if (error === 'Prompt is required.' || error === 'All multi-shot entries need a text prompt.') return false;
+  if (draft.tool === 'motion' && (error === 'Character image is required.' || error === 'Reference video is required.')) return false;
+  return true;
 }
 
 function sanitizeVideoMultiPrompts(draft: VideoCreationDraft): VideoMultiPromptInput[] {

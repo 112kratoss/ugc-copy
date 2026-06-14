@@ -6,6 +6,8 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   getCreditEstimate,
+  getCreationReadiness,
+  getCreationSectionSummary,
   validateCreationDraft,
   type MediaDraft,
 } from '../lib/media-creation-view-model';
@@ -58,6 +60,95 @@ function audioReference(overrides: Partial<MediaDraft> = {}): MediaDraft {
 }
 
 describe('media creation view model', () => {
+  it('summarizes image creation readiness and progressive sections', () => {
+    const draft = {
+      ...createDefaultCreationDraft('image'),
+      prompt: 'Create a cinematic product photo on a marble counter.',
+      references: [imageReference()],
+    };
+    const validation = validateCreationDraft(draft, { credits: 999 });
+
+    expect(getCreationSectionSummary(draft)).toEqual({
+      essentials: 'Nano Banana 2.0 · 4:5 · 1K',
+      references: '1 reference image',
+      advanced: 'JPG · Search off',
+    });
+    expect(getCreationReadiness(draft, validation)).toEqual([
+      expect.objectContaining({
+        id: 'prompt',
+        label: 'Prompt ready',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'media',
+        label: 'References optional',
+        body: '1 reference image attached.',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'settings',
+        label: 'Settings ready',
+        body: 'Nano Banana 2.0 · 4:5 · 1K',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'cost',
+        label: 'Cost ready',
+        body: '8 credits available for this generation.',
+        state: 'ready',
+      }),
+    ]);
+  });
+
+  it('summarizes video frames/elements and motion required media readiness', () => {
+    const videoDraft = {
+      ...createDefaultCreationDraft('video'),
+      prompt: 'Slow push-in on @hero_product with warm creator lighting.',
+      model: 'seedance-2-fast' as const,
+      references: [imageReference()],
+      referenceMode: 'elements' as const,
+      duration: 12,
+      resolution: '720p',
+    };
+    expect(getCreationSectionSummary(videoDraft)).toEqual({
+      essentials: 'Seedance 2 Fast · 9:16 · 12s',
+      references: 'Elements mode · 1 image element',
+      advanced: '720p · sound off',
+    });
+
+    const motionDraft = createDefaultCreationDraft('motion');
+    const validation = validateCreationDraft(motionDraft, { credits: 999 });
+    expect(getCreationSectionSummary(motionDraft)).toEqual({
+      essentials: 'Kling 3.0 · 720p · 10s',
+      references: 'Character missing · motion missing',
+      advanced: 'Video orientation',
+    });
+    expect(getCreationReadiness(motionDraft, validation)).toEqual([
+      expect.objectContaining({
+        id: 'prompt',
+        label: 'Prompt optional',
+        state: 'neutral',
+      }),
+      expect.objectContaining({
+        id: 'media',
+        label: 'Motion media needed',
+        body: 'Add a character image and reference motion video.',
+        state: 'warning',
+      }),
+      expect.objectContaining({
+        id: 'settings',
+        label: 'Settings ready',
+        body: 'Kling 3.0 · 720p · 10s',
+        state: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'cost',
+        label: 'Cost ready',
+        state: 'ready',
+      }),
+    ]);
+  });
+
   it('validates image prompts, unknown handles, max references, costs, and payload fields', () => {
     const draft = createDefaultCreationDraft('image');
     expect(validateCreationDraft(draft, { credits: 999 }).errors).toContain('Prompt is required.');

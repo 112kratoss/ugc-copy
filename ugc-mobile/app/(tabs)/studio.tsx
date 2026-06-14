@@ -13,10 +13,10 @@ import {
   ToggleRight,
   WandSparkles,
 } from 'lucide-react-native';
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PrimaryButton, StatusBlock } from '@/components/ui';
+import { AppText, Card, IconButton, MetricCard, PrimaryButton, StatusBlock, SurfaceSection } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -127,13 +127,13 @@ export default function StudioScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
       <ScrollView
         bounces={false}
         contentInsetAdjustmentBehavior="never"
         overScrollMode="never"
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: '#03040d' }}
+        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
           paddingTop: 18,
           paddingHorizontal: horizontalPadding,
@@ -219,25 +219,20 @@ function NotificationHeader({
     <View style={{ gap: 16 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
-          <Text
+          <AppText
             numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.76}
-            style={{ color: '#fff', fontSize: 34, lineHeight: 38, fontWeight: '900' }}
+            variant="pageTitle"
+            style={{ fontSize: 34, lineHeight: 38 }}
           >
             Notifications
-          </Text>
-          <Text style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 18, fontWeight: '700' }}>
+          </AppText>
+          <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
             {signedIn ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}` : 'Mobile notification history'}
-          </Text>
+          </AppText>
         </View>
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          <HeaderIconButton label="Refresh notifications" disabled={isRefreshing} onPress={onRefresh}>
-            <RefreshCw size={19} color="#ffffff" strokeWidth={2.4} />
-          </HeaderIconButton>
-          <HeaderIconButton label="Mark all notifications read" disabled={!canMarkAllRead} onPress={onMarkAllRead}>
-            <CheckCheck size={19} color="#ffffff" strokeWidth={2.4} />
-          </HeaderIconButton>
+          <IconButton icon={RefreshCw} label="Refresh notifications" disabled={isRefreshing} onPress={onRefresh} accent="motion" />
+          <IconButton icon={CheckCheck} label="Mark all notifications read" disabled={!canMarkAllRead} onPress={onMarkAllRead} accent="workflow" />
         </View>
       </View>
 
@@ -255,12 +250,12 @@ function NotificationHeader({
           justifyContent: 'center',
         }}
       >
-        <Text style={{ color: '#fff', fontSize: 20, lineHeight: 25, fontWeight: '900' }}>
+        <AppText variant="cardTitle">
           Your mobile notification history.
-        </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13, lineHeight: 19, fontWeight: '600', marginTop: 5 }}>
+        </AppText>
+        <AppText variant="bodySm" color="muted" style={{ marginTop: 5 }}>
           Results, unlocks, and creator activity stay here after each push alert fades.
-        </Text>
+        </AppText>
       </LinearGradient>
     </View>
   );
@@ -277,86 +272,35 @@ function NotificationSummary({
 }) {
   return (
     <View style={{ flexDirection: 'row', gap: 10 }}>
-      <SummaryPill label="Unread" value={String(unreadCount)} />
-      <SummaryPill label="History" value={totalCount > 0 ? String(totalCount) : 'Empty'} />
-      <SummaryPill label="Delivery" value={isRefreshing ? 'Syncing' : 'Mobile'} />
-    </View>
-  );
-}
-
-function SummaryPill({ label, value }: { label: string; value: string }) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        minHeight: 66,
-        borderRadius: 20,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: 'rgba(255,255,255,0.045)',
-        paddingHorizontal: 12,
-        paddingVertical: 11,
-        justifyContent: 'center',
-        gap: 4,
-      }}
-    >
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
-        {value}
-      </Text>
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>
-        {label}
-      </Text>
+      <MetricCard label="Unread" value={String(unreadCount)} accent="motion" compact />
+      <MetricCard label="History" value={totalCount > 0 ? String(totalCount) : 'Empty'} accent="image" compact />
+      <MetricCard label="Delivery" value={isRefreshing ? 'Syncing' : 'Mobile'} accent="workflow" compact />
     </View>
   );
 }
 
 function LoadingState() {
   return (
-    <View
-      style={{
-        minHeight: 144,
-        borderRadius: 24,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: 'rgba(255,255,255,0.048)',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-      }}
-    >
+    <Card variant="soft" style={{ minHeight: 144, alignItems: 'center', justifyContent: 'center' }}>
       <ActivityIndicator color="#c084fc" />
-      <Text style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '700' }}>Loading notification history</Text>
-    </View>
+      <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>Loading notification history</AppText>
+    </Card>
   );
 }
 
 function CaughtUpState() {
   return (
-    <View
-      style={{
-        minHeight: 156,
-        borderRadius: 24,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: 'rgba(255,255,255,0.048)',
-        padding: 18,
-        justifyContent: 'center',
-        gap: 14,
-      }}
-    >
+    <Card accent="workflow" variant="soft" style={{ minHeight: 156, justifyContent: 'center' }}>
       <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,211,153,0.13)', borderWidth: 1, borderColor: 'rgba(52,211,153,0.28)' }}>
         <CheckCircle2 size={24} color="#6ee7b7" strokeWidth={2.4} />
       </View>
       <View style={{ gap: 6 }}>
-        <Text style={{ color: '#fff', fontSize: 19, lineHeight: 24, fontWeight: '900' }}>You are all caught up.</Text>
-        <Text style={{ color: appTheme.colors.muted, fontSize: 14, lineHeight: 21, fontWeight: '600' }}>
+        <AppText variant="cardTitle">You are all caught up.</AppText>
+        <AppText variant="bodySm" color="muted">
           New mobile notifications appear here with unread state, timestamps, and quick paths back into the right screen.
-        </Text>
+        </AppText>
       </View>
-    </View>
+    </Card>
   );
 }
 
@@ -397,15 +341,19 @@ function NotificationPreferences({
   ];
 
   return (
-    <View style={{ gap: 12 }}>
-      <Text style={{ color: '#fff', fontSize: 20, lineHeight: 25, fontWeight: '900' }}>Push preferences</Text>
+    <SurfaceSection
+      eyebrow="Preferences"
+      title="Push preferences"
+      body="Tune alerts without leaving the mobile inbox."
+      accent="workflow"
+    >
       <View
         style={{
-          borderRadius: 22,
+          borderRadius: appTheme.radii.lg,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.1)',
-          backgroundColor: '#10111a',
+          borderColor: appTheme.colors.borderSubtle,
+          backgroundColor: appTheme.colors.surfaceInset,
           overflow: 'hidden',
         }}
       >
@@ -434,15 +382,15 @@ function NotificationPreferences({
               })}
             >
               <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                <Text style={{ color: '#fff', fontSize: 15, lineHeight: 20, fontWeight: '900' }}>{row.title}</Text>
-                <Text style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 18, fontWeight: '600' }}>{row.body}</Text>
+                <AppText variant="body" style={{ fontWeight: '900' }}>{row.title}</AppText>
+                <AppText variant="caption" color="muted">{row.body}</AppText>
               </View>
               <Icon size={32} color={enabled ? '#6ee7b7' : appTheme.colors.faint} strokeWidth={2.2} />
             </Pressable>
           );
         })}
       </View>
-    </View>
+    </SurfaceSection>
   );
 }
 
@@ -495,21 +443,12 @@ function PushPermissionCard({
   }
 
   return (
-    <View
-      style={{
-        borderRadius: 24,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: '#10111a',
-        padding: 16,
-        gap: 12,
-      }}
+    <SurfaceSection
+      eyebrow="Device alerts"
+      title={title}
+      body={body}
+      accent={actionAccent}
     >
-      <View style={{ gap: 5 }}>
-        <Text style={{ color: '#fff', fontSize: 18, lineHeight: 23, fontWeight: '900' }}>{title}</Text>
-        <Text style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 20, fontWeight: '600' }}>{body}</Text>
-      </View>
       <PrimaryButton
         label={actionLabel}
         onPress={action}
@@ -517,7 +456,7 @@ function PushPermissionCard({
         loading={isPending}
         accent={actionAccent}
       />
-    </View>
+    </SurfaceSection>
   );
 }
 
@@ -537,8 +476,8 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         borderRadius: 22,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: notification.isRead ? 'rgba(255,255,255,0.1)' : `${meta.color}66`,
-        backgroundColor: notification.isRead ? '#10111a' : 'rgba(124,58,237,0.13)',
+        borderColor: notification.isRead ? appTheme.colors.borderSubtle : `${meta.color}66`,
+        backgroundColor: notification.isRead ? appTheme.colors.surface : 'rgba(124,58,237,0.13)',
         padding: 14,
         opacity: pressed ? 0.78 : 1,
       })}
@@ -548,20 +487,20 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={{ flex: 1, color: '#fff', fontSize: 16, lineHeight: 21, fontWeight: '900' }} numberOfLines={2}>
+          <AppText variant="body" style={{ flex: 1, fontWeight: '900' }} numberOfLines={2}>
             {notification.title}
-          </Text>
+          </AppText>
           {!notification.isRead ? <UnreadDot color={meta.color} /> : null}
         </View>
-        <Text style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 20, fontWeight: '600' }} numberOfLines={3}>
+        <AppText variant="bodySm" color="muted" numberOfLines={3}>
           {notification.body}
-        </Text>
+        </AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Badge label={meta.label} color={meta.color} />
           {notification.eventCount > 1 ? <Badge label={`${notification.eventCount} updates`} color="#c084fc" /> : null}
-          <Text style={{ color: appTheme.colors.faint, fontSize: 11, lineHeight: 16, fontWeight: '800' }}>
+          <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>
             {formatNotificationTime(notification.updatedAt)}
-          </Text>
+          </AppText>
         </View>
       </View>
     </Pressable>
@@ -598,7 +537,7 @@ function Badge({ label, color }: { label: string; color: string }) {
         borderColor: `${color}55`,
       }}
     >
-      <Text style={{ color, fontSize: 11, lineHeight: 15, fontWeight: '900' }}>{label}</Text>
+      <AppText variant="caption" color={color} style={{ fontWeight: '900' }}>{label}</AppText>
     </View>
   );
 }
@@ -607,75 +546,36 @@ function NotificationCategoryList() {
   return (
     <View style={{ gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <Text style={{ color: '#fff', fontSize: 20, lineHeight: 25, fontWeight: '900' }}>What shows here</Text>
+        <AppText variant="cardTitle">What shows here</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <Clock3 size={14} color={appTheme.colors.faint} strokeWidth={2.3} />
-          <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '800' }}>History</Text>
+          <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>History</AppText>
         </View>
       </View>
       {NOTIFICATION_CATEGORIES.map((item) => {
         const Icon = item.icon;
 
         return (
-          <View
+          <Card
             key={item.title}
+            variant="soft"
             style={{
               flexDirection: 'row',
               alignItems: 'flex-start',
               gap: 12,
-              borderRadius: 22,
-              borderCurve: 'continuous',
-              borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.1)',
-              backgroundColor: '#10111a',
-              padding: 14,
             }}
           >
             <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${item.color}1c`, borderWidth: 1, borderColor: `${item.color}4a` }}>
               <Icon size={21} color={item.color} strokeWidth={2.4} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
-              <Text style={{ color: '#fff', fontSize: 16, lineHeight: 21, fontWeight: '900' }}>{item.title}</Text>
-              <Text style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 20, fontWeight: '600' }}>{item.body}</Text>
+              <AppText variant="body" style={{ fontWeight: '900' }}>{item.title}</AppText>
+              <AppText variant="bodySm" color="muted">{item.body}</AppText>
             </View>
-          </View>
+          </Card>
         );
       })}
     </View>
-  );
-}
-
-function HeaderIconButton({
-  label,
-  disabled,
-  onPress,
-  children,
-}: {
-  label: string;
-  disabled?: boolean;
-  onPress?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 40,
-        height: 40,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.12)',
-        backgroundColor: 'rgba(255,255,255,0.065)',
-        opacity: disabled ? 0.44 : pressed ? 0.74 : 1,
-      })}
-    >
-      {children}
-    </Pressable>
   );
 }
 

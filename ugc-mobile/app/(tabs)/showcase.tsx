@@ -3,9 +3,9 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { FileText, Heart, Images, Play, RefreshCw, Search, SlidersHorizontal } from 'lucide-react-native';
+import { FileText, Heart, Images, Lock, Play, RefreshCw, Repeat2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -31,6 +31,7 @@ import {
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getShowcaseFeedPageParams,
+  type ShowcaseFeedFilters,
 } from '@/lib/showcase-feed-query';
 import {
   buildShowcaseMasonry,
@@ -44,13 +45,52 @@ import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/li
 import { accentColor, appTheme } from '@/lib/theme';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem } from '@/lib/types';
 
-const FILTERS = ['For you', 'UGC', 'Beauty', 'Food', 'Prompts', 'Remixable'];
+type FeedFilterId = 'all' | 'unlocks' | 'free' | 'paid' | 'remixable';
+
+const FEED_FILTERS: Array<{
+  id: FeedFilterId;
+  label: string;
+  body: string;
+  params: ShowcaseFeedFilters;
+}> = [
+  {
+    id: 'all',
+    label: 'All',
+    body: 'Fresh creator posts with unlocks mixed in.',
+    params: {},
+  },
+  {
+    id: 'unlocks',
+    label: 'Unlocks',
+    body: 'Posts with reusable prompts, files, notes, or remix access.',
+    params: { unlock: 'with-unlock' },
+  },
+  {
+    id: 'free',
+    label: 'Free',
+    body: 'Free resources you can open from the viewer.',
+    params: { unlock: 'free' },
+  },
+  {
+    id: 'paid',
+    label: 'Paid',
+    body: 'Premium creator resources available with credits.',
+    params: { unlock: 'paid' },
+  },
+  {
+    id: 'remixable',
+    label: 'Remixable',
+    body: 'Posts built to recreate, remix, and learn from.',
+    params: { resource: 'remix' },
+  },
+];
+
 const SKELETON_HEIGHTS = [
   [196, 230, 244],
   [230, 260, 196],
 ];
 const LOAD_MORE_COOLDOWN_MS = 800;
-const FEED_HORIZONTAL_PADDING = 14;
+const FEED_HORIZONTAL_PADDING = appTheme.spacing.screen;
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
@@ -62,7 +102,9 @@ export default function ShowcaseScreen() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const gridLayout = getShowcaseGridLayout(width);
-  const queryKey = useMemo(() => createShowcaseFeedQueryKey(), []);
+  const [activeFilterId, setActiveFilterId] = useState<FeedFilterId>('all');
+  const activeFilter = FEED_FILTERS.find((filter) => filter.id === activeFilterId) ?? FEED_FILTERS[0];
+  const queryKey = useMemo(() => createShowcaseFeedQueryKey(activeFilter.params), [activeFilter]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
@@ -81,7 +123,10 @@ export default function ShowcaseScreen() {
   const showcaseQuery = useInfiniteQuery({
     queryKey,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({ offset: pageParam })),
+    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
+      ...activeFilter.params,
+      offset: pageParam,
+    })),
     getNextPageParam: getNextShowcaseFeedOffset,
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
   });
@@ -90,6 +135,13 @@ export default function ShowcaseScreen() {
   const hasItems = showcaseItems.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
   const isRefreshing = showcaseQuery.isRefetching && !showcaseQuery.isFetchingNextPage;
+
+  useEffect(() => {
+    setActiveVideoIds([]);
+    loadingMoreRef.current = false;
+    lastLoadMoreAtRef.current = 0;
+    lastLoadMoreItemCountRef.current = 0;
+  }, [activeFilterId]);
 
   const requestNextPage = () => {
     const now = Date.now();
@@ -179,63 +231,31 @@ export default function ShowcaseScreen() {
             <View style={{ gap: 16 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <View style={{ gap: 4, flex: 1 }}>
-                  <Text selectable style={{ color: appTheme.colors.text, fontSize: 34, lineHeight: 38, fontWeight: '900' }}>
-                    Showcase
+                  <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.display, fontWeight: '900' }}>
+                    Feed
                   </Text>
-                  <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600' }}>
-                    Fresh creator pins
+                  <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm, fontWeight: '700' }}>
+                    {activeFilter.body}
                   </Text>
                 </View>
-                <View style={{ flexDirection: 'row', gap: 9 }}>
-                  <IconButton label="Search showcase">
-                    <Search size={19} color={appTheme.colors.text} strokeWidth={2.4} />
-                  </IconButton>
-                  <IconButton label="Filter showcase">
-                    <SlidersHorizontal size={19} color={appTheme.colors.text} strokeWidth={2.4} />
-                  </IconButton>
-                </View>
+                <IconButton
+                  disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
+                  label="Refresh feed"
+                  onPress={handleRefresh}
+                >
+                  <RefreshCw size={19} color={appTheme.colors.text} strokeWidth={2.4} />
+                </IconButton>
               </View>
 
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                {FILTERS.map((filter, index) => (
-                  <Pressable
-                    key={filter}
-                    accessibilityRole="button"
-                    style={({ pressed }) => ({
-                      minHeight: 34,
-                      justifyContent: 'center',
-                      borderRadius: appTheme.radii.pill,
-                      borderWidth: 1,
-                      borderColor: index === 0 ? 'rgba(56,189,248,0.55)' : appTheme.colors.border,
-                      backgroundColor: index === 0 ? 'rgba(56,189,248,0.14)' : appTheme.colors.panelSoft,
-                      opacity: pressed ? 0.75 : 1,
-                      paddingHorizontal: 13,
-                    })}
-                  >
-                    <Text style={{ color: index === 0 ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>
-                      {filter}
-                    </Text>
-                  </Pressable>
+                {FEED_FILTERS.map((filter) => (
+                  <FeedFilterChip
+                    key={filter.id}
+                    active={activeFilterId === filter.id}
+                    label={filter.label}
+                    onPress={() => setActiveFilterId(filter.id)}
+                  />
                 ))}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Refresh showcase"
-                  disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
-                  onPress={handleRefresh}
-                  style={({ pressed }) => ({
-                    width: 34,
-                    height: 34,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: appTheme.radii.pill,
-                    borderWidth: 1,
-                    borderColor: appTheme.colors.border,
-                    backgroundColor: appTheme.colors.panelSoft,
-                    opacity: pressed ? 0.75 : showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage ? 0.52 : 1,
-                  })}
-                >
-                  <RefreshCw size={15} color={appTheme.colors.muted} strokeWidth={2.5} />
-                </Pressable>
               </View>
             </View>
             {showcaseQuery.error ? (
@@ -250,7 +270,7 @@ export default function ShowcaseScreen() {
         }
         ListEmptyComponent={
           !isFirstLoad && !showcaseQuery.error && !hasItems ? (
-            <StatusBlock title="No posts loaded" body="Check the API URL or try again in a moment." />
+            <StatusBlock title="No posts loaded" body={`No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
           ) : null
         }
         ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
@@ -285,11 +305,23 @@ function MasonryCardCell({ children, layout }: { children: React.ReactNode; layo
   );
 }
 
-function IconButton({ label, children }: { label: string; children: React.ReactNode }) {
+function IconButton({
+  children,
+  disabled,
+  label,
+  onPress,
+}: {
+  children: React.ReactNode;
+  disabled?: boolean;
+  label: string;
+  onPress?: () => void;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      disabled={disabled}
+      onPress={onPress}
       style={({ pressed }) => ({
         width: 40,
         height: 40,
@@ -299,10 +331,42 @@ function IconButton({ label, children }: { label: string; children: React.ReactN
         borderWidth: 1,
         borderColor: appTheme.colors.border,
         backgroundColor: appTheme.colors.panelSoft,
-        opacity: pressed ? 0.75 : 1,
+        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       {children}
+    </Pressable>
+  );
+}
+
+function FeedFilterChip({
+  active,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 36,
+        justifyContent: 'center',
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: active ? `${appTheme.colors.image}8c` : appTheme.colors.border,
+        backgroundColor: active ? `${appTheme.colors.image}24` : appTheme.colors.panelSoft,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: appTheme.spacing.gap,
+      })}
+    >
+      <Text style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, ...appTheme.type.label }}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -531,14 +595,14 @@ function MasonryPin({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={card.title}
+      accessibilityLabel={`${card.title}. ${card.badge}${card.unlock ? `. ${card.unlock.summary}` : ''}`}
       onPress={() => onOpenPost(card.item)}
       style={({ pressed }) => ({
-        borderRadius: 22,
+        borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: pressed ? `${accent}66` : 'rgba(255,255,255,0.11)',
-        backgroundColor: 'rgba(18,18,24,0.92)',
+        borderColor: pressed ? `${accent}66` : appTheme.colors.border,
+        backgroundColor: appTheme.colors.panel,
         overflow: 'hidden',
         opacity: pressed ? 0.88 : 1,
         transform: [{ scale: pressed ? 0.985 : 1 }],
@@ -547,8 +611,8 @@ function MasonryPin({
       <View
         style={{
           overflow: 'hidden',
-          backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
-        }}
+        backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
+      }}
       >
         {card.previewKind === 'text' ? (
           <TextPinPreview
@@ -622,11 +686,11 @@ function MasonryPin({
                 bottom: 0,
                 minHeight: 88,
                 justifyContent: 'flex-end',
-                paddingHorizontal: 12,
-                paddingBottom: 12,
+                paddingHorizontal: appTheme.spacing.gap,
+                paddingBottom: appTheme.spacing.gap,
               }}
             >
-              <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 15, lineHeight: 18, fontWeight: '900' }}>
+              <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>
                 {card.title}
               </Text>
             </LinearGradient>
@@ -635,15 +699,25 @@ function MasonryPin({
         ) : null}
       </View>
 
-      <View style={{ paddingHorizontal: 10, paddingTop: 9, paddingBottom: 10 }}>
+      <View style={{ gap: appTheme.spacing.compact, paddingHorizontal: 10, paddingTop: 9, paddingBottom: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
             <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />
-            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, fontSize: 12, lineHeight: 15, fontWeight: '800' }}>
+            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '800' }}>
               {creatorLabel}
             </Text>
           </View>
           <PinStat icon={<Heart size={16} color={appTheme.colors.text} strokeWidth={2.4} />} label={card.saveLabel} />
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
+          {card.unlock ? (
+            <UnlockSummary unlock={card.unlock} />
+          ) : (
+            <Text numberOfLines={1} style={{ color: appTheme.colors.faint, flex: 1, ...appTheme.type.caption }}>
+              Open post
+            </Text>
+          )}
+          <PinStat icon={<Repeat2 size={15} color={appTheme.colors.muted} strokeWidth={2.4} />} label={card.remixLabel} muted />
         </View>
       </View>
     </Pressable>
@@ -667,13 +741,32 @@ function PinBadge({ label, accent }: { label: string; accent: string }) {
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: `${accent}66`,
-        backgroundColor: 'rgba(3,3,6,0.68)',
+        backgroundColor: appTheme.colors.overlay,
         paddingHorizontal: 9,
         paddingVertical: 5,
       }}
     >
-      <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 10, lineHeight: 12, fontWeight: '900' }}>
+      <Text numberOfLines={1} style={{ color: '#ffffff', ...appTheme.type.caption, lineHeight: 12, fontWeight: '900' }}>
         {label}
+      </Text>
+    </View>
+  );
+}
+
+function UnlockSummary({ unlock }: { unlock: ShowcaseMasonryCard['unlock'] }) {
+  if (!unlock) return null;
+  const accent = accentColor(unlock.accent);
+
+  return (
+    <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+        <Lock size={12} color={accent} strokeWidth={2.6} />
+        <Text numberOfLines={1} style={{ color: accent, flex: 1, ...appTheme.type.caption, fontWeight: '900' }}>
+          {unlock.ctaLabel}
+        </Text>
+      </View>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
+        {unlock.summary}
       </Text>
     </View>
   );
@@ -862,11 +955,11 @@ function VideoPinPreview({ accent, height, radius }: { accent: string; height: n
   );
 }
 
-function PinStat({ icon, label }: { icon: React.ReactNode; label: string }) {
+function PinStat({ icon, label, muted = false }: { icon: React.ReactNode; label: string; muted?: boolean }) {
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
       {icon}
-      <Text style={{ color: appTheme.colors.muted, fontSize: 16, fontWeight: '500', fontVariant: ['tabular-nums'] }}>
+      <Text style={{ color: muted ? appTheme.colors.faint : appTheme.colors.muted, fontSize: muted ? 12 : 13, fontWeight: muted ? '800' : '700', fontVariant: ['tabular-nums'] }}>
         {label}
       </Text>
     </View>

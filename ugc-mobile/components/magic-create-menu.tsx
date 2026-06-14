@@ -176,9 +176,12 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
       >
         <Icon size={32} color="#ffffff" strokeWidth={2.3} />
       </LinearGradient>
-      <View style={{ alignItems: 'center' }}>
+      <View style={{ alignItems: 'center', gap: 3 }}>
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color: '#ffffff', fontSize: 17, fontWeight: '900' }}>
           {action.label}
+        </Text>
+        <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.62)', textAlign: 'center', fontSize: 11, lineHeight: 14, fontWeight: '700' }}>
+          {action.body}
         </Text>
       </View>
     </Pressable>

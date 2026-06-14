@@ -9,19 +9,19 @@ export interface CreateMenuAction {
 
 export const CREATE_MENU_ACTIONS: CreateMenuAction[] = [
   {
+    id: 'post',
+    label: 'Post',
+    body: 'Publish a post or unlockable',
+    href: '/post/new',
+  },
+  {
     id: 'create',
     label: 'Create',
     body: 'Image, AI Video, and Motion',
     href: '/(tabs)/creator',
   },
-  {
-    id: 'post',
-    label: 'Post',
-    body: 'Publish an existing creation',
-    href: '/post/new',
-  },
 ];
 
 export function getCreateMenuActionHref(id: CreateMenuActionId) {
-  return CREATE_MENU_ACTIONS.find((action) => action.id === id)?.href ?? '/(tabs)/creator';
+  return CREATE_MENU_ACTIONS.find((action) => action.id === id)?.href ?? '/post/new';
 }
