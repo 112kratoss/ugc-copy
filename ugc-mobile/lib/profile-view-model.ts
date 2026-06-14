@@ -9,10 +9,16 @@ export interface ProfileMediaCard {
   label: 'Saved' | 'Creation' | 'Post';
   meta: string;
   mediaUrl: string | null;
+  previewUrl?: string | null;
   mediaKind: 'image' | 'video' | null;
   previewKind?: 'text';
   previewText?: string;
   badge?: string;
+  detailLabel?: string;
+  statusLabel?: string;
+  linkedPostLabel?: string;
+  visibilityLabel?: string;
+  mediaTypeLabel?: string;
   avatarUrl?: string | null;
   avatarLabel?: string;
   countLabel?: string;
@@ -143,16 +149,30 @@ export function getProfileMediaSwipeTarget(currentTab: ProfileMediaTab, directio
 
 export function generationToProfileMediaCard(item: GenerationListItem): ProfileMediaCard {
   const kind = generationKind(item);
+  const mediaKind = kind === 'text' ? null : kind === 'image' ? 'image' : 'video';
+  const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
+  const previewUrl = item.previewUrl ?? item.preview_url ?? (mediaKind === 'image' ? mediaUrl : null);
 
   return {
     id: item.id,
     title: item.title || item.prompt || 'Untitled creation',
     label: 'Creation',
     meta: formatRelativeTime(item.completed_at ?? item.created_at),
-    mediaUrl: item.output_urls?.[0] ?? item.output_url ?? null,
-    mediaKind: kind === 'text' ? null : kind === 'image' ? 'image' : 'video',
+    mediaUrl,
+    previewUrl,
+    mediaKind,
     previewKind: kind === 'text' ? 'text' : undefined,
     previewText: kind === 'text' ? item.prompt || item.description || item.title || 'Saved text generation' : undefined,
+    badge: generationToolLabel(kind),
+    detailLabel: generationToolLabel(kind),
+    statusLabel: generationStatusLabel(item.status),
+    linkedPostLabel: item.linked_post_id
+      ? item.linked_post_archived_at
+        ? 'Archived post'
+        : item.linked_post_visibility
+          ? `${capitalize(item.linked_post_visibility)} post`
+          : 'Linked post'
+      : 'Not posted',
     countLabel: '0',
     viewerSource: 'profile-creations',
     sourceId: item.id,
@@ -176,10 +196,14 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     label: 'Post',
     meta: item.visibility || formatRelativeTime(item.createdAt),
     mediaUrl: item.mediaUrl,
+    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
     mediaKind: item.mediaKind,
     previewKind: isTextPost ? 'text' : undefined,
     previewText,
     badge: ownerPostBadge(item),
+    statusLabel: item.archivedAt ? 'Archived' : 'Published',
+    visibilityLabel: postVisibilityLabel(item.visibility),
+    mediaTypeLabel: ownerPostBadge(item),
     countLabel: '0',
     viewerSource: 'profile-posts',
     sourceId: item.id,
@@ -195,6 +219,7 @@ export function showcaseToSavedProfileMediaCard(item: ShowcaseFeedItem): Profile
     label: 'Saved',
     meta: item.creator.name,
     mediaUrl: item.mediaUrl,
+    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
     mediaKind: item.mediaKind,
     previewKind: item.category === 'text' || item.postFormat === 'text' ? 'text' : undefined,
     previewText: item.category === 'text' || item.postFormat === 'text' ? item.body || item.prompt || item.title : undefined,
@@ -226,6 +251,32 @@ function ownerPostBadge(item: OwnerPostListItem) {
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   if (item.category === 'motion') return 'Motion';
   return 'Post';
+}
+
+function generationToolLabel(kind: ReturnType<typeof generationKind>) {
+  if (kind === 'motion') return 'Motion';
+  if (kind === 'video') return 'Video';
+  if (kind === 'text') return 'Text';
+  return 'Image';
+}
+
+function generationStatusLabel(status: string | null | undefined) {
+  if (status === 'succeeded') return 'Ready';
+  if (status === 'processing') return 'Rendering';
+  if (status === 'waiting') return 'Queued';
+  if (status === 'failed') return 'Failed';
+  return status ? capitalize(status) : 'Draft';
+}
+
+function postVisibilityLabel(visibility: string | null | undefined) {
+  if (!visibility) return 'Private';
+  return capitalize(visibility);
+}
+
+function capitalize(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
 }
 
 function getEmailLocalPart(email?: string | null) {

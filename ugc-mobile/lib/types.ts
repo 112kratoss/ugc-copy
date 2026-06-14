@@ -20,6 +20,8 @@ export interface GenerationListItem {
   id: string;
   output_url: string | null;
   output_urls?: string[];
+  preview_url?: string | null;
+  previewUrl?: string | null;
   status: string;
   created_at: string;
   completed_at?: string | null;
@@ -184,6 +186,7 @@ export interface ShowcaseAssetSummary {
 export interface ShowcaseMediaItem {
   id: string;
   url: string;
+  previewUrl?: string | null;
   mediaKind: 'image' | 'video';
   contentType: string | null;
   originalName: string | null;

@@ -4,6 +4,8 @@ type GenerationRow = {
   id: string;
   user_id: string;
   output_url: string | null;
+  preview_url?: string | null;
+  thumbnail_url?: string | null;
   showcase_asset_path?: string | null;
   status: string;
   created_at: string;
@@ -21,6 +23,7 @@ type GenerationRow = {
 };
 
 let generationsState: GenerationRow[] = [];
+let generationPreviewColumnsAvailable = true;
 let linkedPostsState: Array<{
   id: string;
   generation_id: string | null;
@@ -57,7 +60,7 @@ function createSupabaseClientMock() {
     from(table: string) {
       if (table === 'generations') {
         return {
-          select() {
+          select(columns?: string) {
             const filters: Record<string, unknown> = {};
             const query = {
               eq(column: string, value: unknown) {
@@ -71,7 +74,24 @@ function createSupabaseClientMock() {
                 filters[column] = value;
                 return query;
               },
-              then(resolve: (value: { data: GenerationRow[]; error: null }) => void) {
+              then(resolve: (value: { data: GenerationRow[]; error: null } | { data: null; error: { code: string; message: string } }) => void) {
+                const selectedColumns = columns ?? '';
+                if (
+                  !generationPreviewColumnsAvailable
+                  && (selectedColumns.includes('preview_url') || selectedColumns.includes('thumbnail_url'))
+                ) {
+                  resolve({
+                    data: null,
+                    error: {
+                      code: '42703',
+                      message: selectedColumns.includes('preview_url')
+                        ? 'column generations.preview_url does not exist'
+                        : 'column generations.thumbnail_url does not exist',
+                    },
+                  });
+                  return;
+                }
+
                 const data = generationsState.filter((generation) => {
                   if (filters.user_id && generation.user_id !== filters.user_id) {
                     return false;
@@ -239,6 +259,7 @@ describe('/api/generations route', () => {
     vi.resetModules();
     syncGenerationStatusesMock.mockReset();
     syncGenerationStatusesMock.mockResolvedValue(undefined);
+    generationPreviewColumnsAvailable = true;
     generationsState = [
       {
         id: 'gen-1',
@@ -371,6 +392,122 @@ describe('/api/generations route', () => {
       'https://signed.example.com/generated_images/user-1/grok-1.jpg',
     ]);
     expect(data.generations[0].workflow_settings).toBeUndefined();
+  });
+
+  it('returns signed preview URLs for image and video generations', async () => {
+    generationsState = [
+      {
+        id: 'gen-image-1',
+        user_id: 'user-1',
+        output_url: 'generated_images/user-1/image-output.jpg',
+        preview_url: null,
+        showcase_asset_path: null,
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        duration: null,
+        cost: 4,
+        model: 'nano-banana-2',
+        category: 'image',
+        is_public: false,
+        title: 'Image output',
+        description: null,
+        prompt: 'An image generation.',
+        workflow_settings: null,
+      },
+      {
+        id: 'gen-video-1',
+        user_id: 'user-1',
+        output_url: 'generated_videos/user-1/video-output.mp4',
+        preview_url: 'generated_videos/user-1/video-output.preview.webp',
+        showcase_asset_path: null,
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        duration: null,
+        cost: 12,
+        model: 'kling-3.0-video',
+        category: 'video',
+        is_public: false,
+        title: 'Video output',
+        description: null,
+        prompt: 'A video generation.',
+        workflow_settings: null,
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].preview_url).toBe('https://signed.example.com/generated_images/user-1/image-output.jpg');
+    expect(data.generations[1].preview_url).toBe('https://signed.example.com/generated_videos/user-1/video-output.preview.webp');
+    expect(data.generations[1].output_url).toBe('https://signed.example.com/generated_videos/user-1/video-output.mp4');
+  });
+
+  it('falls back to base generation columns when preview columns are not deployed yet', async () => {
+    generationPreviewColumnsAvailable = false;
+    generationsState = [
+      {
+        id: 'gen-image-legacy-schema',
+        user_id: 'user-1',
+        output_url: 'generated_images/user-1/image-output.jpg',
+        showcase_asset_path: null,
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        duration: null,
+        cost: 4,
+        model: 'nano-banana-2',
+        category: 'image',
+        is_public: false,
+        title: 'Image output',
+        description: null,
+        prompt: 'An image generation.',
+        workflow_settings: null,
+      },
+      {
+        id: 'gen-video-legacy-schema',
+        user_id: 'user-1',
+        output_url: 'generated_videos/user-1/video-output.mp4',
+        showcase_asset_path: null,
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        duration: null,
+        cost: 12,
+        model: 'kling-3.0-video',
+        category: 'video',
+        is_public: false,
+        title: 'Video output',
+        description: null,
+        prompt: 'A video generation.',
+        workflow_settings: null,
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].preview_url).toBe('https://signed.example.com/generated_images/user-1/image-output.jpg');
+    expect(data.generations[1].preview_url).toBeNull();
   });
 
   it('prefers durable showcase assets over expired provider URLs', async () => {

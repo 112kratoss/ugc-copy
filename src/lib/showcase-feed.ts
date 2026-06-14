@@ -90,6 +90,8 @@ interface LegacyGenerationRow {
   id: string;
   output_url: string | null;
   showcase_asset_path?: string | null;
+  preview_url?: string | null;
+  thumbnail_url?: string | null;
   model: string;
   prompt: string | null;
   title: string | null;
@@ -108,6 +110,31 @@ function resolveItemCategory(category: ShowcaseItemCategory | null): ShowcaseIte
   }
 
   return 'image';
+}
+
+function isMissingGenerationPreviewColumnError(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as { code?: string; message?: string };
+  return (
+    (code === '42703' || code === 'PGRST204')
+    && (message.includes('preview_url') || message.includes('thumbnail_url'))
+  );
+}
+
+async function resolveLegacyGenerationPreviewUrl(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  generation: Pick<LegacyGenerationRow, 'preview_url' | 'thumbnail_url' | 'category'>,
+  mediaUrl: string
+) {
+  const previewSource = generation.preview_url || generation.thumbnail_url || null;
+  if (previewSource) {
+    return resolveStoredMediaUrl(adminSupabase, previewSource);
+  }
+
+  return resolveItemCategory(generation.category) === 'image' ? mediaUrl : null;
 }
 
 async function fetchPostRows(
@@ -307,19 +334,47 @@ export async function resolvePostRowsToFeedItems(
     }
   }
 
-  const generationModelMap = new Map<string, string>();
+  const generationInfoMap = new Map<string, { model: string; previewUrl: string | null }>();
   if (generationIds.length > 0) {
-    const { data: models, error: modelsError } = await adminSupabase
+    type GenerationInfoRow = {
+      id: string;
+      model: string;
+      preview_url?: string | null;
+      thumbnail_url?: string | null;
+      category?: string | null;
+    };
+
+    const modelsWithPreviewResult = await adminSupabase
       .from('generations')
-      .select('id, model')
+      .select('id, model, preview_url, thumbnail_url, category')
       .in('id', generationIds);
+    let models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
+    let modelsError = modelsWithPreviewResult.error;
+
+    if (isMissingGenerationPreviewColumnError(modelsError)) {
+      const legacyModelsResult = await adminSupabase
+        .from('generations')
+        .select('id, model')
+        .in('id', generationIds);
+      models = legacyModelsResult.data as GenerationInfoRow[] | null;
+      modelsError = legacyModelsResult.error;
+    }
 
     if (modelsError) {
       console.error('Error fetching showcase generation models:', modelsError);
     } else {
       for (const generation of models ?? []) {
         if (typeof generation.id === 'string' && typeof generation.model === 'string') {
-          generationModelMap.set(generation.id, generation.model);
+          const previewSource =
+            typeof generation.preview_url === 'string' && generation.preview_url
+              ? generation.preview_url
+              : typeof generation.thumbnail_url === 'string' && generation.thumbnail_url
+                ? generation.thumbnail_url
+                : null;
+          generationInfoMap.set(generation.id, {
+            model: generation.model,
+            previewUrl: previewSource ? await resolveStoredMediaUrl(adminSupabase, previewSource) : null,
+          });
         }
       }
     }
@@ -376,11 +431,18 @@ export async function resolvePostRowsToFeedItems(
 
   const resolvedItems = await Promise.all(
     visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
-      const mediaItems = mediaItemsMap.get(post.id) ?? await buildLegacyPostMediaItems({
+      let mediaItems = mediaItemsMap.get(post.id) ?? await buildLegacyPostMediaItems({
         supabase: adminSupabase,
         postId: post.id,
         row: post,
       });
+      const generationInfo = post.generation_id ? generationInfoMap.get(post.generation_id) : null;
+      if (generationInfo?.previewUrl && mediaItems[0] && !mediaItems[0].previewUrl) {
+        mediaItems = [
+          { ...mediaItems[0], previewUrl: generationInfo.previewUrl },
+          ...mediaItems.slice(1),
+        ];
+      }
       const coverMedia = mediaItems[0] ?? null;
       const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, post);
       const mediaKind = coverMedia?.mediaKind ?? getPostMediaKind(post.category, post.post_format);
@@ -392,7 +454,7 @@ export async function resolvePostRowsToFeedItems(
       const asset = assetMap.get(post.id) ?? recipeAssetMap.get(post.id) ?? null;
       const body = post.body?.trim() || '';
       const model = post.generation_id
-        ? generationModelMap.get(post.generation_id) ?? MAGICBOOKLET_SOURCE_KIND
+        ? generationInfo?.model ?? MAGICBOOKLET_SOURCE_KIND
         : post.source_kind === 'manual'
           ? 'manual'
           : post.source_tool ?? 'external';
@@ -583,7 +645,9 @@ async function fetchLegacyGenerationRows(
     return [] as LegacyGenerationRow[];
   }
 
+  const selectWithAssetAndPreview = 'id, output_url, showcase_asset_path, preview_url, thumbnail_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
   const selectWithAsset = 'id, output_url, showcase_asset_path, model, prompt, title, category, save_count, remix_count, created_at, user_id';
+  const selectWithoutAssetAndPreview = 'id, output_url, preview_url, thumbnail_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
   const selectWithoutAsset = 'id, output_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
 
   const buildQuery = (selectClause: string) => {
@@ -616,8 +680,14 @@ async function fetchLegacyGenerationRows(
     return query.range(offset, offset + limit);
   };
 
-  let result = await buildQuery(selectWithAsset);
+  let result = await buildQuery(selectWithAssetAndPreview);
+  if (isMissingGenerationPreviewColumnError(result.error)) {
+    result = await buildQuery(selectWithAsset);
+  }
   if (result.error?.code === '42703') {
+    result = await buildQuery(selectWithoutAssetAndPreview);
+  }
+  if (isMissingGenerationPreviewColumnError(result.error)) {
     result = await buildQuery(selectWithoutAsset);
   }
 
@@ -671,6 +741,7 @@ async function getLegacyShowcaseFeedPageBase(
         }
 
         const resolvedCategory = resolveItemCategory(generation.category);
+        const previewUrl = await resolveLegacyGenerationPreviewUrl(adminSupabase, generation, mediaUrl);
         const profile = generation.user_id ? profilesMap[generation.user_id] : undefined;
 
         return {
@@ -680,6 +751,7 @@ async function getLegacyShowcaseFeedPageBase(
           mediaItems: [{
             id: `${generation.id}:cover`,
             url: mediaUrl,
+            previewUrl,
             mediaKind: getPostMediaKind(resolvedCategory, 'media') ?? 'image',
             contentType: null,
             originalName: null,
@@ -827,7 +899,7 @@ async function attachViewerStateToFeed(
       feed.items
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
-        .filter((bundleId): bundleId is string => Boolean(bundleId))
+        .filter((bundleId): bundleId is string => Boolean(bundleId) && !isGenerationRecipeAssetId(bundleId))
     )
   );
   let purchasedBundleIdSet = new Set<string>();

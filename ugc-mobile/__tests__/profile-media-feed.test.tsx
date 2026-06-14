@@ -1,0 +1,308 @@
+// Define React Native development global
+(global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
+
+import React from 'react';
+import renderer from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
+
+function resolvePressableStyle(style: unknown) {
+  return typeof style === 'function'
+    ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false })
+    : style;
+}
+
+const routerState = vi.hoisted(() => ({
+  back: vi.fn(),
+  push: vi.fn(),
+}));
+
+const paramsState = vi.hoisted(() => ({
+  source: 'profile-creations' as string | string[] | undefined,
+  initialId: 'gen-2' as string | string[] | undefined,
+}));
+
+const videoState = vi.hoisted(() => ({
+  useVideoPlayer: vi.fn((_source: unknown, setup?: (player: {
+    addListener: ReturnType<typeof vi.fn>;
+    loop: boolean;
+    muted: boolean;
+    pause: ReturnType<typeof vi.fn>;
+    play: ReturnType<typeof vi.fn>;
+    playing: boolean;
+    volume: number;
+  }) => void) => {
+    const player = {
+      addListener: vi.fn(() => ({ remove: vi.fn() })),
+      loop: false,
+      muted: false,
+      pause: vi.fn(),
+      play: vi.fn(),
+      playing: false,
+      volume: 0,
+    };
+    setup?.(player);
+    return player;
+  }),
+}));
+
+vi.mock('expo-router', () => ({
+  router: routerState,
+  useLocalSearchParams: () => paramsState,
+}));
+
+vi.mock('react-native', () => ({
+  Pressable: ({ children, style, ...props }: MockProps) =>
+    React.createElement('pressable', {
+      ...props,
+      style: resolvePressableStyle(style),
+    }, children),
+  Text: ({ children, ...props }: MockProps) =>
+    React.createElement('text', props, children),
+  View: ({ children, ...props }: MockProps) =>
+    React.createElement('view', props, children),
+  ScrollView: ({ children, ...props }: MockProps) =>
+    React.createElement('scrollview', props, children),
+  FlatList: (props: MockProps & {
+    data?: unknown[];
+    renderItem?: (info: { item: unknown; index: number }) => React.ReactNode;
+    ListEmptyComponent?: React.ReactNode;
+  }) => React.createElement(
+    'flat-list',
+    props,
+    props.data?.length
+      ? props.data.map((item, index) => props.renderItem?.({ item, index }))
+      : props.ListEmptyComponent
+  ),
+  ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  Modal: ({ children, visible, ...props }: MockProps & { visible?: boolean }) =>
+    visible ? React.createElement('modal', props, children) : null,
+  Alert: {
+    alert: vi.fn(),
+  },
+  Linking: {
+    openURL: vi.fn(),
+  },
+  Share: {
+    share: vi.fn(),
+  },
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+  Platform: {
+    OS: 'ios',
+    select: (obj: Record<string, unknown>) => obj.ios || obj.default,
+  },
+}));
+
+vi.mock('expo-image', () => ({
+  Image: (props: MockProps) => React.createElement('image', props),
+}));
+
+vi.mock('expo-blur', () => ({
+  BlurView: ({ children, ...props }: MockProps) => React.createElement('blur-view', props, children),
+}));
+
+vi.mock('expo-video', () => ({
+  VideoView: (props: MockProps) => React.createElement('video-view', props),
+  useVideoPlayer: videoState.useVideoPlayer,
+}));
+
+vi.mock('expo-linear-gradient', () => ({
+  LinearGradient: ({ children, ...props }: MockProps) => React.createElement('linear-gradient', props, children),
+}));
+
+vi.mock('expo-haptics', () => ({
+  selectionAsync: vi.fn(),
+}));
+
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
+}));
+
+vi.mock('@react-navigation/native', () => ({
+  useIsFocused: () => true,
+}));
+
+vi.mock('lucide-react-native', () => ({
+  ArrowLeft: (props: Record<string, unknown>) => React.createElement('arrow-left-icon', props),
+  Download: (props: Record<string, unknown>) => React.createElement('download-icon', props),
+  FileText: (props: Record<string, unknown>) => React.createElement('file-text-icon', props),
+  Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
+  ImageOff: (props: Record<string, unknown>) => React.createElement('image-off-icon', props),
+  Images: (props: Record<string, unknown>) => React.createElement('images-icon', props),
+  MessageCircle: (props: Record<string, unknown>) => React.createElement('message-circle-icon', props),
+  MoreVertical: (props: Record<string, unknown>) => React.createElement('more-vertical-icon', props),
+  Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
+  Repeat2: (props: Record<string, unknown>) => React.createElement('repeat-icon', props),
+  Send: (props: Record<string, unknown>) => React.createElement('send-icon', props),
+  Share2: (props: Record<string, unknown>) => React.createElement('share-icon', props),
+}));
+
+const authState = vi.hoisted(() => ({
+  user: { id: 'user-123', email: 'user@example.com' },
+  api: {
+    getProfile: vi.fn(),
+    listGenerations: vi.fn(),
+    listOwnerPosts: vi.fn(),
+    saveShowcasePost: vi.fn(),
+    shareShowcasePost: vi.fn(),
+    remixShowcasePost: vi.fn(),
+  },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => authState,
+}));
+
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: ({ queryKey, queryFn }: { queryKey: string[]; queryFn?: () => unknown }) => {
+    if (queryKey[0] === 'profile') {
+      return {
+        data: { id: 'user-123', username: 'luna_dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' },
+        isLoading: false,
+      };
+    }
+    if (queryKey[0] === 'immersive-preview-source') {
+      const data = paramsState.source === 'profile-posts'
+        ? {
+            ownerPosts: [
+              {
+                id: 'post-1',
+                title: 'Published office set',
+                createdAt: '2026-06-10T00:00:00Z',
+                visibility: 'public',
+                mediaUrl: 'post.png',
+                mediaKind: 'image',
+                body: 'A published post caption',
+                category: 'image',
+                publicPath: '/showcase/post-1',
+              },
+            ],
+          }
+        : {
+            generations: [
+              {
+                id: 'gen-1',
+                status: 'succeeded',
+                output_url: 'first.png',
+                category: 'image',
+                title: 'First creation',
+                prompt: 'first prompt',
+              },
+              {
+                id: 'gen-2',
+                status: 'succeeded',
+                output_url: 'video.mp4',
+                preview_url: 'video-poster.webp',
+                previewUrl: 'video-poster.webp',
+                category: 'video',
+                title: 'Video creation',
+                prompt: 'video prompt',
+              },
+            ],
+          };
+      return {
+        data,
+        isFetching: false,
+        isLoading: false,
+        refetch: vi.fn(),
+      };
+    }
+    return {
+      data: queryFn ? queryFn() : null,
+      isFetching: false,
+      isLoading: false,
+      refetch: vi.fn(),
+    };
+  },
+  useMutation: () => ({
+    isPending: false,
+    mutate: vi.fn(),
+    variables: null,
+  }),
+  useQueryClient: () => ({
+    getQueryData: vi.fn(),
+    getQueriesData: vi.fn(() => []),
+    invalidateQueries: vi.fn(),
+  }),
+}));
+
+vi.mock('@/components/feed-media-frame', () => ({
+  FeedMediaFrame: (props: MockProps) => React.createElement('feed-media-frame', props),
+}));
+
+vi.mock('@/components/fantasy-portal-art', () => ({
+  FantasyPortalArt: (props: MockProps) => React.createElement('fantasy-portal-art', props),
+}));
+
+vi.mock('@/components/post-resource-references', () => ({
+  PostResourceReferences: (props: MockProps) => React.createElement('post-resource-references', props),
+}));
+
+import ProfileMediaFeedScreen from '../app/profile-media-feed';
+
+function renderScreen() {
+  let tree: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    tree = renderer.create(<ProfileMediaFeedScreen />);
+  });
+  return tree!;
+}
+
+describe('ProfileMediaFeedScreen', () => {
+  beforeEach(() => {
+    routerState.back.mockClear();
+    routerState.push.mockClear();
+    videoState.useVideoPlayer.mockClear();
+    paramsState.source = 'profile-creations';
+    paramsState.initialId = 'gen-2';
+  });
+
+  it('opens profile creations at the tapped item and exposes creation actions in the options menu', () => {
+    const tree = renderScreen();
+
+    const list = tree.root.findByProps({ testID: 'profile-media-feed-list' });
+    expect(list.props.initialScrollIndex).toBe(1);
+    expect(tree.root.findByProps({ children: 'Creations' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Video creation' })).toBeTruthy();
+
+    const options = tree.root.findByProps({ accessibilityLabel: 'Open media options' });
+    renderer.act(() => {
+      options.props.onPress();
+    });
+
+    expect(tree.root.findByProps({ children: 'Post this creation' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Recreate / Remix' })).toBeTruthy();
+  });
+
+  it('opens profile posts with post actions in the options menu', () => {
+    paramsState.source = 'profile-posts';
+    paramsState.initialId = 'post-1';
+
+    const tree = renderScreen();
+
+    expect(tree.root.findByProps({ children: 'Posts' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Published office set' })).toBeTruthy();
+
+    const options = tree.root.findByProps({ accessibilityLabel: 'Open media options' });
+    renderer.act(() => {
+      options.props.onPress();
+    });
+
+    expect(tree.root.findByProps({ children: 'Edit post' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Change visibility' })).toBeTruthy();
+  });
+
+  it('plays the active profile feed video with a contained frame and a single player', () => {
+    const tree = renderScreen();
+
+    const videoFrames = tree.root.findAll((node) =>
+      String(node.type) === 'feed-media-frame'
+      && node.props.kind === 'video'
+      && node.props.backdropUrl === 'video-poster.webp'
+    );
+    expect(videoFrames).toHaveLength(1);
+    expect(videoFrames[0].props.player).toBeTruthy();
+    expect(videoState.useVideoPlayer).toHaveBeenCalledTimes(1);
+  });
+});

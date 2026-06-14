@@ -11,6 +11,13 @@ export type PostComposerMode = 'text' | 'upload' | 'creation';
 export type PostComposerVisibility = 'public' | 'unlisted' | 'private';
 export type PostComposerCategory = ShowcaseFeedItem['category'];
 
+interface PostComposerSourceToolSelection {
+  toolLabel: string;
+  toolSlug: string | null;
+  modelLabel?: string | null;
+  modelSlug?: string | null;
+}
+
 export interface PostComposerUpload {
   uri: string;
   name: string;
@@ -74,6 +81,12 @@ export const POST_COMPOSER_SOURCE_OPTIONS = [
   { label: 'Other', slug: 'other' },
 ];
 
+export const POST_COMPOSER_VISIBILITY_OPTIONS: Array<{ id: PostComposerVisibility; label: string; body: string }> = [
+  { id: 'public', label: 'Public', body: 'Visible in Feed.' },
+  { id: 'unlisted', label: 'Unlisted', body: 'Shareable by link only.' },
+  { id: 'private', label: 'Private', body: 'Saved privately in Studio.' },
+];
+
 export const POST_COMPOSER_UNLOCK_OPTIONS: Array<{ id: PostResourceBundleAccessMode; label: string }> = [
   { id: 'none', label: 'No unlock' },
   { id: 'free', label: 'Free unlock' },
@@ -121,6 +134,8 @@ export function getPublishableGenerations(items: GenerationListItem[] | null | u
 }
 
 export function buildPublishGenerationPayload(item: GenerationListItem) {
+  const includeGenerationReferences = hasGenerationReferences(item) || undefined;
+
   return {
     generationId: item.id,
     visibility: 'public',
@@ -128,10 +143,15 @@ export function buildPublishGenerationPayload(item: GenerationListItem) {
     description: item.description || undefined,
     prompt: item.prompt || undefined,
     category: normalizeGenerationCategory(item.category),
+    ...(includeGenerationReferences ? { includeGenerationReferences } : {}),
   };
 }
 
 export function buildPublishGenerationPostPayload(item: GenerationListItem, draft: PostComposerDraft) {
+  const resourceBundle = buildPostResourceBundleInput(draft.resource);
+  const includeGenerationReferences = shouldIncludeGenerationReferences(item, draft.visibility, resourceBundle);
+  const sourceTools = buildSourceToolsPayload(draft, item);
+
   return {
     generationId: item.id,
     visibility: draft.visibility,
@@ -141,7 +161,9 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
     category: draft.category === 'text' ? getPublishGenerationMediaKind(item) ?? 'image' : draft.category,
     sourceTool: trimOrUndefined(draft.sourceTool),
     sourceToolSlug: trimOrUndefined(draft.sourceToolSlug),
-    resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' },
+    ...(sourceTools.length > 0 ? { sourceTools } : {}),
+    ...(includeGenerationReferences ? { includeGenerationReferences: true } : {}),
+    resourceBundle: resourceBundle ?? { accessMode: 'none' },
   };
 }
 
@@ -153,6 +175,7 @@ export function buildUpdatePostPayload(isGenerationBacked: boolean, draft: PostC
     };
   } else {
     const body = draft.mode === 'text' ? draft.contentText.trim() : getCreatePostBody(draft);
+    const sourceTools = draft.mode === 'upload' ? buildSourceToolsPayload(draft) : [];
 
     return {
       title: draft.title.trim(),
@@ -162,6 +185,7 @@ export function buildUpdatePostPayload(isGenerationBacked: boolean, draft: PostC
       category: draft.category,
       sourceTool: draft.sourceTool.trim(),
       sourceToolSlug: draft.sourceToolSlug.trim(),
+      ...(sourceTools.length > 0 ? { sourceTools } : {}),
       resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' },
     };
   }
@@ -216,6 +240,10 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
   if (draft.sourceToolSlug.trim()) {
     formData.append('sourceToolSlug', draft.sourceToolSlug.trim());
   }
+  const sourceTools = draft.mode === 'upload' ? buildSourceToolsPayload(draft) : [];
+  if (sourceTools.length > 0) {
+    formData.append('sourceTools', JSON.stringify(sourceTools));
+  }
   formData.append('visibility', draft.visibility);
   formData.append('postFormat', getCreatePostFormat(draft));
   formData.append('resourceBundle', JSON.stringify(buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' }));
@@ -261,6 +289,49 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
   };
 }
 
+export function getPostComposerPreviewStatusLabel(
+  draft: PostComposerDraft,
+  selectedGeneration?: GenerationListItem | null
+) {
+  if (draft.resource.accessMode === 'paid') {
+    return 'Paid unlock will appear in post details.';
+  }
+
+  if (draft.resource.accessMode === 'free') {
+    return 'Free unlock will appear in post details.';
+  }
+
+  if (willAttachFreeGenerationReferenceBundle(selectedGeneration, draft)) {
+    return 'Free reference package will appear in post details.';
+  }
+
+  return 'No unlock attached.';
+}
+
+export function getPostComposerSubmitLabel(params: {
+  visibility: PostComposerVisibility;
+  isEditMode: boolean;
+  isPending: boolean;
+}) {
+  if (params.isPending) {
+    return params.isEditMode ? 'Saving' : 'Publishing';
+  }
+
+  if (params.isEditMode) {
+    return 'Save changes';
+  }
+
+  if (params.visibility === 'private') {
+    return 'Save private';
+  }
+
+  if (params.visibility === 'unlisted') {
+    return 'Save unlisted';
+  }
+
+  return 'Publish public';
+}
+
 export function getCreatePostBody(draft: PostComposerDraft) {
   const parts = draft.mode === 'text'
     ? [draft.contentText.trim(), draft.caption.trim()]
@@ -284,13 +355,41 @@ export function getPublishGenerationSubtitle(item: GenerationListItem) {
 
 export function getPublishGenerationMediaKind(item: GenerationListItem): 'image' | 'video' | null {
   const category = normalizeGenerationCategory(item.category);
-  if (category === 'video' || category === 'motion') return 'video';
+  if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
   if (category === 'text') return null;
   return 'image';
 }
 
+export function hasGenerationReferences(item: GenerationListItem | null | undefined) {
+  return Boolean(item?.input_media?.some((media) => media.url || media.kind));
+}
+
+export function shouldIncludeGenerationReferences(
+  item: GenerationListItem,
+  visibility: PostComposerVisibility,
+  resourceBundle: PostResourceBundleInput | null
+) {
+  if (!hasGenerationReferences(item)) {
+    return false;
+  }
+
+  return visibility === 'public' || Boolean(resourceBundle && resourceBundle.accessMode !== 'none');
+}
+
+export function willAttachFreeGenerationReferenceBundle(
+  item: GenerationListItem | null | undefined,
+  draft: PostComposerDraft
+) {
+  if (!item || draft.mode !== 'creation') {
+    return false;
+  }
+
+  return !buildPostResourceBundleInput(draft.resource)
+    && shouldIncludeGenerationReferences(item, draft.visibility, null);
+}
+
 function normalizeGenerationCategory(category: string | null | undefined) {
-  if (category === 'video' || category === 'motion' || category === 'text') {
+  if (category === 'video' || category === 'motion' || category === 'ugc-ad' || category === 'text') {
     return category;
   }
   return 'image';
@@ -303,6 +402,41 @@ function trimOrUndefined(value: string | null | undefined) {
 
 function trimOrNull(value: string | null | undefined) {
   return trimOrUndefined(value) ?? null;
+}
+
+function slugifySourceValue(value: string | null | undefined) {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return normalized || null;
+}
+
+function buildSourceToolsPayload(
+  draft: PostComposerDraft,
+  item?: GenerationListItem
+): PostComposerSourceToolSelection[] {
+  const toolLabel = draft.sourceTool.trim();
+  if (!toolLabel) {
+    return [];
+  }
+
+  const toolSlug = slugifySourceValue(draft.sourceToolSlug) ?? slugifySourceValue(toolLabel);
+  const modelLabel = item?.model?.trim() || null;
+
+  return [{
+    toolLabel,
+    toolSlug,
+    ...(modelLabel
+      ? {
+          modelLabel,
+          modelSlug: slugifySourceValue(modelLabel),
+        }
+      : {}),
+  }];
 }
 
 function getPriceUsdCents(value: string) {
@@ -357,6 +491,7 @@ function getDefaultResourcePreview(kinds: PostResourceKind[]) {
 
 function getGenerationCategoryLabel(category: string | null | undefined) {
   const normalized = normalizeGenerationCategory(category);
+  if (normalized === 'ugc-ad') return 'UGC ad';
   if (normalized === 'motion') return 'Motion';
   if (normalized === 'video') return 'Video';
   if (normalized === 'text') return 'Text';

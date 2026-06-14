@@ -60,10 +60,14 @@ function absolutizeMediaUrl(root: string, url: string | null | undefined) {
 }
 
 function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): GenerationListItem {
+  const previewUrl = absolutizeMediaUrl(root, item.previewUrl ?? item.preview_url);
+
   return {
     ...item,
     output_url: absolutizeMediaUrl(root, item.output_url),
     output_urls: item.output_urls?.map((url) => absolutizeMediaUrl(root, url)).filter((url): url is string => Boolean(url)),
+    preview_url: previewUrl,
+    previewUrl,
     input_media: item.input_media?.map((media) => ({
       ...media,
       url: absolutizeMediaUrl(root, media.url),

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowRight, CheckCircle2, Newspaper, PlayCircle, Sparkles } from 'lucide-react';
 
+import { Button, Kicker, SectionHeader, Surface, Text } from '@/app/components/DesignSystem';
 import { JsonLd } from '@/app/components/JsonLd';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import { buildSoftwareApplicationSchema } from '@/lib/seo';
@@ -47,7 +48,7 @@ export default function FeatureLandingPage({
     featureList,
 }: FeatureLandingPageProps) {
     return (
-        <div className="min-h-screen overflow-hidden bg-black text-white">
+        <div className="ui-page overflow-hidden">
             <JsonLd
                 data={buildSoftwareApplicationSchema({
                     name: title,
@@ -66,112 +67,107 @@ export default function FeatureLandingPage({
             />
 
             <div className="fixed inset-0 pointer-events-none">
-                <div className="absolute left-[-10%] top-[-5%] h-[32rem] w-[32rem] rounded-full bg-fuchsia-700/15 blur-[140px]" />
-                <div className="absolute bottom-[-10%] right-[-10%] h-[28rem] w-[28rem] rounded-full bg-cyan-500/10 blur-[140px]" />
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_40%)]" />
             </div>
 
-            <main className="studio-shell relative flex flex-col gap-20 py-20">
+            <main className="studio-shell ui-section-gap relative py-20">
                 <section className="grid gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
                     <div className="space-y-8">
-                        <div className="inline-flex items-center gap-2 rounded-full border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-sm text-fuchsia-200">
-                            <Sparkles className="h-4 w-4" />
+                        <Kicker icon={Sparkles} className="rounded-full border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-fuchsia-200">
                             {badge}
-                        </div>
+                        </Kicker>
                         <div className="space-y-5">
-                            <h1 className="max-w-4xl text-5xl font-black tracking-tight sm:text-6xl lg:text-7xl">
+                            <Text as="h1" variant="display" className="max-w-4xl">
                                 {title}
-                            </h1>
-                            <p className="max-w-3xl text-lg leading-8 text-zinc-300 sm:text-xl">
+                            </Text>
+                            <Text variant="body" className="max-w-3xl text-lg leading-8 sm:text-xl">
                                 {description}
-                            </p>
+                            </Text>
                         </div>
                         <div className="flex flex-col gap-4 sm:flex-row">
-                            <Link
+                            <Button
                                 href={primaryCtaHref}
-                                className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-7 py-4 font-semibold text-black transition hover:scale-[1.02] hover:bg-zinc-200"
+                                variant="primary"
+                                icon={ArrowRight}
+                                className="min-h-12 px-7"
                             >
                                 {primaryCtaLabel}
-                                <ArrowRight className="h-4 w-4" />
-                            </Link>
-                            <Link
+                            </Button>
+                            <Button
                                 href={secondaryCtaHref}
-                                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/15 bg-white/5 px-7 py-4 font-semibold text-white transition hover:border-white/25 hover:bg-white/10"
+                                variant="secondary"
+                                className="min-h-12 px-7"
                             >
                                 {secondaryCtaLabel}
-                            </Link>
+                            </Button>
                         </div>
                     </div>
 
-                    <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 backdrop-blur-xl">
-                        <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-400">
-                            Why teams use it
-                        </p>
+                    <Surface variant="panel" padding="lg" className="backdrop-blur-xl">
+                        <Kicker>Why teams use it</Kicker>
                         <div className="mt-6 space-y-4">
                             {highlights.map((highlight) => (
-                                <div
+                                <Surface
+                                    as="article"
+                                    variant="soft"
+                                    padding="sm"
                                     key={highlight}
-                                    className="flex items-start gap-3 rounded-2xl border border-white/6 bg-black/30 p-4"
+                                    className="flex items-start gap-3 bg-black/30"
                                 >
                                     <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
-                                    <p className="text-sm leading-6 text-zinc-300">{highlight}</p>
-                                </div>
+                                    <Text variant="bodySm" className="text-zinc-300">{highlight}</Text>
+                                </Surface>
                             ))}
                         </div>
-                    </div>
+                    </Surface>
                 </section>
 
                 <section className="space-y-8">
-                    <div className="space-y-3">
-                        <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-400">
-                            How it works
-                        </p>
-                        <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                            Move from idea to publish-ready creative without bouncing across tools
-                        </h2>
-                    </div>
+                    <SectionHeader
+                        eyebrow="How it works"
+                        title="Move from idea to publish-ready creative without bouncing across tools"
+                    />
                     <div className="grid gap-6 md:grid-cols-3">
                         {steps.map((step, index) => (
-                            <article
+                            <Surface
+                                as="article"
                                 key={step.title}
-                                className="rounded-[1.75rem] border border-white/8 bg-zinc-950/70 p-6 shadow-[0_20px_50px_rgba(0,0,0,0.3)]"
+                                variant="card"
+                                padding="lg"
+                                interactive
                             >
                                 <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5 text-lg font-bold text-white">
                                     {index + 1}
                                 </div>
-                                <h3 className="text-xl font-semibold text-white">{step.title}</h3>
-                                <p className="mt-3 text-sm leading-6 text-zinc-400">{step.description}</p>
-                            </article>
+                                <Text as="h3" variant="cardTitle">{step.title}</Text>
+                                <Text variant="bodySm" className="mt-3">{step.description}</Text>
+                            </Surface>
                         ))}
                     </div>
                 </section>
 
                 <section className="space-y-8">
-                    <div className="space-y-3">
-                        <p className="text-sm font-semibold uppercase tracking-[0.25em] text-zinc-400">
-                            Keep exploring
-                        </p>
-                        <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                            Build authority around the feature, not just a single page
-                        </h2>
-                    </div>
+                    <SectionHeader
+                        eyebrow="Keep exploring"
+                        title="Build authority around the feature, not just a single page"
+                    />
                     <div className="grid gap-6 md:grid-cols-3">
                         {relatedLinks.map((link) => (
                             <Link
                                 key={link.href}
                                 href={link.href}
-                                className="group rounded-[1.75rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-fuchsia-400/40 hover:bg-white/[0.05]"
+                                className="ui-card ui-card-interactive ui-focus-ring group p-6"
                             >
-                                <div className="flex items-center gap-2 text-sm uppercase tracking-[0.18em] text-zinc-500">
+                                <Kicker>
                                     {link.href.startsWith('/blog') ? (
                                         <Newspaper className="h-4 w-4" />
                                     ) : (
                                         <PlayCircle className="h-4 w-4" />
                                     )}
                                     Linked path
-                                </div>
-                                <h3 className="mt-4 text-xl font-semibold text-white">{link.title}</h3>
-                                <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
+                                </Kicker>
+                                <Text as="h3" variant="cardTitle" className="mt-4">{link.title}</Text>
+                                <Text variant="bodySm" className="mt-3">{link.description}</Text>
                                 <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-fuchsia-300">
                                     {link.label}
                                     <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />

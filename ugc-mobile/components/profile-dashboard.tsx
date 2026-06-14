@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { FlashList } from '@shopify/flash-list';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -15,8 +16,8 @@ import {
   UserRound,
   Wallet,
 } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, PanResponder, Platform, Pressable, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
@@ -25,7 +26,7 @@ import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { PrimaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
-import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
+import { immersiveViewerHref, profileMediaFeedHref } from '@/lib/immersive-preview-view-model';
 import {
   FALLBACK_PROFILE_MEDIA,
   PROFILE_MEDIA_TABS,
@@ -143,91 +144,169 @@ export function ProfileDashboard() {
 
   if (!user) {
     return (
-      <ProfileShell topInset={topInset} contentBottomPadding={tabBarMetrics.contentBottomPadding} horizontalPadding={horizontalPadding}>
-        <ProfileTitle />
-        <SignedOutCard />
-        <SavedMediaSection
-          activeTab={activeTab}
-          onTabChange={handleMediaTabChange}
-          onSwipeTab={handleMediaSwipe}
-          cards={FALLBACK_PROFILE_MEDIA}
-          isLoading={false}
-          emptyTitle="Sign in to load your media"
-          fallbackAvatarInitials="C"
-        />
-      </ProfileShell>
+      <ProfileMediaList
+        activeTab={activeTab}
+        cards={FALLBACK_PROFILE_MEDIA}
+        contentBottomPadding={tabBarMetrics.contentBottomPadding}
+        emptyTitle="Sign in to load your media"
+        fallbackAvatarInitials="C"
+        header={(
+          <>
+            <ProfileTitle />
+            <SignedOutCard />
+          </>
+        )}
+        horizontalPadding={horizontalPadding}
+        isLoading={false}
+        onSwipeTab={handleMediaSwipe}
+        onTabChange={handleMediaTabChange}
+        topInset={topInset}
+      />
     );
   }
 
   return (
-    <ProfileShell topInset={topInset} contentBottomPadding={tabBarMetrics.contentBottomPadding} horizontalPadding={horizontalPadding}>
-      <ProfileTitle />
-
-      {profileQuery.error && !profile ? (
-        <StatusBlock tone="danger" title="Could not load profile" body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again.'} />
-      ) : null}
-
-      <ProfileHeroCard
-        profile={profile}
-        displayName={displayName}
-        handle={handle}
-        initials={initials}
-        email={user.email}
-        stats={stats}
-        onEdit={() => router.push('/edit-profile' as never)}
-      />
-
-      <View style={{ flexDirection: 'row', gap: 12 }}>
-        <BalanceCard icon={<Crown size={22} color="#fbbf24" />} label="Credits" value={String(credits ?? profile?.credits ?? 0)} />
-        <BalanceCard icon={<Wallet size={22} color="#22d3ee" />} label="Wallet" value={formatUsdCents(salesSummary.earningsUsdCents)} />
-      </View>
-
-      <SellerDashboardButton />
-
-      <SavedMediaSection
-        activeTab={activeTab}
-        onTabChange={handleMediaTabChange}
-        onSwipeTab={handleMediaSwipe}
-        onRefresh={refreshActiveMedia}
-        title={getProfileMediaSectionTitle(activeTab)}
-        cards={visibleCards}
-        isLoading={isMediaLoading}
-        emptyTitle={getProfileMediaEmptyTitle(activeTab)}
-        fallbackAvatarUrl={profile?.avatarUrl}
-        fallbackAvatarInitials={initials}
-      />
-    </ProfileShell>
+    <ProfileMediaList
+      activeTab={activeTab}
+      cards={visibleCards}
+      contentBottomPadding={tabBarMetrics.contentBottomPadding}
+      emptyTitle={getProfileMediaEmptyTitle(activeTab)}
+      fallbackAvatarInitials={initials}
+      fallbackAvatarUrl={profile?.avatarUrl}
+      header={(
+        <>
+          <ProfileTitle />
+          {profileQuery.error && !profile ? (
+            <StatusBlock tone="danger" title="Could not load profile" body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again.'} />
+          ) : null}
+          <ProfileHeroCard
+            profile={profile}
+            displayName={displayName}
+            handle={handle}
+            initials={initials}
+            email={user.email}
+            stats={stats}
+            onEdit={() => router.push('/edit-profile' as never)}
+          />
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <BalanceCard icon={<Crown size={22} color="#fbbf24" />} label="Credits" value={String(credits ?? profile?.credits ?? 0)} />
+            <BalanceCard icon={<Wallet size={22} color="#22d3ee" />} label="Wallet" value={formatUsdCents(salesSummary.earningsUsdCents)} />
+          </View>
+          <SellerDashboardButton />
+        </>
+      )}
+      horizontalPadding={horizontalPadding}
+      isLoading={isMediaLoading}
+      onRefresh={refreshActiveMedia}
+      onSwipeTab={handleMediaSwipe}
+      onTabChange={handleMediaTabChange}
+      title={getProfileMediaSectionTitle(activeTab)}
+      topInset={topInset}
+    />
   );
 }
 
-function ProfileShell({
-  children,
-  topInset,
+function ProfileMediaList({
+  activeTab,
+  cards,
   contentBottomPadding,
+  emptyTitle,
+  fallbackAvatarInitials,
+  fallbackAvatarUrl,
+  header,
   horizontalPadding,
+  isLoading,
+  onRefresh,
+  onSwipeTab,
+  onTabChange,
+  title,
+  topInset,
 }: {
-  children: React.ReactNode;
-  topInset: number;
+  activeTab: ProfileMediaTab;
+  cards: ProfileMediaCard[];
   contentBottomPadding: number;
+  emptyTitle: string;
+  fallbackAvatarInitials: string;
+  fallbackAvatarUrl?: string | null;
+  header: React.ReactNode;
   horizontalPadding: number;
+  isLoading: boolean;
+  onRefresh?: () => void;
+  onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
+  onTabChange: (tab: ProfileMediaTab) => void;
+  title?: string;
+  topInset: number;
 }) {
+  const { width } = useWindowDimensions();
+  const pageWidth = Math.min(width, 430);
+  const contentWidth = pageWidth - horizontalPadding * 2;
+  const cardWidth = Math.floor((contentWidth - PROFILE_GALLERY_GAP * (PROFILE_GALLERY_COLUMNS - 1)) / PROFILE_GALLERY_COLUMNS);
+  const cardHeight = Math.round(cardWidth / PROFILE_GALLERY_ASPECT_RATIO);
+  const swipeResponder = useMemo(
+    () => PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => isProfileMediaSwipeGesture(gestureState),
+      onPanResponderRelease: (_, gestureState) => {
+        const direction = getProfileMediaSwipeDirection(gestureState);
+        if (direction) onSwipeTab(direction);
+      },
+    }),
+    [onSwipeTab]
+  );
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
-      <ScrollView
-        bounces={false}
-        contentInsetAdjustmentBehavior="never"
-        overScrollMode="never"
+    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
+      <FlashList
+        data={isLoading ? [] : cards}
+        drawDistance={400}
+        extraData={activeTab}
+        getItemType={(item) => item.mediaKind ?? item.previewKind}
+        keyExtractor={(item) => `${item.label}-${item.id}`}
+        ListHeaderComponent={(
+          <View style={{ gap: 20, paddingBottom: 14 }}>
+            {header}
+            <ProfileMediaHeader
+              activeTab={activeTab}
+              onRefresh={onRefresh}
+              onTabChange={onTabChange}
+              title={title}
+            />
+          </View>
+        )}
+        ListEmptyComponent={isLoading ? (
+          <View style={{ minHeight: 160, alignItems: 'center', justifyContent: 'center' }}>
+            <ActivityIndicator color="#d946ef" />
+          </View>
+        ) : (
+          <ProfileMediaEmpty title={emptyTitle} />
+        )}
+        numColumns={PROFILE_GALLERY_COLUMNS}
+        removeClippedSubviews={Platform.OS === 'android'}
+        renderItem={({ item, index }) => (
+          <View
+            style={{
+              width: cardWidth,
+              marginRight: index % PROFILE_GALLERY_COLUMNS === PROFILE_GALLERY_COLUMNS - 1 ? 0 : PROFILE_GALLERY_GAP,
+              marginBottom: PROFILE_GALLERY_GAP,
+            }}
+          >
+            <ProfileMediaTile
+              item={item}
+              width={cardWidth}
+              height={cardHeight}
+              fallbackAvatarUrl={fallbackAvatarUrl}
+              fallbackAvatarInitials={fallbackAvatarInitials}
+            />
+          </View>
+        )}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: '#03040d' }}
+        contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{
           paddingTop: 18,
           paddingHorizontal: horizontalPadding,
           paddingBottom: contentBottomPadding,
-          gap: 20,
         }}
-      >
-        {children}
-      </ScrollView>
+      />
     </View>
   );
 }
@@ -459,104 +538,56 @@ function SellerDashboardButton() {
   );
 }
 
-function SavedMediaSection({
+function ProfileMediaHeader({
   activeTab,
   onTabChange,
-  onSwipeTab,
   onRefresh,
   title,
-  cards,
-  isLoading,
-  emptyTitle,
-  fallbackAvatarUrl,
-  fallbackAvatarInitials,
 }: {
   activeTab: ProfileMediaTab;
   onTabChange: (tab: ProfileMediaTab) => void;
-  onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onRefresh?: () => void;
   title?: string;
-  cards: ProfileMediaCard[];
-  isLoading: boolean;
-  emptyTitle: string;
-  fallbackAvatarUrl?: string | null;
-  fallbackAvatarInitials: string;
 }) {
-  const { width } = useWindowDimensions();
-  const pageWidth = Math.min(width, 430);
-  const isCompact = pageWidth < 390;
-  const contentWidth = pageWidth - (isCompact ? 16 : 18) * 2;
-  const cardWidth = Math.floor((contentWidth - PROFILE_GALLERY_GAP * (PROFILE_GALLERY_COLUMNS - 1)) / PROFILE_GALLERY_COLUMNS);
-  const cardHeight = Math.round(cardWidth / PROFILE_GALLERY_ASPECT_RATIO);
-  const activeVideoPreviewId = cards.find((card) => card.mediaKind === 'video' && card.mediaUrl)?.id ?? null;
-  const swipeResponder = useMemo(
-    () => PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => isProfileMediaSwipeGesture(gestureState),
-      onPanResponderRelease: (_, gestureState) => {
-        const direction = getProfileMediaSwipeDirection(gestureState);
-        if (direction) onSwipeTab(direction);
-      },
-    }),
-    [onSwipeTab]
-  );
-
   return (
-    <View {...swipeResponder.panHandlers} style={{ gap: 14 }}>
-      <View style={{ gap: 12 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 25, fontWeight: '900', flex: 1 }}>{title ?? getProfileMediaSectionTitle(activeTab)}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Refresh media"
-            onPress={onRefresh}
-            style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' })}
-          >
-            <RefreshCw size={20} color="#a855f7" />
-          </Pressable>
-        </View>
-        <ProfileSegment value={activeTab} onChange={onTabChange} />
-      </View>
-
-      {isLoading ? (
-        <View style={{ minHeight: 160, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color="#d946ef" />
-        </View>
-      ) : cards.length > 0 ? (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: PROFILE_GALLERY_GAP }}>
-          {cards.map((item) => (
-            <ProfileMediaTile
-              key={`${item.label}-${item.id}`}
-              item={item}
-              width={cardWidth}
-              height={cardHeight}
-              fallbackAvatarUrl={fallbackAvatarUrl}
-              fallbackAvatarInitials={fallbackAvatarInitials}
-              videoActive={item.id === activeVideoPreviewId}
-            />
-          ))}
-        </View>
-      ) : (
-        <View
-          style={{
-            minHeight: 154,
-            borderRadius: 24,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.10)',
-            backgroundColor: 'rgba(255,255,255,0.045)',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 20,
-            gap: 8,
-          }}
+    <View style={{ gap: 12 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 25, fontWeight: '900', flex: 1 }}>{title ?? getProfileMediaSectionTitle(activeTab)}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh media"
+          onPress={onRefresh}
+          style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' })}
         >
-          <ImageIcon size={30} color={appTheme.colors.faint} />
-          <Text style={{ color: '#fff', fontSize: 17, fontWeight: '900' }}>{emptyTitle}</Text>
-          <Text style={{ color: appTheme.colors.muted, textAlign: 'center', lineHeight: 20 }}>
-            This section will fill as you save media, create generations, or publish posts.
-          </Text>
-        </View>
-      )}
+          <RefreshCw size={20} color="#a855f7" />
+        </Pressable>
+      </View>
+      <ProfileSegment value={activeTab} onChange={onTabChange} />
+    </View>
+  );
+}
+
+function ProfileMediaEmpty({ title }: { title: string }) {
+  return (
+    <View
+      style={{
+        minHeight: 154,
+        borderRadius: 24,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.10)',
+        backgroundColor: 'rgba(255,255,255,0.045)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+        gap: 8,
+      }}
+    >
+      <ImageIcon size={30} color={appTheme.colors.faint} />
+      <Text style={{ color: '#fff', fontSize: 17, fontWeight: '900' }}>{title}</Text>
+      <Text style={{ color: appTheme.colors.muted, textAlign: 'center', lineHeight: 20 }}>
+        This section will fill as you save media, create generations, or publish posts.
+      </Text>
     </View>
   );
 }
@@ -616,14 +647,12 @@ function ProfileMediaTile({
   height,
   fallbackAvatarUrl,
   fallbackAvatarInitials,
-  videoActive,
 }: {
   item: ProfileMediaCard;
   width: number;
   height: number;
   fallbackAvatarUrl?: string | null;
   fallbackAvatarInitials: string;
-  videoActive: boolean;
 }) {
   const avatarUrl = item.avatarUrl ?? fallbackAvatarUrl ?? null;
   const avatarInitials = item.avatarUrl
@@ -647,22 +676,12 @@ function ProfileMediaTile({
           router.push(item.href as never);
           return;
         }
-        if (isSavedTile) {
-          router.push(
-            immersiveViewerHref({
-              source: 'profile-saved',
-              initialId: item.sourceId,
-            }) as never
-          );
-          return;
-        }
-        router.push({
-          pathname: '/media-feed',
-          params: {
+        router.push(
+          (isSavedTile ? immersiveViewerHref : profileMediaFeedHref)({
             source: item.viewerSource,
             initialId: item.sourceId,
-          },
-        } as never);
+          }) as never
+        );
       }}
       style={({ pressed }) => ({
         width,
@@ -680,7 +699,7 @@ function ProfileMediaTile({
           backgroundColor: '#090914',
         }}
       >
-        <ProfileGalleryPreview item={item} height={height} videoActive={videoActive} />
+        <ProfileGalleryPreview item={item} height={height} />
         <LinearGradient
           colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.16)', 'rgba(0,0,0,0.70)']}
           locations={[0, 0.48, 1]}
@@ -699,7 +718,7 @@ function ProfileMediaTile({
             countLabel={countLabel}
           />
         ) : (
-          <ProfileWorkBadge item={item} />
+          <ProfileMinimalMediaOverlay item={item} />
         )}
       </View>
     </Pressable>
@@ -718,7 +737,7 @@ function ProfileSavedFeedOverlay({
   countLabel: string;
 }) {
   return (
-    <>
+    <View testID="profile-saved-overlay" pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
       <View
         style={{
           position: 'absolute',
@@ -791,70 +810,94 @@ function ProfileSavedFeedOverlay({
           </Text>
         </View>
       </View>
-    </>
-  );
-}
-
-function ProfileWorkBadge({ item }: { item: ProfileMediaCard }) {
-  const isCreation = item.label === 'Creation';
-  const tint = isCreation ? '#c084fc' : '#38bdf8';
-  const icon = isCreation
-    ? <Sparkles size={12} color={tint} />
-    : item.mediaKind === 'video'
-      ? <Play size={12} color={tint} fill={tint} />
-      : <ImageIcon size={12} color={tint} />;
-  const label = isCreation ? 'Creation' : item.badge ?? item.meta;
-
-  return (
-    <View
-      style={{
-        position: 'absolute',
-        left: 8,
-        right: 8,
-        bottom: 8,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        alignSelf: 'flex-start',
-        maxWidth: '86%',
-        borderRadius: 12,
-        backgroundColor: 'rgba(3,4,13,0.72)',
-        borderWidth: 1,
-        borderColor: isCreation ? 'rgba(192,132,252,0.30)' : 'rgba(56,189,248,0.28)',
-        paddingHorizontal: 8,
-        paddingVertical: 5,
-      }}
-    >
-      {icon}
-      <Text numberOfLines={1} style={{ color: tint, fontSize: 11, fontWeight: '900' }}>
-        {label}
-      </Text>
     </View>
   );
 }
 
-function ProfileGalleryPreview({ item, height, videoActive }: { item: ProfileMediaCard; height: number; videoActive: boolean }) {
-  const [imageFailed, setImageFailed] = useState(false);
+function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
+  const accent = item.label === 'Creation' ? '#e879f9' : '#67e8f9';
+  const icon = item.label === 'Creation'
+    ? <Sparkles size={13} color={accent} strokeWidth={2.4} />
+    : item.mediaKind === 'video'
+      ? <Play size={13} color={accent} fill={accent} strokeWidth={2.4} />
+      : <ImageIcon size={13} color={accent} strokeWidth={2.4} />;
+  const stateColor = item.label === 'Creation'
+    ? item.linkedPostLabel && item.linkedPostLabel !== 'Not posted'
+      ? '#67ff45'
+      : '#c084fc'
+    : item.visibilityLabel === 'Public'
+      ? '#67ff45'
+      : item.visibilityLabel === 'Private'
+        ? '#f59e0b'
+        : '#67e8f9';
 
-  useEffect(() => {
-    setImageFailed(false);
-  }, [item.mediaUrl]);
+  return (
+    <View testID="profile-minimal-overlay" pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          width: 28,
+          height: 28,
+          borderRadius: 14,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'rgba(3,4,13,0.62)',
+          borderWidth: 1,
+          borderColor: item.label === 'Creation' ? 'rgba(216,180,254,0.38)' : 'rgba(103,232,249,0.28)',
+        }}
+      >
+        {icon}
+      </View>
 
-  if (item.mediaUrl && item.mediaKind === 'image' && !imageFailed) {
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 8,
+          left: 8,
+          width: 10,
+          height: 10,
+          borderRadius: 5,
+          backgroundColor: stateColor,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.72)',
+        }}
+      />
+    </View>
+  );
+}
+
+function ProfileGalleryPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
+  const previewMediaUrl = item.mediaKind === 'video' ? item.previewUrl : item.mediaUrl;
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+
+  if (previewMediaUrl && failedUrl !== previewMediaUrl) {
     return (
       <FeedMediaFrame
         kind="image"
-        url={item.mediaUrl}
+        url={previewMediaUrl}
+        imageBackdrop="none"
+        imageContentFit="cover"
         transition={120}
-        onImageError={() => setImageFailed(true)}
+        onImageError={() => setFailedUrl(previewMediaUrl)}
+        recyclingKey={`profile:${item.id}`}
         radius={12}
         style={{ width: '100%', height }}
       />
     );
   }
 
-  if (item.mediaUrl && item.mediaKind === 'video' && videoActive) {
-    return <FeedVideoPreview url={item.mediaUrl} active height={height} radius={12} accent="#ff4d2d" />;
+  if (item.mediaKind === 'video' && item.mediaUrl) {
+    return (
+      <FeedVideoPreview
+        url={item.mediaUrl}
+        active={false}
+        height={height}
+        radius={12}
+        accent="#e879f9"
+      />
+    );
   }
 
   if (item.previewKind === 'text') {

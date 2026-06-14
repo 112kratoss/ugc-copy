@@ -17,6 +17,8 @@ import {
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
   getDefaultPostComposerDraft,
+  getPostComposerPreviewStatusLabel,
+  getPostComposerSubmitLabel,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
   getPublishGenerationTitle,
@@ -25,9 +27,9 @@ import {
   POST_COMPOSER_MODES,
   POST_COMPOSER_SOURCE_OPTIONS,
   POST_COMPOSER_UNLOCK_OPTIONS,
+  POST_COMPOSER_VISIBILITY_OPTIONS,
   validatePostComposerDraft,
-  buildPostResourceBundleInput,
-  getCreatePostBody,
+  hasGenerationReferences,
   type PostComposerCategory,
   type PostComposerDraft,
   type PostComposerMode,
@@ -181,13 +183,12 @@ export default function NewPostScreen() {
       void invalidatePostCaches(queryClient, user?.id);
       const targetPostId = response.postId || postId;
       if (targetPostId) {
-        router.replace({
-          pathname: '/media-feed',
-          params: {
+        router.replace(
+          immersiveViewerHref({
             source: 'profile-posts',
             initialId: targetPostId,
-          },
-        } as never);
+          }) as never
+        );
       }
     },
     onError: (error) => {
@@ -388,7 +389,23 @@ export default function NewPostScreen() {
           </OrderedField>
         </View>
 
-        <OrderedField step="6" label="Unlockables">
+        <OrderedField step="6" label="Visibility">
+          <SegmentedRow>
+            {POST_COMPOSER_VISIBILITY_OPTIONS.map((option) => (
+              <Chip
+                key={option.id}
+                label={option.label}
+                active={draft.visibility === option.id}
+                onPress={() => updateDraft({ visibility: option.id })}
+              />
+            ))}
+          </SegmentedRow>
+          <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, fontWeight: '700' }}>
+            {POST_COMPOSER_VISIBILITY_OPTIONS.find((option) => option.id === draft.visibility)?.body ?? 'Choose who can see this post.'}
+          </Text>
+        </OrderedField>
+
+        <OrderedField step="7" label="Unlockables">
           <SegmentedRow>
             {POST_COMPOSER_UNLOCK_OPTIONS.map((option) => (
               <Chip
@@ -400,22 +417,40 @@ export default function NewPostScreen() {
             ))}
           </SegmentedRow>
           {draft.resource.accessMode !== 'none' ? (
-            <UnlockFields
-              accessMode={draft.resource.accessMode}
-              resource={draft.resource}
-              onChange={updateResource}
-            />
+            <>
+              {draft.visibility !== 'public' ? (
+                <Text selectable style={{ color: '#fbbf24', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
+                  This unlock will save as a draft until the post is public.
+                </Text>
+              ) : null}
+              <UnlockFields
+                accessMode={draft.resource.accessMode}
+                resource={draft.resource}
+                onChange={updateResource}
+              />
+            </>
           ) : (
-            <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19 }}>
-              Publish a normal community post. You can add free or paid resources when the post has reusable value.
-            </Text>
+            <View style={{ gap: 6 }}>
+              <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19 }}>
+                Publish a normal community post. You can add free or paid resources when the post has reusable value.
+              </Text>
+              {selectedGeneration && hasGenerationReferences(selectedGeneration) ? (
+                <Text selectable style={{ color: '#66ff45', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
+                  Saved creation inputs will attach to public posts as a free reference package.
+                </Text>
+              ) : null}
+            </View>
           )}
         </OrderedField>
 
         <PreviewPanel draft={draft} selectedGeneration={selectedGeneration} />
 
         <PrimaryButton
-          label={publishMutation.isPending ? (isEditMode ? 'Saving' : 'Publishing') : (isEditMode ? 'Save changes' : 'Post now')}
+          label={getPostComposerSubmitLabel({
+            visibility: draft.visibility,
+            isEditMode,
+            isPending: publishMutation.isPending,
+          })}
           loading={publishMutation.isPending}
           disabled={!canSubmit || publishMutation.isPending}
           onPress={() => {
@@ -608,7 +643,7 @@ function UploadContent({
       <View style={{ gap: 10 }}>
         {draft.upload ? (
           <View style={{ height: 190, borderRadius: 18, overflow: 'hidden', backgroundColor: '#080912', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', opacity: 0.8 }}>
-            {draft.upload.uri.startsWith('http') || draft.upload.type.startsWith('image/') ? (
+            {draft.upload.type.startsWith('image/') ? (
               <Image source={{ uri: draft.upload.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
             ) : (
               <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -628,7 +663,7 @@ function UploadContent({
     <View style={{ gap: 10 }}>
       {draft.upload ? (
         <View style={{ height: 190, borderRadius: 18, overflow: 'hidden', backgroundColor: '#080912', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }}>
-          {draft.upload.uri.startsWith('http') || draft.upload.type.startsWith('image/') ? (
+          {draft.upload.type.startsWith('image/') ? (
             <Image source={{ uri: draft.upload.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
             <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -715,7 +750,9 @@ function CreationContent({
 
 function CreationCard({ item, selected, onPress, disabled = false }: { item: GenerationListItem; selected: boolean; onPress: () => void; disabled?: boolean }) {
   const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
+  const previewUrl = getGenerationPreviewImageUrl(item);
   const mediaKind = getPublishGenerationMediaKind(item);
+  const visualUrl = mediaKind === 'video' ? previewUrl : mediaUrl;
   return (
     <Pressable
       accessibilityRole="button"
@@ -733,13 +770,18 @@ function CreationCard({ item, selected, onPress, disabled = false }: { item: Gen
       })}
     >
       <View style={{ height: 148, backgroundColor: '#080912' }}>
-        {mediaUrl && mediaKind === 'image' ? (
-          <Image source={{ uri: mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        {visualUrl ? (
+          <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
           <LinearGradient colors={mediaKind === 'video' ? ['#111827', '#271233', '#080912'] : ['#121226', '#171123', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             {mediaKind === 'video' ? <Play size={31} color="#fff" fill="#fff" /> : <Sparkles size={31} color="#fff" />}
           </LinearGradient>
         )}
+        {visualUrl && mediaKind === 'video' ? (
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.18)' }}>
+            <Play size={31} color="#fff" fill="#fff" />
+          </View>
+        ) : null}
         {selected ? (
           <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: '#66ff45', alignItems: 'center', justifyContent: 'center' }}>
             <Check size={17} color="#07110a" strokeWidth={3} />
@@ -831,16 +873,24 @@ function UnlockFields({
 function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft; selectedGeneration: GenerationListItem | null }) {
   const title = draft.title.trim() || 'Untitled post';
   const body = draft.mode === 'text' ? draft.contentText.trim() || draft.caption.trim() : draft.caption.trim();
+  const statusLabel = getPostComposerPreviewStatusLabel(draft, selectedGeneration);
   const mediaUrl = draft.mode === 'upload' ? draft.upload?.uri ?? null : selectedGeneration?.output_urls?.[0] ?? selectedGeneration?.output_url ?? null;
-  const isImage = draft.mode === 'upload'
-    ? draft.upload?.type.startsWith('image/')
-    : selectedGeneration ? getPublishGenerationMediaKind(selectedGeneration) === 'image' : false;
+  const selectedGenerationKind = selectedGeneration ? getPublishGenerationMediaKind(selectedGeneration) : null;
+  const generationPreviewUrl = selectedGeneration ? getGenerationPreviewImageUrl(selectedGeneration) : null;
+  const isUploadImage = draft.mode === 'upload' && draft.upload?.type.startsWith('image/');
+  const isGenerationImage = draft.mode !== 'upload' && selectedGenerationKind === 'image';
+  const visualUrl = draft.mode === 'upload'
+    ? isUploadImage ? mediaUrl : null
+    : selectedGenerationKind === 'video'
+      ? generationPreviewUrl
+      : mediaUrl;
+  const showVideoOverlay = draft.mode !== 'text' && !isUploadImage && (selectedGenerationKind === 'video' || draft.upload?.type.startsWith('video/'));
 
   return (
-    <OrderedField step="7" label="Preview">
+    <OrderedField step="8" label="Preview">
       <View style={{ minHeight: 190, borderRadius: 20, overflow: 'hidden', backgroundColor: '#050506', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }}>
-        {mediaUrl && isImage ? (
-          <Image source={{ uri: mediaUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        {visualUrl && (isUploadImage || isGenerationImage || selectedGenerationKind === 'video') ? (
+          <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : mediaUrl ? (
           <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <Play size={44} color="#fff" fill="#fff" />
@@ -852,6 +902,11 @@ function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft;
             {body ? <Text selectable numberOfLines={4} style={{ color: 'rgba(255,255,255,0.76)', fontSize: 14, lineHeight: 20 }}>{body}</Text> : null}
           </LinearGradient>
         )}
+        {visualUrl && showVideoOverlay ? (
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.16)' }}>
+            <Play size={44} color="#fff" fill="#fff" />
+          </View>
+        ) : null}
         {mediaUrl ? (
           <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.62)', padding: 12, gap: 5 }}>
             <Text selectable numberOfLines={1} style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{title}</Text>
@@ -859,8 +914,8 @@ function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft;
           </View>
         ) : null}
       </View>
-      <Text selectable style={{ color: draft.resource.accessMode === 'none' ? appTheme.colors.muted : '#66ff45', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
-        {draft.resource.accessMode === 'none' ? 'No unlock attached.' : `${draft.resource.accessMode === 'paid' ? 'Paid' : 'Free'} unlock will appear in post details.`}
+      <Text selectable style={{ color: statusLabel === 'No unlock attached.' ? appTheme.colors.muted : '#66ff45', fontSize: 13, lineHeight: 19, fontWeight: '800' }}>
+        {statusLabel}
       </Text>
     </OrderedField>
   );
@@ -878,6 +933,10 @@ function validateCurrentDraft(draft: PostComposerDraft, selectedGeneration: Gene
 function generationToPostCategory(item: GenerationListItem): PostComposerCategory {
   if (item.category === 'video' || item.category === 'motion' || item.category === 'ugc-ad') return item.category;
   return 'image';
+}
+
+function getGenerationPreviewImageUrl(item: GenerationListItem) {
+  return item.previewUrl ?? item.preview_url ?? null;
 }
 
 async function invalidatePostCaches(queryClient: QueryClient, userId: string | undefined) {

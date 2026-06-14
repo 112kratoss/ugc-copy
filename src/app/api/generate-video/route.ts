@@ -12,6 +12,7 @@ import {
 } from '@/lib/generation-timing';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
+import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
@@ -121,6 +122,19 @@ async function persistVideoOutput(
         }
 
         const storagePath = `generated_videos/${fileName}`;
+        let previewUrl: string | null = null;
+        try {
+            const preview = await createGenerationOutputPreview({
+                body: videoBlob,
+                category: 'video',
+                contentType: videoBlob.type || 'video/mp4',
+                storagePath,
+                supabase,
+            });
+            previewUrl = preview?.previewStoragePath ?? null;
+        } catch (posterError) {
+            console.error('Failed to create video generation preview poster:', posterError);
+        }
         const { data: signedData } = await supabase.storage
             .from('generated_videos')
             .createSignedUrl(fileName, 3600);
@@ -130,6 +144,7 @@ async function persistVideoOutput(
             .update({
                 status: 'succeeded',
                 output_url: storagePath,
+                preview_url: previewUrl,
                 completed_at: completedAt ?? new Date().toISOString(),
             })
             .eq('prediction_id', predictionId);

@@ -13,6 +13,7 @@ export const MAX_POST_MEDIA_ITEMS = 5;
 export interface PostMediaSummary {
   id: string;
   url: string;
+  previewUrl: string | null;
   mediaKind: ShowcaseMediaKind;
   contentType: string | null;
   originalName: string | null;
@@ -24,6 +25,7 @@ export interface PostMediaSummary {
 
 export interface PostMediaPersistInput {
   storagePath: string | null;
+  previewStoragePath?: string | null;
   externalUrl?: string | null;
   mediaKind: ShowcaseMediaKind;
   contentType: string | null;
@@ -38,6 +40,7 @@ interface PostMediaDbRow {
   id: string;
   post_id: string;
   storage_path: string | null;
+  preview_storage_path?: string | null;
   external_url: string | null;
   media_kind: ShowcaseMediaKind;
   content_type: string | null;
@@ -52,6 +55,15 @@ type SupabaseSchemaError = {
   code?: string;
   message?: string;
 };
+
+function isMissingPostMediaPreviewColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as SupabaseSchemaError;
+  return (code === '42703' || code === 'PGRST204') && message.includes('preview_storage_path');
+}
 
 export function isMissingPostMediaSchemaError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
@@ -115,6 +127,9 @@ async function resolvePostMediaDbRows(
         return {
           id: row.id,
           url,
+          previewUrl: row.preview_storage_path
+            ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.preview_storage_path).data.publicUrl
+            : null,
           mediaKind: row.media_kind,
           contentType: row.content_type,
           originalName: row.original_name,
@@ -138,11 +153,23 @@ export async function loadPostMediaItemsMap(
     return new Map();
   }
 
-  const { data, error } = await supabase
+  const previewResult = await supabase
     .from('post_media')
-    .select('id, post_id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select('id, post_id, storage_path, preview_storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
+  let data = previewResult.data as PostMediaDbRow[] | null;
+  let error = previewResult.error;
+
+  if (isMissingPostMediaPreviewColumnError(error)) {
+    const legacyResult = await supabase
+      .from('post_media')
+      .select('id, post_id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+      .in('post_id', uniquePostIds)
+      .order('sort_order', { ascending: true });
+    data = legacyResult.data as PostMediaDbRow[] | null;
+    error = legacyResult.error;
+  }
 
   if (error) {
     if (isMissingPostMediaSchemaError(error)) {
@@ -153,7 +180,7 @@ export async function loadPostMediaItemsMap(
   }
 
   const rowsByPostId = new Map<string, PostMediaDbRow[]>();
-  for (const row of (data ?? []) as PostMediaDbRow[]) {
+  for (const row of data ?? []) {
     const list = rowsByPostId.get(row.post_id) ?? [];
     list.push(row);
     rowsByPostId.set(row.post_id, list);
@@ -186,6 +213,7 @@ export async function buildLegacyPostMediaItems(params: {
   return [{
     id: `${params.postId}:cover`,
     url,
+    previewUrl: null,
     mediaKind,
     contentType: null,
     originalName: null,
@@ -205,11 +233,10 @@ export async function insertPostMediaItems(params: {
     return;
   }
 
-  const { error } = await params.supabase
-    .from('post_media')
-    .insert(params.mediaItems.map((item) => ({
+  const rows = params.mediaItems.map((item) => ({
       post_id: params.postId,
       storage_path: item.storagePath,
+      preview_storage_path: item.previewStoragePath ?? null,
       external_url: item.externalUrl ?? null,
       media_kind: item.mediaKind,
       content_type: item.contentType,
@@ -218,7 +245,20 @@ export async function insertPostMediaItems(params: {
       height: item.height ?? null,
       duration_seconds: item.durationSeconds ?? null,
       sort_order: item.sortOrder,
-    })));
+    }));
+  let { error } = await params.supabase
+    .from('post_media')
+    .insert(rows);
+
+  if (isMissingPostMediaPreviewColumnError(error)) {
+    const legacyRows = rows.map((row) => {
+      const legacyRow = { ...row };
+      delete (legacyRow as Partial<typeof row>).preview_storage_path;
+      return legacyRow;
+    });
+    const legacyResult = await params.supabase.from('post_media').insert(legacyRows);
+    error = legacyResult.error;
+  }
 
   if (error) {
     throw error;

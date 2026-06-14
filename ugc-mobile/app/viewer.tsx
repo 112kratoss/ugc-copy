@@ -5,24 +5,32 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, Play, Repeat2, Share2 } from 'lucide-react-native';
+import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
+import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, FlatList, Linking, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostResourceReferences } from '@/components/post-resource-references';
+import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import {
-  getImmersiveHorizontalPageIndex,
   getImmersiveInitialIndex,
   hasImmersiveDetailsPage,
-  isImmersiveDetailsHorizontalPage,
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
+import {
+  buildImmersiveSlidePages,
+  getImmersiveSlideHint,
+  getImmersiveVideoBlockerId,
+  isImmersiveDetailsSlidePageIndex,
+  type ImmersiveSlidePage,
+} from '@/lib/immersive-slide-pages';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import {
   buildViewerItems,
@@ -33,6 +41,7 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
 import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseMediaItem } from '@/lib/types';
 
 type ViewerParams = {
@@ -46,13 +55,16 @@ export default function ImmersivePreviewViewerScreen() {
   const initialId = normalizeParam(params.initialId);
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
+  const isFocused = useIsFocused();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [detailsOpenItemId, setDetailsOpenItemId] = useState<string | null>(null);
+  const [detailsPageOpenItemId, setDetailsPageOpenItemId] = useState<string | null>(null);
+  const [detailsSheetOpenItemId, setDetailsSheetOpenItemId] = useState<string | null>(null);
+  const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
 
   const profileQuery = useQuery({
@@ -81,15 +93,23 @@ export default function ImmersivePreviewViewerScreen() {
     [source, sourceQuery.data, ownerInfo]
   );
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
-  const activeVideoId = selectActiveImmersiveVideoId(items, activeIndex, detailsOpenItemId);
+  const overlayOpenItemId = getImmersiveVideoBlockerId({
+    actionsOpenItemId,
+    detailsPageOpenItemId,
+    detailsSheetOpenItemId,
+  });
+  const activeVideoId = isFocused
+    ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
+    : null;
   const activeItem = items[activeIndex];
 
   useEffect(() => {
     if (!items.length) return;
-    setActiveIndex(initialIndex);
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
+      setActiveIndex(initialIndex);
       listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
     });
+    return () => cancelAnimationFrame(frame);
   }, [initialIndex, items.length]);
 
   const saveMutation = useMutation({
@@ -170,12 +190,16 @@ export default function ImmersivePreviewViewerScreen() {
         data={items}
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
+        initialNumToRender={IMMERSIVE_VERTICAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={initialIndex}
         keyExtractor={(item) => `${item.source}-${item.id}`}
+        maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
           setActiveIndex(Math.max(0, Math.min(items.length - 1, nextIndex)));
-          setDetailsOpenItemId(null);
+          setDetailsPageOpenItemId(null);
+          setDetailsSheetOpenItemId(null);
+          setActionsOpenItemId(null);
         }}
         onScrollToIndexFailed={({ index }) => {
           requestAnimationFrame(() => {
@@ -183,15 +207,16 @@ export default function ImmersivePreviewViewerScreen() {
           });
         }}
         pagingEnabled
+        removeClippedSubviews={Platform.OS === 'android'}
         renderItem={({ item, index }) => (
           <ImmersiveSlide
             active={index === activeIndex}
             activeVideoId={activeVideoId}
             bottomInset={bottomInset}
-            detailsOpen={detailsOpenItemId === item.id}
             height={height}
             item={item}
-            onDetailsOpenChange={(open) => setDetailsOpenItemId(open ? item.id : null)}
+            onActionsOpen={() => setActionsOpenItemId(item.id)}
+            onDetailsPageOpenChange={(open) => setDetailsPageOpenItemId(open ? item.id : null)}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
             onRecreate={recreateItem}
             onSave={saveItem}
@@ -201,9 +226,10 @@ export default function ImmersivePreviewViewerScreen() {
             width={width}
           />
         )}
-        scrollEnabled={!detailsOpenItemId && !isHorizontalScrolling}
+        scrollEnabled={!overlayOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: '#000' }}
+        windowSize={IMMERSIVE_VERTICAL_LIST_TUNING.windowSize}
       />
       <Pressable
         accessibilityRole="button"
@@ -224,6 +250,35 @@ export default function ImmersivePreviewViewerScreen() {
       >
         <ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} />
       </Pressable>
+      {activeItem && hasImmersiveDetailsPage(activeItem) ? (
+        <ViewerDetailsSheet
+          bottomInset={bottomInset}
+          height={height}
+          item={activeItem}
+          onClose={() => setDetailsSheetOpenItemId(null)}
+          onRecreate={recreateItem}
+          onSave={saveItem}
+          onShare={shareItem}
+          saveLoading={saveMutation.isPending && saveMutation.variables === activeItem.showcasePostId}
+          topInset={topInset}
+          visible={detailsSheetOpenItemId === activeItem.id}
+          width={width}
+        />
+      ) : null}
+      {activeItem ? (
+        <ViewerActionSheet
+          item={activeItem}
+          onClose={() => setActionsOpenItemId(null)}
+          onDetails={() => {
+            setActionsOpenItemId(null);
+            setDetailsSheetOpenItemId(activeItem.id);
+          }}
+          onRecreate={() => void recreateItem(activeItem)}
+          onShare={() => void shareItem(activeItem)}
+          onSourceRefresh={() => void sourceQuery.refetch()}
+          visible={actionsOpenItemId === activeItem.id}
+        />
+      ) : null}
       {sourceQuery.isFetching && activeItem ? (
         <View style={{ position: 'absolute', top: topInset + 24, right: 20 }}>
           <ActivityIndicator color="rgba(255,255,255,0.72)" />
@@ -249,19 +304,14 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
   );
 }
 
-type SlidePage = 
-  | { type: 'text' }
-  | { type: 'media'; mediaIndex: number; mediaItem: ShowcaseMediaItem }
-  | { type: 'details' };
-
 function ImmersiveSlide({
   active,
   activeVideoId,
   bottomInset,
-  detailsOpen,
   height,
   item,
-  onDetailsOpenChange,
+  onActionsOpen,
+  onDetailsPageOpenChange,
   onRecreate,
   onSave,
   onShare,
@@ -273,10 +323,10 @@ function ImmersiveSlide({
   active: boolean;
   activeVideoId: string | null;
   bottomInset: number;
-  detailsOpen: boolean;
   height: number;
   item: ImmersivePreviewItem;
-  onDetailsOpenChange: (open: boolean) => void;
+  onActionsOpen: () => void;
+  onDetailsPageOpenChange: (open: boolean) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
@@ -285,29 +335,25 @@ function ImmersiveSlide({
   width: number;
   onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
-  const horizontalRef = useRef<FlatList<SlidePage>>(null);
+  const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   const [currentHorizontalIndex, setCurrentHorizontalIndex] = useState(0);
-  const scrollX = useRef(new Animated.Value(0)).current;
   const prevActiveRef = useRef(active);
 
-  const pages = useMemo<SlidePage[]>(() => {
-    const list: SlidePage[] = [];
-    if (item.previewKind === 'text') {
-      list.push({ type: 'text' });
-    } else {
-      (item.mediaItems ?? []).forEach((mediaItem, index) => {
-        list.push({
-          type: 'media',
-          mediaIndex: index,
-          mediaItem,
-        });
-      });
-    }
-    if (hasImmersiveDetailsPage(item)) {
-      list.push({ type: 'details' });
-    }
-    return list;
-  }, [item]);
+  const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
+  const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
+  const slideHint = getImmersiveSlideHint({ item, pages, currentHorizontalIndex });
+  const updateCurrentHorizontalIndex = useCallback((pageIndex: number) => {
+    setCurrentHorizontalIndex(pageIndex);
+    onDetailsPageOpenChange(isImmersiveDetailsSlidePageIndex(pages, pageIndex));
+  }, [onDetailsPageOpenChange, pages]);
+
+  const openDetailsPage = useCallback(() => {
+    const detailsIndex = pages.findIndex((page) => page.type === 'details');
+    if (detailsIndex < 0) return;
+
+    updateCurrentHorizontalIndex(detailsIndex);
+    horizontalRef.current?.scrollToIndex({ index: detailsIndex, animated: true });
+  }, [pages, updateCurrentHorizontalIndex]);
 
   useEffect(() => {
     if (!active) {
@@ -318,60 +364,52 @@ function ImmersiveSlide({
     const becameActive = !prevActiveRef.current;
     prevActiveRef.current = active;
 
-    const onDetailsPage = currentHorizontalIndex === pages.length - 1;
-
-    if (becameActive) {
-      const targetIndex = detailsOpen ? pages.length - 1 : 0;
-      if (currentHorizontalIndex !== targetIndex) {
-        setCurrentHorizontalIndex(targetIndex);
-        horizontalRef.current?.scrollToIndex({ index: targetIndex, animated: false });
-      }
-    } else {
-      if (detailsOpen && !onDetailsPage) {
-        const targetIndex = pages.length - 1;
-        setCurrentHorizontalIndex(targetIndex);
-        horizontalRef.current?.scrollToIndex({ index: targetIndex, animated: false });
-      } else if (!detailsOpen && onDetailsPage) {
-        const targetIndex = 0;
-        setCurrentHorizontalIndex(targetIndex);
-        horizontalRef.current?.scrollToIndex({ index: targetIndex, animated: false });
-      }
+    if (becameActive && currentHorizontalIndex !== 0) {
+      const frame = requestAnimationFrame(() => {
+        updateCurrentHorizontalIndex(0);
+        horizontalRef.current?.scrollToIndex({ index: 0, animated: false });
+      });
+      return () => cancelAnimationFrame(frame);
     }
-  }, [active, detailsOpen, pages.length]);
+  }, [active, currentHorizontalIndex, updateCurrentHorizontalIndex]);
 
   const mediaCount = item.mediaItems?.length ?? 0;
-  const visualPageCount = item.previewKind === 'text' ? 1 : Math.max(1, mediaCount);
-  const detailsStartOffset = width * (visualPageCount - 1);
-
-  // Opacity: 1 from 0 to detailsStartOffset, then fades to 0 at detailsStartOffset + width
-  const overlayOpacity = scrollX.interpolate({
-    inputRange: [detailsStartOffset, detailsStartOffset + width],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-
-  // TranslateX: 0 from 0 to detailsStartOffset, then moves to -width
-  const overlayTranslateX = scrollX.interpolate({
-    inputRange: [detailsStartOffset, detailsStartOffset + width],
-    outputRange: [0, -width],
-    extrapolate: 'clamp',
-  });
-
   const isTextPost = item.previewKind === 'text';
+  const videoPlaybackActive = active && activeVideoId === item.id && !currentPageIsDetails;
 
   const renderOverlays = () => {
-    if (currentHorizontalIndex === pages.length - 1 && hasImmersiveDetailsPage(item)) {
-      return null;
+    if (currentPageIsDetails) {
+      return (
+        <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
+          {slideHint ? (
+            <View
+              style={{
+                position: 'absolute',
+                left: 18,
+                bottom: bottomInset + 28,
+                borderRadius: 999,
+                backgroundColor: 'rgba(255,255,255,0.10)',
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.14)',
+                paddingHorizontal: 11,
+                paddingVertical: 7,
+              }}
+            >
+              <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
+                {slideHint}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      );
     }
 
     return (
-      <Animated.View
+      <View
         pointerEvents="box-none"
         style={{
           position: 'absolute',
           inset: 0,
-          opacity: overlayOpacity,
-          transform: [{ translateX: overlayTranslateX }],
         }}
       >
         <LinearGradient
@@ -420,6 +458,11 @@ function ImmersiveSlide({
         >
           <ViewerCreatorAvatar item={item} size={56} />
           <RailActionButton
+            icon={<MoreVertical size={27} color="#ffffff" strokeWidth={2.5} />}
+            label="More"
+            onPress={onActionsOpen}
+          />
+          <RailActionButton
             disabled={!item.canSave}
             icon={<Heart size={27} color="#ffffff" fill={item.isSaved ? '#ffffff' : 'transparent'} strokeWidth={2.6} />}
             label={item.isSaved ? 'Saved' : item.saveLabel}
@@ -431,6 +474,13 @@ function ImmersiveSlide({
             label="Share"
             onPress={() => void onShare(item)}
           />
+          {hasImmersiveDetailsPage(item) ? (
+            <RailActionButton
+              icon={<FileText size={27} color="#ffffff" strokeWidth={2.4} />}
+              label="Details"
+              onPress={openDetailsPage}
+            />
+          ) : null}
           <RailActionButton
             primary
             icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
@@ -464,26 +514,30 @@ function ImmersiveSlide({
           <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
             {item.displayText}
           </Text>
-          {hasImmersiveDetailsPage(item) ? (
+          {slideHint ? (
             <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
-              {currentHorizontalIndex < mediaCount - 1
-                ? 'Swipe left for more media'
-                : 'Swipe left for details'}
+              {slideHint}
             </Text>
           ) : null}
         </View>
-      </Animated.View>
+      </View>
     );
   };
 
-  if (!hasImmersiveDetailsPage(item)) {
+  if (pages.length <= 1) {
     return (
       <View style={{ width, height }}>
         <MediaSlidePage
-          active={active}
+          active={videoPlaybackActive}
+          bottomInset={bottomInset}
           height={height}
           item={item}
-          page={(pages[0] ?? { type: 'text' }) as Exclude<SlidePage, { type: 'details' }>}
+          onRecreate={onRecreate}
+          onSave={onSave}
+          onShare={onShare}
+          page={pages[0] ?? { type: 'text' }}
+          saveLoading={saveLoading}
+          topInset={topInset}
           width={width}
         />
         {renderOverlays()}
@@ -493,26 +547,21 @@ function ImmersiveSlide({
 
   return (
     <View style={{ width, height, backgroundColor: '#000' }}>
-      <Animated.FlatList
+      <FlatList
         ref={horizontalRef}
         data={pages}
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
         horizontal
+        initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={0}
         keyExtractor={(page, index) => page.type === 'media' ? `media-${page.mediaItem.id}` : `${page.type}-${index}`}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { x: scrollX } } }],
-          { useNativeDriver: true }
-        )}
-        scrollEventThrottle={16}
+        maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
         onScrollBeginDrag={() => onHorizontalScrollToggle?.(true)}
         onScrollEndDrag={() => onHorizontalScrollToggle?.(false)}
         onMomentumScrollEnd={(event) => {
           const page = Math.round(event.nativeEvent.contentOffset.x / width);
-          setCurrentHorizontalIndex(page);
-          const isDetailsPage = page === pages.length - 1 && hasImmersiveDetailsPage(item);
-          onDetailsOpenChange(isDetailsPage);
+          updateCurrentHorizontalIndex(Math.max(0, Math.min(pages.length - 1, page)));
           onHorizontalScrollToggle?.(false);
         }}
         onScrollToIndexFailed={({ index }) => {
@@ -521,31 +570,26 @@ function ImmersiveSlide({
           });
         }}
         pagingEnabled
-        renderItem={({ item: page, index: pageIndex }) => page.type === 'details' ? (
-          <PostDetailsPage
-            active={active && detailsOpen}
+        removeClippedSubviews={Platform.OS === 'android'}
+        renderItem={({ item: page, index: pageIndex }) => (
+          <MediaSlidePage
+            active={active && currentHorizontalIndex === pageIndex && (page.type !== 'media' || videoPlaybackActive)}
             bottomInset={bottomInset}
             height={height}
             item={item}
             onRecreate={onRecreate}
             onSave={onSave}
             onShare={onShare}
+            page={page}
             saveLoading={saveLoading}
             topInset={topInset}
-            width={width}
-          />
-        ) : (
-          <MediaSlidePage
-            active={active && currentHorizontalIndex === pageIndex}
-            height={height}
-            item={item}
-            page={page}
             width={width}
           />
         )}
         scrollEnabled={active}
         showsHorizontalScrollIndicator={false}
         style={{ width, height, backgroundColor: '#000' }}
+        windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
       />
       {renderOverlays()}
     </View>
@@ -554,20 +598,46 @@ function ImmersiveSlide({
 
 function MediaSlidePage({
   active,
+  bottomInset,
   height,
   item,
+  onRecreate,
+  onSave,
+  onShare,
   page,
+  saveLoading,
+  topInset,
   width,
 }: {
   active: boolean;
+  bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
-  page: Exclude<SlidePage, { type: 'details' }>;
+  onRecreate: (item: ImmersivePreviewItem) => void;
+  onSave: (item: ImmersivePreviewItem) => void;
+  onShare: (item: ImmersivePreviewItem) => void;
+  page: ImmersiveSlidePage;
+  saveLoading: boolean;
+  topInset: number;
   width: number;
 }) {
   return (
     <View style={{ width, height, backgroundColor: '#000' }}>
-      {page.type === 'text' ? (
+      {page.type === 'details' ? (
+        <PostDetailsPage
+          active={active}
+          bottomInset={bottomInset}
+          height={height}
+          item={item}
+          onRecreate={onRecreate}
+          onSave={onSave}
+          onShare={onShare}
+          saveLoading={saveLoading}
+          sheet={false}
+          topInset={topInset}
+          width={width}
+        />
+      ) : page.type === 'text' ? (
         <TextSlide item={item} width={width} height={height} />
       ) : (
         <ImmersiveMedia
@@ -581,6 +651,110 @@ function MediaSlidePage({
   );
 }
 
+function ViewerDetailsSheet({
+  bottomInset,
+  height,
+  item,
+  onClose,
+  onRecreate,
+  onSave,
+  onShare,
+  saveLoading,
+  topInset,
+  visible,
+  width,
+}: {
+  bottomInset: number;
+  height: number;
+  item: ImmersivePreviewItem;
+  onClose: () => void;
+  onRecreate: (item: ImmersivePreviewItem) => void;
+  onSave: (item: ImmersivePreviewItem) => void;
+  onShare: (item: ImmersivePreviewItem) => void;
+  saveLoading: boolean;
+  topInset: number;
+  visible: boolean;
+  width: number;
+}) {
+  const sheetHeight = Math.min(height * 0.9, height - topInset - 12);
+
+  return (
+    <Modal
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      transparent
+      visible={visible}
+    >
+      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.56)' }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close details"
+          onPress={onClose}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+        <View
+          style={{
+            height: sheetHeight,
+            overflow: 'hidden',
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderBottomWidth: 0,
+            borderColor: 'rgba(255,255,255,0.14)',
+            backgroundColor: '#050506',
+          }}
+        >
+          <View
+            style={{
+              height: 58,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingHorizontal: 18,
+              borderBottomWidth: 1,
+              borderBottomColor: 'rgba(255,255,255,0.1)',
+            }}
+          >
+            <View style={{ width: 40 }} />
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Details</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close details"
+              onPress={onClose}
+              style={({ pressed }) => ({
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'rgba(255,255,255,0.08)',
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <X size={22} color="#fff" />
+            </Pressable>
+          </View>
+          <PostDetailsPage
+            active={visible}
+            bottomInset={bottomInset}
+            height={sheetHeight - 58}
+            item={item}
+            onRecreate={onRecreate}
+            onSave={onSave}
+            onShare={onShare}
+            saveLoading={saveLoading}
+            sheet
+            topInset={0}
+            width={width}
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function PostDetailsPage({
   active,
   bottomInset,
@@ -590,6 +764,7 @@ function PostDetailsPage({
   onSave,
   onShare,
   saveLoading,
+  sheet = false,
   topInset,
   width,
 }: {
@@ -601,6 +776,7 @@ function PostDetailsPage({
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
+  sheet?: boolean;
   topInset: number;
   width: number;
 }) {
@@ -693,7 +869,7 @@ function PostDetailsPage({
     <View style={{ width, height, backgroundColor: '#050506' }}>
       <ScrollView
         contentContainerStyle={{
-          paddingTop: topInset + 80,
+          paddingTop: sheet ? 20 : topInset + 80,
           paddingBottom: bottomInset + 36,
           paddingHorizontal: 22,
           gap: 18,
@@ -1015,10 +1191,44 @@ function formatCount(value: number) {
 function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: ShowcaseMediaItem; active: boolean; width: number; height: number }) {
   if (mediaItem.mediaKind === 'video') {
     if (active && mediaItem.url) {
-      return <ActiveVideo url={mediaItem.url} width={width} height={height} />;
+      return <ActiveVideo url={mediaItem.url} previewUrl={mediaItem.previewUrl} width={width} height={height} />;
     }
 
-    return (
+    if (mediaItem.previewUrl) {
+      return (
+        <View style={{ width, height }}>
+          <FeedMediaFrame
+            kind="image"
+            url={mediaItem.previewUrl}
+            backdropUrl={mediaItem.previewUrl}
+            recyclingKey={`viewer:${mediaItem.id}`}
+            style={{ width, height }}
+          />
+          <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+            <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)' }}>
+              <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
+            </View>
+          </View>
+        </View>
+      );
+    }
+
+    return mediaItem.url ? (
+      <View style={{ width, height, backgroundColor: '#020203' }}>
+        <FeedVideoPreview
+          url={mediaItem.url}
+          active={false}
+          height={height}
+          radius={0}
+          accent="#ffffff"
+        />
+        <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
+            <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
+          </View>
+        </View>
+      </View>
+    ) : (
       <View style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#020203' }}>
         <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' }}>
           <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
@@ -1032,7 +1242,9 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
       <FeedMediaFrame
         kind="image"
         url={mediaItem.url}
+        backdropUrl={mediaItem.previewUrl}
         transition={120}
+        recyclingKey={`viewer:${mediaItem.id}`}
         style={{ width, height }}
       />
     );
@@ -1048,8 +1260,10 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
   );
 }
 
-function ActiveVideo({ url, width, height }: { url: string; width: number; height: number }) {
-  const player = useVideoPlayer(url, (instance) => {
+function ActiveVideo({ url, previewUrl, width, height }: { url: string; previewUrl?: string | null; width: number; height: number }) {
+  const [hasFrame, setHasFrame] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = false;
     instance.volume = 1.0;
@@ -1065,8 +1279,22 @@ function ActiveVideo({ url, width, height }: { url: string; width: number; heigh
   }, [player]);
 
   useEffect(() => {
+    setHasFrame(false);
+    setHasError(false);
+  }, [url]);
+
+  useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
       setIsPlaying(event.isPlaying);
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [player]);
+
+  useEffect(() => {
+    const subscription = player.addListener('statusChange', (event) => {
+      setHasError(event.status === 'error');
     });
     return () => {
       subscription.remove();
@@ -1086,8 +1314,19 @@ function ActiveVideo({ url, width, height }: { url: string; width: number; heigh
       onPress={togglePlayback}
       style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
     >
-      <FeedMediaFrame kind="video" player={player} style={{ width, height }} />
-      {!isPlaying && (
+      <FeedMediaFrame
+        kind="video"
+        player={player}
+        backdropUrl={previewUrl}
+        posterUrl={previewUrl}
+        posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+        onFirstFrameRender={() => {
+          setHasFrame(true);
+          setHasError(false);
+        }}
+        style={{ width, height }}
+      />
+      {!isPlaying && hasFrame && !hasError && (
         <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
           <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
         </View>

@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
+    "backfill:generation-video-previews": "node scripts/backfill-generation-video-previews.mjs",
+    "backfill:post-media-previews": "node scripts/backfill-post-media-previews.mjs",
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
@@ -18,6 +20,7 @@
     "@supabase/supabase-js": "^2.95.0",
     "@xyflow/react": "^12.10.1",
     "clsx": "^2.1.1",
+    "ffmpeg-static": "^5.3.0",
     "framer-motion": "^12.33.0",
     "gray-matter": "^4.0.3",
     "localforage": "^1.10.0",
@@ -27,7 +30,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "remark": "^15.0.1",
-    "remark-html": "^16.0.1"
+    "remark-html": "^16.0.1",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

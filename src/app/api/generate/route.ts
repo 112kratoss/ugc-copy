@@ -9,6 +9,7 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { persistGenerationInputMedia } from '@/lib/generation-input-media';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
@@ -394,6 +395,19 @@ export async function GET(request: NextRequest) {
                         } else {
                             // Store the storage path, not a public URL
                             const storagePath = `generated_videos/${fileName}`;
+                            let previewUrl: string | null = null;
+                            try {
+                                const preview = await createGenerationOutputPreview({
+                                    body: videoBlob,
+                                    category: 'motion',
+                                    contentType: videoBlob.type || 'video/mp4',
+                                    storagePath,
+                                    supabase,
+                                });
+                                previewUrl = preview?.previewStoragePath ?? null;
+                            } catch (posterError) {
+                                console.error('Failed to create motion generation preview poster:', posterError);
+                            }
                             // Generate a signed URL for the client
                             const { data: signedData } = await supabase.storage
                                 .from('generated_videos')
@@ -405,6 +419,7 @@ export async function GET(request: NextRequest) {
                                 .update({
                                     status: 'succeeded',
                                     output_url: storagePath,
+                                    preview_url: previewUrl,
                                     completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
                                 })
                                 .eq('prediction_id', predictionId);

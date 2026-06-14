@@ -41,6 +41,7 @@ import {
   MAX_POST_MEDIA_ITEMS,
   type PostMediaPersistInput,
 } from '@/lib/post-media';
+import { createPostMediaPreview } from '@/lib/post-media-preview';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
@@ -585,11 +586,29 @@ export async function POST(request: NextRequest) {
         }
 
         storagePathsToCleanup.push(storagePath);
+        let preview: Awaited<ReturnType<typeof createPostMediaPreview>> = null;
+        try {
+          preview = await createPostMediaPreview({
+            body: mediaBody,
+            contentType: mediaItem.contentType || mediaBody.type,
+            storagePath,
+            supabase: adminSupabase,
+          });
+          if (preview?.previewStoragePath) {
+            storagePathsToCleanup.push(preview.previewStoragePath);
+          }
+        } catch (previewError) {
+          console.warn('Failed to create post media preview:', previewError);
+        }
+
         persistedMediaItems.push({
           storagePath,
+          previewStoragePath: preview?.previewStoragePath ?? null,
           mediaKind: getSubmittedMediaKind(mediaItem),
           contentType: mediaItem.contentType || mediaBody.type || null,
           originalName: mediaItem.originalName,
+          width: preview?.width ?? null,
+          height: preview?.height ?? null,
           sortOrder: index,
         });
       }

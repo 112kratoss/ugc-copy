@@ -35,6 +35,7 @@ export interface HomeCommunityCard {
   title: string;
   body: string;
   mediaUrl: string | null;
+  previewUrl?: string | null;
   mediaKind: 'image' | 'video' | null;
   previewKind: 'media' | 'text';
   timeLabel: string;
@@ -220,6 +221,7 @@ export function showcaseToCommunityCard(item: ShowcaseFeedItem): HomeCommunityCa
     title: item.title || item.prompt || 'Community creation',
     body: getShowcasePostDisplayText(item),
     mediaUrl: item.mediaUrl,
+    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
     mediaKind: item.mediaKind,
     previewKind,
     timeLabel: formatRelativeTime(item.createdAt),

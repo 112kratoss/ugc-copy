@@ -6,7 +6,10 @@ import {
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
   getDefaultPostComposerDraft,
+  getPostComposerPreviewStatusLabel,
+  getPostComposerSubmitLabel,
   getPublishableGenerations,
+  getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
   validatePostComposerDraft,
 } from '../lib/post-new-view-model';
@@ -53,7 +56,18 @@ describe('post new view model', () => {
 
   it('uses readable subtitles for the publish list', () => {
     expect(getPublishGenerationSubtitle(generation({ category: 'video', model: 'seedance' }))).toContain('Video');
+    expect(getPublishGenerationSubtitle(generation({ category: 'ugc-ad', model: 'seedance' }))).toContain('UGC ad');
     expect(getPublishGenerationSubtitle(generation({ category: null, model: 'seedream' }))).toContain('Image');
+  });
+
+  it('preserves ugc-ad generation category and treats it as video media', () => {
+    const item = generation({ id: 'gen-ugc', category: 'ugc-ad', output_url: 'https://cdn.example.com/ad.mp4' });
+
+    expect(buildPublishGenerationPayload(item)).toMatchObject({
+      generationId: 'gen-ugc',
+      category: 'ugc-ad',
+    });
+    expect(getPublishGenerationMediaKind(item)).toBe('video');
   });
 
   it('validates the ordered text composer fields', () => {
@@ -158,6 +172,12 @@ describe('post new view model', () => {
       category: 'video',
       sourceTool: 'Magicbooklet',
       sourceToolSlug: 'magicbooklet',
+      sourceTools: [{
+        toolLabel: 'Magicbooklet',
+        toolSlug: 'magicbooklet',
+        modelLabel: 'seedream',
+        modelSlug: 'seedream',
+      }],
       resourceBundle: {
         accessMode: 'free',
         summary: 'Prompt',
@@ -172,6 +192,116 @@ describe('post new view model', () => {
         },
       },
     });
+  });
+
+  it('requests generation references for public creation posts with saved inputs', () => {
+    const item = generation({
+      id: 'gen-with-inputs',
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+    });
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      title: 'Reference post',
+      category: 'image',
+      visibility: 'public',
+      selectedGenerationId: 'gen-with-inputs',
+      sourceTool: 'Magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+    } as const;
+    const payload = buildPublishGenerationPostPayload(item, draft);
+
+    expect(payload).toMatchObject({
+      generationId: 'gen-with-inputs',
+      visibility: 'public',
+      includeGenerationReferences: true,
+      resourceBundle: { accessMode: 'none' },
+    });
+    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('Free reference package will appear in post details.');
+  });
+
+  it('keeps non-public creation posts without unlocks from auto-attaching generation references', () => {
+    const item = generation({
+      id: 'gen-private-inputs',
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+    });
+
+    for (const visibility of ['private', 'unlisted'] as const) {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        mode: 'creation',
+        title: 'Private reference post',
+        category: 'image',
+        visibility,
+        selectedGenerationId: 'gen-private-inputs',
+        sourceTool: 'Magicbooklet',
+        sourceToolSlug: 'magicbooklet',
+      } as const;
+      const payload = buildPublishGenerationPostPayload(item, draft);
+
+      expect(payload).not.toHaveProperty('includeGenerationReferences');
+      expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No unlock attached.');
+    }
+  });
+
+  it('uses explicit unlock preview labels before auto generation reference labels', () => {
+    const item = generation({
+      id: 'gen-unlock-inputs',
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+    });
+
+    expect(getPostComposerPreviewStatusLabel({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      visibility: 'public',
+      selectedGenerationId: 'gen-unlock-inputs',
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'free',
+        promptText: 'Prompt',
+        previewText: 'Prompt included.',
+      },
+    }, item)).toBe('Free unlock will appear in post details.');
+
+    expect(getPostComposerPreviewStatusLabel({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      visibility: 'public',
+      selectedGenerationId: 'gen-unlock-inputs',
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'paid',
+        promptText: 'Prompt',
+        previewText: 'Prompt included.',
+      },
+    }, item)).toBe('Paid unlock will appear in post details.');
+  });
+
+  it('adds structured source tool metadata for uploaded media posts', () => {
+    const formData = buildCreatePostFormData({
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload',
+      title: 'Uploaded edit',
+      caption: 'Made with a video tool.',
+      category: 'video',
+      sourceTool: 'Runway',
+      sourceToolSlug: 'runway',
+      upload: null,
+    });
+
+    expect(formData.get('sourceTools')).toBe(JSON.stringify([{
+      toolLabel: 'Runway',
+      toolSlug: 'runway',
+    }]));
+  });
+
+  it('returns submit labels for publish visibility and edit states', () => {
+    expect(getPostComposerSubmitLabel({ visibility: 'public', isEditMode: false, isPending: false })).toBe('Publish public');
+    expect(getPostComposerSubmitLabel({ visibility: 'unlisted', isEditMode: false, isPending: false })).toBe('Save unlisted');
+    expect(getPostComposerSubmitLabel({ visibility: 'private', isEditMode: false, isPending: false })).toBe('Save private');
+    expect(getPostComposerSubmitLabel({ visibility: 'public', isEditMode: true, isPending: false })).toBe('Save changes');
+    expect(getPostComposerSubmitLabel({ visibility: 'private', isEditMode: false, isPending: true })).toBe('Publishing');
+    expect(getPostComposerSubmitLabel({ visibility: 'private', isEditMode: true, isPending: true })).toBe('Saving');
   });
 
   describe('edit payload builder', () => {
@@ -274,6 +404,10 @@ describe('post new view model', () => {
         body: 'Media Caption',
         visibility: 'unlisted',
         category: 'image',
+        sourceTools: [{
+          toolLabel: 'Manual',
+          toolSlug: 'manual',
+        }],
       });
     });
   });

@@ -1,5 +1,5 @@
 // Define React Native development global
-(global as any).__DEV__ = true;
+(global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 
 import React from 'react';
 import renderer from 'react-test-renderer';
@@ -46,8 +46,24 @@ vi.mock('react-native', () => ({
   },
   Platform: {
     OS: 'ios',
-    select: (obj: any) => obj.ios || obj.default,
+    select: (obj: Record<string, unknown>) => obj.ios || obj.default,
   },
+}));
+
+vi.mock('@shopify/flash-list', () => ({
+  FlashList: (props: MockProps & {
+    data?: unknown[];
+    ListHeaderComponent?: React.ReactNode;
+    ListEmptyComponent?: React.ReactNode;
+    renderItem?: (info: { item: unknown; index: number }) => React.ReactNode;
+  }) => React.createElement(
+    'flash-list',
+    props,
+    props.ListHeaderComponent,
+    props.data?.length
+      ? props.data.map((item, index) => props.renderItem?.({ item, index }))
+      : props.ListEmptyComponent
+  ),
 }));
 
 vi.mock('expo-image', () => ({
@@ -135,7 +151,17 @@ vi.mock('@tanstack/react-query', () => ({
       return {
         data: {
           generations: [
-            { id: 'gen-1', status: 'succeeded', output_url: 'gen.png', category: 'image', title: 'Cre', prompt: 'Prompt' },
+            {
+              id: 'gen-1',
+              status: 'succeeded',
+              output_url: 'gen.mp4',
+              preview_url: 'gen-poster.webp',
+              previewUrl: 'gen-poster.webp',
+              category: 'video',
+              title: 'Cre',
+              prompt: 'Prompt',
+              linked_post_id: 'post-1',
+            },
           ],
         },
         isLoading: false,
@@ -187,13 +213,17 @@ import { ProfileDashboard } from '../components/profile-dashboard';
 function findPressableByText(root: renderer.ReactTestInstance, text: string) {
   const textInstances = root.findAllByProps({ children: text });
   for (const textInstance of textInstances) {
-    let current: any = textInstance;
-    while (current && current.type !== 'pressable') {
+    let current: renderer.ReactTestInstance | null = textInstance;
+    while (current && String(current.type) !== 'pressable') {
       current = current.parent;
     }
     if (current) return current;
   }
   throw new Error(`No pressable containing text "${text}" was found`);
+}
+
+function findViewByTestId(root: renderer.ReactTestInstance, testID: string) {
+  return root.findAll((node) => String(node.type) === 'view' && node.props.testID === testID);
 }
 
 describe('ProfileDashboard media tiles routing', () => {
@@ -227,7 +257,7 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
-  it('routes to /media-feed with correct source and initialId for Creations tiles', () => {
+  it('routes to the profile media feed with correct source and initialId for Creations tiles', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -249,7 +279,7 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     expect(routerState.push).toHaveBeenCalledWith({
-      pathname: '/media-feed',
+      pathname: '/profile-media-feed',
       params: {
         source: 'profile-creations',
         initialId: 'gen-1',
@@ -257,7 +287,69 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
-  it('routes to /media-feed with correct source and initialId for Posts tiles', () => {
+  it('uses a virtualized three-column grid without autoplaying profile videos', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    const creationsTab = findPressableByText(tree!.root, 'Creations');
+    renderer.act(() => {
+      creationsTab.props.onPress();
+    });
+
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+    expect(list.props.numColumns).toBe(3);
+    expect(tree!.root.findAll((node) => String(node.type) === 'feed-video-preview')).toHaveLength(0);
+  });
+
+  it('renders a persisted creation video poster without creating a grid video player', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    const creationsTab = findPressableByText(tree!.root, 'Creations');
+    renderer.act(() => {
+      creationsTab.props.onPress();
+    });
+
+    const posterImages = tree!.root.findAll((node) =>
+      String(node.type) === 'image' && node.props.source?.uri === 'gen-poster.webp'
+    );
+    expect(posterImages).toHaveLength(1);
+    expect(posterImages[0].props.contentFit).toBe('cover');
+    expect(posterImages[0].props.blurRadius).toBeUndefined();
+    expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+  });
+
+  it('keeps Saved feed cards but makes Creations and Posts grid tiles minimal', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    expect(findViewByTestId(tree!.root, 'profile-saved-overlay')).toHaveLength(1);
+
+    const creationsTab = findPressableByText(tree!.root, 'Creations');
+    renderer.act(() => {
+      creationsTab.props.onPress();
+    });
+    expect(findViewByTestId(tree!.root, 'profile-minimal-overlay')).toHaveLength(1);
+    expect(tree!.root.findAllByProps({ children: 'Cre' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ children: 'Ready' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ children: 'Public post' })).toHaveLength(0);
+
+    const postsTab = findPressableByText(tree!.root, 'Posts');
+    renderer.act(() => {
+      postsTab.props.onPress();
+    });
+    expect(findViewByTestId(tree!.root, 'profile-minimal-overlay')).toHaveLength(1);
+    expect(tree!.root.findAllByProps({ children: 'Post Title' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ children: 'Public' })).toHaveLength(0);
+  });
+
+  it('routes to the profile media feed with correct source and initialId for Posts tiles', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -279,7 +371,7 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     expect(routerState.push).toHaveBeenCalledWith({
-      pathname: '/media-feed',
+      pathname: '/profile-media-feed',
       params: {
         source: 'profile-posts',
         initialId: 'post-1',

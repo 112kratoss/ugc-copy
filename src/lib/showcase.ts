@@ -54,6 +54,7 @@ export interface ShowcaseAssetSummary {
 export interface ShowcaseMediaItem {
     id: string;
     url: string;
+    previewUrl?: string | null;
     mediaKind: ShowcaseMediaKind;
     contentType: string | null;
     originalName: string | null;

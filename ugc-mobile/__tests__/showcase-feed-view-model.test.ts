@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildShowcaseMasonry, getShowcaseGridLayout } from '../lib/showcase-feed-view-model';
+import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight } from '../lib/showcase-feed-view-model';
 import type { ShowcaseFeedItem } from '../lib/types';
 
 function item(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
@@ -85,5 +85,46 @@ describe('showcase feed view model', () => {
     const cards = buildShowcaseMasonry([sourceItem]);
 
     expect(cards[0]?.item).toBe(sourceItem);
+  });
+
+  it('uses media dimensions for bounded masonry heights', () => {
+    const [portrait, landscape] = buildShowcaseMasonry([
+      item({
+        id: 'portrait',
+        mediaKind: 'image',
+        mediaUrl: 'portrait.jpg',
+        mediaItems: [{
+          id: 'portrait-media',
+          url: 'portrait.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'portrait.jpg',
+          width: 900,
+          height: 1600,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      }),
+      item({
+        id: 'landscape',
+        mediaKind: 'image',
+        mediaUrl: 'landscape.jpg',
+        mediaItems: [{
+          id: 'landscape-media',
+          url: 'landscape.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'landscape.jpg',
+          width: 1600,
+          height: 900,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      }),
+    ]);
+
+    expect(getShowcaseMediaHeight(portrait, 170)).toBeGreaterThan(getShowcaseMediaHeight(landscape, 170));
+    expect(getShowcaseMediaHeight(portrait, 170)).toBeLessThanOrEqual(320);
+    expect(getShowcaseMediaHeight(landscape, 170)).toBeGreaterThanOrEqual(180);
   });
 });

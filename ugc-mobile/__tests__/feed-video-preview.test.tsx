@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const videoState = vi.hoisted(() => ({
   player: {
+    addListener: vi.fn(() => ({ remove: vi.fn() })),
     play: vi.fn(),
     pause: vi.fn(),
     loop: false,
@@ -24,13 +25,13 @@ vi.mock('expo-video', () => ({
   VideoView: (props: Record<string, unknown>) => React.createElement('video-view', props),
 }));
 
+vi.mock('expo-image', () => ({
+  Image: (props: Record<string, unknown>) => React.createElement('image', props),
+}));
+
 vi.mock('expo-blur', () => ({
   BlurView: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
     React.createElement('blur-view', props, children),
-}));
-
-vi.mock('expo-image', () => ({
-  Image: (props: Record<string, unknown>) => React.createElement('image', props),
 }));
 
 vi.mock('react-native', () => ({
@@ -51,6 +52,7 @@ import { FeedVideoPreview } from '../components/feed-video-preview';
 
 describe('FeedVideoPreview', () => {
   beforeEach(() => {
+    videoState.player.addListener.mockClear();
     videoState.player.play.mockClear();
     videoState.player.pause.mockClear();
     videoState.useVideoPlayer.mockClear();
@@ -88,5 +90,56 @@ describe('FeedVideoPreview', () => {
     });
 
     expect(videoState.player.pause).not.toHaveBeenCalled();
+  });
+
+  it('renders a poster without creating a player while inactive', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedVideoPreview
+          url="https://cdn.example.com/video.mp4"
+          previewUrl="https://cdn.example.com/video-poster.jpg"
+          active={false}
+          height={260}
+          radius={8}
+          accent="#d946ef"
+        />
+      );
+    });
+
+    expect(videoState.useVideoPlayer).not.toHaveBeenCalled();
+    expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+    const images = tree!.root.findAll((node) => String(node.type) === 'image');
+    expect(images).toHaveLength(2);
+    expect(images.some((node) => node.props.contentFit === 'contain')).toBe(true);
+  });
+
+  it('renders a muted video frame while inactive when no poster exists', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedVideoPreview
+          url="https://cdn.example.com/video-without-poster.mp4"
+          previewUrl={null}
+          active={false}
+          height={260}
+          radius={8}
+          accent="#d946ef"
+        />
+      );
+    });
+
+    expect(videoState.useVideoPlayer).toHaveBeenCalledWith({
+      uri: 'https://cdn.example.com/video-without-poster.mp4',
+      useCaching: true,
+    });
+    expect(videoState.player.play).not.toHaveBeenCalled();
+    expect(videoState.player.muted).toBe(true);
+    expect(videoState.player.volume).toBe(0);
+    const videoViews = tree!.root.findAll((node) => String(node.type) === 'video-view');
+    expect(videoViews).toHaveLength(1);
+    expect(videoViews[0].props.contentFit).toBe('contain');
   });
 });

@@ -54,6 +54,10 @@ import {
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
+import {
+  createGenerationOutputPreview,
+  isImageGenerationPreview,
+} from '@/lib/generation-media-preview';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -403,6 +407,46 @@ function getKieImageModelId(model: ImageModelId, referenceCount: number): string
   return model;
 }
 
+async function createGenerationPreviewQuietly({
+  body,
+  category,
+  contentType,
+  storagePath,
+  supabase,
+}: {
+  body: Blob;
+  category: string | null | undefined;
+  contentType: string | null | undefined;
+  storagePath: string;
+  supabase: SupabaseClient;
+}) {
+  try {
+    const preview = await createGenerationOutputPreview({
+      body,
+      category,
+      contentType,
+      storagePath,
+      supabase,
+    });
+    return preview?.previewStoragePath ?? null;
+  } catch (error) {
+    console.error('Failed to create generation preview poster:', error);
+    return null;
+  }
+}
+
+function getFallbackPreviewUrl(
+  category: string | null | undefined,
+  contentType: string | null | undefined,
+  outputUrl: string | null
+) {
+  if (!outputUrl) {
+    return null;
+  }
+
+  return isImageGenerationPreview(category, contentType) ? outputUrl : null;
+}
+
 async function persistGeneratedOutput(
   supabase: SupabaseClient,
   generation: SyncableGenerationRecord,
@@ -435,6 +479,7 @@ async function persistGeneratedOutput(
         .update({
           status: 'succeeded',
           output_url: tempUrl,
+          preview_url: getFallbackPreviewUrl(generation.category, mediaBlob.type, tempUrl),
           completed_at: completedAt ?? new Date().toISOString(),
         })
         .eq('id', generation.id);
@@ -442,11 +487,20 @@ async function persistGeneratedOutput(
     }
 
     const storagePath = `${bucket}/${fileName}`;
+    const previewUrl = await createGenerationPreviewQuietly({
+      body: mediaBlob,
+      category: generation.category,
+      contentType: mediaBlob.type,
+      storagePath,
+      supabase,
+    });
+
     await supabase
       .from('generations')
       .update({
         status: 'succeeded',
         output_url: storagePath,
+        preview_url: previewUrl,
         completed_at: completedAt ?? new Date().toISOString(),
       })
       .eq('id', generation.id);
@@ -457,6 +511,7 @@ async function persistGeneratedOutput(
       .update({
         status: 'succeeded',
         output_url: tempUrl,
+        preview_url: getFallbackPreviewUrl(generation.category, null, tempUrl),
         completed_at: completedAt ?? new Date().toISOString(),
       })
       .eq('id', generation.id);
@@ -471,6 +526,7 @@ export async function persistGeneratedOutputList(
 ): Promise<PersistedGenerationOutput[]> {
   const bucket = getStorageBucket(generation.category, generation.model);
   const outputs: PersistedGenerationOutput[] = [];
+  let primaryPreviewUrl: string | null = null;
 
   for (const [index, tempUrl] of tempUrls.entries()) {
     try {
@@ -499,12 +555,25 @@ export async function persistGeneratedOutputList(
         index,
         storagePath: `${bucket}/${fileName}`,
       });
+
+      if (index === 0) {
+        primaryPreviewUrl = await createGenerationPreviewQuietly({
+          body: mediaBlob,
+          category: generation.category,
+          contentType: mediaBlob.type,
+          storagePath: `${bucket}/${fileName}`,
+          supabase,
+        });
+      }
     } catch (error) {
       console.error(`Error persisting generated output ${index}:`, error);
       outputs.push({
         index,
         storagePath: tempUrl,
       });
+      if (index === 0) {
+        primaryPreviewUrl = getFallbackPreviewUrl(generation.category, null, tempUrl);
+      }
     }
   }
 
@@ -516,6 +585,7 @@ export async function persistGeneratedOutputList(
   const updatePayload: Record<string, unknown> = {
     status: 'succeeded',
     output_url: primaryOutput,
+    preview_url: primaryPreviewUrl ?? getFallbackPreviewUrl(generation.category, null, primaryOutput),
     completed_at: completedAt ?? new Date().toISOString(),
   };
 

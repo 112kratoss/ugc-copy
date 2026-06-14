@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { FlashList } from '@shopify/flash-list';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -42,6 +43,7 @@ import {
   type HomeToolShortcut,
 } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
+import { HOME_RAIL_DRAW_DISTANCE } from '@/lib/media-performance';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
@@ -221,11 +223,19 @@ export function HomeDashboard() {
         {hasRecentStudio ? (
           <Panel>
             <SectionHeader title="Recent Studio" actionLabel="View all" onPress={() => router.push('/(tabs)/profile' as never)} compact />
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 2 }}>
-              {generationCards.map((item) => (
-                <RecentCreationCard key={item.id} item={item} width={studioCardWidth} />
-              ))}
-            </ScrollView>
+            <FlashList
+              data={generationCards}
+              drawDistance={HOME_RAIL_DRAW_DISTANCE}
+              horizontal
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <View style={{ marginRight: 10 }}>
+                  <RecentCreationCard item={item} width={studioCardWidth} />
+                </View>
+              )}
+              showsHorizontalScrollIndicator={false}
+              style={{ height: 160 }}
+            />
           </Panel>
         ) : null}
 
@@ -581,7 +591,7 @@ function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: 
       {isText ? (
         <TextPreviewCard text={item.previewText} accent={accentColor('amber')} height={160} radius={18} lines={4} />
       ) : item.mediaUrl && item.kind === 'image' ? (
-        <FeedMediaFrame kind="image" url={item.mediaUrl} radius={18} style={{ position: 'absolute', inset: 0 }} />
+        <FeedMediaFrame kind="image" url={item.mediaUrl} recyclingKey={`home-generation:${item.id}`} radius={18} style={{ position: 'absolute', inset: 0 }} />
       ) : (
         <FantasyPortalArt variant={item.artVariant} muted />
       )}
@@ -616,19 +626,23 @@ function PreviewRail({
   return (
     <Panel>
       <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
-      <ScrollView
+      <FlashList
+        data={items}
+        drawDistance={HOME_RAIL_DRAW_DISTANCE}
         horizontal
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <View style={{ marginRight: 10 }}>
+            <CommunityPreviewCard item={item} width={width} />
+          </View>
+        )}
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: 10, paddingRight: 2, paddingBottom: 2 }}
         decelerationRate="fast"
         disableIntervalMomentum
         snapToAlignment="start"
         snapToInterval={width + 10}
-      >
-        {items.map((item) => (
-          <CommunityPreviewCard key={item.id} item={item} width={width} />
-        ))}
-      </ScrollView>
+        style={{ height: 204 }}
+      />
     </Panel>
   );
 }
@@ -662,8 +676,14 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
       <View style={{ height: 108, overflow: 'hidden' }}>
         {item.previewKind === 'text' ? (
           <TextPreviewCard text={item.body} accent={accentColor('workflow')} height={108} radius={0} lines={3} compact />
-        ) : item.mediaUrl && item.mediaKind === 'image' ? (
-          <FeedMediaFrame kind="image" url={item.mediaUrl} style={{ position: 'absolute', inset: 0 }} />
+        ) : item.previewUrl || (item.mediaUrl && item.mediaKind === 'image') ? (
+          <FeedMediaFrame
+            kind="image"
+            url={item.previewUrl || item.mediaUrl as string}
+            backdropUrl={item.previewUrl}
+            recyclingKey={`home-community:${item.id}`}
+            style={{ position: 'absolute', inset: 0 }}
+          />
         ) : (
           <FantasyPortalArt variant={item.artVariant} muted />
         )}
@@ -713,19 +733,23 @@ function UnlockRail({
   return (
     <Panel>
       <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
-      <ScrollView
+      <FlashList
+        data={items}
+        drawDistance={HOME_RAIL_DRAW_DISTANCE}
         horizontal
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <View style={{ marginRight: 10 }}>
+            <UnlockPreviewCard item={item} width={width} />
+          </View>
+        )}
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: 10, paddingRight: 2, paddingBottom: 2 }}
         decelerationRate="fast"
         disableIntervalMomentum
         snapToAlignment="start"
         snapToInterval={width + 10}
-      >
-        {items.map((item) => (
-          <UnlockPreviewCard key={item.id} item={item} width={width} />
-        ))}
-      </ScrollView>
+        style={{ height: 146 }}
+      />
     </Panel>
   );
 }
@@ -756,7 +780,7 @@ function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number })
       })}
     >
       {item.mediaUrl ? (
-        <FeedMediaFrame kind="image" url={item.mediaUrl} radius={18} style={{ position: 'absolute', inset: 0 }} />
+        <FeedMediaFrame kind="image" url={item.mediaUrl} recyclingKey={`home-unlock:${item.id}`} radius={18} style={{ position: 'absolute', inset: 0 }} />
       ) : (
         <LinearGradient colors={['rgba(16,185,129,0.22)', 'rgba(124,58,237,0.12)', 'rgba(8,9,18,1)']} style={{ position: 'absolute', inset: 0 }} />
       )}

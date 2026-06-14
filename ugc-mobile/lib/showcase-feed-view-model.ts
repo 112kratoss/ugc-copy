@@ -12,9 +12,11 @@ export interface ShowcaseMasonryCard {
   creatorLabel: string;
   creatorAvatar: string | null;
   mediaUrl: string | null;
+  previewUrl: string | null;
   mediaKind: 'image' | 'video' | null;
   badge: string;
   accent: ToolAccent;
+  aspectRatio: number | null;
   height: number;
   saveLabel: string;
   remixLabel: string;
@@ -55,15 +57,24 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
     creatorLabel: item.creator.username || item.creator.name,
     creatorAvatar: item.creator.avatar,
     mediaUrl: item.mediaUrl,
+    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
     mediaKind: item.mediaKind,
     badge: cardBadge(item),
     accent,
+    aspectRatio: getCardAspectRatio(item),
     height: cardHeight(item),
     saveLabel: formatCompactCount(item.saveCount),
     remixLabel: formatCompactCount(item.remixCount),
     viewerSource: 'showcase-feed',
     sourceId: item.id,
   };
+}
+
+export function getShowcaseMediaHeight(card: ShowcaseMasonryCard, columnWidth: number) {
+  if (card.previewKind === 'text' || !card.aspectRatio) {
+    return card.height;
+  }
+  return Math.round(Math.max(180, Math.min(320, columnWidth / card.aspectRatio)));
 }
 
 function cardBadge(item: ShowcaseFeedItem) {
@@ -82,6 +93,14 @@ function cardHeight(item: ShowcaseFeedItem) {
   if (item.mediaKind === 'video' || item.category === 'video') return [226, 260, 292][variant];
   if (item.category === 'motion') return [236, 268, 304][variant];
   return [218, 248, 284][variant];
+}
+
+function getCardAspectRatio(item: ShowcaseFeedItem) {
+  const cover = item.mediaItems?.[0];
+  if (!cover?.width || !cover.height) {
+    return null;
+  }
+  return cover.width / cover.height;
 }
 
 function categoryAccent(category: ShowcaseFeedItem['category']): ToolAccent {

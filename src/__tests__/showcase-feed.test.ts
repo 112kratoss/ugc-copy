@@ -32,8 +32,19 @@ type PostRow = {
 type GenerationModelRow = {
   id: string;
   model: string;
+  output_url?: string | null;
+  showcase_asset_path?: string | null;
   category?: string | null;
   prompt?: string | null;
+  title?: string | null;
+  preview_url?: string | null;
+  thumbnail_url?: string | null;
+  save_count?: number | null;
+  remix_count?: number | null;
+  created_at?: string;
+  user_id?: string | null;
+  is_public?: boolean | null;
+  status?: string | null;
   workflow_settings?: Record<string, unknown> | null;
 };
 
@@ -101,6 +112,8 @@ let generationInputMediaState: GenerationInputMediaRow[] = [];
 let resourceBundlesState: ResourceBundleRow[] = [];
 let postSavesState: PostSaveRow[] = [];
 let postResourceBundlePurchasesState: PostResourceBundlePurchaseRow[] = [];
+let postsSchemaMissingState = false;
+let lastPurchaseBundleIds: unknown[] | null = null;
 
 function createPostRow(overrides: Partial<PostRow> & { id: string; created_at: string }): PostRow {
   return {
@@ -157,6 +170,10 @@ function createServiceClientMock() {
         const filters: Record<string, unknown> = {};
         const sorts: Array<{ column: keyof PostRow; ascending: boolean }> = [];
         let textFilter = false;
+        const missingPostsError = {
+          code: 'PGRST205',
+          message: "Could not find the table 'public.posts'",
+        };
 
         const query = {
           select() {
@@ -179,6 +196,10 @@ function createServiceClientMock() {
             return query;
           },
           async range(start: number, end: number) {
+            if (postsSchemaMissingState) {
+              return { data: null, error: missingPostsError };
+            }
+
             const rows = [...postsState]
               .filter((row) =>
                 Object.entries(filters).every(([key, value]) =>
@@ -249,18 +270,63 @@ function createServiceClientMock() {
       }
 
       if (table === 'generations') {
-        return {
+        const filters: Record<string, unknown> = {};
+        const sorts: Array<{ column: keyof GenerationModelRow; ascending: boolean }> = [];
+
+        const run = () => {
+          const rows = [...generationModelsState]
+            .filter((row) =>
+              Object.entries(filters).every(([key, value]) => {
+                const rowValue = (row as Record<string, unknown>)[key];
+                return Array.isArray(value)
+                  ? value.includes(rowValue)
+                  : (rowValue ?? null) === value;
+              })
+            )
+            .sort((left, right) => {
+              for (const sort of sorts) {
+                const comparison = compareValues(left[sort.column] as string | number | null | undefined, right[sort.column] as string | number | null | undefined);
+                if (comparison !== 0) {
+                  return sort.ascending ? comparison : -comparison;
+                }
+              }
+
+              return 0;
+            });
+
+          return { data: rows, error: null };
+        };
+
+        const query = {
           select() {
-            return {
-              async in(_column: string, values: unknown[]) {
-                return {
-                  data: generationModelsState.filter((row) => values.includes(row.id)),
-                  error: null,
-                };
-              },
-            };
+            return query;
+          },
+          in(column: string, values: unknown[]) {
+            filters[column] = values;
+            return query;
+          },
+          eq(column: string, value: unknown) {
+            filters[column] = value;
+            return query;
+          },
+          is(column: string, value: unknown) {
+            filters[column] = value;
+            return query;
+          },
+          order(column: string, options: { ascending: boolean }) {
+            sorts.push({ column: column as keyof GenerationModelRow, ascending: options.ascending });
+            return query;
+          },
+          async range(start: number, end: number) {
+            const rows = run().data.slice(start, end + 1);
+            return { data: rows, error: null };
+          },
+          then(resolve: (value: { data: GenerationModelRow[]; error: null }) => void) {
+            resolve(run());
           },
         };
+
+        return query;
       }
 
       if (table === 'generation_input_media') {
@@ -370,6 +436,7 @@ function createServiceClientMock() {
           async in(column: string, values: unknown[]) {
             if (column === 'bundle_id') {
               bundleIds = values;
+              lastPurchaseBundleIds = values;
             }
 
             return {
@@ -447,6 +514,8 @@ describe('showcase feed', () => {
     ];
     postSavesState = [];
     postResourceBundlePurchasesState = [];
+    postsSchemaMissingState = false;
+    lastPurchaseBundleIds = null;
   });
 
   afterEach(() => {
@@ -564,6 +633,39 @@ describe('showcase feed', () => {
         sortOrder: 1,
       }),
     ]);
+  });
+
+  it('uses generation preview urls for generation-backed legacy post media items', async () => {
+    postsState = [
+      createPostRow({
+        id: 'generated-video-post',
+        created_at: '2026-03-20T11:00:00.000Z',
+        output_url: 'generated_videos/user-1/generated-video.mp4',
+        category: 'video',
+        generation_id: 'gen-video',
+      }),
+    ];
+    postMediaState = [];
+    generationModelsState = [{
+      id: 'gen-video',
+      model: 'kling-3.0-video',
+      preview_url: 'generated_videos/user-1/generated-video.preview.webp',
+      category: 'video',
+    }];
+    resourceBundlesState = [];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].mediaItems?.[0]).toMatchObject({
+      mediaKind: 'video',
+      previewUrl: 'https://proxy.example.com/generated_videos/user-1/generated-video.preview.webp',
+    });
   });
 
   it('includes mixed image and video posts in any matching media filter', async () => {
@@ -861,6 +963,38 @@ describe('showcase feed', () => {
     expect(page.items[0].canRemix).toBe(true);
   });
 
+  it('does not send synthetic generation recipe asset ids to uuid purchase lookups', async () => {
+    resourceBundlesState = [];
+    generationModelsState = [{
+      id: 'gen-1',
+      model: 'nano-banana-2',
+      category: 'image',
+      prompt: 'SECRET_LEGACY_PROMPT',
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        elements: [{
+          id: 'element-1',
+          displayName: 'Image input',
+          handle: '@alisa',
+          storagePath: 'generation_inputs/user-1/gen-1/legacy-reference.png',
+        }],
+      },
+    }];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(page.items[0].asset?.id).toBe('generation-recipe:post-1');
+    expect(lastPurchaseBundleIds ?? []).toEqual([]);
+  });
+
   it('keeps remix access disabled for unrelated viewers of remix-enabled bundles', async () => {
     const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
     const page = await getShowcaseFeedPage({
@@ -1021,5 +1155,41 @@ describe('showcase feed', () => {
 
     expect(page.items.map((item) => item.id)).toEqual(['older-best-seller']);
     expect(page.items[0].asset?.salesCount).toBe(42);
+  });
+
+  it('returns legacy generation video preview urls in fallback feed items', async () => {
+    postsSchemaMissingState = true;
+    resourceBundlesState = [];
+    generationModelsState = [{
+      id: 'legacy-video',
+      model: 'kling-3.0-video',
+      output_url: 'generated_videos/user-1/legacy-video.mp4',
+      showcase_asset_path: null,
+      preview_url: 'generated_videos/user-1/legacy-video.preview.webp',
+      category: 'video',
+      prompt: 'A public video generation.',
+      title: 'Legacy Video',
+      save_count: 2,
+      remix_count: 1,
+      created_at: '2026-03-18T10:00:00.000Z',
+      user_id: 'user-1',
+      is_public: true,
+      status: 'succeeded',
+    }];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].mediaUrl).toBe('https://proxy.example.com/generated_videos/user-1/legacy-video.mp4');
+    expect(page.items[0].mediaItems?.[0]).toMatchObject({
+      mediaKind: 'video',
+      previewUrl: 'https://proxy.example.com/generated_videos/user-1/legacy-video.preview.webp',
+    });
   });
 });

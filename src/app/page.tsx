@@ -4,6 +4,7 @@ import { ArrowRight } from 'lucide-react';
 
 import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
+import { SectionHeader, Text } from '@/app/components/DesignSystem';
 import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowcasePreviewGrid';
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
@@ -82,7 +83,7 @@ export default async function Home() {
   });
 
   return (
-    <div className="relative flex min-h-screen flex-col overflow-hidden bg-black text-white font-[family-name:var(--font-geist-sans)]">
+    <div className="ui-page relative flex flex-col overflow-hidden font-[family-name:var(--font-geist-sans)]">
       <JsonLd data={buildOrganizationSchema()} />
       <JsonLd
         data={buildSoftwareApplicationSchema({
@@ -108,18 +109,18 @@ export default async function Home() {
 
       <main className="studio-shell relative z-10 flex flex-1 flex-col pb-24 pt-8 sm:pt-12">
         <section className="flex flex-col items-center text-center">
-          <h1 className="max-w-3xl text-4xl font-semibold tracking-tight sm:text-5xl md:text-[3.85rem]">
+          <Text as="h1" variant="display" className="max-w-3xl">
             What would you like to{' '}
             <span className="bg-gradient-to-r from-pink-400 via-fuchsia-400 to-violet-300 bg-clip-text text-transparent">
               create
             </span>{' '}
             today?
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">
+          </Text>
+          <Text variant="bodySm" className="mt-4 max-w-2xl sm:text-base">
             Pick a path, see the output style immediately, and move straight into creation.
-          </p>
+          </Text>
 
-          <div className="mt-6 grid w-full max-w-[880px] grid-cols-2 gap-2 rounded-[28px] border border-white/8 bg-white/[0.03] p-2 sm:grid-cols-4">
+          <div className="ui-surface-soft mt-6 grid w-full max-w-[880px] grid-cols-2 gap-2 rounded-3xl p-2 sm:grid-cols-4">
             {CREATOR_TOOLS.map((tool) => {
               const Icon = tool.icon;
 
@@ -141,21 +142,16 @@ export default async function Home() {
         </section>
 
         <section className="mt-10 w-full">
-          <div className="mb-5 flex flex-col items-center text-center">
-            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">
-              Creator suite
-            </div>
-            <h2 className="text-[1.85rem] font-semibold tracking-tight text-white sm:text-[2.2rem]">
-              Core creator paths
-            </h2>
-            <Link
-              href="/create"
-              className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
-            >
-              Launchpad
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
+          <SectionHeader
+            eyebrow="Creator suite"
+            title="Core creator paths"
+            actionHref="/create"
+            actionLabel="Launchpad"
+            actionIcon={ArrowRight}
+            align="center"
+            compact
+            className="mb-5"
+          />
 
           <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
             {CREATOR_TOOLS.map((tool) => (
@@ -190,16 +186,16 @@ export default async function Home() {
                 key={model.name}
                 href={model.href}
                 prefetch={model.href.includes('/create-video') ? false : undefined}
-                className="group overflow-hidden rounded-[26px] border border-white/8 bg-[#111215] p-3.5 transition hover:border-white/12"
+                className="ui-card ui-card-interactive ui-focus-ring group overflow-hidden p-3.5"
               >
                 <div
-                  className={`flex h-36 w-full items-end rounded-[20px] bg-gradient-to-br p-5 ${model.accent}`}
+                  className={`flex h-36 w-full items-end rounded-2xl bg-gradient-to-br p-5 ${model.accent}`}
                 >
-                  <div className="text-2xl font-semibold tracking-tight text-white/90">
+                  <div className="text-2xl font-semibold text-white/90">
                     {model.name}
                   </div>
                 </div>
-                <p className="px-1 pb-1 pt-4 text-sm text-zinc-400">{model.description}</p>
+                <Text variant="bodySm" className="px-1 pb-1 pt-4">{model.description}</Text>
               </Link>
             ))}
           </div>

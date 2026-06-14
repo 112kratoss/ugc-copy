@@ -108,6 +108,22 @@ export function immersiveViewerHref({
   };
 }
 
+export function profileMediaFeedHref({
+  source,
+  initialId,
+}: {
+  source: PreviewViewerSource;
+  initialId: string;
+}) {
+  return {
+    pathname: '/profile-media-feed',
+    params: {
+      source,
+      initialId,
+    },
+  };
+}
+
 export function buildImmersiveShowcaseItems(source: PreviewViewerSource, items: ShowcaseFeedItem[]) {
   return items.map((item) => showcaseToImmersiveItem(source, item));
 }
@@ -191,12 +207,14 @@ function getGenerationMediaItemsList(
   id: string,
   outputUrls: string[] | undefined,
   outputUrl: string | null,
-  mediaKind: 'image' | 'video' | null
+  mediaKind: 'image' | 'video' | null,
+  previewUrl?: string | null
 ): ShowcaseMediaItem[] {
   if (outputUrls?.length && mediaKind) {
     return outputUrls.map((url, index) => ({
       id: `${id}:${index}`,
       url,
+      previewUrl: index === 0 ? previewUrl ?? (mediaKind === 'image' ? url : null) : mediaKind === 'image' ? url : null,
       mediaKind: mediaKind === 'video' ? 'video' : 'image',
       contentType: null,
       originalName: null,
@@ -212,6 +230,7 @@ function getGenerationMediaItemsList(
   return [{
     id: `${id}:output`,
     url: outputUrl,
+    previewUrl: previewUrl ?? (mediaKind === 'image' ? outputUrl : null),
     mediaKind: mediaKind === 'video' ? 'video' : 'image',
     contentType: null,
     originalName: null,
@@ -295,6 +314,7 @@ function generationToImmersiveItem(
   const displayText = item.prompt?.trim() || item.description?.trim() || item.title?.trim() || 'Saved Magicbooklet generation.';
   const title = item.title?.trim() || displayText;
   const mediaKind = kind === 'text' ? null : kind === 'image' ? 'image' : 'video';
+  const previewUrl = item.previewUrl ?? item.preview_url ?? null;
 
   return {
     id: item.id,
@@ -304,7 +324,7 @@ function generationToImmersiveItem(
     displayText,
     mediaUrl: item.output_urls?.[0] ?? item.output_url ?? null,
     mediaKind,
-    mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind),
+    mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind, previewUrl),
     previewKind: kind === 'text' ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
@@ -378,7 +398,7 @@ function ownerPostToImmersiveItem(
     displayText,
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
-    mediaItems: getMediaItemsList(item.id, item.mediaUrl, item.mediaKind),
+    mediaItems: getMediaItemsList(item.id, item.mediaUrl, item.mediaKind, item.mediaItems),
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,

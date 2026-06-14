@@ -28,6 +28,7 @@ import {
   replacePostMediaItems,
   type PostMediaPersistInput,
 } from '@/lib/post-media';
+import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
@@ -90,6 +91,7 @@ type BundleStatusRow = {
 type ExistingPostMediaRow = {
   id: string;
   storage_path: string | null;
+  preview_storage_path?: string | null;
   external_url: string | null;
   media_kind: 'image' | 'video';
   content_type: string | null;
@@ -220,17 +222,33 @@ async function loadOwnedBundleStatus(postId: string, userId: string): Promise<Bu
 
 async function loadOwnedPostMedia(postId: string): Promise<ExistingPostMediaRow[]> {
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase
+  const previewResult = await adminSupabase
     .from('post_media')
-    .select('id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select('id, storage_path, preview_storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
     .eq('post_id', postId)
     .order('sort_order', { ascending: true });
+  let data = previewResult.data as ExistingPostMediaRow[] | null;
+  let error = previewResult.error;
+
+  if (
+    error
+    && (error.code === '42703' || error.code === 'PGRST204')
+    && error.message.includes('preview_storage_path')
+  ) {
+    const legacyResult = await adminSupabase
+      .from('post_media')
+      .select('id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+      .eq('post_id', postId)
+      .order('sort_order', { ascending: true });
+    data = legacyResult.data as ExistingPostMediaRow[] | null;
+    error = legacyResult.error;
+  }
 
   if (error) {
     throw error;
   }
 
-  return (data ?? []) as ExistingPostMediaRow[];
+  return data ?? [];
 }
 
 async function parseSubmittedEditMediaItems(params: {
@@ -544,6 +562,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
           if (item.source === 'existing') {
             persistedMediaItems.push({
               storagePath: item.row.storage_path,
+              previewStoragePath: item.row.preview_storage_path ?? null,
               externalUrl: item.row.external_url,
               mediaKind: item.row.media_kind,
               contentType: item.row.content_type,
@@ -578,12 +597,30 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 
           newStoragePaths.push(storagePath);
           temporaryStoragePaths.push(item.temporaryStoragePath);
+          let preview: Awaited<ReturnType<typeof createPostMediaPreview>> = null;
+          try {
+            preview = await createPostMediaPreview({
+              body: downloadedMedia.data,
+              contentType: item.contentType || downloadedMedia.data.type,
+              storagePath,
+              supabase: adminSupabase,
+            });
+            if (preview?.previewStoragePath) {
+              newStoragePaths.push(preview.previewStoragePath);
+            }
+          } catch (previewError) {
+            console.warn('Failed to create edited post media preview:', previewError);
+          }
+
           persistedMediaItems.push({
             storagePath,
+            previewStoragePath: preview?.previewStoragePath ?? null,
             externalUrl: null,
             mediaKind: item.mediaKind,
             contentType: item.contentType,
             originalName: item.originalName,
+            width: preview?.width ?? null,
+            height: preview?.height ?? null,
             sortOrder: index,
           });
         }
@@ -606,11 +643,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 
         const retainedStoragePaths = new Set(
           persistedMediaItems
-            .map((item) => item.storagePath)
+            .flatMap((item) => [item.storagePath, item.previewStoragePath])
             .filter((storagePath): storagePath is string => Boolean(storagePath))
         );
         const removedStoragePaths = existingMediaRows
-          .map((row) => row.storage_path)
+          .flatMap((row) => [row.storage_path, row.preview_storage_path])
           .filter((storagePath): storagePath is string =>
             Boolean(storagePath) && !retainedStoragePaths.has(storagePath as string)
           );

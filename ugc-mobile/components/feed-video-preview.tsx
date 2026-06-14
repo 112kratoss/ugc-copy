@@ -7,37 +7,75 @@ import { appTheme } from '@/lib/theme';
 
 export function FeedVideoPreview({
   url,
+  previewUrl,
   active,
   height,
   radius,
   accent,
 }: {
   url: string;
+  previewUrl?: string | null;
   active: boolean;
   height: number;
   radius: number;
   accent: string;
 }) {
-  const [hasFrame, setHasFrame] = useState(false);
-  const player = useVideoPlayer(url, (instance) => {
-    instance.loop = true;
+  if (!active) {
+    if (previewUrl) {
+      return (
+      <FeedMediaFrame
+        kind="image"
+        url={previewUrl}
+        backdropUrl={previewUrl}
+        radius={radius}
+        borderWidth={1}
+        borderColor={`${accent}4d`}
+        backgroundColor="#050506"
+        recyclingKey={`${url}:poster`}
+        style={{ height }}
+      />
+      );
+    }
+
+    return (
+      <PassiveFeedVideoPreview
+        url={url}
+        height={height}
+        radius={radius}
+        accent={accent}
+      />
+    );
+  }
+
+  return (
+    <ActiveFeedVideoPreview
+      url={url}
+      previewUrl={previewUrl}
+      height={height}
+      radius={radius}
+      accent={accent}
+    />
+  );
+}
+
+function PassiveFeedVideoPreview({
+  url,
+  height,
+  radius,
+  accent,
+}: {
+  url: string;
+  height: number;
+  radius: number;
+  accent: string;
+}) {
+  const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
+    instance.loop = false;
     instance.muted = true;
     instance.volume = 0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
   });
-
-  useEffect(() => {
-    setHasFrame(false);
-  }, [url]);
-
-  useEffect(() => {
-    if (active) {
-      player.play();
-    } else {
-      player.pause();
-    }
-  }, [active, player]);
 
   return (
     <FeedMediaFrame
@@ -47,12 +85,75 @@ export function FeedVideoPreview({
       borderWidth={1}
       borderColor={`${accent}4d`}
       backgroundColor="#050506"
-      onFirstFrameRender={() => setHasFrame(true)}
+      recyclingKey={`${url}:passive`}
+      style={{ height }}
+    />
+  );
+}
+
+function ActiveFeedVideoPreview({
+  url,
+  previewUrl,
+  height,
+  radius,
+  accent,
+}: {
+  url: string;
+  previewUrl?: string | null;
+  height: number;
+  radius: number;
+  accent: string;
+}) {
+  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [hasError, setHasError] = useState(false);
+  const hasFrame = frameUrl === url;
+  const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
+    instance.loop = true;
+    instance.muted = true;
+    instance.volume = 0;
+    instance.showNowPlayingNotification = false;
+    instance.staysActiveInBackground = false;
+  });
+
+  useEffect(() => {
+    player.play();
+  }, [player]);
+
+  useEffect(() => {
+    setFrameUrl(null);
+    setHasError(false);
+  }, [url]);
+
+  useEffect(() => {
+    const subscription = player.addListener('statusChange', (event) => {
+      setHasError(event.status === 'error');
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [player]);
+
+  return (
+    <FeedMediaFrame
+      kind="video"
+      player={player}
+      backdropUrl={previewUrl}
+      posterUrl={previewUrl}
+      posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+      radius={radius}
+      borderWidth={1}
+      borderColor={`${accent}4d`}
+      backgroundColor="#050506"
+      recyclingKey={url}
+      onFirstFrameRender={() => {
+        setFrameUrl(url);
+        setHasError(false);
+      }}
       style={{
         height,
       }}
     >
-      {!hasFrame ? (
+      {!hasFrame && !hasError ? (
         <View
           pointerEvents="none"
           style={{

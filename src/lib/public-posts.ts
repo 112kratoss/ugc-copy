@@ -229,6 +229,7 @@ export async function getPublicPostDetail(
       mediaItems: [{
         id: `${generation.id}:cover`,
         url: generation.url,
+        previewUrl: generation.previewUrl,
         mediaKind: generation.category === 'image' ? 'image' : 'video',
         contentType: null,
         originalName: null,

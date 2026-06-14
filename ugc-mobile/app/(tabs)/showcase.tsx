@@ -4,7 +4,8 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { FileText, Heart, Images, Play, RefreshCw, Search, SlidersHorizontal } from 'lucide-react-native';
-import { useMemo, useRef, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -34,10 +35,12 @@ import {
 import {
   buildShowcaseMasonry,
   getShowcaseGridLayout,
+  getShowcaseMediaHeight,
   type ShowcaseGridLayout,
   type ShowcaseMasonryCard,
 } from '@/lib/showcase-feed-view-model';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem } from '@/lib/types';
 
@@ -47,12 +50,12 @@ const SKELETON_HEIGHTS = [
   [230, 260, 196],
 ];
 const LOAD_MORE_COOLDOWN_MS = 800;
-const MAX_ACTIVE_VIDEO_PREVIEWS = 3;
 const FEED_HORIZONTAL_PADDING = 14;
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -61,19 +64,20 @@ export default function ShowcaseScreen() {
   const gridLayout = getShowcaseGridLayout(width);
   const queryKey = useMemo(() => createShowcaseFeedQueryKey(), []);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
-  const viewabilityConfig = useRef({
+  const viewabilityConfig = useMemo(() => ({
     itemVisiblePercentThreshold: 55,
     minimumViewTime: 180,
-  }).current;
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+  }), []);
+  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     const visibleItems = getVisibleCardItems(viewableItems);
-    const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, MAX_ACTIVE_VIDEO_PREVIEWS);
+    const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
     setActiveVideoIds((current) => (sameStringList(current, nextVideoIds) ? current : nextVideoIds));
-  }).current;
+  }, []);
   const showcaseQuery = useInfiniteQuery({
     queryKey,
     initialPageParam: 0,
@@ -132,7 +136,7 @@ export default function ShowcaseScreen() {
         <MasonryPin
           card={item}
           layout={gridLayout}
-          activeVideoIds={target === 'Cell' ? activeVideoIds : []}
+          activeVideoIds={target === 'Cell' ? visibleActiveVideoIds : []}
           onOpenPost={openPost}
           onScrollToggle={setIsSwipingMedia}
         />
@@ -145,8 +149,8 @@ export default function ShowcaseScreen() {
       <FlashList
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}
-        drawDistance={900}
-        extraData={activeVideoIds}
+        drawDistance={SHOWCASE_DRAW_DISTANCE}
+        extraData={visibleActiveVideoIds}
         getItemType={(item) => item.previewKind === 'text' ? 'text' : item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         masonry
@@ -416,19 +420,29 @@ function CardMediaCarousel({
                 isActiveVideo ? (
                   <FeedVideoPreview
                     url={item.url}
+                    previewUrl={item.previewUrl}
                     active={true}
                     height={height}
                     radius={radius}
                     accent={accent}
                   />
                 ) : (
-                  <VideoPinPreview accent={accent} height={height} radius={radius} />
+                  <FeedVideoPreview
+                    url={item.url}
+                    previewUrl={item.previewUrl}
+                    active={false}
+                    height={height}
+                    radius={radius}
+                    accent={accent}
+                  />
                 )
               ) : (
                 <FeedMediaFrame
                   kind="image"
                   url={item.url}
+                  backdropUrl={item.previewUrl}
                   transition={120}
+                  recyclingKey={`showcase:${cardId}:${item.id}`}
                   radius={radius}
                   style={{ width: '100%', height: '100%' }}
                 />
@@ -506,6 +520,7 @@ function MasonryPin({
 }) {
   const { width } = useWindowDimensions();
   const columnWidth = (width - FEED_HORIZONTAL_PADDING * 2 - layout.columnGap) / 2;
+  const mediaHeight = getShowcaseMediaHeight(card, columnWidth);
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
@@ -539,14 +554,14 @@ function MasonryPin({
           <TextPinPreview
             accent={accent}
             badge={card.badge}
-            height={card.height}
+            height={mediaHeight}
             prompt={card.prompt}
             title={card.title}
           />
         ) : hasMultipleMedia ? (
           <CardMediaCarousel
             mediaItems={mediaItems}
-            height={card.height}
+            height={mediaHeight}
             radius={layout.mediaRadius}
             accent={accent}
             activeVideoIds={activeVideoIds}
@@ -559,19 +574,39 @@ function MasonryPin({
           <FeedMediaFrame
             kind="image"
             url={card.mediaUrl}
+            backdropUrl={card.previewUrl}
             transition={120}
+            recyclingKey={`showcase:${card.id}`}
             radius={layout.mediaRadius}
             style={{
               width: '100%',
-              height: card.height,
+              height: mediaHeight,
             }}
           />
         ) : showActiveVideo && card.mediaUrl ? (
-          <FeedVideoPreview url={card.mediaUrl} active height={card.height} radius={layout.mediaRadius} accent={accent} />
+          <FeedVideoPreview
+            url={card.mediaUrl}
+            previewUrl={card.previewUrl}
+            active
+            height={mediaHeight}
+            radius={layout.mediaRadius}
+            accent={accent}
+          />
         ) : isVideoCard ? (
-          <VideoPinPreview accent={accent} height={card.height} radius={layout.mediaRadius} />
+          card.mediaUrl ? (
+            <FeedVideoPreview
+              url={card.mediaUrl}
+              previewUrl={card.previewUrl}
+              active={false}
+              height={mediaHeight}
+              radius={layout.mediaRadius}
+              accent={accent}
+            />
+          ) : (
+            <VideoPinPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
+          )
         ) : (
-          <VisualFallbackPreview accent={accent} height={card.height} radius={layout.mediaRadius} />
+          <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
         )}
         {card.previewKind === 'media' ? (
           <>

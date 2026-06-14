@@ -9,8 +9,16 @@ import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 
 type GenerationRow = {
+    id: string;
     output_url: string | null;
+    preview_url?: string | null;
+    thumbnail_url?: string | null;
     showcase_asset_path?: string | null;
+    status: string;
+    workflow_settings?: unknown;
+    model: string;
+    category?: string | null;
+    prompt?: string | null;
 };
 
 type LinkedPostRow = {
@@ -81,6 +89,40 @@ async function resolveGenerationOutputUrl(
     return resolveStoredMediaUrl(adminSupabase, generation.output_url);
 }
 
+async function resolveGenerationPreviewUrl(
+    adminSupabase: ReturnType<typeof createServiceClient>,
+    generation: GenerationRow,
+    outputUrl: string | null
+): Promise<string | null> {
+    const previewSource = generation.preview_url || generation.thumbnail_url || null;
+    if (previewSource) {
+        return resolveStoredMediaUrl(adminSupabase, previewSource);
+    }
+
+    if (generation.category === 'image') {
+        return outputUrl;
+    }
+
+    return null;
+}
+
+type SupabaseSchemaError = {
+    code?: string;
+    message?: string;
+};
+
+function isMissingGenerationPreviewColumnError(error: unknown) {
+    if (!error || typeof error !== 'object') {
+        return false;
+    }
+
+    const { code, message = '' } = error as SupabaseSchemaError;
+    return (
+        (code === '42703' || code === 'PGRST204')
+        && (message.includes('preview_url') || message.includes('thumbnail_url'))
+    );
+}
+
 export async function GET(request: NextRequest) {
     try {
         const supabase = createClient(
@@ -101,24 +143,42 @@ export async function GET(request: NextRequest) {
 
         const includeArchived = request.nextUrl.searchParams.get('includeArchived') === 'true';
 
-        const fetchGenerations = async () => {
-            let query = supabase
-                .from('generations')
-                .select('id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: false });
+        const fetchGenerations = async (): Promise<GenerationRow[]> => {
+            const baseColumns = 'id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at';
+            const selectCandidates = [
+                `${baseColumns}, preview_url, thumbnail_url`,
+                `${baseColumns}, preview_url`,
+                `${baseColumns}, thumbnail_url`,
+                baseColumns,
+            ];
 
-            if (!includeArchived) {
-                query = query.is('archived_at', null);
+            let lastPreviewColumnError: unknown = null;
+            for (const columns of selectCandidates) {
+                let query = supabase
+                    .from('generations')
+                    .select(columns)
+                    .eq('user_id', user.id)
+                    .order('created_at', { ascending: false });
+
+                if (!includeArchived) {
+                    query = query.is('archived_at', null);
+                }
+
+                const result = await query;
+
+                if (result.error) {
+                    if (isMissingGenerationPreviewColumnError(result.error)) {
+                        lastPreviewColumnError = result.error;
+                        continue;
+                    }
+
+                    throw result.error;
+                }
+
+                return (result.data || []) as unknown as GenerationRow[];
             }
 
-            const result = await query;
-
-            if (result.error) {
-                throw result.error;
-            }
-
-            return result.data || [];
+            throw lastPreviewColumnError ?? new Error('Failed to fetch generations');
         };
 
         let generations = await fetchGenerations();
@@ -181,7 +241,7 @@ export async function GET(request: NextRequest) {
                     supabase: adminSupabase,
                     generationId: generation.id,
                     ownerUserId: user.id,
-                    category: generation.category,
+                    category: generation.category ?? null,
                     workflowSettings: workflowSettings ?? {},
                 });
             const paywallPrefill = buildGenerationPaywallPrefill({
@@ -192,11 +252,13 @@ export async function GET(request: NextRequest) {
                 inputMedia,
             });
             const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation);
+            const previewUrl = await resolveGenerationPreviewUrl(adminSupabase, generation, outputUrl);
 
             if (!outputUrl) {
                 const rest = withoutWorkflowSettings(generation);
                 return {
                     ...rest,
+                    preview_url: previewUrl,
                     ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                     input_media: inputMedia,
                     paywallPrefill,
@@ -211,6 +273,7 @@ export async function GET(request: NextRequest) {
             return {
                 ...rest,
                 output_url: outputUrl,
+                preview_url: previewUrl,
                 ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                 input_media: inputMedia,
                 paywallPrefill,

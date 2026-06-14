@@ -5,6 +5,16 @@ import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 
 import {
+  getAccentClasses,
+  IconButton,
+  Kicker,
+  MediaFrame,
+  Pill,
+  SectionHeader,
+  Surface,
+  Text,
+} from '@/app/components/DesignSystem';
+import {
   CREATOR_TOOLS,
   type CreatorToolAccent,
   type CreatorToolDefinition,
@@ -17,71 +27,6 @@ import {
   getGenerationTimingSummaryLabel,
   type GenerationTiming,
 } from '@/lib/generation-timing';
-
-const ACCENT_STYLES: Record<
-  CreatorToolAccent,
-  {
-    border: string;
-    shadow: string;
-    focusRing: string;
-    iconWrap: string;
-    badge: string;
-    button: string;
-    surface: string;
-    accentText: string;
-  }
-> = {
-  blue: {
-    border: 'hover:border-sky-300/20',
-    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(56,189,248,0.65)]',
-    focusRing: 'focus-visible:border-sky-300/35 focus-visible:ring-sky-300/35',
-    iconWrap: 'border-sky-400/20 bg-sky-400/10 text-sky-200',
-    badge: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
-    button: 'bg-sky-300 text-slate-950 hover:bg-sky-200',
-    surface: 'from-sky-500/20 via-sky-400/10 to-transparent',
-    accentText: 'text-sky-300',
-  },
-  rose: {
-    border: 'hover:border-rose-300/20',
-    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(251,113,133,0.65)]',
-    focusRing: 'focus-visible:border-rose-300/35 focus-visible:ring-rose-300/35',
-    iconWrap: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
-    badge: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
-    button: 'bg-rose-300 text-slate-950 hover:bg-rose-200',
-    surface: 'from-rose-500/20 via-fuchsia-400/10 to-transparent',
-    accentText: 'text-rose-300',
-  },
-  violet: {
-    border: 'hover:border-violet-300/20',
-    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(167,139,250,0.68)]',
-    focusRing: 'focus-visible:border-violet-300/35 focus-visible:ring-violet-300/35',
-    iconWrap: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
-    badge: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
-    button: 'bg-violet-300 text-slate-950 hover:bg-violet-200',
-    surface: 'from-violet-500/20 via-indigo-400/10 to-transparent',
-    accentText: 'text-violet-300',
-  },
-  emerald: {
-    border: 'hover:border-emerald-300/20',
-    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(52,211,153,0.6)]',
-    focusRing: 'focus-visible:border-emerald-300/35 focus-visible:ring-emerald-300/35',
-    iconWrap: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
-    badge: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
-    button: 'bg-emerald-300 text-slate-950 hover:bg-emerald-200',
-    surface: 'from-emerald-500/20 via-teal-400/10 to-transparent',
-    accentText: 'text-emerald-300',
-  },
-  amber: {
-    border: 'hover:border-amber-300/20',
-    shadow: 'hover:shadow-[0_28px_80px_-46px_rgba(245,158,11,0.62)]',
-    focusRing: 'focus-visible:border-amber-300/35 focus-visible:ring-amber-300/35',
-    iconWrap: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
-    badge: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
-    button: 'bg-amber-300 text-slate-950 hover:bg-amber-200',
-    surface: 'from-amber-500/20 via-orange-400/10 to-transparent',
-    accentText: 'text-amber-300',
-  },
-};
 
 const MEDIA_TOOL_IDS: CreatorToolId[] = ['image', 'video', 'motion'];
 export type StudioMediaPreviewType = 'image' | 'video';
@@ -106,50 +51,16 @@ export function SectionHeading({
   const isMinimal = variant === 'minimal';
 
   return (
-    <div
-      className={clsx(
-        'flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between',
-        isMinimal ? 'mb-4' : 'mb-6'
-      )}
-    >
-      <div className={clsx(isMinimal ? 'max-w-xl' : 'max-w-2xl')}>
-        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">
-          {eyebrow}
-        </div>
-        <h2
-          className={clsx(
-            'font-semibold tracking-tight text-white',
-            isMinimal ? 'text-[1.7rem] sm:text-[2rem]' : 'text-2xl sm:text-3xl'
-          )}
-        >
-          {title}
-        </h2>
-        {description ? (
-          <p
-            className={clsx(
-              'text-zinc-400',
-              isMinimal ? 'mt-2 text-sm leading-6' : 'mt-3 text-sm leading-6 sm:text-base'
-            )}
-          >
-            {description}
-          </p>
-        ) : null}
-      </div>
-      {actionHref && actionLabel ? (
-        <Link
-          href={actionHref}
-          className={clsx(
-            'inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] text-zinc-100 transition hover:bg-white/[0.06]',
-            isMinimal
-              ? 'px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em]'
-              : 'px-4 py-2 text-sm font-medium'
-          )}
-        >
-          {actionLabel}
-          <ArrowRight className="h-4 w-4" />
-        </Link>
-      ) : null}
-    </div>
+    <SectionHeader
+      eyebrow={eyebrow}
+      title={title}
+      description={description}
+      actionHref={actionHref}
+      actionLabel={actionLabel}
+      actionIcon={ArrowRight}
+      compact={isMinimal}
+      className={isMinimal ? 'mb-4' : 'mb-6'}
+    />
   );
 }
 
@@ -164,7 +75,7 @@ export function CreatorToolCard({
   variant = 'suite',
   preview,
 }: CreatorToolCardProps) {
-  const theme = ACCENT_STYLES[tool.accent];
+  const theme = getAccentClasses(tool.accent);
   const Icon = tool.icon;
   const isLaunchpad = variant === 'launchpad';
   const prefetch = tool.id === 'workflow' || tool.id === 'video' ? false : undefined;
@@ -174,23 +85,17 @@ export function CreatorToolCard({
       href={tool.href}
       prefetch={prefetch}
       className={clsx(
-        'group relative block h-full cursor-pointer overflow-hidden border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(9,9,12,0.96))] transition duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black',
+        'ui-card ui-card-interactive ui-focus-ring group relative block h-full cursor-pointer overflow-hidden bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(9,9,12,0.96))]',
         theme.border,
-        theme.shadow,
         theme.focusRing,
         isLaunchpad
-          ? 'h-full min-h-[318px] rounded-[30px] p-4 sm:p-5'
-          : 'h-full min-h-[286px] rounded-[26px] p-3.5 sm:p-4'
+          ? 'min-h-[318px] rounded-3xl p-4 sm:p-5'
+          : 'min-h-[286px] rounded-3xl p-3.5 sm:p-4'
       )}
     >
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
       <article className="flex h-full flex-col">
-        <div
-          className={clsx(
-            'relative overflow-hidden border border-white/8 bg-black/30',
-            isLaunchpad ? 'rounded-[24px]' : 'rounded-[20px]'
-          )}
-        >
+        <MediaFrame className={clsx('relative', isLaunchpad ? 'rounded-3xl' : 'rounded-2xl')}>
           {preview ? (
             <div className={clsx('w-full bg-black', isLaunchpad ? 'h-44 sm:h-48' : 'h-40 sm:h-44')}>
               {preview}
@@ -217,41 +122,31 @@ export function CreatorToolCard({
           >
             <Icon className={clsx(isLaunchpad ? 'h-5 w-5' : 'h-4 w-4')} />
           </div>
-          <div className="pointer-events-none absolute bottom-4 left-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/85">
+          <Kicker className="pointer-events-none absolute bottom-4 left-4 text-white/85">
             {tool.shortLabel}
-          </div>
-        </div>
+          </Kicker>
+        </MediaFrame>
 
         <div className="mt-4 flex items-start justify-between gap-3">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500">
-              {tool.eyebrow}
-            </div>
-            <h3
-              className={clsx(
-                'mt-2 font-semibold tracking-tight text-white',
-                isLaunchpad ? 'text-[1.65rem]' : 'text-[1.3rem]'
-              )}
+            <Kicker className="text-zinc-500">{tool.eyebrow}</Kicker>
+            <Text
+              as="h3"
+              variant="cardTitle"
+              className={clsx('mt-2', isLaunchpad ? 'text-2xl leading-8' : 'text-xl')}
             >
               {tool.label}
-            </h3>
+            </Text>
           </div>
-          <span
-            className={clsx(
-              'rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]',
-              theme.badge
-            )}
-          >
-            {tool.badge}
-          </span>
+          <Pill accent={tool.accent} className="shrink-0">{tool.badge}</Pill>
         </div>
 
-        <p className="mt-3 max-w-[28ch] text-sm leading-6 text-zinc-300">{tool.summary}</p>
+        <Text variant="bodySm" className="mt-3 max-w-[28ch] text-zinc-300">{tool.summary}</Text>
 
         <div className="mt-auto pt-4">
           <div
             className={clsx(
-              'inline-flex w-full items-center justify-between rounded-[18px] px-4 py-3 text-sm font-semibold transition',
+              'ui-button w-full justify-between',
               theme.button
             )}
           >
@@ -324,28 +219,23 @@ export function GeneratorPageHeader({
   showPathSwitcher = true,
 }: GeneratorPageHeaderProps) {
   const tool = getCreatorTool(currentToolId);
-  const theme = ACCENT_STYLES[tool.accent];
+  const theme = getAccentClasses(tool.accent);
 
   return (
-    <section className="mb-8 rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-7">
+    <Surface as="section" variant="panel" padding="none" className="mb-8 p-5 sm:p-7">
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-start gap-4">
-            <Link
-              href={backHref}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.06]"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
+            <IconButton href={backHref} label="Back to create hub" icon={ArrowLeft} className="shrink-0" />
             <div className="max-w-2xl">
-              <div className="text-xs font-semibold uppercase tracking-[0.26em] text-zinc-500">{eyebrow}</div>
+              <Kicker className="text-zinc-500">{eyebrow}</Kicker>
               <div className="mt-3 flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-[2.25rem]">{title}</h1>
-                <span className={clsx('rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]', theme.badge)}>
-                  {tool.badge}
-                </span>
+                <Text as="h1" variant="pageTitle" className="text-3xl sm:text-4xl">
+                  {title}
+                </Text>
+                <Pill accent={tool.accent}>{tool.badge}</Pill>
               </div>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">{description}</p>
+              <Text variant="bodySm" className="mt-3 max-w-2xl sm:text-base">{description}</Text>
             </div>
           </div>
 
@@ -359,15 +249,13 @@ export function GeneratorPageHeader({
         </div>
 
         {showPathSwitcher ? (
-          <div className="space-y-3 rounded-[24px] border border-white/8 bg-black/30 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
-              Switch creator path
-            </div>
+          <Surface variant="soft" padding="sm" className="space-y-3 bg-black/30">
+            <Kicker className="text-zinc-500">Switch creator path</Kicker>
             <GeneratorQuickSwitch currentToolId={currentToolId} />
-          </div>
+          </Surface>
         ) : null}
       </div>
-    </section>
+    </Surface>
   );
 }
 
@@ -379,14 +267,9 @@ function StudioPanel({
   children: ReactNode;
 }) {
   return (
-    <section
-      className={clsx(
-        'rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)]',
-        className
-      )}
-    >
+    <Surface as="section" variant="panel" padding="none" className={className}>
       {children}
-    </section>
+    </Surface>
   );
 }
 
@@ -410,7 +293,7 @@ function MediaStudioRail({
           {MEDIA_TOOL_IDS.map((toolId) => {
             const tool = getCreatorTool(toolId);
             const Icon = tool.icon;
-            const theme = ACCENT_STYLES[tool.accent];
+            const theme = getAccentClasses(tool.accent);
             const isActive = tool.id === currentToolId;
 
             return (
@@ -664,7 +547,7 @@ export function StudioBackgroundProcessingNotice({
   phaseLabel?: string | null;
   timingLabel?: string | null;
 }) {
-  const theme = ACCENT_STYLES[accent];
+  const theme = getAccentClasses(accent);
   const isWorkspace = variant === 'workspace';
 
   return (

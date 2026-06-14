@@ -7,6 +7,8 @@ import type { ShowcaseCreator, ShowcaseItemCategory } from '@/lib/showcase';
 type PublicGenerationRow = {
   id: string;
   output_url: string | null;
+  preview_url?: string | null;
+  thumbnail_url?: string | null;
   showcase_asset_path: string | null;
   model: string;
   prompt: string | null;
@@ -31,6 +33,7 @@ type ProfileSummary = {
 export interface PublicGenerationDetail {
   id: string;
   url: string;
+  previewUrl: string | null;
   model: string;
   title: string;
   description: string;
@@ -79,12 +82,26 @@ async function resolvePublicGenerationUrl(
   return resolveStoredMediaUrl(adminSupabase, generation.output_url);
 }
 
+async function resolvePublicGenerationPreviewUrl(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  generation: Pick<PublicGenerationRow, 'preview_url' | 'thumbnail_url' | 'category'>,
+  outputUrl: string
+) {
+  const previewSource = generation.preview_url || generation.thumbnail_url || null;
+  if (previewSource) {
+    return resolveStoredMediaUrl(adminSupabase, previewSource);
+  }
+
+  return resolveItemCategory(generation.category) === 'image' ? outputUrl : null;
+}
+
 async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow | null> {
   const adminSupabase = createServiceClient();
 
-  const selectWithAllColumns = 'id, output_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, created_at, user_id';
-  const selectWithoutShareColumns = 'id, output_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
-  const selectWithoutShareAndAsset = 'id, output_url, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
+  const selectWithAllColumns = 'id, output_url, preview_url, thumbnail_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, created_at, user_id';
+  const selectWithoutShareColumns = 'id, output_url, preview_url, thumbnail_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
+  const selectWithoutShareAndAsset = 'id, output_url, preview_url, thumbnail_url, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
+  const selectLegacyColumns = 'id, output_url, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
 
   type PublicGenerationAttempt = {
     data: PublicGenerationRow | null;
@@ -135,6 +152,10 @@ async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow
     result = await attempt(selectWithoutShareAndAsset, false, false);
   }
 
+  if (result.error?.code === '42703') {
+    result = await attempt(selectLegacyColumns, false, false);
+  }
+
   if (result.error) {
     console.error('Failed to fetch public generation detail:', result.error);
     throw result.error;
@@ -154,6 +175,7 @@ export async function getPublicGenerationDetail(id: string): Promise<PublicGener
   if (!url) {
     return null;
   }
+  const previewUrl = await resolvePublicGenerationPreviewUrl(adminSupabase, generation, url);
 
   let creator: ShowcaseCreator = {
     id: null,
@@ -191,6 +213,7 @@ export async function getPublicGenerationDetail(id: string): Promise<PublicGener
   return {
     id: generation.id,
     url,
+    previewUrl,
     model: generation.model,
     title,
     description,
