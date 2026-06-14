@@ -16,6 +16,7 @@ describe('magic tab bar layout', () => {
       bottomPadding: 48,
       topPadding: 22,
       contentBottomPadding: 150,
+      contentBottomOverlapPadding: 128,
     });
   });
 
@@ -32,6 +33,7 @@ describe('magic tab bar layout', () => {
       bottomPadding: 10,
       topPadding: 20,
       contentBottomPadding: 106,
+      contentBottomOverlapPadding: 86,
     });
   });
 });

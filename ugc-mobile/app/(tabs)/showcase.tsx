@@ -219,7 +219,7 @@ export default function ShowcaseScreen() {
         style={{
           flex: 1,
           backgroundColor: appTheme.colors.background,
-          marginBottom: tabBarMetrics.contentBottomPadding - 10,
+          marginBottom: tabBarMetrics.contentBottomOverlapPadding - 10,
         }}
         contentContainerStyle={{
           paddingTop: topInset + appTheme.spacing.screen,

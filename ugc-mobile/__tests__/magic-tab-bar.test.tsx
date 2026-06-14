@@ -126,6 +126,27 @@ describe('MagicTabBar create menu', () => {
     routerState.push.mockClear();
   });
 
+  it('keeps the bottom safe-area continuation transparent under the restored nav', () => {
+    const { tree } = renderTabBar();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(1);
+
+    const opaqueBottomFillers = tree.root.findAll((node) => {
+      const style = node.props.style as Record<string, unknown> | undefined;
+      return (
+        node.type === 'view' &&
+        style?.position === 'absolute' &&
+        style?.left === 0 &&
+        style?.right === 0 &&
+        style?.bottom === 0 &&
+        style?.height === 24 &&
+        style?.backgroundColor === '#03040d'
+      );
+    });
+
+    expect(opaqueBottomFillers).toHaveLength(0);
+  });
+
   it('opens and closes the action menu from the center button', () => {
     const { tree } = renderTabBar();
 

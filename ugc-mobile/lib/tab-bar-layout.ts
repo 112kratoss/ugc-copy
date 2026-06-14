@@ -12,6 +12,7 @@ export interface MagicTabBarMetrics {
   bottomPadding: number;
   topPadding: number;
   contentBottomPadding: number;
+  contentBottomOverlapPadding: number;
 }
 
 export function getMagicTabBarMetrics(windowWidth: number, bottomInset: number): MagicTabBarMetrics {
@@ -33,5 +34,6 @@ export function getMagicTabBarMetrics(windowWidth: number, bottomInset: number):
     bottomPadding,
     topPadding,
     contentBottomPadding: topPadding + barHeight + bottomPadding + CONTENT_BOTTOM_GAP,
+    contentBottomOverlapPadding: barHeight + bottomPadding + CONTENT_BOTTOM_GAP,
   };
 }

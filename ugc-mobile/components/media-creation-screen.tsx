@@ -344,7 +344,7 @@ export function MediaCreationScreen({
         contentContainerStyle={{
           paddingTop: topInset + 14,
           paddingHorizontal: isCompact ? 16 : 20,
-          paddingBottom: insideTab ? tabBarMetrics.contentBottomPadding : bottomInset + 36,
+          paddingBottom: insideTab ? tabBarMetrics.contentBottomOverlapPadding : bottomInset + 36,
           gap: 18,
         }}
       >

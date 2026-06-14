@@ -47,7 +47,7 @@ export function Screen({
   const { width } = useWindowDimensions();
   const topPadding = appTheme.spacing.screen + (insideTab ? resolvedTopInset(insets.top) : 0);
   const bottomPadding = insideTab
-    ? getMagicTabBarMetrics(width, resolvedBottomInset(insets.bottom)).contentBottomPadding
+    ? getMagicTabBarMetrics(width, resolvedBottomInset(insets.bottom)).contentBottomOverlapPadding
     : 36;
 
   if (!scroll) {

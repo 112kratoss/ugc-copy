@@ -147,7 +147,7 @@ export function ProfileDashboard() {
       <ProfileMediaList
         activeTab={activeTab}
         cards={FALLBACK_PROFILE_MEDIA}
-        contentBottomPadding={tabBarMetrics.contentBottomPadding}
+        contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
         emptyTitle="Sign in to load your media"
         fallbackAvatarInitials="C"
         header={(
@@ -169,7 +169,7 @@ export function ProfileDashboard() {
     <ProfileMediaList
       activeTab={activeTab}
       cards={visibleCards}
-      contentBottomPadding={tabBarMetrics.contentBottomPadding}
+      contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
       emptyTitle={getProfileMediaEmptyTitle(activeTab)}
       fallbackAvatarInitials={initials}
       fallbackAvatarUrl={profile?.avatarUrl}

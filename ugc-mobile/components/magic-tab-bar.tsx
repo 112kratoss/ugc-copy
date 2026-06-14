@@ -90,13 +90,14 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
         bottomInset={metrics.bottomPadding}
       />
       <View
+        pointerEvents="none"
         style={{
           position: 'absolute',
           left: 0,
           right: 0,
           bottom: 0,
           height: metrics.bottomInset,
-          backgroundColor: '#03040d',
+          backgroundColor: 'transparent',
         }}
       />
       <BlurView

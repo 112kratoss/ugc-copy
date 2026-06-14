@@ -137,7 +137,7 @@ export default function StudioScreen() {
         contentContainerStyle={{
           paddingTop: 18,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: tabBarMetrics.contentBottomPadding,
+          paddingBottom: tabBarMetrics.contentBottomOverlapPadding,
           gap: 18,
         }}
       >

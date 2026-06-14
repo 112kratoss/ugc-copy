@@ -196,7 +196,7 @@ export function HomeDashboard() {
         contentContainerStyle={{
           paddingTop: 12,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: tabBarMetrics.contentBottomPadding,
+          paddingBottom: tabBarMetrics.contentBottomOverlapPadding,
           gap: 16,
         }}
       >
