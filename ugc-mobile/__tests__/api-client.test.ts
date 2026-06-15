@@ -12,6 +12,22 @@ function jsonResponse(body: unknown) {
 }
 
 describe('mobile api client caching', () => {
+  it('turns local network failures into actionable API errors', async () => {
+    const api = createApiClient({
+      baseUrl: 'http://10.0.2.2:3000',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => {
+        throw new TypeError('Network request failed');
+      }) as unknown as typeof fetch,
+    });
+
+    await expect(api.getProfile()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 0,
+      message: 'Could not reach local API at http://10.0.2.2:3000. Start the web app and check EXPO_PUBLIC_API_BASE_URL.',
+    });
+  });
+
   it('deduplicates anonymous showcase feed requests inside the content cache window', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       items: [],
@@ -121,6 +137,58 @@ describe('mobile api client caching', () => {
     expect(init.method).toBe('POST');
     expect(JSON.parse(String(init.body))).toEqual({ storagePath: 'bundles/resource.zip' });
     expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('lists source tools for the mobile Made With picker', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      tools: [{
+        slug: 'runway',
+        label: 'Runway',
+        models: [{ slug: 'gen-4', label: 'Gen-4' }],
+        supportedMediaKinds: ['image', 'video'],
+      }],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.listSourceTools();
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/source-tools');
+    expect(init.method ?? 'GET').toBe('GET');
+    expect(response.tools[0].models[0].label).toBe('Gen-4');
+  });
+
+  it('uploads post resource files as FormData without forcing a JSON content type', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      success: true,
+      attachment: {
+        label: 'workflow.json',
+        kind: 'file',
+        storagePath: 'user-1/workflow.json',
+        contentType: 'application/json',
+        sizeBytes: 128,
+      },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const formData = new FormData();
+    formData.append('file', new Blob(['{}'], { type: 'application/json' }), 'workflow.json');
+
+    await api.uploadPostResourceFile(formData);
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/resource-files');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe(formData);
+    expect((init.headers as Headers).get('Content-Type')).toBeNull();
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 

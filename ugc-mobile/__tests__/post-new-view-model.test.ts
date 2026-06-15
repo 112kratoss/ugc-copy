@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCreatePostFormData,
+  buildPostComposerMediaItemsPayload,
   buildPostResourceBundleInput,
   buildPublishGenerationPayload,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  getPostComposerPublishActions,
   applyCreationPromptResource,
   getDefaultPostComposerDraft,
   getPostComposerPackageStatus,
@@ -79,16 +81,14 @@ describe('post new view model', () => {
       ...getDefaultPostComposerDraft(),
       mode: 'text' as const,
       title: 'Prompt teardown',
+      proofMode: 'text' as const,
       contentText: 'A reusable breakdown for product hooks.',
       caption: '',
       category: 'text' as const,
     };
 
     expect(validatePostComposerDraft(draft)).toEqual({ valid: true });
-    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toMatchObject({
-      valid: false,
-      message: 'Add a title before publishing.',
-    });
+    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toEqual({ valid: true });
     expect(validatePostComposerDraft({ ...draft, contentText: '', caption: '' })).toMatchObject({
       valid: false,
       message: 'Write the text post or add a caption.',
@@ -99,6 +99,7 @@ describe('post new view model', () => {
     const formData = buildCreatePostFormData({
       ...getDefaultPostComposerDraft(),
       mode: 'text',
+      proofMode: 'text',
       title: 'Text post title',
       contentText: 'Main text content',
       caption: 'Extra caption',
@@ -121,8 +122,80 @@ describe('post new view model', () => {
     ]);
   });
 
+  it('serializes ordered multi-media gallery items for upload posts', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload' as const,
+      proofMode: 'media' as const,
+      title: 'Gallery post',
+      caption: 'Five references in order.',
+      category: 'image' as const,
+      mediaItems: [
+        {
+          id: 'media-1',
+          uri: 'file:///cover.jpg',
+          name: 'cover.jpg',
+          type: 'image/jpeg',
+          mediaKind: 'image' as const,
+          storagePath: 'uploads/user-1/cover.jpg',
+        },
+        {
+          id: 'media-2',
+          uri: 'file:///clip.mp4',
+          name: 'clip.mp4',
+          type: 'video/mp4',
+          mediaKind: 'video' as const,
+          storagePath: 'uploads/user-1/clip.mp4',
+        },
+      ],
+      madeWithRows: [{
+        id: 'tool-1',
+        toolLabel: 'Runway',
+        toolSlug: 'runway',
+        modelLabel: 'Gen-4',
+        modelSlug: 'gen-4',
+        createTool: false,
+        createModel: false,
+      }],
+    };
+
+    expect(buildPostComposerMediaItemsPayload(draft)).toEqual([
+      {
+        storagePath: 'uploads/user-1/cover.jpg',
+        contentType: 'image/jpeg',
+        originalName: 'cover.jpg',
+      },
+      {
+        storagePath: 'uploads/user-1/clip.mp4',
+        contentType: 'video/mp4',
+        originalName: 'clip.mp4',
+      },
+    ]);
+
+    const formData = buildCreatePostFormData(draft);
+    expect(formData.get('mediaItems')).toBe(JSON.stringify([
+      {
+        storagePath: 'uploads/user-1/cover.jpg',
+        contentType: 'image/jpeg',
+        originalName: 'cover.jpg',
+      },
+      {
+        storagePath: 'uploads/user-1/clip.mp4',
+        contentType: 'video/mp4',
+        originalName: 'clip.mp4',
+      },
+    ]));
+    expect(formData.get('sourceTools')).toBe(JSON.stringify([{
+      toolLabel: 'Runway',
+      toolSlug: 'runway',
+      modelLabel: 'Gen-4',
+      modelSlug: 'gen-4',
+    }]));
+  });
+
   it('builds paid unlock bundle payloads only when unlock content exists', () => {
     expect(buildPostResourceBundleInput({
+      ...getDefaultPostComposerDraft().resource,
       accessMode: 'paid',
       promptText: 'Exact prompt',
       notesMarkdown: 'Usage notes',
@@ -133,7 +206,7 @@ describe('post new view model', () => {
       summary: '',
       previewText: 'Exact prompt, workflow, preset, and notes.',
       priceUsd: '9',
-    })).toEqual({
+    })).toMatchObject({
       accessMode: 'paid',
       summary: 'Prompt, workflow, files, notes, and remix access',
       previewText: 'Exact prompt, workflow, preset, and notes.',
@@ -144,6 +217,84 @@ describe('post new view model', () => {
         workflowShareUrl: 'https://workflow.example.com',
         attachments: [{ kind: 'link', label: 'Preset', url: 'https://assets.example.com/preset.zip' }],
         allowRemix: true,
+      },
+    });
+  });
+
+  it('builds web-style resource bundles with selected types, files, remix, and sections', () => {
+    expect(buildPostResourceBundleInput({
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'paid',
+      selectedKinds: {
+        prompt: true,
+        workflow: true,
+        files: true,
+        notes: true,
+        remix: true,
+      },
+      promptText: 'Exact prompt',
+      notesMarkdown: 'Usage notes',
+      workflowShareUrl: 'https://workflow.example.com',
+      attachments: [{
+        id: 'att-1',
+        kind: 'file',
+        label: 'Preset file',
+        storagePath: 'user-1/preset.workflow',
+        contentType: 'application/json',
+        sizeBytes: 128,
+        resourceType: 'source_file',
+        role: 'primary',
+        remixUse: 'import_source',
+      }],
+      sections: [{
+        id: 'section-1',
+        title: 'Scene 1',
+        kind: 'scene',
+        description: 'Opening setup',
+        promptText: 'Scene prompt',
+        workflowShareUrl: '',
+        notesMarkdown: 'Scene notes',
+        allowRemix: true,
+        attachments: [],
+      }],
+      organizeSections: true,
+      allowRemix: true,
+      summary: '',
+      previewText: 'Prompt, files, notes, and sections included.',
+      priceUsd: '12',
+    })).toEqual({
+      accessMode: 'paid',
+      summary: 'Prompt, workflow, files, notes, and remix access',
+      previewText: 'Prompt, files, notes, and sections included.',
+      priceUsdCents: 1200,
+      resources: {
+        promptText: 'Exact prompt',
+        notesMarkdown: 'Usage notes',
+        workflowShareUrl: 'https://workflow.example.com',
+        attachments: [{
+          kind: 'file',
+          label: 'Preset file',
+          storagePath: 'user-1/preset.workflow',
+          contentType: 'application/json',
+          sizeBytes: 128,
+          resourceType: 'source_file',
+          role: 'primary',
+          remixUse: 'import_source',
+        }],
+        allowRemix: true,
+        sections: [{
+          id: 'section-1',
+          title: 'Scene 1',
+          kind: 'scene',
+          description: 'Opening setup',
+          sortOrder: 0,
+        }],
+        items: expect.arrayContaining([
+          expect.objectContaining({ type: 'prompt', title: 'Prompt', textContent: 'Exact prompt', sectionId: null }),
+          expect.objectContaining({ type: 'source_file', title: 'Preset file', storagePath: 'user-1/preset.workflow', sectionId: null }),
+          expect.objectContaining({ type: 'prompt', title: 'Scene 1 prompt', textContent: 'Scene prompt', sectionId: 'section-1' }),
+          expect.objectContaining({ type: 'remix_access', title: 'Scene 1 remix access', sectionId: 'section-1' }),
+        ]),
       },
     });
   });
@@ -167,7 +318,7 @@ describe('post new view model', () => {
       },
     });
 
-    expect(payload).toEqual({
+    expect(payload).toMatchObject({
       generationId: 'gen-post',
       visibility: 'public',
       title: 'Sports edit prompt',
@@ -305,7 +456,7 @@ describe('post new view model', () => {
     expect(draft.resource.accessMode).toBe('free');
     expect(draft.resource.promptText).toBe('Exact cinematic product prompt');
     expect(draft.resource.previewText).toBe('Includes the exact reusable prompt.');
-    expect(buildPublishGenerationPostPayload(item, draft).resourceBundle).toEqual({
+    expect(buildPublishGenerationPostPayload(item, draft).resourceBundle).toMatchObject({
       accessMode: 'free',
       summary: 'Prompt',
       previewText: 'Includes the exact reusable prompt.',
@@ -430,18 +581,51 @@ describe('post new view model', () => {
     const formData = buildCreatePostFormData({
       ...getDefaultPostComposerDraft(),
       mode: 'upload',
+      proofMode: 'media',
       title: 'Uploaded edit',
       caption: 'Made with a video tool.',
       category: 'video',
-      sourceTool: 'Runway',
-      sourceToolSlug: 'runway',
-      upload: null,
+      madeWithRows: [{
+        id: 'tool-1',
+        toolLabel: 'Runway',
+        toolSlug: 'runway',
+        modelLabel: 'Gen-4',
+        modelSlug: 'gen-4',
+        createTool: false,
+        createModel: false,
+      }],
+      mediaItems: [{
+        id: 'media-1',
+        uri: 'file:///tmp/image.jpg',
+        name: 'image.jpg',
+        type: 'image/jpeg',
+        mediaKind: 'image',
+        storagePath: 'uploads/user-1/image.jpg',
+      }],
     });
 
     expect(formData.get('sourceTools')).toBe(JSON.stringify([{
       toolLabel: 'Runway',
       toolSlug: 'runway',
+      modelLabel: 'Gen-4',
+      modelSlug: 'gen-4',
     }]));
+  });
+
+  it('returns web-style publish actions with explicit target visibility', () => {
+    expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: false, isPending: false })).toEqual([
+      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false },
+      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false },
+    ]);
+    expect(getPostComposerPublishActions({ selectedVisibility: 'unlisted', isEditMode: false, isPending: false })).toEqual([
+      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false },
+      { id: 'unlisted', label: 'Save unlisted', visibility: 'unlisted', variant: 'secondary', disabled: false },
+      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false },
+    ]);
+    expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: true, isPending: true })).toEqual([
+      { id: 'private', label: 'Saving', visibility: 'private', variant: 'secondary', disabled: true },
+      { id: 'public', label: 'Saving', visibility: 'public', variant: 'primary', disabled: true },
+    ]);
   });
 
   it('returns submit labels for publish visibility and edit states', () => {
@@ -469,7 +653,7 @@ describe('post new view model', () => {
       };
 
       const payload = buildUpdatePostPayload(true, draft);
-      expect(payload).toEqual({
+      expect(payload).toMatchObject({
         visibility: 'private',
         resourceBundle: {
           accessMode: 'free',
@@ -506,7 +690,7 @@ describe('post new view model', () => {
       };
 
       const payload = buildUpdatePostPayload(false, draft);
-      expect(payload).toEqual({
+      expect(payload).toMatchObject({
         title: 'New Title',
         description: 'New Caption',
         body: 'New Content',

@@ -16,8 +16,10 @@ import type {
   ProfileResponse,
   PromptEnhancementRequest,
   PromptEnhancementResponse,
+  PostResourceAttachment,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
+  SourceToolOption,
   VideoGenerationRequest,
 } from './types';
 
@@ -48,6 +50,27 @@ const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/$/, '');
+}
+
+function isLocalApiRoot(root: string) {
+  try {
+    const hostname = new URL(root).hostname;
+    return hostname === 'localhost'
+      || hostname === '127.0.0.1'
+      || hostname === '10.0.2.2'
+      || hostname.startsWith('192.168.')
+      || hostname.endsWith('.local');
+  } catch {
+    return false;
+  }
+}
+
+function networkFailureMessage(root: string) {
+  if (isLocalApiRoot(root)) {
+    return `Could not reach local API at ${root}. Start the web app and check EXPO_PUBLIC_API_BASE_URL.`;
+  }
+
+  return 'Network request failed. Please check your connection and try again.';
 }
 
 function absolutizeMediaUrl(root: string, url: string | null | undefined) {
@@ -141,10 +164,19 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
         }
       }
 
-      const response = await fetcher(`${root}${path}`, {
-        ...init,
-        headers,
-      });
+      const url = `${root}${path}`;
+      let response: Response;
+      try {
+        response = await fetcher(url, {
+          ...init,
+          headers,
+        });
+      } catch (error) {
+        throw new ApiError(networkFailureMessage(root), 0, {
+          url,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
       const body = await parseResponse(response);
 
       if (!response.ok) {
@@ -260,6 +292,13 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),
     createPost: (body: FormData) =>
       request<CreatePostResponse>('/api/posts', { method: 'POST', body }),
+    listSourceTools: () =>
+      request<{ tools: SourceToolOption[] }>('/api/source-tools'),
+    uploadPostResourceFile: (body: FormData) =>
+      request<{ success: boolean; attachment: PostResourceAttachment }>('/api/posts/resource-files', {
+        method: 'POST',
+        body,
+      }),
     listPosts: (params?: Record<string, QueryValue>) => request(`/api/posts${buildQuery(params)}`),
     listOwnerPosts: (params?: Record<string, QueryValue>) =>
       request<OwnerPostsResponse>(`/api/posts${buildQuery({ ...params, scope: 'owner' })}`),

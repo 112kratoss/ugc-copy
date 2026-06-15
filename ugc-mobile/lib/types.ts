@@ -306,6 +306,9 @@ export interface PostResourceAttachment {
   storagePath?: string | null;
   contentType?: string | null;
   sizeBytes?: number | null;
+  resourceType?: PostResourceItemType | null;
+  role?: PostResourceItemRole | null;
+  remixUse?: PostResourceRemixUse | null;
 }
 
 export interface PostResourceBundleResources {
@@ -325,6 +328,27 @@ export interface PostResourceBundleInput {
   previewText?: string | null;
   priceUsdCents?: number | null;
   resources?: Partial<PostResourceBundleResources> | null;
+}
+
+export interface SourceToolModel {
+  slug: string;
+  label: string;
+}
+
+export interface SourceToolOption {
+  slug: string;
+  label: string;
+  models: SourceToolModel[];
+  supportedMediaKinds: Array<'image' | 'video'>;
+}
+
+export interface SourceToolSelection {
+  toolLabel: string;
+  toolSlug: string | null;
+  modelLabel?: string | null;
+  modelSlug?: string | null;
+  createTool?: boolean;
+  createModel?: boolean;
 }
 
 export interface PostResourceBundleLockedPreview {
@@ -415,6 +439,7 @@ export interface OwnerPostListItem {
   generationId?: string | null;
   sourceTool?: string | null;
   sourceToolSlug?: string | null;
+  sourceTools?: SourceToolSelection[];
 }
 
 export interface OwnerPostsResponse {

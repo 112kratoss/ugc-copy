@@ -19,7 +19,7 @@ const routerState = vi.hoisted(() => ({
 }));
 
 const paramsState = vi.hoisted(() => ({
-  params: {} as { generationId?: string; postId?: string },
+  params: {} as { generationId?: string; postId?: string; focus?: string },
 }));
 
 const authState = vi.hoisted(() => ({
@@ -27,10 +27,12 @@ const authState = vi.hoisted(() => ({
   isLoading: false,
   api: {
     listGenerations: vi.fn(),
+    listSourceTools: vi.fn(),
     getOwnerPost: vi.fn(),
     publishGeneration: vi.fn(),
     createPost: vi.fn(),
     updatePost: vi.fn(),
+    uploadPostResourceFile: vi.fn(),
   },
 }));
 
@@ -127,6 +129,9 @@ vi.mock('lucide-react-native', () => ({
 
 vi.mock('@/lib/media', () => ({
   pickMedia: vi.fn(),
+  pickMediaList: vi.fn(),
+  pickResourceDocument: vi.fn(),
+  uploadPickedMedia: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -160,34 +165,115 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     routerState.replace.mockClear();
     mutationState.mutate.mockClear();
     mutationState.isPending = false;
+    authState.api.listSourceTools.mockResolvedValue({
+      tools: [{
+        slug: 'runway',
+        label: 'Runway',
+        models: [{ slug: 'gen-4', label: 'Gen-4' }],
+        supportedMediaKinds: ['image', 'video'],
+      }],
+    });
   });
 
-  it('shows the selected creation hero before public post fields when launched from a generation', () => {
+  it('renders the web composer hierarchy when launched from a generation', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<NewPostScreen />);
     });
 
     const text = collectText(tree!.root);
-    expect(text.indexOf('Selected creation')).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf('Selected creation')).toBeLessThan(text.indexOf('Public post'));
+    expect(text.indexOf('Create post')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Made With')).toBeGreaterThan(text.indexOf('Create post'));
+    expect(text.indexOf('Proof')).toBeGreaterThan(text.indexOf('Made With'));
+    expect(text.indexOf('Story')).toBeGreaterThan(text.indexOf('Proof'));
+    expect(text.indexOf('Unlock')).toBeGreaterThan(text.indexOf('Story'));
+    expect(text.indexOf('Publish')).toBeGreaterThan(text.indexOf('Unlock'));
+    expect(text.indexOf('Publish checklist')).toBeGreaterThan(text.indexOf('Publish'));
     expect(text).toContain('Hero product image');
     expect(text).toContain('Change creation');
   });
 
-  it('keeps post settings collapsed and resource package set to none by default', () => {
+  it('shows Made With, Proof, Story details, Unlock, and web-style publish actions', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<NewPostScreen />);
     });
 
     const text = collectText(tree!.root);
-    expect(text).toContain('Post settings');
-    expect(text).not.toContain('Source');
+    expect(text).toContain('Tool 1');
+    expect(text).toContain('Model');
+    expect(text).toContain('Generated media attached');
+    expect(text).toContain('Feed description');
+    expect(text).toContain('Resource types');
+    expect(text).toContain('Prompt');
+    expect(text).toContain('Workflow / setup');
+    expect(text).toContain('Files / links');
+    expect(text).toContain('Notes');
+    expect(text).toContain('Remix access');
+    expect(text).toContain('Save private');
+    expect(text).toContain('Publish public');
+    expect(text).not.toContain('Publish dock');
+    expect(text).not.toContain('Post settings');
+    expect(text).not.toContain('Public post');
+  });
+
+  it('keeps the composer chrome compact instead of explaining every section', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).not.toContain('Share your work and add optional unlockable resources.');
+    expect(text).not.toContain('Add the tool and model you used.');
+    expect(text).not.toContain('The public content visible in the community feed.');
+    expect(text).not.toContain('Add optional gated resources, prompts, files, notes, or remix access to this post.');
+    expect(text).not.toContain('Choose who can see this post, then save privately or publish publicly.');
+    expect(text).not.toContain('Resolve anything marked before publishing.');
+    expect(text).not.toContain('Check the public card and the unlock cue before publishing.');
+  });
+
+  it('surfaces the unlock section first after creation media when opened with focus=resources', () => {
+    paramsState.params = { generationId: 'gen-1', focus: 'resources' };
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text.indexOf('Unlock')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Unlock')).toBeLessThan(text.indexOf('Story'));
+  });
+
+  it('renders gallery controls for manual upload proof', () => {
+    paramsState.params = {};
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Upload images or videos');
+    expect(text).toContain('Add media');
+    expect(text).toContain('Cover first · max 5');
+  });
+
+  it('expands source tool controls without the old post settings disclosure', () => {
+    paramsState.params = {};
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Made With');
+    expect(text).toContain('Tool 1');
+    expect(text).toContain('Model');
     expect(text).not.toContain('Category');
-    expect(text).toContain('Resource package');
-    expect(text).toContain('None');
-    expect(text).toContain('No resource package configured.');
   });
 
   it('updates the resource package when the exact prompt toggle is enabled', () => {
@@ -205,15 +291,16 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).toContain('Includes the exact reusable prompt.');
   });
 
-  it('renders a compact publish dock with readiness and the publish CTA', () => {
+  it('uses visible publish actions instead of an overlapping dock', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<NewPostScreen />);
     });
 
     const text = collectText(tree!.root);
-    expect(text).toContain('Publish dock');
     expect(text).toContain('Public post ready');
+    expect(text).toContain('Save private');
     expect(text).toContain('Publish public');
+    expect(text).not.toContain('Publish dock');
   });
 });

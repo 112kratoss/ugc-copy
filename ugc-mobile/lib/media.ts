@@ -58,6 +58,28 @@ export async function pickAudioDocument() {
   return result.assets[0];
 }
 
+export async function pickResourceDocument() {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: [
+      'application/json',
+      'application/pdf',
+      'application/zip',
+      'application/x-zip-compressed',
+      'application/gzip',
+      'text/*',
+      '*/*',
+    ],
+    multiple: false,
+    copyToCacheDirectory: true,
+  });
+
+  if (result.canceled || !result.assets[0]) {
+    return null;
+  }
+
+  return result.assets[0];
+}
+
 export async function uploadPickedMedia(
   uri: string,
   options: {
