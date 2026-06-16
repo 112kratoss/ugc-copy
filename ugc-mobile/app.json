@@ -38,6 +38,7 @@
       "expo-router",
       "expo-secure-store",
       "expo-video",
+      "./plugins/withAndroidLocalCleartextDebug",
       [
         "expo-notifications",
         {

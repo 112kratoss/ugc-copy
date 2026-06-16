@@ -355,12 +355,65 @@ describe('immersive preview view model', () => {
       expect(item.disabledActions).toEqual({});
     });
 
-    it('returns correct actions for linked creation', () => {
+    it('returns web-parity actions for a public linked creation with an unlock', () => {
       const [item] = buildImmersiveGenerationItems('profile-creations', [
         generation({ id: 'linked-gen', linked_post_id: 'post-123', archived_at: null }),
-      ], { creatorLabel: '@batman' });
-      expect(item.availableActions).toEqual(['view-linked', 'edit-linked', 'recreate', 'archive', 'share', 'view-details']);
+      ], { creatorLabel: '@batman' }, [
+        ownerPost({
+          id: 'post-123',
+          generationId: 'linked-gen',
+          visibility: 'public',
+          bundle: {
+            id: 'bundle-1',
+            accessMode: 'paid',
+            status: 'published',
+            priceUsdCents: 900,
+            salesCount: 2,
+            earningsUsdCents: 1800,
+            resourceKinds: ['prompt'],
+          },
+        }),
+      ]);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'make-private', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.linkedPostBundle).toMatchObject({ id: 'bundle-1', accessMode: 'paid' });
+      expect(item.linkedPostVisibility).toBe('public');
       expect(item.disabledActions).toEqual({});
+    });
+
+    it('returns add-unlock and make-public actions for a private linked creation without an unlock', () => {
+      const [item] = buildImmersiveGenerationItems('profile-creations', [
+        generation({ id: 'private-gen', linked_post_id: 'post-private', archived_at: null }),
+      ], { creatorLabel: '@batman' }, [
+        ownerPost({
+          id: 'post-private',
+          generationId: 'private-gen',
+          visibility: 'private',
+          publicPath: null,
+          bundle: null,
+        }),
+      ]);
+
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'make-public', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.linkedPostBundle).toBeNull();
+      expect(item.linkedPostVisibility).toBe('private');
+    });
+
+    it('uses open-post instead of visibility toggle for unlisted linked creations', () => {
+      const [item] = buildImmersiveGenerationItems('profile-creations', [
+        generation({ id: 'unlisted-gen', linked_post_id: 'post-unlisted', archived_at: null }),
+      ], { creatorLabel: '@batman' }, [
+        ownerPost({
+          id: 'post-unlisted',
+          generationId: 'unlisted-gen',
+          visibility: 'unlisted',
+          publicPath: '/showcase/post-unlisted',
+          bundle: null,
+        }),
+      ]);
+
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.linkedPostVisibility).toBe('unlisted');
+      expect(item.linkedPostPath).toBe('/showcase/post-unlisted');
     });
 
     it('returns correct actions for active owner post', () => {

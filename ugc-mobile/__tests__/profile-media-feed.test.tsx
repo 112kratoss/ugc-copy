@@ -47,6 +47,10 @@ const videoState = vi.hoisted(() => ({
   }),
 }));
 
+const alertState = vi.hoisted(() => ({
+  alert: vi.fn(),
+}));
+
 vi.mock('expo-router', () => ({
   router: routerState,
   useLocalSearchParams: () => paramsState,
@@ -79,7 +83,7 @@ vi.mock('react-native', () => ({
   Modal: ({ children, visible, ...props }: MockProps & { visible?: boolean }) =>
     visible ? React.createElement('modal', props, children) : null,
   Alert: {
-    alert: vi.fn(),
+    alert: alertState.alert,
   },
   Linking: {
     openURL: vi.fn(),
@@ -127,15 +131,18 @@ vi.mock('lucide-react-native', () => ({
   ArrowLeft: (props: Record<string, unknown>) => React.createElement('arrow-left-icon', props),
   Download: (props: Record<string, unknown>) => React.createElement('download-icon', props),
   FileText: (props: Record<string, unknown>) => React.createElement('file-text-icon', props),
+  Globe: (props: Record<string, unknown>) => React.createElement('globe-icon', props),
   Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
   ImageOff: (props: Record<string, unknown>) => React.createElement('image-off-icon', props),
   Images: (props: Record<string, unknown>) => React.createElement('images-icon', props),
+  LockKeyhole: (props: Record<string, unknown>) => React.createElement('lock-icon', props),
   MessageCircle: (props: Record<string, unknown>) => React.createElement('message-circle-icon', props),
   MoreVertical: (props: Record<string, unknown>) => React.createElement('more-vertical-icon', props),
   Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
   Repeat2: (props: Record<string, unknown>) => React.createElement('repeat-icon', props),
   Send: (props: Record<string, unknown>) => React.createElement('send-icon', props),
   Share2: (props: Record<string, unknown>) => React.createElement('share-icon', props),
+  Wand2: (props: Record<string, unknown>) => React.createElement('wand-icon', props),
 }));
 
 const authState = vi.hoisted(() => ({
@@ -147,6 +154,7 @@ const authState = vi.hoisted(() => ({
     saveShowcasePost: vi.fn(),
     shareShowcasePost: vi.fn(),
     remixShowcasePost: vi.fn(),
+    updatePost: vi.fn(),
   },
 }));
 
@@ -199,6 +207,41 @@ vi.mock('@tanstack/react-query', () => ({
                 title: 'Video creation',
                 prompt: 'video prompt',
               },
+              {
+                id: 'gen-3',
+                status: 'succeeded',
+                output_url: 'linked.png',
+                category: 'image',
+                title: 'Published creation',
+                prompt: 'linked prompt',
+                linked_post_id: 'post-1',
+                linked_post_title: 'Published office set',
+                linked_post_visibility: 'public',
+              },
+            ],
+            ownerPosts: [
+              {
+                id: 'post-1',
+                title: 'Published office set',
+                createdAt: '2026-06-10T00:00:00Z',
+                visibility: 'public',
+                mediaUrl: 'post.png',
+                mediaKind: 'image',
+                body: 'A published post caption',
+                category: 'image',
+                postFormat: 'media',
+                publicPath: '/showcase/post-1',
+                generationId: 'gen-3',
+                bundle: {
+                  id: 'bundle-1',
+                  accessMode: 'paid',
+                  status: 'published',
+                  priceUsdCents: 900,
+                  salesCount: 1,
+                  earningsUsdCents: 900,
+                  resourceKinds: ['prompt'],
+                },
+              },
             ],
           };
       return {
@@ -249,10 +292,24 @@ function renderScreen() {
   return tree!;
 }
 
+function findPressableByText(root: renderer.ReactTestInstance, text: string) {
+  const textInstances = root.findAllByProps({ children: text });
+  for (const textInstance of textInstances) {
+    let current: renderer.ReactTestInstance | null = textInstance;
+    while (current && String(current.type) !== 'pressable') {
+      current = current.parent;
+    }
+    if (current) return current;
+  }
+  throw new Error(`No pressable containing text "${text}" was found`);
+}
+
 describe('ProfileMediaFeedScreen', () => {
   beforeEach(() => {
     routerState.back.mockClear();
     routerState.push.mockClear();
+    alertState.alert.mockClear();
+    authState.api.updatePost.mockClear();
     videoState.useVideoPlayer.mockClear();
     paramsState.source = 'profile-creations';
     paramsState.initialId = 'gen-2';
@@ -273,6 +330,7 @@ describe('ProfileMediaFeedScreen', () => {
 
     expect(tree.root.findByProps({ children: 'Post this creation' })).toBeTruthy();
     expect(tree.root.findByProps({ children: 'Recreate / Remix' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'View details' })).toBeTruthy();
   });
 
   it('opens profile posts with post actions in the options menu', () => {
@@ -293,15 +351,64 @@ describe('ProfileMediaFeedScreen', () => {
     expect(tree.root.findByProps({ children: 'Change visibility' })).toBeTruthy();
   });
 
-  it('renders labeled media action chips instead of bare post icons', () => {
-    paramsState.source = 'profile-posts';
-    paramsState.initialId = 'post-1';
+  it('renders Publish as the visible creation action and keeps details in the options menu', () => {
+    paramsState.source = 'profile-creations';
+    paramsState.initialId = 'gen-2';
 
     const tree = renderScreen();
 
-    expect(tree.root.findByProps({ children: 'Create' })).toBeTruthy();
-    expect(tree.root.findByProps({ children: 'Share' })).toBeTruthy();
-    expect(tree.root.findByProps({ children: 'Details' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ children: 'Create' }).length).toBeGreaterThan(0);
+    expect(tree.root.findAllByProps({ children: 'Share' }).length).toBeGreaterThan(0);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Publish Video creation' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ children: 'Details' })).toHaveLength(0);
+
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Publish Video creation' }).props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith({
+      pathname: '/post/new',
+      params: { generationId: 'gen-2' },
+    });
+
+    const options = tree.root.findByProps({ accessibilityLabel: 'Open media options' });
+    renderer.act(() => {
+      options.props.onPress();
+    });
+
+    expect(tree.root.findByProps({ children: 'View details' })).toBeTruthy();
+  });
+
+  it('renders manage unlock and make private for published creations', () => {
+    paramsState.source = 'profile-creations';
+    paramsState.initialId = 'gen-3';
+
+    const tree = renderScreen();
+
+    expect(tree.root.findAllByProps({ children: 'Create' }).length).toBeGreaterThan(0);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Manage unlock for Published creation' })).toBeTruthy();
+    expect(tree.root.findByProps({ accessibilityLabel: 'Make private for Published creation' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Publish Published creation' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ children: 'Details' })).toHaveLength(0);
+
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Manage unlock for Published creation' }).props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith({
+      pathname: '/post/new',
+      params: { postId: 'post-1', focus: 'resources' },
+    });
+
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Make private for Published creation' }).props.onPress();
+    });
+
+    expect(alertState.alert).toHaveBeenCalledWith(
+      'Make private?',
+      'This linked post will leave public surfaces until you make it public again.',
+      expect.any(Array)
+    );
   });
 
   it('plays the active profile feed video with a contained frame and a single player', () => {

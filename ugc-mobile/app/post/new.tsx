@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
-import { Check, FileText, ImageIcon, Lock, PackageCheck, Play, Sparkles } from 'lucide-react-native';
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Check, ChevronDown, ImageIcon, Lock, PackageCheck, Play, Plus, Sparkles, X } from 'lucide-react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
@@ -22,9 +22,6 @@ import {
   getDefaultPostComposerDraft,
   getPostComposerPublishActions,
   getPostComposerPackageStatus,
-  getPostComposerPreviewStatusLabel,
-  getPostComposerReadiness,
-  getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
@@ -34,7 +31,6 @@ import {
   POST_COMPOSER_RESOURCE_KIND_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   POST_COMPOSER_UNLOCK_OPTIONS,
-  POST_COMPOSER_VISIBILITY_OPTIONS,
   validatePostComposerDraft,
   hasGenerationReferences,
   type PostComposerCategory,
@@ -77,6 +73,12 @@ const COMPOSER_SECTION_STYLE = {
   gap: 10,
 } as const;
 
+const MINIMAL_COMPOSER_SECTION_STYLE = {
+  padding: 14,
+  borderRadius: 18,
+  gap: 12,
+} as const;
+
 export default function NewPostScreen() {
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
@@ -102,6 +104,7 @@ export default function NewPostScreen() {
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
+  const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
 
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id],
@@ -132,14 +135,6 @@ export default function NewPostScreen() {
   const isFieldsLocked = isEditMode && isGenerationBacked;
   const canSubmit = !isPickingMedia && !isPickingResourceFile && (!isEditMode || !postQuery.isLoading);
   const sourceTools = sourceToolsQuery.data?.tools ?? [];
-  const readiness = useMemo(
-    () => getPostComposerReadiness(draft, selectedGeneration, isEditMode && isGenerationBacked),
-    [draft, isEditMode, isGenerationBacked, selectedGeneration]
-  );
-  const sectionSummary = useMemo(
-    () => getPostComposerSectionSummary(draft, selectedGeneration),
-    [draft, selectedGeneration]
-  );
   const packageStatus = useMemo(
     () => getPostComposerPackageStatus(draft, selectedGeneration),
     [draft, selectedGeneration]
@@ -264,6 +259,7 @@ export default function NewPostScreen() {
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
         } : getDefaultResourceDraft(),
       });
+      setIsDescriptionOpen(Boolean(post.description));
       setHasPrefilledEdit(true);
     }
   }, [postId, postQuery.data, hasPrefilledEdit]);
@@ -372,7 +368,7 @@ export default function NewPostScreen() {
     }));
   };
 
-  const chooseMedia = async (kind: 'image' | 'video') => {
+  const chooseMedia = async (kind: 'image' | 'video' | 'mixed') => {
     if (isFieldsLocked) return;
     setMessage(null);
     setIsPickingMedia(true);
@@ -385,7 +381,7 @@ export default function NewPostScreen() {
           const uploaded = await uploadPickedMedia(asset.uri, {
             fileName: asset.fileName,
             mimeType: asset.mimeType,
-            kind,
+            ...(kind === 'mixed' ? {} : { kind }),
             durationSeconds: asset.duration ?? null,
             sizeBytes: asset.fileSize ?? null,
           });
@@ -405,7 +401,7 @@ export default function NewPostScreen() {
         ...current,
         mode: 'upload',
         proofMode: 'media',
-        category: kind === 'video' ? 'video' : 'image',
+        category: uploadedItems[0]?.mediaKind === 'video' ? 'video' : 'image',
         upload: uploadedItems[0]
           ? {
               uri: uploadedItems[0].uri,
@@ -483,16 +479,16 @@ export default function NewPostScreen() {
     });
   };
 
-  const moveMediaItem = (id: string, direction: -1 | 1) => {
+  const reorderMediaItem = (id: string, targetIndex: number) => {
     setDraft((current) => {
       const index = current.mediaItems.findIndex((item) => item.id === id);
-      const targetIndex = index + direction;
-      if (index < 0 || targetIndex < 0 || targetIndex >= current.mediaItems.length) {
+      const boundedTargetIndex = Math.max(0, Math.min(targetIndex, current.mediaItems.length - 1));
+      if (index < 0 || index === boundedTargetIndex) {
         return current;
       }
       const next = [...current.mediaItems];
       const [moved] = next.splice(index, 1);
-      next.splice(targetIndex, 0, moved);
+      next.splice(boundedTargetIndex, 0, moved);
       return {
         ...current,
         mediaItems: next,
@@ -611,7 +607,7 @@ export default function NewPostScreen() {
     isEditMode,
     isPending: publishMutation.isPending,
   });
-  const publishReadiness = readiness.find((item) => item.id === 'publish') ?? readiness[readiness.length - 1];
+  const showMadeWith = draft.proofMode === 'media';
   const unlockSection = (
     <UnlockSection
       draft={draft}
@@ -645,8 +641,6 @@ export default function NewPostScreen() {
           gap: 10,
         }}
       >
-        <PostIntro isEdit={isEditMode} isGenerationBacked={isGenerationBacked} />
-
         {postQuery.isLoading && isEditMode ? (
           <ActivityIndicator color="#d946ef" style={{ marginVertical: 20 }} />
         ) : null}
@@ -663,14 +657,22 @@ export default function NewPostScreen() {
           />
         ) : null}
 
-        <MadeWithSection
-          rows={draft.madeWithRows}
-          sourceTools={sourceTools}
-          disabled={isFieldsLocked || draft.mode === 'creation'}
-          onUpdate={updateMadeWithRow}
-          onAdd={addMadeWithRow}
-          onRemove={removeMadeWithRow}
+        <TitleSection
+          draft={draft}
+          disabled={isFieldsLocked}
+          onChange={updateDraft}
         />
+
+        {showMadeWith ? (
+          <MadeWithSection
+            rows={draft.madeWithRows}
+            sourceTools={sourceTools}
+            disabled={isFieldsLocked || draft.mode === 'creation'}
+            onUpdate={updateMadeWithRow}
+            onAdd={addMadeWithRow}
+            onRemove={removeMadeWithRow}
+          />
+        ) : null}
 
         <ProofSection
           draft={draft}
@@ -682,12 +684,11 @@ export default function NewPostScreen() {
           isPickingMedia={isPickingMedia}
           isFieldsLocked={isFieldsLocked}
           onModeChange={setMode}
-          onPickImage={() => chooseMedia('image')}
-          onPickVideo={() => chooseMedia('video')}
+          onPickMedia={() => chooseMedia('mixed')}
           onChooseGeneration={chooseGeneration}
           onCreateGeneration={() => router.push('/(tabs)/creator' as never)}
           onRemoveMedia={removeMediaItem}
-          onMoveMedia={moveMediaItem}
+          onReorderMedia={reorderMediaItem}
         />
 
         {focusResourcePackage ? unlockSection : null}
@@ -695,43 +696,25 @@ export default function NewPostScreen() {
         <StorySection
           draft={draft}
           disabled={isFieldsLocked}
+          isDescriptionOpen={isDescriptionOpen}
           onChange={updateDraft}
+          onToggleDescription={() => setIsDescriptionOpen((current) => !current)}
         />
 
         {!focusResourcePackage ? unlockSection : null}
 
         <PublishSection
-          draft={draft}
           actions={publishActions}
           canSubmit={canSubmit}
-          publishReadiness={publishReadiness}
           isPending={publishMutation.isPending}
-          onDraftChange={updateDraft}
           onSubmit={(visibility) => {
             setMessage(null);
             publishMutation.mutate(visibility);
           }}
         />
 
-        <ChecklistSection readiness={readiness} />
-        <PreviewPanel draft={draft} selectedGeneration={selectedGeneration} />
       </ScrollView>
     </View>
-  );
-}
-
-function PostIntro({ isEdit, isGenerationBacked }: { isEdit: boolean; isGenerationBacked: boolean }) {
-  return (
-    <SurfaceSection
-      eyebrow={isEdit ? 'Edit' : 'Composer'}
-      title={isEdit ? 'Update post' : 'Create post'}
-      accent="motion"
-      style={COMPOSER_SECTION_STYLE}
-    >
-      {isEdit && isGenerationBacked ? (
-        <ReadinessRow label="Creation locked" body="Media and source stay fixed." state="neutral" />
-      ) : null}
-    </SurfaceSection>
   );
 }
 
@@ -751,6 +734,7 @@ function MadeWithSection({
   onRemove: (id: string) => void;
 }) {
   const toolOptions = getMadeWithToolOptions(sourceTools);
+  const [activePickerId, setActivePickerId] = useState<string | null>(null);
 
   return (
     <SurfaceSection
@@ -760,73 +744,125 @@ function MadeWithSection({
       style={COMPOSER_SECTION_STYLE}
     >
       <View style={{ gap: appTheme.spacing.gap }}>
-        {rows.map((row, index) => (
-          <View key={row.id} style={{ gap: appTheme.spacing.compact }}>
-            <FieldBlock label={`Tool ${index + 1}`}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 4 }}>
-                {getVisibleMadeWithToolOptions(row, toolOptions).map((tool) => (
-                  <SmallChip
-                    key={`${row.id}-${tool.slug}`}
-                    label={tool.label}
-                    active={row.toolSlug === tool.slug || row.toolLabel === tool.label}
-                    disabled={disabled}
-                    onPress={() => onUpdate(row.id, {
-                      toolLabel: tool.label,
-                      toolSlug: tool.slug,
+        {rows.map((row, index) => {
+          const selectedTool = toolOptions.find((tool) => (
+            row.toolSlug ? tool.slug === row.toolSlug : tool.label === row.toolLabel
+          ));
+          const provisionalToolRows = rows.filter((candidate) => candidate.createTool && candidate.toolLabel.trim());
+          const toolPickerOptions = uniquePickerOptions([
+            ...toolOptions.map((tool) => ({ value: tool.slug, label: tool.label })),
+            ...provisionalToolRows
+              .filter((candidate) => !toolOptions.some((tool) => tool.slug === candidate.toolSlug))
+              .map((candidate) => ({
+                value: candidate.toolSlug,
+                label: candidate.toolLabel,
+                provisional: true,
+              })),
+          ]);
+          const catalogModels = selectedTool?.models ?? [];
+          const provisionalModelRows = rows.filter((candidate) => (
+            candidate.toolSlug === row.toolSlug
+            && candidate.createModel
+            && candidate.modelLabel.trim()
+          ));
+          const modelPickerOptions = uniquePickerOptions([
+            ...catalogModels.map((model) => ({ value: model.slug, label: model.label })),
+            ...provisionalModelRows
+              .filter((candidate) => !catalogModels.some((model) => model.slug === candidate.modelSlug))
+              .map((candidate) => ({
+                value: candidate.modelSlug,
+                label: candidate.modelLabel,
+                provisional: true,
+              })),
+          ]);
+          const toolIsCatalogEntry = Boolean(selectedTool);
+          const modelIsCatalogEntry = Boolean(catalogModels.some((model) => model.slug === row.modelSlug));
+
+          return (
+            <View key={row.id} style={{ gap: appTheme.spacing.compact }}>
+              <FieldBlock label={`Tool ${index + 1}`}>
+                <MobileCreatablePicker
+                  pickerId={`${row.id}:tool`}
+                  activePickerId={activePickerId}
+                  value={row.toolLabel}
+                  options={toolPickerOptions}
+                  placeholder="Choose or search tool"
+                  disabled={disabled}
+                  allowCustomEdit={!toolIsCatalogEntry && !row.createTool}
+                  onActivePickerChange={setActivePickerId}
+                  onSelect={(option) => {
+                    if (!option) {
+                      onUpdate(row.id, {
+                        toolLabel: '',
+                        toolSlug: '',
+                        modelLabel: '',
+                        modelSlug: '',
+                        createTool: false,
+                        createModel: false,
+                      });
+                      return;
+                    }
+                    onUpdate(row.id, {
+                      toolLabel: option.label,
+                      toolSlug: option.value,
                       modelLabel: '',
                       modelSlug: '',
-                      createTool: false,
+                      createTool: option.provisional === true,
                       createModel: false,
-                    })}
-                  />
-                ))}
-              </ScrollView>
-              <ComposerInput
-                value={row.toolLabel}
-                onChangeText={(toolLabel) => onUpdate(row.id, {
-                  toolLabel,
-                  toolSlug: slugifyMobileValue(toolLabel) ?? '',
-                  createTool: Boolean(toolLabel.trim() && !sourceTools.some((tool) => tool.label.toLowerCase() === toolLabel.trim().toLowerCase())),
-                })}
-                placeholder="Choose or search tool"
-                editable={!disabled}
-              />
-            </FieldBlock>
-            <FieldBlock label="Model">
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 4 }}>
-                {(sourceTools.find((tool) => tool.slug === row.toolSlug || tool.label === row.toolLabel)?.models ?? []).map((model) => (
-                  <SmallChip
-                    key={`${row.id}-${model.slug}`}
-                    label={model.label}
-                    active={row.modelSlug === model.slug || row.modelLabel === model.label}
-                    disabled={disabled}
-                    onPress={() => onUpdate(row.id, {
-                      modelLabel: model.label,
-                      modelSlug: model.slug,
-                      createModel: false,
-                    })}
-                  />
-                ))}
-              </ScrollView>
-              <ComposerInput
-                value={row.modelLabel}
-                onChangeText={(modelLabel) => onUpdate(row.id, {
-                  modelLabel,
-                  modelSlug: slugifyMobileValue(modelLabel) ?? '',
-                  createModel: Boolean(modelLabel.trim()),
-                })}
-                placeholder="Any model"
-                editable={!disabled && Boolean(row.toolLabel.trim())}
-              />
-            </FieldBlock>
-            {!disabled && rows.length > 1 ? (
-              <SecondaryButton label="Remove tool" onPress={() => onRemove(row.id)} />
-            ) : null}
-          </View>
-        ))}
+                    });
+                  }}
+                  onCreate={(label) => onUpdate(row.id, {
+                    toolLabel: label,
+                    toolSlug: slugifyMobileValue(label) ?? '',
+                    modelLabel: '',
+                    modelSlug: '',
+                    createTool: true,
+                    createModel: false,
+                  })}
+                  onCustomEdit={(label) => onUpdate(row.id, {
+                    toolLabel: label,
+                    toolSlug: slugifyMobileValue(label) ?? '',
+                    createTool: false,
+                  })}
+                />
+              </FieldBlock>
+              <FieldBlock label="Model">
+                <MobileCreatablePicker
+                  pickerId={`${row.id}:model`}
+                  activePickerId={activePickerId}
+                  value={row.modelLabel}
+                  options={modelPickerOptions}
+                  placeholder="Any model"
+                  disabled={disabled || !row.toolLabel.trim()}
+                  emptyOptionLabel="Any model"
+                  allowCustomEdit={Boolean(row.modelLabel && !modelIsCatalogEntry && !row.createModel)}
+                  onActivePickerChange={setActivePickerId}
+                  onSelect={(option) => onUpdate(row.id, {
+                    modelLabel: option?.label ?? '',
+                    modelSlug: option?.value ?? '',
+                    createModel: option?.provisional === true,
+                  })}
+                  onCreate={(label) => onUpdate(row.id, {
+                    modelLabel: label,
+                    modelSlug: slugifyMobileValue(label) ?? '',
+                    createModel: true,
+                  })}
+                  onCustomEdit={(label) => onUpdate(row.id, {
+                    modelLabel: label,
+                    modelSlug: slugifyMobileValue(label) ?? '',
+                    createModel: false,
+                  })}
+                />
+              </FieldBlock>
+              {!disabled && rows.length > 1 ? (
+                <SecondaryButton label="Remove tool" onPress={() => onRemove(row.id)} />
+              ) : null}
+            </View>
+          );
+        })}
         {!disabled && rows.length < 5 ? (
           <View style={{ alignSelf: 'flex-start' }}>
-            <MiniAction label="Add tool" onPress={onAdd} />
+            <MiniAction label="Add another tool" onPress={onAdd} />
           </View>
         ) : null}
       </View>
@@ -834,37 +870,308 @@ function MadeWithSection({
   );
 }
 
-function getVisibleMadeWithToolOptions(row: PostComposerMadeWithRow, toolOptions: SourceToolOption[]) {
-  const selectedTool = toolOptions.find((tool) => row.toolSlug === tool.slug || row.toolLabel === tool.label);
-  const pinnedTools = toolOptions.filter((tool) => ['manual', 'other'].includes(tool.slug));
-  const compactOptions = [selectedTool, ...toolOptions.slice(0, 5), ...pinnedTools].filter(Boolean) as SourceToolOption[];
+function TitleSection({
+  draft,
+  disabled,
+  onChange,
+}: {
+  draft: PostComposerDraft;
+  disabled: boolean;
+  onChange: (patch: Partial<PostComposerDraft>) => void;
+}) {
+  return (
+    <SurfaceSection
+      eyebrow="Post"
+      title="Title"
+      accent="motion"
+      style={COMPOSER_SECTION_STYLE}
+    >
+      <ComposerInput
+        value={draft.title}
+        onChangeText={(title) => onChange({ title })}
+        placeholder={draft.proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
+        editable={!disabled}
+      />
+    </SurfaceSection>
+  );
+}
+
+type MobilePickerOption = {
+  value: string;
+  label: string;
+  provisional?: boolean;
+};
+
+type MobilePickerEntry =
+  | { type: 'empty'; key: string; label: string }
+  | { type: 'option'; key: string; option: MobilePickerOption }
+  | { type: 'create'; key: string; label: string };
+
+function uniquePickerOptions(options: MobilePickerOption[]) {
   const seen = new Set<string>();
 
-  return compactOptions.filter((tool) => {
-    const key = tool.slug || tool.label.toLowerCase();
+  return options.filter((option) => {
+    const key = option.value || option.label.toLowerCase();
+    if (!key) return false;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-function getMadeWithToolOptions(sourceTools: SourceToolOption[]): SourceToolOption[] {
-  const options = [
-    ...sourceTools,
-    ...POST_COMPOSER_SOURCE_OPTIONS.map((source) => ({
-      ...source,
-      models: [],
-      supportedMediaKinds: ['image', 'video'] as Array<'image' | 'video'>,
-    })),
-  ];
-  const seen = new Set<string>();
+function normalizePickerSearch(value: string) {
+  return value.trim().toLocaleLowerCase();
+}
 
-  return options.filter((tool) => {
+function MobileCreatablePicker({
+  pickerId,
+  activePickerId,
+  value,
+  options,
+  placeholder,
+  disabled = false,
+  emptyOptionLabel,
+  allowCreate = true,
+  allowCustomEdit = false,
+  onActivePickerChange,
+  onSelect,
+  onCreate,
+  onCustomEdit,
+}: {
+  pickerId: string;
+  activePickerId: string | null;
+  value: string;
+  options: MobilePickerOption[];
+  placeholder: string;
+  disabled?: boolean;
+  emptyOptionLabel?: string;
+  allowCreate?: boolean;
+  allowCustomEdit?: boolean;
+  onActivePickerChange: (id: string | null) => void;
+  onSelect: (option: MobilePickerOption | null) => void;
+  onCreate?: (label: string) => void;
+  onCustomEdit?: (label: string) => void;
+}) {
+  const [draftQuery, setDraftQuery] = useState<string | null>(null);
+  const isOpen = activePickerId === pickerId;
+  const query = isOpen ? draftQuery ?? value : value;
+  const normalizedQuery = normalizePickerSearch(query);
+  const matchingOptions = useMemo(() => {
+    if (!normalizedQuery) return options;
+
+    return options.filter((option) => (
+      normalizePickerSearch(option.label).includes(normalizedQuery)
+      || normalizePickerSearch(option.value).includes(normalizedQuery)
+    ));
+  }, [normalizedQuery, options]);
+  const hasExactMatch = options.some((option) => (
+    normalizePickerSearch(option.label) === normalizedQuery
+    || normalizePickerSearch(option.value) === normalizedQuery
+  ));
+  const canCreate = Boolean(allowCreate && onCreate && normalizedQuery && !hasExactMatch);
+  const entries = useMemo<MobilePickerEntry[]>(() => {
+    const next: MobilePickerEntry[] = [];
+    if (emptyOptionLabel && (!normalizedQuery || normalizePickerSearch(emptyOptionLabel).includes(normalizedQuery))) {
+      next.push({ type: 'empty', key: 'empty', label: emptyOptionLabel });
+    }
+    matchingOptions.forEach((option) => {
+      next.push({ type: 'option', key: `option-${option.value}`, option });
+    });
+    if (canCreate) {
+      next.push({ type: 'create', key: `create-${normalizedQuery}`, label: query.trim() });
+    }
+    return next;
+  }, [canCreate, emptyOptionLabel, matchingOptions, normalizedQuery, query]);
+
+  const openPicker = () => {
+    if (!disabled) {
+      onActivePickerChange(pickerId);
+    }
+  };
+
+  const closePicker = () => {
+    setDraftQuery(null);
+    onActivePickerChange(null);
+  };
+
+  const chooseEntry = (entry: MobilePickerEntry) => {
+    if (entry.type === 'empty') {
+      onSelect(null);
+    } else if (entry.type === 'option') {
+      onSelect(entry.option);
+    } else {
+      onCreate?.(entry.label);
+    }
+    closePicker();
+  };
+
+  const commitCustomEdit = () => {
+    if (!allowCustomEdit || !onCustomEdit || !value || query.trim() === value.trim()) {
+      return;
+    }
+
+    const exactOption = options.some((option) => normalizePickerSearch(option.label) === normalizedQuery);
+    if (!exactOption && query.trim()) {
+      onCustomEdit(query.trim());
+    }
+    setDraftQuery(null);
+  };
+
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ position: 'relative' }}>
+        <TextInput
+          value={query}
+          onChangeText={(nextQuery) => {
+            setDraftQuery(nextQuery);
+            openPicker();
+          }}
+          onFocus={openPicker}
+          onBlur={commitCustomEdit}
+          onSubmitEditing={() => {
+            if (entries[0]) {
+              chooseEntry(entries[0]);
+            } else {
+              commitCustomEdit();
+              closePicker();
+            }
+          }}
+          placeholder={placeholder}
+          placeholderTextColor="rgba(255,255,255,0.36)"
+          editable={!disabled}
+          style={{
+            minHeight: 44,
+            borderRadius: 14,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: isOpen ? `${appTheme.colors.image}88` : appTheme.colors.border,
+            backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
+            color: disabled ? appTheme.colors.faint : appTheme.colors.text,
+            ...appTheme.type.bodySm,
+            fontWeight: '700',
+            paddingLeft: appTheme.spacing.gap,
+            paddingRight: 44,
+            paddingVertical: appTheme.spacing.gap,
+          }}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${placeholder}`}
+          disabled={disabled}
+          onPress={() => {
+            if (disabled) return;
+            if (isOpen) {
+              closePicker();
+            } else {
+              openPicker();
+            }
+          }}
+          style={({ pressed }) => ({
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 44,
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: pressed ? 0.72 : disabled ? 0.38 : 1,
+          })}
+        >
+          <ChevronDown size={16} color="rgba(255,255,255,0.58)" strokeWidth={2.6} />
+        </Pressable>
+      </View>
+
+      {isOpen && !disabled ? (
+        <View
+          style={{
+            maxHeight: 224,
+            borderRadius: 16,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: appTheme.colors.border,
+            backgroundColor: '#0a0b10',
+            overflow: 'hidden',
+          }}
+        >
+          <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 224 }}>
+            {entries.length > 0 ? entries.map((entry) => {
+              const label = entry.type === 'option' ? entry.option.label : entry.label;
+              const selected = entry.type === 'option' && normalizePickerSearch(entry.option.label) === normalizePickerSearch(value);
+
+              return (
+                <Pressable
+                  key={entry.key}
+                  accessibilityRole="button"
+                  onPress={() => chooseEntry(entry)}
+                  style={({ pressed }) => ({
+                    minHeight: 44,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    backgroundColor: selected ? 'rgba(56,189,248,0.14)' : pressed ? 'rgba(255,255,255,0.07)' : 'transparent',
+                  })}
+                >
+                  {entry.type === 'create' ? (
+                    <Plus size={15} color={appTheme.colors.image} strokeWidth={2.8} />
+                  ) : null}
+                  <AppText
+                    variant="bodySm"
+                    color={entry.type === 'create' ? 'text' : selected ? 'text' : 'muted'}
+                    style={{ flex: 1 }}
+                  >
+                    {entry.type === 'create' ? `Create "${label}"` : label}
+                  </AppText>
+                  {entry.type === 'option' && entry.option.provisional ? (
+                    <AppText variant="caption" color="image">New</AppText>
+                  ) : null}
+                </Pressable>
+              );
+            }) : (
+              <View style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
+                <AppText variant="bodySm" color="faint">No matches</AppText>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function getMadeWithToolOptions(sourceTools: SourceToolOption[]): SourceToolOption[] {
+  const optionsByKey = new Map<string, SourceToolOption>();
+  const addTool = (tool: SourceToolOption) => {
     const key = tool.slug || tool.label.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const existing = optionsByKey.get(key);
+    const normalizedTool: SourceToolOption = {
+      slug: tool.slug,
+      label: tool.label,
+      models: tool.models.map((model) => ({ ...model })),
+      supportedMediaKinds: [...tool.supportedMediaKinds],
+    };
+
+    if (!existing) {
+      optionsByKey.set(key, normalizedTool);
+      return;
+    }
+
+    if (existing.models.length === 0 && normalizedTool.models.length > 0) {
+      optionsByKey.set(key, {
+        ...existing,
+        models: normalizedTool.models,
+        supportedMediaKinds: existing.supportedMediaKinds.length > 0
+          ? existing.supportedMediaKinds
+          : normalizedTool.supportedMediaKinds,
+      });
+    }
+  };
+
+  sourceTools.forEach(addTool);
+  POST_COMPOSER_SOURCE_OPTIONS.forEach(addTool);
+
+  return [...optionsByKey.values()];
 }
 
 function ProofSection({
@@ -877,12 +1184,11 @@ function ProofSection({
   isPickingMedia,
   isFieldsLocked,
   onModeChange,
-  onPickImage,
-  onPickVideo,
+  onPickMedia,
   onChooseGeneration,
   onCreateGeneration,
   onRemoveMedia,
-  onMoveMedia,
+  onReorderMedia,
 }: {
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
@@ -893,12 +1199,11 @@ function ProofSection({
   isPickingMedia: boolean;
   isFieldsLocked: boolean;
   onModeChange: (mode: PostComposerMode) => void;
-  onPickImage: () => void;
-  onPickVideo: () => void;
+  onPickMedia: () => void;
   onChooseGeneration: (item: GenerationListItem) => void;
   onCreateGeneration: () => void;
   onRemoveMedia: (id: string) => void;
-  onMoveMedia: (id: string, direction: -1 | 1) => void;
+  onReorderMedia: (id: string, targetIndex: number) => void;
 }) {
   return (
     <SurfaceSection
@@ -915,25 +1220,13 @@ function ProofSection({
         </SegmentedRow>
       ) : null}
 
-      {draft.proofMode === 'text' ? (
-        <ComposerInput
-          value={draft.contentText}
-          onChangeText={() => {}}
-          placeholder="Write the post content..."
-          multiline
-          minHeight={150}
-          editable={false}
-        />
-      ) : null}
-
       {draft.mode === 'upload' ? (
         <UploadContent
           draft={draft}
           isPicking={isPickingMedia}
-          onPickImage={onPickImage}
-          onPickVideo={onPickVideo}
+          onPickMedia={onPickMedia}
           onRemoveMedia={onRemoveMedia}
-          onMoveMedia={onMoveMedia}
+          onReorderMedia={onReorderMedia}
           disabled={isFieldsLocked}
         />
       ) : null}
@@ -957,27 +1250,27 @@ function ProofSection({
 function StorySection({
   draft,
   disabled,
+  isDescriptionOpen,
   onChange,
+  onToggleDescription,
 }: {
   draft: PostComposerDraft;
   disabled: boolean;
+  isDescriptionOpen: boolean;
   onChange: (patch: Partial<PostComposerDraft>) => void;
+  onToggleDescription: () => void;
 }) {
   return (
-    <SurfaceSection
-      eyebrow="Story"
+    <MinimalComposerSection
       title="Story"
-      accent="motion"
-      style={COMPOSER_SECTION_STYLE}
-    >
-      <FieldBlock label="Title">
-        <ComposerInput
-          value={draft.title}
-          onChangeText={(title) => onChange({ title })}
-          placeholder={draft.proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
-          editable={!disabled}
+      body="The public content visible in the community feed."
+      action={(
+        <MiniAction
+          label={isDescriptionOpen ? 'Hide description' : 'Add feed description'}
+          onPress={onToggleDescription}
         />
-      </FieldBlock>
+      )}
+    >
       <FieldBlock label={draft.proofMode === 'text' ? 'Post body' : 'Caption'}>
         <ComposerInput
           value={draft.proofMode === 'text' ? draft.contentText : draft.caption}
@@ -988,17 +1281,19 @@ function StorySection({
           editable={!disabled}
         />
       </FieldBlock>
-      <FieldBlock label="Feed description">
-        <ComposerInput
-          value={draft.description}
-          onChangeText={(description) => onChange({ description })}
-          placeholder="Optional: give the post a short one-line setup for feeds and previews."
-          multiline
-          minHeight={78}
-          editable={!disabled}
-        />
-      </FieldBlock>
-    </SurfaceSection>
+      {isDescriptionOpen ? (
+        <FieldBlock label="Feed description">
+          <ComposerInput
+            value={draft.description}
+            onChangeText={(description) => onChange({ description })}
+            placeholder="Optional: give the post a short one-line setup for feeds and previews."
+            multiline
+            minHeight={78}
+            editable={!disabled}
+          />
+        </FieldBlock>
+      ) : null}
+    </MinimalComposerSection>
   );
 }
 
@@ -1034,15 +1329,36 @@ function UnlockSection({
   onUpdateSection: (id: string, patch: Partial<PostComposerDraft['resource']['sections'][number]>) => void;
 }) {
   const resourceActive = draft.resource.accessMode !== 'none';
+  const unlockEnabled = resourceActive
+    || draft.creationPackage.attachGenerationReferences
+    || draft.creationPackage.attachPromptResource;
+
+  const toggleUnlockEnabled = () => {
+    if (unlockEnabled) {
+      onResourceChange({ accessMode: 'none', organizeSections: false });
+      onCreationPackageChange({
+        attachGenerationReferences: false,
+        attachPromptResource: false,
+      });
+      return;
+    }
+
+    onResourceChange({ accessMode: 'free' });
+  };
 
   return (
-    <SurfaceSection
-      eyebrow={draft.resource.accessMode === 'none' ? 'No unlock' : draft.resource.accessMode === 'paid' ? 'Paid unlock' : 'Free unlock'}
+    <MinimalComposerSection
       title="Unlock"
-      accent={draft.resource.accessMode === 'paid' ? 'commerce' : 'workflow'}
-      style={COMPOSER_SECTION_STYLE}
+      body="Add optional gated resources to this post."
+      tone="workflow"
     >
-      {draft.mode === 'creation' && selectedGeneration ? (
+      <UnlockChecklistRow
+        checked={unlockEnabled}
+        label="Add references & unlockable resources"
+        onPress={toggleUnlockEnabled}
+      />
+
+      {unlockEnabled && draft.mode === 'creation' && selectedGeneration ? (
         <View style={{ gap: appTheme.spacing.compact }}>
           {hasGenerationReferences(selectedGeneration) ? (
             <ToggleRow
@@ -1064,35 +1380,67 @@ function UnlockSection({
         </View>
       ) : null}
 
-      <SegmentedRow>
-        {POST_COMPOSER_UNLOCK_OPTIONS.map((option) => (
-          <Chip
-            key={option.id}
-            label={option.label === 'Paid' ? 'Paid ($)' : option.label}
-            active={draft.resource.accessMode === option.id}
-            onPress={() => {
-              onResourceChange({ accessMode: option.id });
-              if (option.id === 'none') onCreationPackageChange({ attachPromptResource: false });
+      {unlockEnabled ? (
+        <>
+          <View
+            style={{
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.10)',
+              backgroundColor: 'rgba(0,0,0,0.16)',
+              padding: 10,
+              gap: appTheme.spacing.gap,
             }}
-            accent={option.id === 'paid' ? 'commerce' : option.id === 'free' ? 'workflow' : 'motion'}
-          />
-        ))}
-      </SegmentedRow>
+          >
+            <SegmentedRow>
+              {POST_COMPOSER_UNLOCK_OPTIONS.filter((option) => option.id !== 'none').map((option) => (
+                <Chip
+                  key={option.id}
+                  label={option.label === 'Paid' ? 'Paid ($)' : option.label}
+                  active={draft.resource.accessMode === option.id}
+                  onPress={() => {
+                    onResourceChange({ accessMode: option.id });
+                    if (option.id === 'none') {
+                      onCreationPackageChange({
+                        attachGenerationReferences: false,
+                        attachPromptResource: false,
+                      });
+                    }
+                  }}
+                  accent={option.id === 'paid' ? 'commerce' : option.id === 'free' ? 'workflow' : 'motion'}
+                />
+              ))}
+            </SegmentedRow>
 
-      <ReadinessRow label={packageStatus.label} body={packageStatus.body} state={packageStatus.state} />
+            <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
 
-      <FieldBlock label="Resource types">
-        <SegmentedRow wrap>
-          {POST_COMPOSER_RESOURCE_KIND_OPTIONS.map((option) => (
-            <SmallChip
-              key={option.id}
-              label={option.label}
-              active={draft.resource.selectedKinds[option.id]}
-              onPress={() => onResourceKindChange(option.id, !draft.resource.selectedKinds[option.id])}
-            />
-          ))}
-        </SegmentedRow>
-      </FieldBlock>
+            <FieldBlock label="Resource types">
+              <SegmentedRow wrap>
+                {POST_COMPOSER_RESOURCE_KIND_OPTIONS.map((option) => (
+                  <SmallChip
+                    key={option.id}
+                    label={option.label}
+                    active={draft.resource.selectedKinds[option.id]}
+                    onPress={() => onResourceKindChange(option.id, !draft.resource.selectedKinds[option.id])}
+                  />
+                ))}
+              </SegmentedRow>
+            </FieldBlock>
+
+            {resourceActive ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
+                <AppText variant="caption" color="muted">Need section-based structure?</AppText>
+                <MiniAction
+                  label={draft.resource.organizeSections ? 'Disable section layout' : 'Enable section layout'}
+                  onPress={() => onResourceChange({ organizeSections: !draft.resource.organizeSections })}
+                />
+              </View>
+            ) : null}
+          </View>
+
+          <ReadinessRow label={packageStatus.label} body={packageStatus.body} state={packageStatus.state} />
+        </>
+      ) : null}
 
       {resourceActive ? (
         <>
@@ -1105,13 +1453,6 @@ function UnlockSection({
             onRemoveAttachment={onRemoveAttachment}
             onPickResourceFile={onPickResourceFile}
             isPickingResourceFile={isPickingResourceFile}
-          />
-          <ToggleRow
-            label="Enable section layout"
-            body="Organize resources into named sections."
-            value={draft.resource.organizeSections}
-            onValueChange={(organizeSections) => onResourceChange({ organizeSections })}
-            accent="workflow"
           />
           {draft.resource.organizeSections ? (
             <View style={{ gap: appTheme.spacing.gap }}>
@@ -1135,83 +1476,47 @@ function UnlockSection({
           ) : null}
         </>
       ) : null}
-    </SurfaceSection>
+    </MinimalComposerSection>
   );
 }
 
 function PublishSection({
-  draft,
   actions,
   canSubmit,
-  publishReadiness,
   isPending,
-  onDraftChange,
   onSubmit,
 }: {
-  draft: PostComposerDraft;
   actions: ReturnType<typeof getPostComposerPublishActions>;
   canSubmit: boolean;
-  publishReadiness: ReturnType<typeof getPostComposerReadiness>[number];
   isPending: boolean;
-  onDraftChange: (patch: Partial<PostComposerDraft>) => void;
   onSubmit: (visibility: PostComposerDraft['visibility']) => void;
 }) {
   return (
-    <SurfaceSection
-      eyebrow="Visibility"
+    <MinimalComposerSection
       title="Publish"
-      accent="commerce"
-      style={COMPOSER_SECTION_STYLE}
+      body="Choose who can see this post."
+      tone="commerce"
+      action={<MinimalStatusPill label="Saved privately in Studio" tone="commerce" />}
     >
-      <FieldBlock label="Visibility">
-        <SegmentedRow>
-          {POST_COMPOSER_VISIBILITY_OPTIONS.map((option) => (
-            <Chip
-              key={option.id}
-              label={option.label}
-              active={draft.visibility === option.id}
-              onPress={() => onDraftChange({ visibility: option.id })}
-              accent={option.id === 'public' ? 'commerce' : 'motion'}
-            />
-          ))}
-        </SegmentedRow>
-      </FieldBlock>
-      <ReadinessRow label={publishReadiness.label} body={publishReadiness.body} state={publishReadiness.state} />
-      <View style={{ gap: appTheme.spacing.compact }}>
-        {actions.map((action) => action.variant === 'primary' ? (
-          <PrimaryButton
+      <View
+        style={{
+          flexDirection: actions.length > 2 ? 'column' : 'row',
+          gap: appTheme.spacing.compact,
+        }}
+      >
+        {actions.map((action) => (
+          <PublishActionCard
             key={action.id}
+            variant={action.variant}
             label={action.label}
+            body={getPublishActionBody(action.visibility)}
             loading={isPending}
-            disabled={!canSubmit || action.disabled}
-            onPress={() => onSubmit(action.visibility)}
-            accent="commerce"
-          />
-        ) : (
-          <SecondaryButton
-            key={action.id}
-            label={action.label}
             disabled={!canSubmit || action.disabled}
             onPress={() => onSubmit(action.visibility)}
           />
         ))}
       </View>
-    </SurfaceSection>
-  );
-}
-
-function ChecklistSection({ readiness }: { readiness: ReturnType<typeof getPostComposerReadiness> }) {
-  return (
-    <SurfaceSection
-      eyebrow="Publish checklist"
-      title="Checklist"
-      accent="motion"
-      style={COMPOSER_SECTION_STYLE}
-    >
-      {readiness.map((item) => (
-        <ReadinessRow key={item.id} label={item.label} body={item.body} state={item.state} />
-      ))}
-    </SurfaceSection>
+    </MinimalComposerSection>
   );
 }
 
@@ -1299,6 +1604,198 @@ function FieldBlock({
   );
 }
 
+function MinimalComposerSection({
+  title,
+  body,
+  tone = 'neutral',
+  pill,
+  action,
+  children,
+}: {
+  title: string;
+  body?: string;
+  tone?: 'neutral' | 'workflow' | 'commerce';
+  pill?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const toneColor = tone === 'workflow'
+    ? appTheme.colors.workflow
+    : tone === 'commerce'
+      ? appTheme.colors.image
+      : appTheme.colors.borderStrong;
+
+  return (
+    <View
+      style={{
+        ...MINIMAL_COMPOSER_SECTION_STYLE,
+        borderWidth: 1,
+        borderColor: tone === 'neutral' ? appTheme.colors.border : `${toneColor}3f`,
+        backgroundColor: tone === 'workflow' ? 'rgba(5, 45, 32, 0.42)' : appTheme.colors.surface,
+      }}
+    >
+      <View style={{ gap: 9 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <AppText variant="cardTitle">{title}</AppText>
+            {body ? (
+              <AppText variant="caption" color="muted">
+                {body}
+              </AppText>
+            ) : null}
+          </View>
+          {action ? (
+            <View style={{ flexShrink: 0 }}>{action}</View>
+          ) : null}
+        </View>
+        {!action && pill ? (
+          <MinimalStatusPill label={pill} tone={tone} />
+        ) : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function MinimalStatusPill({
+  label,
+  tone = 'neutral',
+}: {
+  label: string;
+  tone?: 'neutral' | 'workflow' | 'commerce';
+}) {
+  const color = tone === 'workflow'
+    ? appTheme.colors.workflow
+    : tone === 'commerce'
+      ? appTheme.colors.image
+      : appTheme.colors.muted;
+
+  return (
+    <View
+      style={{
+        minHeight: 30,
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: `${color}55`,
+        backgroundColor: `${color}14`,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 10,
+      }}
+    >
+      <AppText selectable={false} variant="caption" color={tone === 'neutral' ? 'muted' : 'text'} numberOfLines={1}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+function UnlockChecklistRow({
+  checked,
+  label,
+  onPress,
+}: {
+  checked: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 44,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: checked ? `${appTheme.colors.workflow}66` : 'transparent',
+        backgroundColor: checked ? 'rgba(16,185,129,0.10)' : 'transparent',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: checked ? 10 : 0,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: 4,
+          borderWidth: 1,
+          borderColor: checked ? appTheme.colors.workflow : appTheme.colors.borderStrong,
+          backgroundColor: checked ? appTheme.colors.workflow : appTheme.colors.surfaceInset,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {checked ? <Check size={13} color="#04130c" strokeWidth={3} /> : null}
+      </View>
+      <AppText selectable={false} variant="label" color="text">
+        {label}
+      </AppText>
+    </Pressable>
+  );
+}
+
+function PublishActionCard({
+  label,
+  body,
+  variant,
+  loading,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  body: string;
+  variant: 'primary' | 'secondary';
+  loading: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const isPrimary = variant === 'primary';
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled || loading}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flex: 1,
+        minHeight: 58,
+        borderRadius: 13,
+        borderWidth: 1,
+        borderColor: isPrimary ? `${appTheme.colors.image}dd` : appTheme.colors.border,
+        backgroundColor: isPrimary ? appTheme.colors.image : appTheme.colors.surfaceStrong,
+        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+        justifyContent: 'center',
+        gap: 4,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+      })}
+    >
+      {loading ? (
+        <ActivityIndicator color={isPrimary ? appTheme.colors.textInverse : appTheme.colors.text} />
+      ) : (
+        <>
+          <AppText selectable={false} variant="label" color={isPrimary ? 'textInverse' : 'text'} numberOfLines={1}>
+            {label}
+          </AppText>
+          <AppText selectable={false} variant="caption" color={isPrimary ? 'textInverse' : 'muted'} numberOfLines={1}>
+            {body}
+          </AppText>
+        </>
+      )}
+    </Pressable>
+  );
+}
+
+function getPublishActionBody(visibility: PostComposerDraft['visibility']) {
+  if (visibility === 'private') return 'Saved privately in Studio.';
+  if (visibility === 'unlisted') return 'Share by link.';
+  return 'Visible in Feed.';
+}
+
 function ComposerInput({
   value,
   onChangeText,
@@ -1382,21 +1879,23 @@ function SmallChip({ label, active, onPress, disabled = false }: { label: string
   );
 }
 
+const MEDIA_CARD_WIDTH = 132;
+const MEDIA_CARD_GAP = 10;
+const MEDIA_CARD_STEP = MEDIA_CARD_WIDTH + MEDIA_CARD_GAP;
+
 function UploadContent({
   draft,
   isPicking,
-  onPickImage,
-  onPickVideo,
+  onPickMedia,
   onRemoveMedia,
-  onMoveMedia,
+  onReorderMedia,
   disabled = false,
 }: {
   draft: PostComposerDraft;
   isPicking: boolean;
-  onPickImage: () => void;
-  onPickVideo: () => void;
+  onPickMedia: () => void;
   onRemoveMedia: (id: string) => void;
-  onMoveMedia: (id: string, direction: -1 | 1) => void;
+  onReorderMedia: (id: string, targetIndex: number) => void;
   disabled?: boolean;
 }) {
   return (
@@ -1408,73 +1907,241 @@ function UploadContent({
       {draft.mediaItems.length > 0 ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
           {draft.mediaItems.map((item, index) => (
-            <View
+            <MediaGalleryCard
               key={item.id}
-              style={{
-                width: 132,
-                borderRadius: 16,
-                borderWidth: 1,
-                borderColor: index === 0 ? `${appTheme.colors.image}aa` : appTheme.colors.border,
-                backgroundColor: appTheme.colors.surfaceInset,
-                overflow: 'hidden',
-              }}
-            >
-              <View style={{ height: 132, backgroundColor: '#080912' }}>
-                {item.mediaKind === 'image' ? (
-                  <Image source={{ uri: item.previewUrl ?? item.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-                ) : (
-                  <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                    <Play size={34} color="#fff" fill="#fff" />
-                  </LinearGradient>
-                )}
-              </View>
-              <View style={{ padding: 9, gap: 7 }}>
-                <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>
-                  {index === 0 ? 'Cover' : `Media ${index + 1}`}
-                </Text>
-                <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
-                  {item.name}
-                </Text>
-                {!disabled ? (
-                  <View style={{ flexDirection: 'row', gap: 6 }}>
-                    <MiniAction label="Left" disabled={index === 0} onPress={() => onMoveMedia(item.id, -1)} />
-                    <MiniAction label="Right" disabled={index === draft.mediaItems.length - 1} onPress={() => onMoveMedia(item.id, 1)} />
-                    <MiniAction label="Remove" onPress={() => onRemoveMedia(item.id)} />
-                  </View>
-                ) : null}
-              </View>
-            </View>
+              item={item}
+              index={index}
+              totalItems={draft.mediaItems.length}
+              disabled={disabled}
+              onRemoveMedia={onRemoveMedia}
+              onReorderMedia={onReorderMedia}
+            />
           ))}
+          {!disabled && draft.mediaItems.length < 5 ? (
+            <AddMediaGalleryCard
+              isPicking={isPicking}
+              remainingSlots={5 - draft.mediaItems.length}
+              onPress={onPickMedia}
+            />
+          ) : null}
         </ScrollView>
       ) : (
-        <View
-          style={{
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled || isPicking}
+          onPress={onPickMedia}
+          style={({ pressed }) => ({
             minHeight: 124,
             borderRadius: 16,
             borderWidth: 1,
             borderStyle: 'dashed',
-            borderColor: appTheme.colors.border,
-            backgroundColor: appTheme.colors.surfaceInset,
+            borderColor: pressed ? `${appTheme.colors.image}aa` : appTheme.colors.border,
+            backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
             alignItems: 'center',
             justifyContent: 'center',
             gap: appTheme.spacing.compact,
             padding: appTheme.spacing.card,
-          }}
+            opacity: disabled || isPicking ? appTheme.opacity.disabled : 1,
+          })}
         >
           <ImageIcon size={30} color={appTheme.colors.muted} />
-          <AppText variant="label" color="muted">Add media</AppText>
-        </View>
+          <AppText variant="label" color="muted">{isPicking ? 'Opening library...' : 'Add media'}</AppText>
+        </Pressable>
       )}
-      {!disabled ? (
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          {draft.mediaItems.length === 0 ? (
-            <SecondaryPickButton icon={<ImageIcon size={18} color="#fff" />} label="Add media" loading={isPicking} onPress={onPickImage} />
-          ) : (
-            <SecondaryPickButton icon={<ImageIcon size={18} color="#fff" />} label="Add more" loading={isPicking} onPress={onPickImage} />
-          )}
-          <SecondaryPickButton icon={<Play size={18} color="#fff" />} label="Video" loading={isPicking} onPress={onPickVideo} />
+    </View>
+  );
+}
+
+function AddMediaGalleryCard({
+  isPicking,
+  remainingSlots,
+  onPress,
+}: {
+  isPicking: boolean;
+  remainingSlots: number;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Add more media"
+      disabled={isPicking}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: MEDIA_CARD_WIDTH,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor: pressed ? `${appTheme.colors.image}cc` : appTheme.colors.border,
+        backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+        overflow: 'hidden',
+        opacity: isPicking ? appTheme.opacity.disabled : 1,
+      })}
+    >
+      <View
+        style={{
+          height: 132,
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          backgroundColor: '#080912',
+        }}
+      >
+        <View
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 21,
+            borderWidth: 1,
+            borderColor: `${appTheme.colors.image}88`,
+            backgroundColor: 'rgba(56,189,248,0.12)',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Plus size={22} color={appTheme.colors.image} strokeWidth={2.8} />
         </View>
-      ) : null}
+        <AppText variant="caption" color="muted">{isPicking ? 'Opening...' : 'Add media'}</AppText>
+      </View>
+      <View style={{ padding: 9, gap: 7 }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>
+          Add media
+        </Text>
+        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+          {`${remainingSlots} ${remainingSlots === 1 ? 'slot' : 'slots'} left`}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function MediaGalleryCard({
+  item,
+  index,
+  totalItems,
+  disabled,
+  onRemoveMedia,
+  onReorderMedia,
+}: {
+  item: PostComposerMediaItem;
+  index: number;
+  totalItems: number;
+  disabled: boolean;
+  onRemoveMedia: (id: string) => void;
+  onReorderMedia: (id: string, targetIndex: number) => void;
+}) {
+  const [dragOffset, setDragOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const isDragArmedRef = useRef(false);
+  const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const label = index === 0 ? 'Cover' : `Media ${index + 1}`;
+  const canDrag = !disabled && totalItems > 1;
+
+  const clearDragTimer = () => {
+    if (dragTimerRef.current) {
+      clearTimeout(dragTimerRef.current);
+      dragTimerRef.current = null;
+    }
+  };
+
+  const setDragArmed = (armed: boolean) => {
+    isDragArmedRef.current = armed;
+  };
+
+  const resetDrag = () => {
+    clearDragTimer();
+    setDragArmed(false);
+    setIsDragging(false);
+    setDragOffset(0);
+  };
+
+  const finishDrag = (dx: number) => {
+    const wasArmed = isDragArmedRef.current;
+    resetDrag();
+    if (!wasArmed) return;
+    const slotDelta = Math.round(dx / MEDIA_CARD_STEP);
+    if (slotDelta === 0) return;
+    const targetIndex = Math.max(0, Math.min(index + slotDelta, totalItems - 1));
+    onReorderMedia(item.id, targetIndex);
+  };
+
+  useEffect(() => () => clearDragTimer(), []);
+
+  const dragResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => canDrag,
+    onPanResponderGrant: () => {
+      clearDragTimer();
+      dragTimerRef.current = setTimeout(() => {
+        setDragArmed(true);
+        setIsDragging(true);
+      }, 220);
+      setDragOffset(0);
+    },
+    onPanResponderMove: (_event, gesture) => {
+      if (canDrag && isDragArmedRef.current) setDragOffset(gesture.dx);
+    },
+    onPanResponderRelease: (_event, gesture) => finishDrag(gesture.dx),
+    onPanResponderTerminate: resetDrag,
+    onPanResponderTerminationRequest: () => false,
+  }), [canDrag, index, item.id, onReorderMedia, totalItems]);
+
+  return (
+    <View
+      accessibilityRole={canDrag ? 'adjustable' : undefined}
+      accessibilityLabel={canDrag ? `Hold ${label} to reorder` : undefined}
+      {...dragResponder.panHandlers}
+      style={{
+        width: MEDIA_CARD_WIDTH,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: isDragging ? `${appTheme.colors.image}dd` : index === 0 ? `${appTheme.colors.image}aa` : appTheme.colors.border,
+        backgroundColor: isDragging ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+        overflow: 'hidden',
+        transform: [{ translateX: dragOffset }],
+        zIndex: isDragging ? 10 : 0,
+        opacity: isDragging ? 0.92 : 1,
+      }}
+    >
+      <View style={{ height: 132, backgroundColor: '#080912' }}>
+        {item.mediaKind === 'image' ? (
+          <Image source={{ uri: item.previewUrl ?? item.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        ) : (
+          <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            <Play size={34} color="#fff" fill="#fff" />
+          </LinearGradient>
+        )}
+        {!disabled ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Remove ${label}`}
+            onPress={() => onRemoveMedia(item.id)}
+            style={({ pressed }) => ({
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              width: 30,
+              height: 30,
+              borderRadius: 15,
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.2)',
+              backgroundColor: 'rgba(0,0,0,0.58)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.72 : 1,
+            })}
+          >
+            <X size={15} color="#fff" strokeWidth={3} />
+          </Pressable>
+        ) : null}
+      </View>
+      <View style={{ padding: 9, gap: 7 }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>
+          {label}
+        </Text>
+        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+          {item.name}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -1729,66 +2396,6 @@ function UnlockFields({
         </Pressable>
       ) : null}
     </View>
-  );
-}
-
-function PreviewPanel({ draft, selectedGeneration }: { draft: PostComposerDraft; selectedGeneration: GenerationListItem | null }) {
-  const title = draft.title.trim() || 'Untitled post';
-  const body = draft.mode === 'text' ? draft.contentText.trim() || draft.caption.trim() : draft.caption.trim();
-  const statusLabel = getPostComposerPreviewStatusLabel(draft, selectedGeneration);
-  const coverMedia = draft.mediaItems[0] ?? null;
-  const mediaUrl = draft.mode === 'upload' ? coverMedia?.uri ?? draft.upload?.uri ?? null : selectedGeneration?.output_urls?.[0] ?? selectedGeneration?.output_url ?? null;
-  const selectedGenerationKind = selectedGeneration ? getPublishGenerationMediaKind(selectedGeneration) : null;
-  const generationPreviewUrl = selectedGeneration ? getGenerationPreviewImageUrl(selectedGeneration) : null;
-  const isUploadImage = draft.mode === 'upload' && (coverMedia?.mediaKind === 'image' || draft.upload?.type.startsWith('image/'));
-  const isGenerationImage = draft.mode !== 'upload' && selectedGenerationKind === 'image';
-  const visualUrl = draft.mode === 'upload'
-    ? isUploadImage ? coverMedia?.previewUrl ?? mediaUrl : null
-    : selectedGenerationKind === 'video'
-      ? generationPreviewUrl
-      : mediaUrl;
-  const showVideoOverlay = draft.mode !== 'text' && !isUploadImage && (selectedGenerationKind === 'video' || draft.upload?.type.startsWith('video/'));
-  const hasResourcePackage = statusLabel !== 'No resource package configured.';
-
-  return (
-    <SurfaceSection
-      eyebrow="Preview"
-      title="Preview"
-      accent="image"
-      style={COMPOSER_SECTION_STYLE}
-    >
-      <View style={{ minHeight: 190, borderRadius: 20, overflow: 'hidden', backgroundColor: '#050506', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }}>
-        {visualUrl && (isUploadImage || isGenerationImage || selectedGenerationKind === 'video') ? (
-          <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-        ) : mediaUrl ? (
-          <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <Play size={44} color="#fff" fill="#fff" />
-          </LinearGradient>
-        ) : (
-          <LinearGradient colors={['#17131d', '#0b0c12', '#1d1020']} style={{ flex: 1, justifyContent: 'center', padding: 18, gap: 12 }}>
-            <FileText size={28} color={appTheme.colors.motion} />
-            <AppText variant="sectionTitle">{title}</AppText>
-            {body ? <AppText variant="bodySm" color="textSecondary" numberOfLines={4}>{body}</AppText> : null}
-          </LinearGradient>
-        )}
-        {visualUrl && showVideoOverlay ? (
-          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.16)' }}>
-            <Play size={44} color="#fff" fill="#fff" />
-          </View>
-        ) : null}
-        {mediaUrl ? (
-          <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.62)', padding: 12, gap: 5 }}>
-            <AppText variant="body" numberOfLines={1} style={{ fontWeight: '900' }}>{title}</AppText>
-            {body ? <AppText variant="caption" color="textSecondary" numberOfLines={2}>{body}</AppText> : null}
-          </View>
-        ) : null}
-      </View>
-      <ReadinessRow
-        label={hasResourcePackage ? 'Resource cue' : 'Post preview'}
-        body={statusLabel}
-        state={hasResourcePackage ? 'ready' : 'neutral'}
-      />
-    </SurfaceSection>
   );
 }
 

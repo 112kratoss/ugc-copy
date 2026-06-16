@@ -61,7 +61,7 @@ export function buildViewerItems(
   owner: { creatorLabel: string; creatorAvatar?: string | null }
 ): ImmersivePreviewItem[] {
   if (isGenerationSource(source)) {
-    return buildImmersiveGenerationItems(source, data?.generations ?? [], owner);
+    return buildImmersiveGenerationItems(source, data?.generations ?? [], owner, data?.ownerPosts ?? []);
   }
   if (source === 'profile-posts') {
     return buildImmersiveOwnerPostItems(source, data?.ownerPosts ?? [], owner);
@@ -83,8 +83,14 @@ export async function loadImmersiveSourceData({
   initialId: string;
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
-    const response = await api.listGenerations(true);
-    return { generations: response.generations };
+    const [generationResponse, ownerPostResponse] = await Promise.all([
+      api.listGenerations(true),
+      api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
+    ]);
+    return {
+      generations: generationResponse.generations,
+      ownerPosts: ownerPostResponse.posts,
+    };
   }
 
   if (source === 'profile-posts') {
@@ -126,7 +132,10 @@ export function readCachedImmersiveSourceData(
   initialId: string
 ): ImmersiveSourceData | undefined {
   if (isGenerationSource(source)) {
-    const data = cachedGenerations(queryClient, userId);
+    const data = {
+      ...(cachedGenerations(queryClient, userId) ?? {}),
+      ...(cachedOwnerPosts(queryClient, userId) ?? {}),
+    };
     return sourceDataContains(data, initialId) ? data : undefined;
   }
 

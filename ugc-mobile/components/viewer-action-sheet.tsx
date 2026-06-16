@@ -124,6 +124,23 @@ export function ViewerActionSheet({
       router.push({ pathname: '/post/new', params: { postId: item.linkedPostId } } as never);
       return;
     }
+    if (action === 'edit-linked-resources' && item.linkedPostId) {
+      router.push({ pathname: '/post/new', params: { postId: item.linkedPostId, focus: 'resources' } } as never);
+      return;
+    }
+    if ((action === 'make-private' || action === 'make-public') && item.linkedPostId) {
+      const nextVisibility = action === 'make-private' ? 'private' : 'public';
+      const label = action === 'make-private' ? 'Make private' : 'Make public';
+      confirmMutation(
+        `${label}?`,
+        action === 'make-private'
+          ? 'This linked post will leave public surfaces until you make it public again.'
+          : 'This linked post will return to public surfaces.',
+        label,
+        () => item.linkedPostId ? api.updatePost(item.linkedPostId, { visibility: nextVisibility }) : Promise.resolve()
+      );
+      return;
+    }
     if (action === 'change-visibility') {
       Alert.alert('Change visibility', 'Choose who can see this post.', [
         { text: 'Public', onPress: () => void updateVisibility('public') },

@@ -20,6 +20,12 @@ export function getViewerActionLabel(action: string) {
       return 'View linked post';
     case 'edit-linked':
       return 'Edit linked post';
+    case 'edit-linked-resources':
+      return 'Manage unlock';
+    case 'make-private':
+      return 'Make private';
+    case 'make-public':
+      return 'Make public';
     case 'open-original':
       return 'Open original post';
     case 'view-details':
@@ -36,7 +42,16 @@ export function isDestructiveViewerAction(action: string) {
 }
 
 export function getViewerActionGroupLabel(action: string) {
-  if (action === 'publish' || action === 'view-linked' || action === 'edit-linked' || action === 'edit-post' || action === 'change-visibility') {
+  if (
+    action === 'publish'
+    || action === 'view-linked'
+    || action === 'edit-linked'
+    || action === 'edit-linked-resources'
+    || action === 'make-private'
+    || action === 'make-public'
+    || action === 'edit-post'
+    || action === 'change-visibility'
+  ) {
     return 'Creation to post';
   }
 

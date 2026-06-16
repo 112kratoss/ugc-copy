@@ -5,10 +5,10 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, FileText, ImageOff, Images, MoreVertical, Play, Repeat2, Share2 } from 'lucide-react-native';
+import { ArrowLeft, Globe, ImageOff, Images, LockKeyhole, MoreVertical, Play, Repeat2, Share2, Wand2 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { ActivityIndicator, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import {
   getImmersiveInitialIndex,
+  immersiveViewerHref,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import {
@@ -88,6 +89,18 @@ export function ProfileMediaFeedScreen() {
   const activeItem = items[resolvedActiveIndex] ?? items[initialIndex] ?? items[0];
   const title = source === 'profile-posts' ? 'Posts' : 'Creations';
 
+  const refreshMediaSources = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
+      queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+      queryClient.invalidateQueries({ queryKey: ['profile-generations', user?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', user?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['home-generations', user?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['home-seller-posts', user?.id] }),
+    ]);
+    await sourceQuery.refetch();
+  };
+
   useEffect(() => {
     if (!items.length) return;
     const frame = scheduleFrame(() => {
@@ -104,6 +117,18 @@ export function ProfileMediaFeedScreen() {
       await queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
       await queryClient.invalidateQueries({ queryKey: ['showcase-post', postId] });
       await queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
+    },
+  });
+
+  const linkedVisibilityMutation = useMutation({
+    mutationFn: async ({ postId, visibility }: { postId: string; visibility: 'public' | 'private' }) =>
+      api.updatePost(postId, { visibility }),
+    onSuccess: async () => {
+      await Haptics.selectionAsync();
+      await refreshMediaSources();
+    },
+    onError: () => {
+      Alert.alert('Could not update visibility', 'Please try again.');
     },
   });
 
@@ -149,6 +174,54 @@ export function ProfileMediaFeedScreen() {
     }
 
     router.push(`/create/${item.recreateTool}?prompt=${encodeURIComponent(item.recreatePrompt)}` as never);
+  };
+
+  const publishItem = (item: ImmersivePreviewItem) => {
+    if (!user) {
+      router.push('/auth');
+      return;
+    }
+    const generationId = item.generationId ?? item.id;
+    router.push({ pathname: '/post/new', params: { generationId } } as never);
+  };
+
+  const manageUnlockItem = (item: ImmersivePreviewItem) => {
+    const postId = item.linkedPostId ?? item.ownerPostId ?? item.showcasePostId;
+    if (!postId) return;
+    router.push({ pathname: '/post/new', params: { postId, focus: 'resources' } } as never);
+  };
+
+  const openLinkedPost = (item: ImmersivePreviewItem) => {
+    if (!item.linkedPostId) return;
+    router.push(immersiveViewerHref({ source: 'profile-posts', initialId: item.linkedPostId }) as never);
+  };
+
+  const confirmLinkedVisibilityChange = (item: ImmersivePreviewItem, visibility: 'public' | 'private') => {
+    if (!user) {
+      router.push('/auth');
+      return;
+    }
+    if (!item.linkedPostId) return;
+
+    const makePrivate = visibility === 'private';
+    Alert.alert(
+      makePrivate ? 'Make private?' : 'Make public?',
+      makePrivate
+        ? 'This linked post will leave public surfaces until you make it public again.'
+        : 'This linked post will return to public surfaces.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: makePrivate ? 'Make private' : 'Make public',
+          style: makePrivate ? 'destructive' : 'default',
+          onPress: () => {
+            if (item.linkedPostId) {
+              linkedVisibilityMutation.mutate({ postId: item.linkedPostId, visibility });
+            }
+          },
+        },
+      ]
+    );
   };
 
   if (!items.length && sourceQuery.isLoading) {
@@ -203,11 +276,15 @@ export function ProfileMediaFeedScreen() {
             bottomInset={bottomInset}
             height={pageHeight}
             item={item}
-            onDetails={() => setDetailsOpenItemId(item.id)}
+            onLinkedVisibilityChange={(visibility) => confirmLinkedVisibilityChange(item, visibility)}
+            onManageUnlock={() => manageUnlockItem(item)}
+            onOpenLinkedPost={() => openLinkedPost(item)}
+            onPublish={() => publishItem(item)}
             onRecreate={() => void recreateItem(item)}
             onSave={() => saveItem(item)}
             onShare={() => void shareItem(item)}
             saveLoading={saveMutation.isPending && saveMutation.variables === item.showcasePostId}
+            visibilityLoading={linkedVisibilityMutation.isPending && linkedVisibilityMutation.variables?.postId === item.linkedPostId}
             width={width}
           />
         )}
@@ -324,22 +401,30 @@ function ProfileFeedPage({
   bottomInset,
   height,
   item,
-  onDetails,
+  onLinkedVisibilityChange,
+  onManageUnlock,
+  onOpenLinkedPost,
+  onPublish,
   onRecreate,
   onSave,
   onShare,
   saveLoading,
+  visibilityLoading,
   width,
 }: {
   active: boolean;
   bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
-  onDetails: () => void;
+  onLinkedVisibilityChange: (visibility: 'public' | 'private') => void;
+  onManageUnlock: () => void;
+  onOpenLinkedPost: () => void;
+  onPublish: () => void;
   onRecreate: () => void;
   onSave: () => void;
   onShare: () => void;
   saveLoading: boolean;
+  visibilityLoading: boolean;
   width: number;
 }) {
   const displayText = shouldShowFeedBody(item.title, item.displayText) ? item.displayText : '';
@@ -360,11 +445,15 @@ function ProfileFeedPage({
       <ProfileFeedMediaCarousel active={active} item={item} width={width} />
       <ProfileFeedActionRow
         item={item}
-        onDetails={onDetails}
+        onLinkedVisibilityChange={onLinkedVisibilityChange}
+        onManageUnlock={onManageUnlock}
+        onOpenLinkedPost={onOpenLinkedPost}
+        onPublish={onPublish}
         onRecreate={onRecreate}
         onSave={onSave}
         onShare={onShare}
         saveLoading={saveLoading}
+        visibilityLoading={visibilityLoading}
       />
       <View style={{ paddingHorizontal: 14, paddingTop: 8, gap: 8 }}>
         <Text selectable numberOfLines={2} style={{ color: '#fff', ...appTheme.type.sectionTitle, fontWeight: '900' }}>
@@ -656,42 +745,106 @@ function ProfileFeedPlayBadge() {
 
 function ProfileFeedActionRow({
   item,
-  onDetails,
+  onLinkedVisibilityChange,
+  onManageUnlock,
+  onOpenLinkedPost,
+  onPublish,
   onRecreate,
   onSave,
   onShare,
   saveLoading,
+  visibilityLoading,
 }: {
   item: ImmersivePreviewItem;
-  onDetails: () => void;
+  onLinkedVisibilityChange: (visibility: 'public' | 'private') => void;
+  onManageUnlock: () => void;
+  onOpenLinkedPost: () => void;
+  onPublish: () => void;
   onRecreate: () => void;
   onSave: () => void;
   onShare: () => void;
   saveLoading: boolean;
+  visibilityLoading: boolean;
 }) {
+  const isCreation = item.sourceType === 'generation';
+  const isPublishedCreation = isCreation && Boolean(item.linkedPostId) && !item.archivedAt;
+  const isUnpublishedCreation = isCreation && !item.linkedPostId && !item.archivedAt;
+  const manageUnlockLabel = item.linkedPostBundle ? 'Manage unlock' : 'Add unlock';
+  const linkedPostVisibility = item.linkedPostVisibility;
+  const nextVisibility = linkedPostVisibility === 'public'
+    ? 'private'
+    : linkedPostVisibility === 'private'
+      ? 'public'
+      : null;
+  const visibilityLabel = nextVisibility === 'private' ? 'Make private' : 'Make public';
+
   return (
     <View style={{ paddingHorizontal: 14, paddingTop: 12, gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact, flexWrap: 'wrap', flex: 1 }}>
-          <ProfileFeedActionChip
-            accessibilityLabel="Recreate media"
-            icon={<Repeat2 size={18} color="#050506" strokeWidth={2.8} />}
-            label="Create"
-            onPress={onRecreate}
-            primary
-          />
-          <ProfileFeedActionChip
-            accessibilityLabel="Share media"
-            icon={<Share2 size={18} color="#ffffff" strokeWidth={2.5} />}
-            label="Share"
-            onPress={onShare}
-          />
-          <ProfileFeedActionChip
-            accessibilityLabel="View media details"
-            icon={<FileText size={18} color="#ffffff" strokeWidth={2.4} />}
-            label="Details"
-            onPress={onDetails}
-          />
+          {!item.archivedAt ? (
+            <ProfileFeedActionChip
+              accessibilityLabel="Recreate media"
+              icon={<Repeat2 size={18} color="#050506" strokeWidth={2.8} />}
+              label="Create"
+              onPress={onRecreate}
+              primary
+            />
+          ) : null}
+          {isUnpublishedCreation ? (
+            <>
+              <ProfileFeedActionChip
+                accessibilityLabel="Share media"
+                icon={<Share2 size={18} color="#ffffff" strokeWidth={2.5} />}
+                label="Share"
+                onPress={onShare}
+              />
+              <ProfileFeedActionChip
+                accessibilityLabel={`Publish ${item.title}`}
+                icon={<Globe size={18} color="#ffffff" strokeWidth={2.5} />}
+                label="Publish"
+                onPress={onPublish}
+              />
+            </>
+          ) : isPublishedCreation ? (
+            <>
+              <ProfileFeedActionChip
+                accessibilityLabel={`${manageUnlockLabel} for ${item.title}`}
+                icon={<Wand2 size={18} color="#07110a" strokeWidth={2.6} />}
+                label={manageUnlockLabel}
+                onPress={onManageUnlock}
+                tone="success"
+              />
+              {nextVisibility ? (
+                <ProfileFeedActionChip
+                  accessibilityLabel={`${visibilityLabel} for ${item.title}`}
+                  disabled={visibilityLoading}
+                  icon={nextVisibility === 'private'
+                    ? <LockKeyhole size={18} color="#ffffff" strokeWidth={2.5} />
+                    : <Globe size={18} color="#ffffff" strokeWidth={2.5} />}
+                  label={visibilityLabel}
+                  onPress={() => onLinkedVisibilityChange(nextVisibility)}
+                  tone={nextVisibility === 'private' ? 'private' : 'default'}
+                />
+              ) : (
+                <ProfileFeedActionChip
+                  accessibilityLabel={`Open linked post for ${item.title}`}
+                  icon={<Globe size={18} color="#ffffff" strokeWidth={2.5} />}
+                  label="Open post"
+                  onPress={onOpenLinkedPost}
+                />
+              )}
+            </>
+          ) : (
+            item.canShare ? (
+              <ProfileFeedActionChip
+                accessibilityLabel="Share media"
+                icon={<Share2 size={18} color="#ffffff" strokeWidth={2.5} />}
+                label="Share"
+                onPress={onShare}
+              />
+            ) : null
+          )}
         </View>
         {item.mediaItems.length > 1 ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -723,30 +876,50 @@ function ProfileFeedActionChip({
   label,
   onPress,
   primary = false,
+  disabled = false,
+  tone = 'default',
 }: {
   accessibilityLabel: string;
   icon: React.ReactNode;
   label: string;
   onPress: () => void;
   primary?: boolean;
+  disabled?: boolean;
+  tone?: 'default' | 'success' | 'private';
 }) {
+  const isSuccess = tone === 'success';
+  const isPrivate = tone === 'private';
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: appTheme.touch.compact,
-        minWidth: primary ? 96 : 84,
+        minWidth: primary || isSuccess ? 96 : 84,
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'row',
         gap: 7,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
-        borderColor: primary ? 'rgba(255,255,255,0.22)' : appTheme.colors.borderStrong,
-        backgroundColor: primary ? appTheme.colors.text : appTheme.colors.surfaceStrong,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
+        borderColor: primary
+          ? 'rgba(255,255,255,0.22)'
+          : isSuccess
+            ? 'rgba(102,255,69,0.42)'
+            : isPrivate
+              ? 'rgba(168,85,247,0.36)'
+              : appTheme.colors.borderStrong,
+        backgroundColor: primary
+          ? appTheme.colors.text
+          : isSuccess
+            ? '#66ff45'
+            : isPrivate
+              ? 'rgba(124,58,237,0.18)'
+              : appTheme.colors.surfaceStrong,
+        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: appTheme.spacing.gap,
       })}
     >
@@ -754,7 +927,7 @@ function ProfileFeedActionChip({
       <Text
         numberOfLines={1}
         style={{
-          color: primary ? appTheme.colors.textInverse : appTheme.colors.text,
+          color: primary || isSuccess ? appTheme.colors.textInverse : appTheme.colors.text,
           ...appTheme.type.label,
           fontWeight: '900',
         }}

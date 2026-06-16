@@ -10,6 +10,7 @@ import type {
   PostResourceRemixUse,
   PostResourceSection,
   PostResourceSectionKind,
+  SourceToolOption,
   ShowcaseFeedItem,
 } from '@/lib/types';
 
@@ -165,15 +166,100 @@ export const POST_COMPOSER_CATEGORY_OPTIONS: Array<{ id: PostComposerCategory; l
   { id: 'ugc-ad', label: 'UGC ad' },
 ];
 
-export const POST_COMPOSER_SOURCE_OPTIONS = [
-  { label: 'Manual', slug: 'manual' },
-  { label: 'Magicbooklet', slug: 'magicbooklet' },
-  { label: 'Runway', slug: 'runway' },
-  { label: 'Midjourney', slug: 'midjourney' },
-  { label: 'Sora', slug: 'sora' },
-  { label: 'Kling', slug: 'kling' },
-  { label: 'CapCut', slug: 'capcut' },
-  { label: 'Other', slug: 'other' },
+export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
+  {
+    label: 'Manual',
+    slug: 'manual',
+    models: [],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    label: 'Magicbooklet',
+    slug: 'magicbooklet',
+    models: [
+      { slug: 'nano-banana-2', label: 'Nano Banana 2.0' },
+      { slug: 'nano-banana-pro', label: 'Nano Banana Pro' },
+      { slug: 'gpt-image-2', label: 'GPT Image 2' },
+      { slug: 'grok-imagine-image', label: 'Grok Imagine' },
+      { slug: 'kling-2.6', label: 'Kling 2.6 Motion' },
+      { slug: 'kling-3.0', label: 'Kling 3.0 Motion' },
+      { slug: 'kling-3.0-video', label: 'Kling 3.0 Cinematic' },
+      { slug: 'seedance-1.5-pro', label: 'Seedance 1.5 Pro' },
+      { slug: 'seedance-2', label: 'Seedance 2' },
+      { slug: 'seedance-2-fast', label: 'Seedance 2 Fast' },
+      { slug: 'veo-3.1', label: 'Veo 3.1' },
+      { slug: 'grok-imagine-video', label: 'Grok Imagine Video' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    label: 'Higgsfield',
+    slug: 'higgsfield',
+    models: [
+      { slug: 'soul', label: 'Soul' },
+      { slug: 'k2', label: 'K2' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    label: 'Freepik',
+    slug: 'freepik',
+    models: [
+      { slug: 'mystic', label: 'Mystic' },
+      { slug: 'classic', label: 'Classic' },
+    ],
+    supportedMediaKinds: ['image'],
+  },
+  {
+    label: 'Runway',
+    slug: 'runway',
+    models: [
+      { slug: 'gen-3', label: 'Gen-3' },
+      { slug: 'gen-4', label: 'Gen-4' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    label: 'Midjourney',
+    slug: 'midjourney',
+    models: [],
+    supportedMediaKinds: ['image'],
+  },
+  {
+    label: 'Sora',
+    slug: 'sora',
+    models: [],
+    supportedMediaKinds: ['video'],
+  },
+  {
+    label: 'Kling',
+    slug: 'kling',
+    models: [
+      { slug: 'kling-2.6', label: 'Kling 2.6' },
+      { slug: 'kling-3.0', label: 'Kling 3.0' },
+    ],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    label: 'Veo',
+    slug: 'veo',
+    models: [
+      { slug: 'veo-3.1', label: 'Veo 3.1' },
+    ],
+    supportedMediaKinds: ['video'],
+  },
+  {
+    label: 'CapCut',
+    slug: 'capcut',
+    models: [],
+    supportedMediaKinds: ['image', 'video'],
+  },
+  {
+    label: 'Other',
+    slug: 'other',
+    models: [],
+    supportedMediaKinds: ['image', 'video'],
+  },
 ];
 
 export const POST_COMPOSER_VISIBILITY_OPTIONS: Array<{ id: PostComposerVisibility; label: string; body: string }> = [

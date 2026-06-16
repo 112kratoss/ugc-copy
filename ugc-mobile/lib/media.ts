@@ -16,13 +16,13 @@ export interface UploadedMedia {
 }
 
 export async function pickMediaList(
-  mediaType: 'image' | 'video',
+  mediaType: 'image' | 'video' | 'mixed',
   options: {
     allowsMultipleSelection?: boolean;
   } = {}
 ) {
   const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: mediaType === 'image' ? ['images'] : ['videos'],
+    mediaTypes: mediaType === 'image' ? ['images'] : mediaType === 'video' ? ['videos'] : ['images', 'videos'],
     quality: 0.92,
     allowsMultipleSelection: options.allowsMultipleSelection ?? false,
   });

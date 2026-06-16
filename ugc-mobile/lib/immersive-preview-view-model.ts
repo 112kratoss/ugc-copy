@@ -86,6 +86,10 @@ export interface ImmersivePreviewItem {
   linkedPostId?: string | null;
   linkedPostTitle?: string | null;
   linkedPostVisibility?: string | null;
+  linkedPostArchivedAt?: string | null;
+  linkedPostBundle?: OwnerPostListItem['bundle'] | null;
+  linkedPostPath?: string | null;
+  linkedPostOwnerPath?: string | null;
   archivedAt?: string | null;
   visibility?: string | null;
   availableActions: string[];
@@ -131,9 +135,10 @@ export function buildImmersiveShowcaseItems(source: PreviewViewerSource, items: 
 export function buildImmersiveGenerationItems(
   source: PreviewViewerSource,
   items: GenerationListItem[],
-  owner: { creatorLabel: string; creatorAvatar?: string | null }
+  owner: { creatorLabel: string; creatorAvatar?: string | null },
+  ownerPosts: OwnerPostListItem[] = []
 ) {
-  return items.map((item) => generationToImmersiveItem(source, item, owner));
+  return items.map((item) => generationToImmersiveItem(source, item, owner, ownerPosts));
 }
 
 export function buildImmersiveOwnerPostItems(
@@ -308,13 +313,21 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
 function generationToImmersiveItem(
   source: PreviewViewerSource,
   item: GenerationListItem,
-  owner: { creatorLabel: string; creatorAvatar?: string | null }
+  owner: { creatorLabel: string; creatorAvatar?: string | null },
+  ownerPosts: OwnerPostListItem[]
 ): ImmersivePreviewItem {
   const kind = generationKind(item);
   const displayText = item.prompt?.trim() || item.description?.trim() || item.title?.trim() || 'Saved Magicbooklet generation.';
   const title = item.title?.trim() || displayText;
   const mediaKind = kind === 'text' ? null : kind === 'image' ? 'image' : 'video';
   const previewUrl = item.previewUrl ?? item.preview_url ?? null;
+  const linkedPost = findLinkedOwnerPost(item, ownerPosts);
+  const linkedPostId = linkedPost?.id ?? item.linked_post_id ?? null;
+  const linkedPostVisibility = linkedPost?.visibility ?? item.linked_post_visibility ?? null;
+  const linkedPostArchivedAt = linkedPost?.archivedAt ?? item.linked_post_archived_at ?? null;
+  const linkedPostPath = linkedPost?.publicPath
+    ?? (linkedPostId && linkedPostVisibility !== 'private' && !linkedPostArchivedAt ? `/showcase/${linkedPostId}` : null);
+  const linkedPostOwnerPath = linkedPost?.ownerPath ?? (linkedPostId ? `/post/${linkedPostId}/edit` : null);
 
   return {
     id: item.id,
@@ -337,7 +350,7 @@ function generationToImmersiveItem(
     sharePath: null,
     recreateTool: kind === 'motion' ? 'motion' : kind === 'video' ? 'video' : 'image',
     recreatePrompt: item.prompt?.trim() || item.description?.trim() || item.title?.trim() || '',
-    showcasePostId: item.linked_post_id ?? null,
+    showcasePostId: linkedPostId,
     generationId: item.id,
     ownerPostId: null,
     details: {
@@ -359,16 +372,16 @@ function generationToImmersiveItem(
         inputMedia: item.input_media ?? null,
       },
     },
-    linkedPostId: item.linked_post_id ?? null,
-    linkedPostTitle: item.linked_post_title ?? null,
-    linkedPostVisibility: item.linked_post_visibility ?? null,
+    linkedPostId,
+    linkedPostTitle: linkedPost?.title ?? item.linked_post_title ?? null,
+    linkedPostVisibility,
+    linkedPostArchivedAt,
+    linkedPostBundle: linkedPost?.bundle ?? null,
+    linkedPostPath,
+    linkedPostOwnerPath,
     archivedAt: item.archived_at ?? null,
     visibility: null,
-    availableActions: item.archived_at
-      ? ['restore', 'view-details']
-      : item.linked_post_id
-        ? ['view-linked', 'edit-linked', 'recreate', 'archive', 'share', 'view-details']
-        : ['publish', 'recreate', 'archive', 'share', 'view-details'],
+    availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostVisibility),
     disabledActions: item.archived_at
       ? {
           publish: 'This creation is archived',
@@ -378,6 +391,35 @@ function generationToImmersiveItem(
         }
       : {},
   };
+}
+
+function findLinkedOwnerPost(item: GenerationListItem, ownerPosts: OwnerPostListItem[]) {
+  return ownerPosts.find((post) => post.generationId === item.id)
+    ?? (item.linked_post_id ? ownerPosts.find((post) => post.id === item.linked_post_id) : null)
+    ?? null;
+}
+
+function getGenerationAvailableActions(
+  item: GenerationListItem,
+  linkedPostId: string | null,
+  linkedPostVisibility: string | null
+) {
+  if (item.archived_at) {
+    return ['restore', 'view-details'];
+  }
+
+  if (!linkedPostId) {
+    return ['publish', 'recreate', 'archive', 'share', 'view-details'];
+  }
+
+  const linkedActions = ['edit-linked-resources'];
+  if (linkedPostVisibility === 'public') {
+    linkedActions.push('make-private');
+  } else if (linkedPostVisibility === 'private') {
+    linkedActions.push('make-public');
+  }
+
+  return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', 'view-details'];
 }
 
 function ownerPostToImmersiveItem(

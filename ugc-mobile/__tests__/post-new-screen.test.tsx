@@ -36,6 +36,15 @@ const authState = vi.hoisted(() => ({
   },
 }));
 
+const sourceToolsState = vi.hoisted(() => ({
+  tools: [{
+    slug: 'runway',
+    label: 'Runway',
+    models: [{ slug: 'gen-4', label: 'Gen-4' }],
+    supportedMediaKinds: ['image', 'video'],
+  }],
+}));
+
 const mutationState = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
@@ -82,6 +91,15 @@ vi.mock('@tanstack/react-query', () => ({
         isLoading: false,
       };
     }
+    if (queryKey[0] === 'post-source-tools') {
+      return {
+        data: {
+          tools: sourceToolsState.tools,
+        },
+        error: null,
+        isLoading: false,
+      };
+    }
     return { data: null, error: null, isLoading: false };
   },
 }));
@@ -97,6 +115,11 @@ vi.mock('react-native', () => ({
       ...props,
       style: resolvePressableStyle(style),
     }, children),
+  PanResponder: {
+    create: (handlers: Record<string, unknown>) => ({
+      panHandlers: handlers,
+    }),
+  },
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('textinput', props),
@@ -119,12 +142,15 @@ vi.mock('expo-linear-gradient', () => ({
 
 vi.mock('lucide-react-native', () => ({
   Check: (props: MockProps) => React.createElement('check-icon', props),
+  ChevronDown: (props: MockProps) => React.createElement('chevron-down-icon', props),
   FileText: (props: MockProps) => React.createElement('file-text-icon', props),
   ImageIcon: (props: MockProps) => React.createElement('image-icon', props),
   Lock: (props: MockProps) => React.createElement('lock-icon', props),
   PackageCheck: (props: MockProps) => React.createElement('package-check-icon', props),
   Play: (props: MockProps) => React.createElement('play-icon', props),
+  Plus: (props: MockProps) => React.createElement('plus-icon', props),
   Sparkles: (props: MockProps) => React.createElement('sparkles-icon', props),
+  X: (props: MockProps) => React.createElement('x-icon', props),
 }));
 
 vi.mock('@/lib/media', () => ({
@@ -139,6 +165,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import NewPostScreen from '../app/post/new';
+import { pickMediaList, uploadPickedMedia } from '@/lib/media';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -158,6 +185,36 @@ function findPressableByText(root: renderer.ReactTestInstance, text: string) {
   throw new Error(`No pressable containing text "${text}" was found`);
 }
 
+function findPressableByAccessibilityLabel(root: renderer.ReactTestInstance, accessibilityLabel: string) {
+  const pressable = root.findAll(
+    (node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === accessibilityLabel
+  )[0];
+  if (!pressable) {
+    throw new Error(`No pressable with accessibility label "${accessibilityLabel}" was found`);
+  }
+  return pressable;
+}
+
+function findNodeByAccessibilityLabel(root: renderer.ReactTestInstance, accessibilityLabel: string) {
+  const node = root.findAll(
+    (candidate) => candidate.props.accessibilityLabel === accessibilityLabel
+  )[0];
+  if (!node) {
+    throw new Error(`No node with accessibility label "${accessibilityLabel}" was found`);
+  }
+  return node;
+}
+
+function findTextInputByPlaceholder(root: renderer.ReactTestInstance, placeholder: string) {
+  const input = root.findAll(
+    (node) => String(node.type) === 'textinput' && node.props.placeholder === placeholder
+  )[0];
+  if (!input) {
+    throw new Error(`No text input with placeholder "${placeholder}" was found`);
+  }
+  return input;
+}
+
 describe('NewPostScreen Phase 4 creation publishing workspace', () => {
   beforeEach(() => {
     paramsState.params = { generationId: 'gen-1' };
@@ -165,13 +222,16 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     routerState.replace.mockClear();
     mutationState.mutate.mockClear();
     mutationState.isPending = false;
+    vi.mocked(pickMediaList).mockReset();
+    vi.mocked(uploadPickedMedia).mockReset();
+    sourceToolsState.tools = [{
+      slug: 'runway',
+      label: 'Runway',
+      models: [{ slug: 'gen-4', label: 'Gen-4' }],
+      supportedMediaKinds: ['image', 'video'],
+    }];
     authState.api.listSourceTools.mockResolvedValue({
-      tools: [{
-        slug: 'runway',
-        label: 'Runway',
-        models: [{ slug: 'gen-4', label: 'Gen-4' }],
-        supportedMediaKinds: ['image', 'video'],
-      }],
+      tools: sourceToolsState.tools,
     });
   });
 
@@ -182,18 +242,36 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     });
 
     const text = collectText(tree!.root);
-    expect(text.indexOf('Create post')).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf('Made With')).toBeGreaterThan(text.indexOf('Create post'));
+    expect(text).not.toContain('Composer');
+    expect(text).not.toContain('Create post');
+    expect(text.indexOf('Title')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Made With')).toBeGreaterThan(text.indexOf('Title'));
     expect(text.indexOf('Proof')).toBeGreaterThan(text.indexOf('Made With'));
     expect(text.indexOf('Story')).toBeGreaterThan(text.indexOf('Proof'));
     expect(text.indexOf('Unlock')).toBeGreaterThan(text.indexOf('Story'));
     expect(text.indexOf('Publish')).toBeGreaterThan(text.indexOf('Unlock'));
-    expect(text.indexOf('Publish checklist')).toBeGreaterThan(text.indexOf('Publish'));
+    expect(text).not.toContain('Publish checklist');
+    expect(text).not.toContain('Checklist');
+    expect(text).not.toContain('Preview');
     expect(text).toContain('Hero product image');
     expect(text).toContain('Change creation');
   });
 
-  it('shows Made With, Proof, Story details, Unlock, and web-style publish actions', () => {
+  it('ends the composer at publish without checklist or preview sections', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Publish');
+    expect(text).not.toContain('Publish checklist');
+    expect(text).not.toContain('Checklist');
+    expect(text).not.toContain('Preview');
+    expect(text).not.toContain('Post preview');
+  });
+
+  it('shows Made With, Proof, compact Story details, Unlock, and web-style publish actions', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<NewPostScreen />);
@@ -203,18 +281,61 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).toContain('Tool 1');
     expect(text).toContain('Model');
     expect(text).toContain('Generated media attached');
-    expect(text).toContain('Feed description');
-    expect(text).toContain('Resource types');
-    expect(text).toContain('Prompt');
-    expect(text).toContain('Workflow / setup');
-    expect(text).toContain('Files / links');
-    expect(text).toContain('Notes');
-    expect(text).toContain('Remix access');
-    expect(text).toContain('Save private');
-    expect(text).toContain('Publish public');
-    expect(text).not.toContain('Publish dock');
-    expect(text).not.toContain('Post settings');
-    expect(text).not.toContain('Public post');
+    expect(text).toContain('Caption');
+    expect(text).toContain('Add feed description');
+    expect(text).not.toContain('Feed description');
+    expect(text).toContain('Add references & unlockable resources');
+    expect(text).not.toContain('Resource types');
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add references & unlockable resources').props.onPress();
+    });
+    const unlockText = collectText(tree!.root);
+    expect(unlockText).toContain('Resource types');
+    expect(unlockText).toContain('Saved privately in Studio');
+    expect(unlockText).toContain('Prompt');
+    expect(unlockText).toContain('Workflow / setup');
+    expect(unlockText).toContain('Files / links');
+    expect(unlockText).toContain('Notes');
+    expect(unlockText).toContain('Remix access');
+    expect(unlockText).toContain('Save private');
+    expect(unlockText).toContain('Publish public');
+    expect(unlockText).not.toContain('Publish dock');
+    expect(unlockText).not.toContain('Post settings');
+    expect(unlockText).not.toContain('Public post');
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add feed description').props.onPress();
+    });
+
+    const expandedText = collectText(tree!.root);
+    expect(expandedText).toContain('Feed description');
+  });
+
+  it('collapses unlock controls behind a web-style checklist row', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const collapsedText = collectText(tree!.root);
+    expect(collapsedText).not.toContain('Unlock off');
+    expect(collapsedText).toContain('Add references & unlockable resources');
+    expect(collapsedText).not.toContain('Resource types');
+    expect(collapsedText).not.toContain('Free unlock');
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add references & unlockable resources').props.onPress();
+    });
+
+    const expandedText = collectText(tree!.root);
+    expect(expandedText).toContain('Resource types');
+    expect(expandedText).toContain('Saved privately in Studio');
+    expect(expandedText).not.toContain('None');
+    expect(expandedText).toContain('Prompt');
+    expect(expandedText).toContain('Workflow / setup');
+    expect(expandedText).toContain('Files / links');
+    expect(expandedText).toContain('Notes');
+    expect(expandedText).toContain('Remix access');
   });
 
   it('keeps the composer chrome compact instead of explaining every section', () => {
@@ -226,11 +347,27 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     const text = collectText(tree!.root);
     expect(text).not.toContain('Share your work and add optional unlockable resources.');
     expect(text).not.toContain('Add the tool and model you used.');
-    expect(text).not.toContain('The public content visible in the community feed.');
-    expect(text).not.toContain('Add optional gated resources, prompts, files, notes, or remix access to this post.');
-    expect(text).not.toContain('Choose who can see this post, then save privately or publish publicly.');
     expect(text).not.toContain('Resolve anything marked before publishing.');
     expect(text).not.toContain('Check the public card and the unlock cue before publishing.');
+  });
+
+  it('renders Story, Unlock, and Publish with the minimal web hierarchy', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add references & unlockable resources').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    expect(text.filter((value) => value === 'Story')).toHaveLength(1);
+    expect(text).toContain('The public content visible in the community feed.');
+    expect(text).toContain('Add optional gated resources to this post.');
+    expect(text).toContain('Choose who can see this post.');
+    expect(text).toContain('Saved privately in Studio');
+    expect(text).not.toContain('Visibility');
+    expect(text).not.toContain('No unlock');
   });
 
   it('surfaces the unlock section first after creation media when opened with focus=resources', () => {
@@ -258,8 +395,182 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
 
     const text = collectText(tree!.root);
     expect(text).toContain('Upload images or videos');
-    expect(text).toContain('Add media');
+    expect(text.filter((value) => value === 'Add media')).toHaveLength(1);
+    expect(text).not.toContain('Video');
     expect(text).toContain('Cover first · max 5');
+  });
+
+  it('uses the center upload target to attach mixed media', async () => {
+    paramsState.params = {};
+    vi.mocked(pickMediaList).mockResolvedValue([]);
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Add media').props.onPress();
+    });
+
+    expect(pickMediaList).toHaveBeenCalledWith('mixed', { allowsMultipleSelection: true });
+  });
+
+  it('removes a selected media item from the gallery strip', async () => {
+    paramsState.params = {};
+    vi.mocked(pickMediaList).mockResolvedValue([
+      { uri: 'file:///28.png', fileName: '28.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      { uri: 'file:///27.png', fileName: '27.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+    ]);
+    vi.mocked(uploadPickedMedia).mockImplementation(async (uri, options) => ({
+      signedUrl: uri,
+      storagePath: `uploads/${options?.fileName ?? 'media.png'}`,
+      mimeType: options?.mimeType ?? 'image/png',
+      fileName: options?.fileName ?? 'media.png',
+      kind: 'image',
+      durationSeconds: null,
+      sizeBytes: options?.sizeBytes ?? null,
+    }));
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Add media').props.onPress();
+    });
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree!.root, 'Remove Media 2').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('28.png');
+    expect(text).not.toContain('27.png');
+    expect(text).not.toContain('Media 2');
+  });
+
+  it('shows a trailing add media card until the gallery reaches five items', async () => {
+    paramsState.params = {};
+    vi.mocked(pickMediaList)
+      .mockResolvedValueOnce([
+        { uri: 'file:///28.png', fileName: '28.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+        { uri: 'file:///27.png', fileName: '27.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      ])
+      .mockResolvedValueOnce([
+        { uri: 'file:///26.png', fileName: '26.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      ]);
+    vi.mocked(uploadPickedMedia).mockImplementation(async (uri, options) => ({
+      signedUrl: uri,
+      storagePath: `uploads/${options?.fileName ?? 'media.png'}`,
+      mimeType: options?.mimeType ?? 'image/png',
+      fileName: options?.fileName ?? 'media.png',
+      kind: 'image',
+      durationSeconds: null,
+      sizeBytes: options?.sizeBytes ?? null,
+    }));
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Add media').props.onPress();
+    });
+
+    expect(collectText(tree!.root)).toContain('3 slots left');
+
+    await renderer.act(async () => {
+      await findPressableByAccessibilityLabel(tree!.root, 'Add more media').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    expect(pickMediaList).toHaveBeenCalledTimes(2);
+    expect(pickMediaList).toHaveBeenLastCalledWith('mixed', { allowsMultipleSelection: true });
+    expect(text).toContain('Media 3');
+    expect(text).toContain('26.png');
+    expect(text).toContain('2 slots left');
+  });
+
+  it('reorders gallery media by pressing and holding the card', async () => {
+    vi.useFakeTimers();
+    paramsState.params = {};
+    vi.mocked(pickMediaList).mockResolvedValue([
+      { uri: 'file:///28.png', fileName: '28.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      { uri: 'file:///27.png', fileName: '27.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+    ]);
+    vi.mocked(uploadPickedMedia).mockImplementation(async (uri, options) => ({
+      signedUrl: uri,
+      storagePath: `uploads/${options?.fileName ?? 'media.png'}`,
+      mimeType: options?.mimeType ?? 'image/png',
+      fileName: options?.fileName ?? 'media.png',
+      kind: 'image',
+      durationSeconds: null,
+      sizeBytes: options?.sizeBytes ?? null,
+    }));
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Add media').props.onPress();
+    });
+
+    expect(tree!.root.findAll((node) => String(node.type) === 'grip-horizontal-icon')).toHaveLength(0);
+    expect(tree!.root.findAll(
+      (node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Drag Media 2 to reorder'
+    )).toHaveLength(0);
+
+    renderer.act(() => {
+      const mediaCard = findNodeByAccessibilityLabel(tree!.root, 'Hold Media 2 to reorder');
+      expect(mediaCard.props.onStartShouldSetPanResponder()).toBe(true);
+      mediaCard.props.onPanResponderGrant();
+      vi.advanceTimersByTime(260);
+      mediaCard.props.onPanResponderMove(null, { dx: -150, dy: 0 });
+      mediaCard.props.onPanResponderRelease(null, { dx: -150, dy: 0 });
+    });
+    vi.useRealTimers();
+
+    const text = collectText(tree!.root);
+    expect(text.indexOf('Cover')).toBeLessThan(text.indexOf('27.png'));
+    expect(text.indexOf('27.png')).toBeLessThan(text.indexOf('Media 2'));
+    expect(text.indexOf('Media 2')).toBeLessThan(text.indexOf('28.png'));
+  });
+
+  it('hides Made With and avoids a duplicate body field for text proof posts', () => {
+    paramsState.params = {};
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Text').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    const bodyInputs = tree!.root.findAll(
+      (node) => String(node.type) === 'textinput' && node.props.placeholder === 'Write the post content...'
+    );
+    expect(text).not.toContain('Made With');
+    expect(text.indexOf('Proof')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Story')).toBeGreaterThan(text.indexOf('Proof'));
+    expect(bodyInputs).toHaveLength(1);
   });
 
   it('expands source tool controls without the old post settings disclosure', () => {
@@ -273,7 +584,116 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).toContain('Made With');
     expect(text).toContain('Tool 1');
     expect(text).toContain('Model');
+    expect(text).toContain('Add another tool');
     expect(text).not.toContain('Category');
+  });
+
+  it('uses web-style searchable Made With pickers instead of an always-visible chip strip', () => {
+    paramsState.params = {};
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const collapsedText = collectText(tree!.root);
+    expect(collapsedText).not.toContain('Manual');
+    expect(collapsedText).not.toContain('Magicbooklet');
+    expect(collapsedText).not.toContain('Runway');
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onFocus();
+    });
+
+    const openedText = collectText(tree!.root);
+    expect(openedText).toContain('Manual');
+    expect(openedText).toContain('Magicbooklet');
+    expect(openedText).toContain('Runway');
+  });
+
+  it('creates custom tools and models from the mobile Made With picker', () => {
+    paramsState.params = {};
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onChangeText('Pika Labs');
+    });
+
+    expect(collectText(tree!.root)).toContain('Create "Pika Labs"');
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Create "Pika Labs"').props.onPress();
+    });
+
+    expect(findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.value).toBe('Pika Labs');
+    expect(findTextInputByPlaceholder(tree!.root, 'Any model').props.editable).toBe(true);
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Any model').props.onChangeText('Pika 2.2');
+    });
+
+    expect(collectText(tree!.root)).toContain('Create "Pika 2.2"');
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Create "Pika 2.2"').props.onPress();
+    });
+
+    expect(findTextInputByPlaceholder(tree!.root, 'Any model').props.value).toBe('Pika 2.2');
+  });
+
+  it('shows catalog models after selecting a catalog Made With tool', () => {
+    paramsState.params = {};
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onFocus();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Runway').props.onPress();
+    });
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Any model').props.onFocus();
+    });
+
+    const modelText = collectText(tree!.root);
+    expect(modelText).toContain('Any model');
+    expect(modelText).toContain('Gen-4');
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Gen-4').props.onPress();
+    });
+
+    expect(findTextInputByPlaceholder(tree!.root, 'Any model').props.value).toBe('Gen-4');
+  });
+
+  it('uses fallback source tool models when the API catalog is empty', () => {
+    paramsState.params = {};
+    sourceToolsState.tools = [];
+    authState.api.listSourceTools.mockResolvedValue({ tools: [] });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onFocus();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Runway').props.onPress();
+    });
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Any model').props.onFocus();
+    });
+
+    const modelText = collectText(tree!.root);
+    expect(modelText).toContain('Gen-3');
+    expect(modelText).toContain('Gen-4');
   });
 
   it('updates the resource package when the exact prompt toggle is enabled', () => {
@@ -282,6 +702,9 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
       tree = renderer.create(<NewPostScreen />);
     });
 
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add references & unlockable resources').props.onPress();
+    });
     renderer.act(() => {
       findPressableByText(tree!.root, 'Use exact prompt as resource').props.onPress();
     });
@@ -298,9 +721,17 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     });
 
     const text = collectText(tree!.root);
-    expect(text).toContain('Public post ready');
     expect(text).toContain('Save private');
     expect(text).toContain('Publish public');
+    expect(text).toContain('Saved privately in Studio.');
+    expect(text).toContain('Visible in Feed.');
+    expect(text).not.toContain('Visible in Feed');
+    expect(text).not.toContain('Public');
+    expect(text).not.toContain('Unlisted');
+    expect(text).not.toContain('Private');
+    expect(text).not.toContain('Ready to publish');
+    expect(text).not.toContain('Publish blocked');
+    expect(text).not.toContain('Public post ready');
     expect(text).not.toContain('Publish dock');
   });
 });
