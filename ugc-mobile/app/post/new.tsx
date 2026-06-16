@@ -602,6 +602,12 @@ export default function NewPostScreen() {
     });
   };
 
+  const removeResourceSection = (id: string) => {
+    updateResource({
+      sections: draft.resource.sections.filter((section) => section.id !== id),
+    });
+  };
+
   const publishActions = getPostComposerPublishActions({
     selectedVisibility: draft.visibility,
     isEditMode,
@@ -624,6 +630,7 @@ export default function NewPostScreen() {
       onPickResourceFile={chooseResourceFile}
       onAddSection={addResourceSection}
       onUpdateSection={updateResourceSection}
+      onRemoveSection={removeResourceSection}
     />
   );
 
@@ -1312,6 +1319,7 @@ function UnlockSection({
   onPickResourceFile,
   onAddSection,
   onUpdateSection,
+  onRemoveSection,
 }: {
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
@@ -1327,6 +1335,7 @@ function UnlockSection({
   onPickResourceFile: () => void;
   onAddSection: () => void;
   onUpdateSection: (id: string, patch: Partial<PostComposerDraft['resource']['sections'][number]>) => void;
+  onRemoveSection: (id: string) => void;
 }) {
   const resourceActive = draft.resource.accessMode !== 'none';
   const unlockEnabled = resourceActive
@@ -1458,7 +1467,14 @@ function UnlockSection({
             <View style={{ gap: appTheme.spacing.gap }}>
               {draft.resource.sections.map((section, index) => (
                 <View key={section.id} style={{ gap: appTheme.spacing.compact }}>
-                  <AppText variant="label" color="muted">{`Section ${index + 1}`}</AppText>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
+                    <AppText variant="label" color="muted">{`Section ${index + 1}`}</AppText>
+                    <MiniAction
+                      label="Remove"
+                      accessibilityLabel={`Remove Section ${index + 1}`}
+                      onPress={() => onRemoveSection(section.id)}
+                    />
+                  </View>
                   <ComposerInput value={section.title} onChangeText={(title) => onUpdateSection(section.id, { title })} placeholder="Section title" />
                   <ComposerInput value={section.description} onChangeText={(description) => onUpdateSection(section.id, { description })} placeholder="Section description" multiline minHeight={68} />
                   <ComposerInput value={section.promptText} onChangeText={(promptText) => onUpdateSection(section.id, { promptText })} placeholder="Section prompt" multiline minHeight={76} />
@@ -2146,10 +2162,21 @@ function MediaGalleryCard({
   );
 }
 
-function MiniAction({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
+function MiniAction({
+  label,
+  onPress,
+  disabled = false,
+  accessibilityLabel,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  accessibilityLabel?: string;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({

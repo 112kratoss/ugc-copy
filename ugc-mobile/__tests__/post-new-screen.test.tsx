@@ -338,6 +338,36 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(expandedText).toContain('Remix access');
   });
 
+  it('removes resource sections from the inline section layout', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add references & unlockable resources').props.onPress();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Enable section layout').props.onPress();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add section').props.onPress();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add section').props.onPress();
+    });
+
+    expect(collectText(tree!.root)).toContain('Section 2');
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree!.root, 'Remove Section 2').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Section 1');
+    expect(text).not.toContain('Section 2');
+  });
+
   it('keeps the composer chrome compact instead of explaining every section', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
