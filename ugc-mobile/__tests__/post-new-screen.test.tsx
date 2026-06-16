@@ -253,8 +253,15 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).not.toContain('Publish checklist');
     expect(text).not.toContain('Checklist');
     expect(text).not.toContain('Preview');
+    expect(text).not.toContain('Selected creation');
+    expect(text).not.toContain('Creation selected');
+    expect(text).not.toContain('References and resources optional.');
     expect(text).toContain('Hero product image');
-    expect(text).toContain('Change creation');
+    expect(text.indexOf('Hero product image')).toBeGreaterThan(text.indexOf('Proof'));
+    expect(text.indexOf('Hero product image')).toBeLessThan(text.indexOf('Story'));
+    expect(text).toContain('Generated media');
+    expect(text).toContain('Attached automatically');
+    expect(text).toContain('Change');
   });
 
   it('ends the composer at publish without checklist or preview sections', () => {
@@ -278,9 +285,17 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     });
 
     const text = collectText(tree!.root);
-    expect(text).toContain('Tool 1');
-    expect(text).toContain('Model');
+    expect(text).toContain('Magicbooklet');
+    expect(text).toContain('seedream');
+    expect(text).not.toContain('Tool 1');
+    expect(text).not.toContain('Model');
     expect(text).toContain('Generated media attached');
+    expect(tree!.root.findAll(
+      (node) => String(node.type) === 'textinput' && node.props.placeholder === 'Choose or search tool'
+    )).toHaveLength(0);
+    expect(tree!.root.findAll(
+      (node) => String(node.type) === 'textinput' && node.props.placeholder === 'Any model'
+    )).toHaveLength(0);
     expect(text).toContain('Caption');
     expect(text).toContain('Add feed description');
     expect(text).not.toContain('Feed description');
@@ -400,7 +415,7 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).not.toContain('No unlock');
   });
 
-  it('surfaces the unlock section first after creation media when opened with focus=resources', () => {
+  it('keeps the web composer order when opened with focus=resources', () => {
     paramsState.params = { generationId: 'gen-1', focus: 'resources' };
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -408,8 +423,13 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     });
 
     const text = collectText(tree!.root);
-    expect(text.indexOf('Unlock')).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf('Unlock')).toBeLessThan(text.indexOf('Story'));
+    expect(text.indexOf('Title')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Made With')).toBeGreaterThan(text.indexOf('Title'));
+    expect(text.indexOf('Proof')).toBeGreaterThan(text.indexOf('Made With'));
+    expect(text.indexOf('Story')).toBeGreaterThan(text.indexOf('Proof'));
+    expect(text.indexOf('Unlock')).toBeGreaterThan(text.indexOf('Story'));
+    expect(text.indexOf('Publish')).toBeGreaterThan(text.indexOf('Unlock'));
+    expect(text).toContain('Add references & unlockable resources');
   });
 
   it('renders gallery controls for manual upload proof', () => {

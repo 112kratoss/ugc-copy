@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
-import { Check, ChevronDown, ImageIcon, Lock, PackageCheck, Play, Plus, Sparkles, X } from 'lucide-react-native';
+import { Check, ChevronDown, ImageIcon, Lock, Play, Plus, Sparkles, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -85,8 +85,6 @@ export default function NewPostScreen() {
   const params = useLocalSearchParams<{ generationId?: string; postId?: string; focus?: string }>();
   const generationId = params.generationId;
   const postId = params.postId;
-  const focusTarget = params.focus;
-  const focusResourcePackage = focusTarget === 'resources';
 
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -656,14 +654,6 @@ export default function NewPostScreen() {
           <StatusBlock tone={message.tone} title={message.title} body={message.body} />
         ) : null}
 
-        {selectedGeneration ? (
-          <SelectedCreationHero
-            item={selectedGeneration}
-            disabled={isFieldsLocked}
-            onChange={changeCreation}
-          />
-        ) : null}
-
         <TitleSection
           draft={draft}
           disabled={isFieldsLocked}
@@ -675,6 +665,7 @@ export default function NewPostScreen() {
             rows={draft.madeWithRows}
             sourceTools={sourceTools}
             disabled={isFieldsLocked || draft.mode === 'creation'}
+            compactReadOnly={draft.mode === 'creation'}
             onUpdate={updateMadeWithRow}
             onAdd={addMadeWithRow}
             onRemove={removeMadeWithRow}
@@ -694,11 +685,10 @@ export default function NewPostScreen() {
           onPickMedia={() => chooseMedia('mixed')}
           onChooseGeneration={chooseGeneration}
           onCreateGeneration={() => router.push('/(tabs)/creator' as never)}
+          onChangeGeneration={changeCreation}
           onRemoveMedia={removeMediaItem}
           onReorderMedia={reorderMediaItem}
         />
-
-        {focusResourcePackage ? unlockSection : null}
 
         <StorySection
           draft={draft}
@@ -708,7 +698,7 @@ export default function NewPostScreen() {
           onToggleDescription={() => setIsDescriptionOpen((current) => !current)}
         />
 
-        {!focusResourcePackage ? unlockSection : null}
+        {unlockSection}
 
         <PublishSection
           actions={publishActions}
@@ -729,6 +719,7 @@ function MadeWithSection({
   rows,
   sourceTools,
   disabled,
+  compactReadOnly = false,
   onUpdate,
   onAdd,
   onRemove,
@@ -736,12 +727,57 @@ function MadeWithSection({
   rows: PostComposerMadeWithRow[];
   sourceTools: SourceToolOption[];
   disabled: boolean;
+  compactReadOnly?: boolean;
   onUpdate: (id: string, patch: Partial<PostComposerMadeWithRow>) => void;
   onAdd: () => void;
   onRemove: (id: string) => void;
 }) {
   const toolOptions = getMadeWithToolOptions(sourceTools);
   const [activePickerId, setActivePickerId] = useState<string | null>(null);
+  const lockedRow = rows[0];
+
+  if (compactReadOnly && lockedRow) {
+    const toolLabel = lockedRow.toolLabel.trim() || 'Magicbooklet';
+    const modelLabel = lockedRow.modelLabel.trim();
+
+    return (
+      <SurfaceSection
+        eyebrow="Attribution"
+        title="Made With"
+        accent="image"
+        style={COMPOSER_SECTION_STYLE}
+      >
+        <View
+          style={{
+            minHeight: 48,
+            borderRadius: 16,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: 'rgba(125,211,252,0.20)',
+            backgroundColor: 'rgba(56,189,248,0.08)',
+            paddingHorizontal: appTheme.spacing.gap,
+            paddingVertical: 10,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: appTheme.spacing.gap,
+          }}
+        >
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <AppText variant="bodySm" color="text" numberOfLines={1}>
+              {toolLabel}
+            </AppText>
+            {modelLabel ? (
+              <AppText variant="caption" color="muted" numberOfLines={1}>
+                {modelLabel}
+              </AppText>
+            ) : null}
+          </View>
+          <MinimalStatusPill label="Locked" tone="neutral" />
+        </View>
+      </SurfaceSection>
+    );
+  }
 
   return (
     <SurfaceSection
@@ -1194,6 +1230,7 @@ function ProofSection({
   onPickMedia,
   onChooseGeneration,
   onCreateGeneration,
+  onChangeGeneration,
   onRemoveMedia,
   onReorderMedia,
 }: {
@@ -1209,6 +1246,7 @@ function ProofSection({
   onPickMedia: () => void;
   onChooseGeneration: (item: GenerationListItem) => void;
   onCreateGeneration: () => void;
+  onChangeGeneration: () => void;
   onRemoveMedia: (id: string) => void;
   onReorderMedia: (id: string, targetIndex: number) => void;
 }) {
@@ -1225,6 +1263,14 @@ function ProofSection({
           <Chip label="Text" active={draft.proofMode === 'text'} onPress={() => onModeChange('text')} disabled={isFieldsLocked} />
           <Chip label="Creation" active={draft.mode === 'creation'} onPress={() => onModeChange('creation')} disabled={isFieldsLocked} />
         </SegmentedRow>
+      ) : null}
+
+      {selectedGeneration ? (
+        <GeneratedProofCard
+          item={selectedGeneration}
+          disabled={isFieldsLocked}
+          onChange={onChangeGeneration}
+        />
       ) : null}
 
       {draft.mode === 'upload' ? (
@@ -1536,7 +1582,7 @@ function PublishSection({
   );
 }
 
-function SelectedCreationHero({
+function GeneratedProofCard({
   item,
   disabled,
   onChange,
@@ -1551,22 +1597,42 @@ function SelectedCreationHero({
   const visualUrl = mediaKind === 'video' ? previewUrl : mediaUrl;
 
   return (
-    <SurfaceSection
-      eyebrow="Selected creation"
-      title={getPublishGenerationTitle(item)}
-      body={getPublishGenerationSubtitle(item)}
-      accent="motion"
-      action={!disabled ? <SecondaryButton label="Change creation" onPress={onChange} /> : null}
-      style={COMPOSER_SECTION_STYLE}
+    <View
+      style={{
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.10)',
+        backgroundColor: 'rgba(255,255,255,0.025)',
+        padding: appTheme.spacing.gap,
+        gap: appTheme.spacing.gap,
+      }}
     >
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
+        <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
+          <AppText variant="label" color="muted" style={{ textTransform: 'uppercase' }}>
+            Generated media
+          </AppText>
+          <AppText variant="cardTitle" numberOfLines={2}>
+            {getPublishGenerationTitle(item)}
+          </AppText>
+          <AppText variant="caption" color="muted" numberOfLines={2}>
+            {`Created in Magicbooklet with ${item.model || 'your latest model'}.`}
+          </AppText>
+        </View>
+        <View style={{ flexShrink: 0, alignItems: 'flex-end', gap: appTheme.spacing.compact }}>
+          <MinimalStatusPill label="Attached automatically" tone="workflow" />
+          {!disabled ? <MiniAction label="Change" onPress={onChange} /> : null}
+        </View>
+      </View>
       <View
         style={{
-          minHeight: 168,
-          borderRadius: appTheme.radii.lg,
+          minHeight: 220,
+          borderRadius: 16,
           borderCurve: 'continuous',
           overflow: 'hidden',
           borderWidth: 1,
-          borderColor: appTheme.colors.border,
+          borderColor: 'rgba(255,255,255,0.08)',
           backgroundColor: appTheme.colors.surfaceInset,
         }}
       >
@@ -1583,15 +1649,8 @@ function SelectedCreationHero({
             <Play size={44} color="#fff" fill="#fff" />
           </View>
         ) : null}
-        <View style={{ position: 'absolute', left: 10, right: 10, bottom: 10, borderRadius: appTheme.radii.md, backgroundColor: 'rgba(0,0,0,0.62)', padding: 10, gap: 5 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-            <PackageCheck size={17} color={appTheme.colors.success} />
-            <AppText variant="label" color="text" numberOfLines={1}>Creation selected</AppText>
-          </View>
-          <AppText variant="caption" color="textSecondary" numberOfLines={1}>References and resources optional.</AppText>
-        </View>
       </View>
-    </SurfaceSection>
+    </View>
   );
 }
 
