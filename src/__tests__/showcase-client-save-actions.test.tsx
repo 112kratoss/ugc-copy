@@ -190,7 +190,7 @@ describe('ShowcaseClient save actions', () => {
   it('optimistically saves a showcase card with accessible pressed state', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
-      json: async () => ({ success: true }),
+      json: async () => ({ success: true, isSaved: true, saveCount: 5, changed: true }),
     })));
 
     renderShowcase(createShowcaseItem());
@@ -207,6 +207,14 @@ describe('ShowcaseClient save actions', () => {
         name: /remove save from campaign frame\. 5 saves/i,
       })).toHaveAttribute('aria-pressed', 'true');
     });
+    expect(fetch).toHaveBeenCalledWith('/api/showcase/save', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        postId: 'post-1',
+        shouldSave: true,
+        sourceSurface: 'showcase',
+      }),
+    }));
   });
 
   it('rolls the showcase card save state back when the API fails', async () => {
@@ -261,6 +269,40 @@ describe('ShowcaseClient save actions', () => {
         Authorization: 'Bearer test-token',
       }),
     }));
+  });
+
+  it('reconciles an optimistic save with canonical server state when saved-state hydration is stale', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => [],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          isSaved: true,
+          saveCount: 4,
+          changed: false,
+        }),
+      };
+    }));
+
+    renderShowcase(createShowcaseItem({ isSaved: false }));
+
+    fireEvent.click(screen.getByRole('button', {
+      name: /save campaign frame\. 4 saves/i,
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', {
+        name: /remove save from campaign frame\. 4 saves/i,
+      })).toHaveAttribute('aria-pressed', 'true');
+    });
   });
 
   it('labels paid unlock links with the price instead of a generic view action', () => {

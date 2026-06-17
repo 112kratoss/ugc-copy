@@ -1,5 +1,5 @@
 import { useIsFocused } from '@react-navigation/native';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,7 +11,6 @@ import type React from 'react';
 import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
@@ -24,6 +23,7 @@ import {
 } from '@/lib/immersive-preview-view-model';
 import {
   buildViewerItems,
+  type ImmersiveSourceData,
   loadImmersiveSourceData,
   normalizeParam,
   normalizeViewerSource,
@@ -32,12 +32,27 @@ import {
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import {
+  applyShowcaseSaveStateToFeedResponse,
+  applyShowcaseSaveStateToInfiniteFeed,
+  applyShowcaseSaveStateToPostResponse,
+  applyShowcaseSaveStateToSourceData,
+  scheduleShowcaseSaveCompletionEffects,
+  type ShowcaseSaveStateResult,
+} from '@/lib/showcase-save-cache';
 import { appTheme } from '@/lib/theme';
-import type { ShowcaseMediaItem } from '@/lib/types';
+import type { ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 
 type ProfileMediaFeedParams = {
   source?: string | string[];
   initialId?: string | string[];
+};
+
+type SaveMutationVariables = {
+  postId: string;
+  previousSaveCount: number;
+  shouldSave: boolean;
+  sourceSurface: string;
 };
 
 export function ProfileMediaFeedScreen() {
@@ -67,8 +82,13 @@ export function ProfileMediaFeedScreen() {
     staleTime: 1000 * 60 * 5,
   });
 
+  const sourceQueryKey = useMemo(
+    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId] as const,
+    [initialId, source, user?.id]
+  );
+
   const sourceQuery = useQuery({
-    queryKey: ['immersive-preview-source', source, user?.id ?? 'guest', initialId],
+    queryKey: sourceQueryKey,
     enabled: Boolean(source),
     initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
     queryFn: () => loadImmersiveSourceData({ api, source, initialId }),
@@ -110,13 +130,55 @@ export function ProfileMediaFeedScreen() {
     return () => cancelFrame(frame);
   }, [initialIndex, items.length]);
 
+  const reconcileShowcaseSave = (
+    result: ShowcaseSaveStateResult,
+    options: { removeWhenUnsaved?: boolean } = {}
+  ) => {
+    queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) =>
+      applyShowcaseSaveStateToSourceData(data, result, options)
+    );
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: ['showcase-feed'] }, (data) =>
+      applyShowcaseSaveStateToInfiniteFeed(data, result)
+    );
+    queryClient.setQueriesData<ShowcasePostResponse>({ queryKey: ['showcase-post', result.postId] }, (data) =>
+      applyShowcaseSaveStateToPostResponse(data, result)
+    );
+    queryClient.setQueryData<ShowcaseFeedResponse>(['profile-saved-media', user?.id], (data) =>
+      applyShowcaseSaveStateToFeedResponse(data, result, {
+        removeWhenUnsaved: true,
+      })
+    );
+  };
+
   const saveMutation = useMutation({
-    mutationFn: (postId: string) => api.saveShowcasePost(postId),
-    onSuccess: async (_result, postId) => {
-      await Haptics.selectionAsync();
-      await queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
-      await queryClient.invalidateQueries({ queryKey: ['showcase-post', postId] });
-      await queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
+    mutationFn: ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface }),
+    onMutate: async (variables) => {
+      reconcileShowcaseSave({
+        postId: variables.postId,
+        isSaved: variables.shouldSave,
+        saveCount: Math.max(0, variables.previousSaveCount + (variables.shouldSave ? 1 : -1)),
+      });
+    },
+    onError: (_error, variables) => {
+      reconcileShowcaseSave({
+        postId: variables.postId,
+        isSaved: !variables.shouldSave,
+        saveCount: variables.previousSaveCount,
+      });
+    },
+    onSuccess: (result, variables) => {
+      reconcileShowcaseSave({
+        postId: variables.postId,
+        isSaved: result.isSaved,
+        saveCount: result.saveCount,
+      });
+      scheduleShowcaseSaveCompletionEffects({
+        postId: variables.postId,
+        userId: user?.id,
+        hapticFeedback: Haptics.selectionAsync,
+        invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
+      });
     },
   });
 
@@ -138,7 +200,12 @@ export function ProfileMediaFeedScreen() {
       router.push('/auth');
       return;
     }
-    saveMutation.mutate(item.showcasePostId);
+    saveMutation.mutate({
+      postId: item.showcasePostId,
+      previousSaveCount: item.saveCount,
+      shouldSave: !item.isSaved,
+      sourceSurface: 'mobile-profile-media-feed',
+    });
   };
 
   const shareItem = async (item: ImmersivePreviewItem) => {
@@ -283,7 +350,7 @@ export function ProfileMediaFeedScreen() {
             onRecreate={() => void recreateItem(item)}
             onSave={() => saveItem(item)}
             onShare={() => void shareItem(item)}
-            saveLoading={saveMutation.isPending && saveMutation.variables === item.showcasePostId}
+            saveLoading={saveMutation.isPending && saveMutation.variables?.postId === item.showcasePostId}
             visibilityLoading={linkedVisibilityMutation.isPending && linkedVisibilityMutation.variables?.postId === item.linkedPostId}
             width={width}
           />

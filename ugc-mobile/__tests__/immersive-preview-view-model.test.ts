@@ -180,6 +180,16 @@ describe('immersive preview view model', () => {
     });
   });
 
+  it('uses save or unsave actions based on the current showcase saved state', () => {
+    const items = buildImmersiveShowcaseItems('showcase-feed', [
+      showcaseItem({ id: 'unsaved-post', isSaved: false }),
+      showcaseItem({ id: 'saved-post', isSaved: true }),
+    ]);
+
+    expect(items[0].availableActions[0]).toBe('save');
+    expect(items[1].availableActions[0]).toBe('unsave');
+  });
+
   it('maps owner post bundle metadata for viewer details', () => {
     const [item] = buildImmersiveOwnerPostItems('profile-posts', [
       ownerPost({
@@ -249,6 +259,8 @@ describe('immersive preview view model', () => {
       badge: 'Motion',
       creatorLabel: '@batman',
       creatorAvatar: 'https://cdn.example.com/avatar.png',
+      saveLabel: 'Saved',
+      isSaved: true,
       canSave: false,
       canShare: true,
       sharePath: null,

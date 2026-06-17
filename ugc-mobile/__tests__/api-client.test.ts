@@ -163,6 +163,43 @@ describe('mobile api client caching', () => {
     expect(response.tools[0].models[0].label).toBe('Gen-4');
   });
 
+  it('saves showcase posts with an idempotent target state and source surface', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      isSaved: false,
+      saveCount: 4,
+      changed: true,
+      message: 'Removed from bookmarks',
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.saveShowcasePost('post-1', {
+      shouldSave: false,
+      sourceSurface: 'mobile-viewer',
+    });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/showcase/save');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      postId: 'post-1',
+      shouldSave: false,
+      sourceSurface: 'mobile-viewer',
+    });
+    expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect(response).toMatchObject({
+      success: true,
+      isSaved: false,
+      saveCount: 4,
+      changed: true,
+    });
+  });
+
   it('uploads post resource files as FormData without forcing a JSON content type', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
       success: true,

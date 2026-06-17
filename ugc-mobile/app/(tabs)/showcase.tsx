@@ -43,7 +43,7 @@ import {
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
 import { accentColor, appTheme } from '@/lib/theme';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem } from '@/lib/types';
+import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 
 type FeedFilterId = 'all' | 'unlocks' | 'free' | 'paid' | 'remixable';
 
@@ -178,7 +178,10 @@ export default function ShowcaseScreen() {
   };
 
   const openPost = (item: ShowcaseFeedItem) => {
-    queryClient.setQueryData(createShowcasePostQueryKey(item.id, user?.id), item);
+    queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
+      success: true,
+      item,
+    });
     router.push(immersiveViewerHref({ source: 'showcase-feed', initialId: item.id }) as never);
   };
 

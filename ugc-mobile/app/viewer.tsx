@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
@@ -35,6 +35,7 @@ import {
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import {
   buildViewerItems,
+  type ImmersiveSourceData,
   loadImmersiveSourceData,
   normalizeParam,
   normalizeViewerSource,
@@ -42,13 +43,29 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import {
+  applyShowcaseSaveStateToFeedResponse,
+  applyShowcaseSaveStateToInfiniteFeed,
+  applyShowcaseSaveStateToPostResponse,
+  applyShowcaseSaveStateToSourceData,
+  scheduleShowcaseSaveCompletionEffects,
+  type ShowcaseSaveStateResult,
+} from '@/lib/showcase-save-cache';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
-import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseMediaItem } from '@/lib/types';
+import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import { getRailActionOpacity, getSaveHeartIconProps } from '@/lib/viewer-actions';
 
 type ViewerParams = {
   source?: string | string[];
   initialId?: string | string[];
+};
+
+type SaveMutationVariables = {
+  postId: string;
+  previousSaveCount: number;
+  shouldSave: boolean;
+  sourceSurface: string;
 };
 
 export default function ImmersivePreviewViewerScreen() {
@@ -77,8 +94,13 @@ export default function ImmersivePreviewViewerScreen() {
     staleTime: 1000 * 60 * 5,
   });
 
+  const sourceQueryKey = useMemo(
+    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId] as const,
+    [initialId, source, user?.id]
+  );
+
   const sourceQuery = useQuery({
-    queryKey: ['immersive-preview-source', source, user?.id ?? 'guest', initialId],
+    queryKey: sourceQueryKey,
     enabled: Boolean(source),
     initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
     queryFn: () => loadImmersiveSourceData({ api, source, initialId }),
@@ -114,13 +136,61 @@ export default function ImmersivePreviewViewerScreen() {
     return () => cancelAnimationFrame(frame);
   }, [initialIndex, items.length]);
 
+  const reconcileShowcaseSave = useCallback((
+    result: ShowcaseSaveStateResult,
+    options: { removeWhenUnsaved?: boolean } = {}
+  ) => {
+    queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) =>
+      applyShowcaseSaveStateToSourceData(data, result, options)
+    );
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: ['showcase-feed'] }, (data) =>
+      applyShowcaseSaveStateToInfiniteFeed(data, result)
+    );
+    queryClient.setQueriesData<ShowcasePostResponse>({ queryKey: ['showcase-post', result.postId] }, (data) =>
+      applyShowcaseSaveStateToPostResponse(data, result)
+    );
+    queryClient.setQueryData<ShowcaseFeedResponse>(['profile-saved-media', user?.id], (data) =>
+      applyShowcaseSaveStateToFeedResponse(data, result, {
+        removeWhenUnsaved: true,
+      })
+    );
+  }, [queryClient, sourceQueryKey, user?.id]);
+
   const saveMutation = useMutation({
-    mutationFn: (postId: string) => api.saveShowcasePost(postId),
-    onSuccess: async (_result, postId) => {
-      await Haptics.selectionAsync();
-      await queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
-      await queryClient.invalidateQueries({ queryKey: ['showcase-post', postId] });
-      await queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
+    mutationFn: ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface }),
+    onMutate: async (variables) => {
+      const optimisticSaveCount = Math.max(
+        0,
+        variables.previousSaveCount + (variables.shouldSave ? 1 : -1)
+      );
+      reconcileShowcaseSave({
+        postId: variables.postId,
+        isSaved: variables.shouldSave,
+        saveCount: optimisticSaveCount,
+      });
+    },
+    onError: (_error, variables) => {
+      reconcileShowcaseSave({
+        postId: variables.postId,
+        isSaved: !variables.shouldSave,
+        saveCount: variables.previousSaveCount,
+      });
+    },
+    onSuccess: (result, variables) => {
+      reconcileShowcaseSave({
+        postId: variables.postId,
+        isSaved: result.isSaved,
+        saveCount: result.saveCount,
+      }, {
+        removeWhenUnsaved: source === 'profile-saved' && !result.isSaved,
+      });
+      scheduleShowcaseSaveCompletionEffects({
+        postId: variables.postId,
+        userId: user?.id,
+        hapticFeedback: Haptics.selectionAsync,
+        invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
+      });
     },
   });
 
@@ -130,7 +200,12 @@ export default function ImmersivePreviewViewerScreen() {
       router.push('/auth');
       return;
     }
-    saveMutation.mutate(item.showcasePostId);
+    saveMutation.mutate({
+      postId: item.showcasePostId,
+      previousSaveCount: item.saveCount,
+      shouldSave: !item.isSaved,
+      sourceSurface: source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer',
+    });
   };
 
   const shareItem = async (item: ImmersivePreviewItem) => {
@@ -223,7 +298,7 @@ export default function ImmersivePreviewViewerScreen() {
             onRecreate={recreateItem}
             onSave={saveItem}
             onShare={shareItem}
-            saveLoading={saveMutation.isPending && saveMutation.variables === item.showcasePostId}
+            saveLoading={saveMutation.isPending && saveMutation.variables?.postId === item.showcasePostId}
             topInset={topInset}
             width={width}
           />
@@ -261,7 +336,7 @@ export default function ImmersivePreviewViewerScreen() {
           onRecreate={recreateItem}
           onSave={saveItem}
           onShare={shareItem}
-          saveLoading={saveMutation.isPending && saveMutation.variables === activeItem.showcasePostId}
+          saveLoading={saveMutation.isPending && saveMutation.variables?.postId === activeItem.showcasePostId}
           topInset={topInset}
           visible={detailsSheetOpenItemId === activeItem.id}
           width={width}
@@ -466,10 +541,11 @@ function ImmersiveSlide({
           />
           <RailActionButton
             disabled={!item.canSave}
-            icon={<Heart size={27} color="#ffffff" fill={item.isSaved ? '#ffffff' : 'transparent'} strokeWidth={2.6} />}
+            icon={<Heart size={27} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
             label={item.isSaved ? 'Saved' : item.saveLabel}
             loading={saveLoading}
             onPress={() => onSave(item)}
+            showDisabledAsActive={item.isSaved && !item.canSave}
           />
           <RailActionButton
             icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
@@ -920,7 +996,7 @@ function PostDetailsPage({
           <DetailActionButton
             disabled={!item.canSave}
             label={item.isSaved ? 'Saved' : 'Save'}
-            icon={<Heart size={18} color={item.canSave ? '#fff' : 'rgba(255,255,255,0.5)'} fill={item.isSaved ? '#fff' : 'transparent'} strokeWidth={2.6} />}
+            icon={<Heart size={18} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
             loading={saveLoading}
             onPress={() => onSave(item)}
           />
@@ -1386,6 +1462,7 @@ function RailActionButton({
   loading,
   onPress,
   primary,
+  showDisabledAsActive,
 }: {
   disabled?: boolean;
   icon: React.ReactNode;
@@ -1393,6 +1470,7 @@ function RailActionButton({
   loading?: boolean;
   onPress: () => void;
   primary?: boolean;
+  showDisabledAsActive?: boolean;
 }) {
   return (
     <Pressable
@@ -1402,7 +1480,11 @@ function RailActionButton({
       style={({ pressed }) => ({
         alignItems: 'center',
         gap: 5,
-        opacity: disabled ? 0.42 : pressed ? 0.72 : 1,
+        opacity: getRailActionOpacity({
+          disabled: disabled || loading,
+          pressed,
+          showAsActive: showDisabledAsActive,
+        }),
         minWidth: 64,
       })}
     >

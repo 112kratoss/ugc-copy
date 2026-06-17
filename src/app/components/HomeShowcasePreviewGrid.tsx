@@ -69,6 +69,7 @@ export default function HomeShowcasePreviewGrid({
     isSignedIn: Boolean(user && session?.access_token),
     onAuthRequired: () => router.push('/login?returnUrl=/'),
     onError: (error) => console.error('Failed to save homepage showcase item:', error),
+    sourceSurface: 'home',
   });
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
 

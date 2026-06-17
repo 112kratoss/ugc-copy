@@ -17,6 +17,7 @@ import type {
   PromptEnhancementRequest,
   PromptEnhancementResponse,
   PostResourceAttachment,
+  PostResourceBundleInput,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
   SourceToolOption,
@@ -45,6 +46,19 @@ type RequestOptions = {
   auth?: boolean;
   cacheTtlMs?: number;
 };
+
+export interface SaveShowcasePostOptions {
+  shouldSave: boolean;
+  sourceSurface?: string;
+}
+
+export interface SaveShowcasePostResponse {
+  success: boolean;
+  isSaved: boolean;
+  saveCount: number;
+  changed: boolean;
+  message?: string;
+}
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -273,10 +287,14 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
         return { success: true, item };
       }
     },
-    saveShowcasePost: (postId: string) =>
-      request<{ success: boolean; isSaved: boolean | null; message?: string }>('/api/showcase/save', {
+    saveShowcasePost: (postId: string, options: SaveShowcasePostOptions) =>
+      request<SaveShowcasePostResponse>('/api/showcase/save', {
         method: 'POST',
-        body: JSON.stringify({ postId }),
+        body: JSON.stringify({
+          postId,
+          shouldSave: options.shouldSave,
+          ...(options.sourceSurface ? { sourceSurface: options.sourceSurface } : {}),
+        }),
       }),
     remixShowcasePost: (postId: string) =>
       request<{ success: boolean; redirectTo?: string; prefill?: { prompt?: string; settings?: unknown } }>('/api/showcase/remix', {
@@ -303,7 +321,7 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
     listOwnerPosts: (params?: Record<string, QueryValue>) =>
       request<OwnerPostsResponse>(`/api/posts${buildQuery({ ...params, scope: 'owner' })}`),
     getOwnerPost: (postId: string) =>
-      request<{ success: boolean; post: OwnerPostListItem & { resourceBundleInput?: any } }>(`/api/posts/${postId}`),
+      request<{ success: boolean; post: OwnerPostListItem & { resourceBundleInput?: PostResourceBundleInput | null } }>(`/api/posts/${postId}`),
     updatePost: (postId: string, body: Record<string, unknown>) =>
       request<{ success: boolean; postId: string; visibility: string }>(`/api/posts/${postId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     archivePost: (postId: string) =>

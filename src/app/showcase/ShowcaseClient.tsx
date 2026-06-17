@@ -206,6 +206,7 @@ export default function ShowcaseClient({
         isSignedIn: Boolean(user && session?.access_token),
         onAuthRequired: () => router.push('/login?returnUrl=/showcase'),
         onError: (error) => console.error('Save failed:', error),
+        sourceSurface: 'showcase',
     });
     const [category, setCategory] = useState(initialCategory);
     const [sort, setSort] = useState(initialSort);

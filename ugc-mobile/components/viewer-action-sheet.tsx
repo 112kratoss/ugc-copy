@@ -77,13 +77,19 @@ export function ViewerActionSheet({
   const handleAction = (action: string) => {
     onClose();
 
-    if (action === 'unsave') {
+    if (action === 'save' || action === 'unsave') {
+      const shouldSave = action === 'save';
       confirmMutation(
-        'Unsave post',
-        'Remove this post from your saved media?',
-        'Unsave',
-        () => item.showcasePostId ? api.saveShowcasePost(item.showcasePostId) : Promise.resolve(),
-        true
+        shouldSave ? 'Save post' : 'Unsave post',
+        shouldSave ? 'Add this post to your saved media?' : 'Remove this post from your saved media?',
+        shouldSave ? 'Save' : 'Unsave',
+        () => item.showcasePostId
+          ? api.saveShowcasePost(item.showcasePostId, {
+              shouldSave,
+              sourceSurface: item.source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer-actions',
+            })
+          : Promise.resolve(),
+        !shouldSave
       );
       return;
     }

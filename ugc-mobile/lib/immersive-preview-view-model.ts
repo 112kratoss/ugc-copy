@@ -251,6 +251,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
   const title = item.title.trim() || item.prompt.trim() || displayText;
   const textOnly = isTextOnlyShowcasePost(item);
   const creatorLabel = creatorHandle(item.creator.username, item.creator.name);
+  const isSaved = Boolean(item.isSaved) || source === 'profile-saved';
 
   return {
     id: item.id,
@@ -267,7 +268,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     badge: showcaseBadge(item),
     saveLabel: formatCompactCount(item.saveCount),
     saveCount: item.saveCount,
-    isSaved: Boolean(item.isSaved),
+    isSaved,
     canSave: true,
     canShare: true,
     sharePath: `/showcase/${item.id}`,
@@ -305,7 +306,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     linkedPostVisibility: null,
     archivedAt: null,
     visibility: 'public',
-    availableActions: ['unsave', 'share', 'recreate', 'view-details', 'open-original'],
+    availableActions: [isSaved ? 'unsave' : 'save', 'share', 'recreate', 'view-details', 'open-original'],
     disabledActions: {},
   };
 }
@@ -342,9 +343,9 @@ function generationToImmersiveItem(
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
     badge: generationBadge(kind),
-    saveLabel: '0',
+    saveLabel: 'Saved',
     saveCount: 0,
-    isSaved: false,
+    isSaved: true,
     canSave: false,
     canShare: true,
     sharePath: null,

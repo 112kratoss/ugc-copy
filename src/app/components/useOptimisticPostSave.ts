@@ -15,6 +15,14 @@ interface UseOptimisticPostSaveOptions<TItem extends SaveablePostItem> {
   isSignedIn: boolean;
   onAuthRequired: () => void;
   onError: (error: unknown) => void;
+  sourceSurface: string;
+}
+
+interface SaveResponse {
+  success?: boolean;
+  error?: string;
+  isSaved?: boolean | null;
+  saveCount?: number | null;
 }
 
 function deriveSavedIds(items: SaveablePostItem[]) {
@@ -52,12 +60,28 @@ function updateSaveCount<TItem extends SaveablePostItem>(
   );
 }
 
+function setSaveCount<TItem extends SaveablePostItem>(
+  items: TItem[],
+  id: string,
+  saveCount: number
+) {
+  return items.map((item) =>
+    item.id === id
+      ? {
+          ...item,
+          saveCount: Math.max(0, saveCount),
+        }
+      : item
+  );
+}
+
 export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   initialItems,
   accessToken,
   isSignedIn,
   onAuthRequired,
   onError,
+  sourceSurface,
 }: UseOptimisticPostSaveOptions<TItem>) {
   const [items, setItems] = useState<TItem[]>(initialItems);
   const [savedItemIds, setSavedItemIds] = useState<Set<string>>(() => deriveSavedIds(initialItems));
@@ -144,12 +168,24 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ generationId: id }),
+        body: JSON.stringify({
+          postId: id,
+          shouldSave: nextSaved,
+          sourceSurface,
+        }),
       });
 
-      const data = await response.json();
+      const data = await response.json() as SaveResponse;
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Failed to save showcase item');
+      }
+
+      if (typeof data.isSaved === 'boolean') {
+        setSavedItemIds((previous) => updateSavedIds(previous, id, data.isSaved === true));
+      }
+
+      if (typeof data.saveCount === 'number') {
+        setItems((previous) => setSaveCount(previous, id, data.saveCount as number));
       }
     } catch (error) {
       onError(error);
