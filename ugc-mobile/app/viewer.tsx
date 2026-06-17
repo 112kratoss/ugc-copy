@@ -8,7 +8,7 @@ import { useVideoPlayer } from 'expo-video';
 import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
@@ -54,7 +54,7 @@ import {
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { getRailActionOpacity, getSaveHeartIconProps } from '@/lib/viewer-actions';
+import { getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
 
 type ViewerParams = {
   source?: string | string[];
@@ -545,7 +545,9 @@ function ImmersiveSlide({
             label={item.isSaved ? 'Saved' : item.saveLabel}
             loading={saveLoading}
             onPress={() => onSave(item)}
+            preserveIconWhileLoading
             showDisabledAsActive={item.isSaved && !item.canSave}
+            tapAnimationSpec={getSaveHeartTapAnimationSpec({ willSave: !item.isSaved, enabled: item.canSave })}
           />
           <RailActionButton
             icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
@@ -1462,7 +1464,9 @@ function RailActionButton({
   loading,
   onPress,
   primary,
+  preserveIconWhileLoading,
   showDisabledAsActive,
+  tapAnimationSpec,
 }: {
   disabled?: boolean;
   icon: React.ReactNode;
@@ -1470,20 +1474,72 @@ function RailActionButton({
   loading?: boolean;
   onPress: () => void;
   primary?: boolean;
+  preserveIconWhileLoading?: boolean;
   showDisabledAsActive?: boolean;
+  tapAnimationSpec?: SaveHeartTapAnimationSpec;
 }) {
+  const tapProgress = useRef(new Animated.Value(0)).current;
+  const [activeTapAnimationSpec, setActiveTapAnimationSpec] = useState(tapAnimationSpec);
+  const animationSpec = activeTapAnimationSpec ?? tapAnimationSpec;
+  const iconScale = tapProgress.interpolate({
+    inputRange: [0, 0.32, 0.66, 1],
+    outputRange: [
+      1,
+      animationSpec?.pressInScale ?? 1,
+      animationSpec?.peakScale ?? 1,
+      1,
+    ],
+  });
+  const haloOpacity = tapProgress.interpolate({
+    inputRange: [0, 0.36, 1],
+    outputRange: [0, animationSpec?.haloPeakOpacity ?? 0, 0],
+  });
+  const haloScale = tapProgress.interpolate({
+    inputRange: [0, 0.44, 1],
+    outputRange: [0.92, animationSpec?.haloPeakScale ?? 1, (animationSpec?.haloPeakScale ?? 1) + 0.04],
+  });
+
+  const runTapAnimation = useCallback(() => {
+    if (!tapAnimationSpec) {
+      return;
+    }
+
+    setActiveTapAnimationSpec(tapAnimationSpec);
+    tapProgress.stopAnimation();
+    tapProgress.setValue(0);
+    Animated.sequence([
+      Animated.timing(tapProgress, {
+        toValue: 0.32,
+        duration: tapAnimationSpec.pressInDurationMs,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(tapProgress, {
+        toValue: 1,
+        duration: tapAnimationSpec.settleDurationMs,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [tapAnimationSpec, tapProgress]);
+
+  const handlePress = useCallback(() => {
+    runTapAnimation();
+    onPress();
+  }, [onPress, runTapAnimation]);
+
   return (
     <Pressable
       accessibilityRole="button"
       disabled={disabled || loading}
-      onPress={onPress}
+      onPress={handlePress}
       style={({ pressed }) => ({
         alignItems: 'center',
         gap: 5,
         opacity: getRailActionOpacity({
           disabled: disabled || loading,
           pressed,
-          showAsActive: showDisabledAsActive,
+          showAsActive: showDisabledAsActive || (Boolean(loading) && Boolean(preserveIconWhileLoading)),
         }),
         minWidth: 64,
       })}
@@ -1500,7 +1556,27 @@ function RailActionButton({
           backgroundColor: primary ? '#67ff45' : 'rgba(12,12,16,0.42)',
         }}
       >
-        {loading ? <ActivityIndicator color={primary ? '#050505' : '#fff'} /> : icon}
+        {tapAnimationSpec && animationSpec ? (
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              width: 54,
+              height: 54,
+              borderRadius: 27,
+              backgroundColor: animationSpec.haloColor,
+              opacity: haloOpacity,
+              transform: [{ scale: haloScale }],
+            }}
+          />
+        ) : null}
+        {loading && !preserveIconWhileLoading ? (
+          <ActivityIndicator color={primary ? '#050505' : '#fff'} />
+        ) : (
+          <Animated.View style={{ transform: [{ scale: iconScale }] }}>
+            {icon}
+          </Animated.View>
+        )}
       </View>
       <Text
         numberOfLines={1}

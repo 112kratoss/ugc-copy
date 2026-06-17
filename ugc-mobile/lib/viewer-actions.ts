@@ -1,6 +1,7 @@
 const SAVE_HEART_COLOR = '#fb7185';
 const ENABLED_HEART_COLOR = '#ffffff';
 const DISABLED_HEART_COLOR = 'rgba(255,255,255,0.5)';
+const SAVE_HEART_HALO_COLOR = 'rgba(251,113,133,0.22)';
 
 export function getSaveHeartIconProps({
   isSaved,
@@ -17,6 +18,26 @@ export function getSaveHeartIconProps({
     strokeWidth: 2.6,
   };
 }
+
+export function getSaveHeartTapAnimationSpec({
+  willSave,
+  enabled = true,
+}: {
+  willSave: boolean;
+  enabled?: boolean;
+}) {
+  return {
+    pressInScale: 0.96,
+    peakScale: willSave ? 1.04 : 0.99,
+    haloPeakScale: willSave ? 1.14 : 1.06,
+    haloPeakOpacity: enabled ? (willSave ? 0.14 : 0.07) : 0,
+    pressInDurationMs: 70,
+    settleDurationMs: 220,
+    haloColor: SAVE_HEART_HALO_COLOR,
+  };
+}
+
+export type SaveHeartTapAnimationSpec = ReturnType<typeof getSaveHeartTapAnimationSpec>;
 
 export function getRailActionOpacity({
   disabled,

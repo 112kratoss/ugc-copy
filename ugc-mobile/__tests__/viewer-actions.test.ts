@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getRailActionOpacity,
   getSaveHeartIconProps,
+  getSaveHeartTapAnimationSpec,
   getViewerActionGroupLabel,
   getViewerActionLabel,
   isDestructiveViewerAction,
@@ -48,5 +49,17 @@ describe('immersive viewer actions', () => {
     expect(getRailActionOpacity({ disabled: true, showAsActive: true })).toBe(1);
     expect(getRailActionOpacity({ disabled: true })).toBe(0.42);
     expect(getRailActionOpacity({ disabled: false, pressed: true })).toBe(0.72);
+  });
+
+  it('uses a restrained heart tap animation for save feedback', () => {
+    const saveSpec = getSaveHeartTapAnimationSpec({ willSave: true });
+    expect(saveSpec.pressInScale).toBe(0.96);
+    expect(saveSpec.peakScale).toBe(1.04);
+    expect(saveSpec.haloPeakScale).toBe(1.14);
+    expect(saveSpec.haloPeakOpacity).toBeLessThanOrEqual(0.14);
+
+    const unsaveSpec = getSaveHeartTapAnimationSpec({ willSave: false });
+    expect(unsaveSpec.peakScale).toBeLessThan(saveSpec.peakScale);
+    expect(unsaveSpec.haloPeakOpacity).toBeLessThan(saveSpec.haloPeakOpacity);
   });
 });
