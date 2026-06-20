@@ -7,7 +7,10 @@ import {
   createMediaDraftFromUpload,
   getCreditEstimate,
   getCreationReadiness,
+  getCreationSectionOrder,
   getCreationSectionSummary,
+  getVisibleGenerationCheckMessages,
+  renameMediaDraft,
   validateCreationDraft,
   type MediaDraft,
 } from '../lib/media-creation-view-model';
@@ -60,6 +63,62 @@ function audioReference(overrides: Partial<MediaDraft> = {}): MediaDraft {
 }
 
 describe('media creation view model', () => {
+  it('renames media references and refreshes image handles', () => {
+    expect(renameMediaDraft(imageReference(), 'Logo Sheet')).toMatchObject({
+      displayName: 'Logo Sheet',
+      handle: '@logo_sheet',
+    });
+    expect(renameMediaDraft(videoReference(), 'Dance Loop')).toMatchObject({
+      displayName: 'Dance Loop',
+      handle: undefined,
+    });
+  });
+
+  it('orders required creation work by tool shape', () => {
+    expect(getCreationSectionOrder(createDefaultCreationDraft('image'))).toEqual([
+      'prompt',
+      'references',
+      'essentials',
+      'advanced',
+      'generate',
+    ]);
+    expect(getCreationSectionOrder(createDefaultCreationDraft('video'))).toEqual([
+      'prompt',
+      'references',
+      'essentials',
+      'advanced',
+      'generate',
+    ]);
+    expect(getCreationSectionOrder(createDefaultCreationDraft('motion'))).toEqual([
+      'essentials',
+      'references',
+      'prompt',
+      'advanced',
+      'generate',
+    ]);
+  });
+
+  it('keeps generation checks for details not already covered by readiness rows', () => {
+    const motionDraft = createDefaultCreationDraft('motion');
+    const validation = validateCreationDraft(motionDraft, { credits: 6 });
+
+    expect(getVisibleGenerationCheckMessages(validation, null)).toEqual({
+      message: null,
+      errors: [],
+      warnings: [],
+    });
+
+    const invalidVideoDraft = {
+      ...createDefaultCreationDraft('video'),
+      prompt: 'Animate the attached references.',
+      references: [imageReference(), imageReference({ displayName: 'Second Product' })],
+      startFrame: imageReference({ displayName: 'Start Frame' }),
+    };
+    expect(getVisibleGenerationCheckMessages(validateCreationDraft(invalidVideoDraft), null).errors).toContain(
+      'Image references cannot be combined with start or end frames in the same run.'
+    );
+  });
+
   it('summarizes image creation readiness and progressive sections', () => {
     const draft = {
       ...createDefaultCreationDraft('image'),

@@ -313,6 +313,14 @@ export interface CreationSectionSummary {
   advanced: string;
 }
 
+export type CreationSectionId = 'prompt' | 'essentials' | 'references' | 'advanced' | 'generate';
+
+export interface VisibleGenerationCheckMessages {
+  message: string | null;
+  errors: string[];
+  warnings: PromptEnhancementWarning[];
+}
+
 const HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
 function createDraftId(prefix: string, seed: string) {
@@ -481,6 +489,15 @@ export function createMediaDraftFromUpload(
     durationSeconds: upload.durationSeconds ?? null,
     sizeBytes: upload.sizeBytes ?? null,
     sourceGenerationId: options.sourceGenerationId ?? null,
+  };
+}
+
+export function renameMediaDraft(media: MediaDraft, displayName: string): MediaDraft {
+  const nextDisplayName = normalizeDisplayName(displayName, media.fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') || media.displayName);
+  return {
+    ...media,
+    displayName: nextDisplayName,
+    handle: media.kind === 'image' ? `@${toHandleBase(nextDisplayName)}` : undefined,
   };
 }
 
@@ -808,6 +825,34 @@ export function validateCreationDraft(draft: CreationDraft, options: { credits?:
   return validateMotionDraft(draft, options.credits);
 }
 
+export function getCreationSectionOrder(draft: CreationDraft): CreationSectionId[] {
+  if (draft.tool === 'motion') {
+    return ['essentials', 'references', 'prompt', 'advanced', 'generate'];
+  }
+  return ['prompt', 'references', 'essentials', 'advanced', 'generate'];
+}
+
+function isReadinessCoveredError(error: string) {
+  return (
+    error === 'Prompt is required.' ||
+    error === 'All multi-shot entries need a text prompt.' ||
+    error === 'Character image is required.' ||
+    error === 'Reference video is required.' ||
+    error.startsWith('Insufficient credits.')
+  );
+}
+
+export function getVisibleGenerationCheckMessages(
+  validation: CreationValidationResult,
+  message: string | null
+): VisibleGenerationCheckMessages {
+  return {
+    message,
+    errors: validation.errors.filter((error) => !isReadinessCoveredError(error)),
+    warnings: validation.warnings,
+  };
+}
+
 export function getCreationSectionSummary(draft: CreationDraft): CreationSectionSummary {
   if (draft.tool === 'image') {
     return {
@@ -849,7 +894,7 @@ export function getCreationReadiness(
       id: 'settings',
       label: settingsHasBlockingError(draft, validation) ? 'Settings need review' : 'Settings ready',
       body: settingsHasBlockingError(draft, validation)
-        ? validation.errors.find((error) => isSettingsError(draft, error)) ?? summary.essentials
+        ? 'Fix the highlighted issue before generating.'
         : summary.essentials,
       state: settingsHasBlockingError(draft, validation) ? 'warning' : 'ready',
     },

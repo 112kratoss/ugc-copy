@@ -23,9 +23,9 @@ export function MagicCreateMenu({
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const safeBottom = resolvedBottomInset(insets.bottom);
-  const panelWidth = Math.max(width * 1.26, 520);
-  const panelHeight = 308 + safeBottom;
-  const actionWidth = Math.max(132, Math.min(182, (width - 104) / 2));
+  const panelWidth = Math.max(320, width - horizontalInset * 2);
+  const panelHeight = 252 + safeBottom;
+  const actionWidth = Math.max(132, Math.min(176, (width - 92) / 2));
 
   if (!visible) return null;
 
@@ -43,8 +43,7 @@ export function MagicCreateMenu({
       }}
     >
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Dismiss create menu"
+        accessible={false}
         onPress={onClose}
         style={{
           position: 'absolute',
@@ -74,10 +73,10 @@ export function MagicCreateMenu({
           style={{
             width: panelWidth,
             height: panelHeight,
-            marginBottom: -104,
+            marginBottom: 0,
             overflow: 'hidden',
-            borderTopLeftRadius: panelWidth / 2,
-            borderTopRightRadius: panelWidth / 2,
+            borderTopLeftRadius: 36,
+            borderTopRightRadius: 36,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: 'rgba(255,255,255,0.13)',
@@ -92,11 +91,12 @@ export function MagicCreateMenu({
             style={{
               width,
               alignSelf: 'center',
-              paddingTop: 58,
-              paddingHorizontal: 38,
+              paddingTop: 30,
+              paddingHorizontal: 34,
+              paddingBottom: safeBottom + 18,
             }}
           >
-            <View style={{ height: 120, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 28 }}>
+            <View style={{ height: 112, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 24 }}>
               {CREATE_MENU_ACTIONS.map((action) => (
                 <MenuActionButton key={action.id} action={action} width={actionWidth} onPress={() => onAction(action.id)} />
               ))}
@@ -105,7 +105,7 @@ export function MagicCreateMenu({
         </BlurView>
       </View>
 
-      <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: safeBottom + 116, alignItems: 'center' }}>
+      <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: safeBottom + 184, alignItems: 'center' }}>
         <CloseMenuButton onPress={onClose} />
       </View>
     </View>
@@ -151,7 +151,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
       onPress={onPress}
       style={({ pressed }) => ({
         width,
-        height: 120,
+        height: 112,
         alignItems: 'center',
         justifyContent: 'flex-start',
         gap: 12,

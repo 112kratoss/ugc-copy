@@ -9,16 +9,16 @@ export interface CreateMenuAction {
 
 export const CREATE_MENU_ACTIONS: CreateMenuAction[] = [
   {
+    id: 'create',
+    label: 'Create',
+    body: 'Image, Video, and Motion',
+    href: '/(tabs)/creator',
+  },
+  {
     id: 'post',
     label: 'Post',
     body: 'Publish a post or unlockable',
     href: '/post/new',
-  },
-  {
-    id: 'create',
-    label: 'Create',
-    body: 'Image, AI Video, and Motion',
-    href: '/(tabs)/creator',
   },
 ];
 

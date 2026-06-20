@@ -12,11 +12,13 @@ export function MediaPreview({
   kind,
   height,
   radius = appTheme.radii.lg,
+  nativeControls = true,
 }: {
   url: string | null | undefined;
   kind?: 'image' | 'video' | null;
   height?: number;
   radius?: number;
+  nativeControls?: boolean;
 }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const imageFailed = failedUrl === url;
@@ -26,7 +28,7 @@ export function MediaPreview({
   }
 
   if (kind === 'video') {
-    return <VideoPreview url={url} height={height} radius={radius} />;
+    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} />;
   }
 
   if (imageFailed) {
@@ -126,7 +128,17 @@ function MediaFallback({ height, radius, label }: { height?: number; radius: num
   );
 }
 
-function VideoPreview({ url, height, radius }: { url: string; height?: number; radius: number }) {
+function VideoPreview({
+  url,
+  height,
+  radius,
+  nativeControls,
+}: {
+  url: string;
+  height?: number;
+  radius: number;
+  nativeControls: boolean;
+}) {
   const player = useVideoPlayer(url, (instance) => {
     instance.loop = true;
     instance.muted = false;
@@ -135,7 +147,7 @@ function VideoPreview({ url, height, radius }: { url: string; height?: number; r
   return (
     <VideoView
       player={player}
-      nativeControls
+      nativeControls={nativeControls}
       style={{
         width: '100%',
         aspectRatio: 4 / 5,
