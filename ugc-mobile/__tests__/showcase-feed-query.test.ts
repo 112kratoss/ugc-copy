@@ -9,6 +9,7 @@ import {
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getShowcaseFeedPageParams,
+  resolveMobileShowcaseFeedFilterId,
 } from '../lib/showcase-feed-query';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
 
@@ -115,6 +116,13 @@ describe('showcase feed query helpers', () => {
       'infinite',
       { category: 'all', resource: 'remix', sort: 'recent', tool: 'all', unlock: 'free' },
     ]);
+  });
+
+  it('normalizes mobile feed filter route params', () => {
+    expect(resolveMobileShowcaseFeedFilterId('unlocks')).toBe('unlocks');
+    expect(resolveMobileShowcaseFeedFilterId(['paid', 'free'])).toBe('paid');
+    expect(resolveMobileShowcaseFeedFilterId('missing')).toBe('all');
+    expect(resolveMobileShowcaseFeedFilterId(undefined)).toBe('all');
   });
 
   it('returns nextOffset only while the API has more pages', () => {

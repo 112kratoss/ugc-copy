@@ -39,13 +39,6 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="marketplace"
-        options={{
-          title: 'Unlocks',
-          href: null,
-        }}
-      />
-      <Tabs.Screen
         name="pricing"
         options={{
           title: 'Credits',

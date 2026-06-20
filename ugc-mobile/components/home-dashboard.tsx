@@ -33,6 +33,7 @@ import { TextPreviewCard } from '@/components/text-preview-card';
 import { useAuth } from '@/lib/auth';
 import {
   FALLBACK_COMMUNITY,
+  HOME_UNLOCKS_FEED_HREF,
   HOME_TOOL_SHORTCUTS,
   formatCompactCount,
   formatUsdCents,
@@ -264,7 +265,7 @@ export function HomeDashboard() {
           <UnlockRail
             title="Unlocks"
             actionLabel="Open"
-            onPress={() => router.push('/(tabs)/marketplace' as never)}
+            onPress={() => router.push(HOME_UNLOCKS_FEED_HREF as never)}
             items={unlockCards}
             width={previewCardWidth}
           />
@@ -785,7 +786,7 @@ function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number })
       accessibilityLabel={item.title}
       onPress={() => {
         if (item.isPreview) {
-          router.push('/(tabs)/marketplace' as never);
+          router.push(HOME_UNLOCKS_FEED_HREF as never);
           return;
         }
         const postQuery = item.postId ? `?postId=${encodeURIComponent(item.postId)}` : '';

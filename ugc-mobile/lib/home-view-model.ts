@@ -52,6 +52,11 @@ export interface HomeCommunityCard {
   sourceId: string;
 }
 
+export const HOME_UNLOCKS_FEED_HREF = {
+  pathname: '/(tabs)/showcase',
+  params: { filter: 'unlocks' },
+} as const;
+
 export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
   {
     id: 'image',

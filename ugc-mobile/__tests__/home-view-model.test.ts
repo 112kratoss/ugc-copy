@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HOME_TOOL_SHORTCUTS,
+  HOME_UNLOCKS_FEED_HREF,
   formatCompactCount,
   formatRelativeTime,
   formatUsdCents,
@@ -19,6 +20,13 @@ describe('home view model', () => {
       { id: 'motion', accent: 'motion', href: '/create/motion', badge: undefined, previewVariant: 'runner' },
       { id: 'workflow', accent: 'workflow', href: null, badge: 'Soon', previewVariant: null },
     ]);
+  });
+
+  it('routes the home unlocks rail to the feed unlocks filter', () => {
+    expect(HOME_UNLOCKS_FEED_HREF).toEqual({
+      pathname: '/(tabs)/showcase',
+      params: { filter: 'unlocks' },
+    });
   });
 
   it('formats compact counts and relative times for dashboard cards', () => {

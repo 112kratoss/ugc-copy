@@ -7,6 +7,7 @@ export type ShowcaseFeedSort = 'recent' | 'top-saves' | 'top-remixes' | 'top-sal
 export type ShowcaseFeedCategory = 'all' | ShowcaseFeedItem['category'];
 export type ShowcaseFeedUnlock = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseFeedResource = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
+export type MobileShowcaseFeedFilterId = 'all' | 'unlocks' | 'free' | 'paid' | 'remixable';
 
 export interface ShowcaseFeedFilters {
   category?: ShowcaseFeedCategory;
@@ -47,6 +48,22 @@ export function createShowcaseFeedQueryKey(filters: ShowcaseFeedFilters = {}) {
 
 export function createShowcasePostQueryKey(postId: string | undefined, userId: string | null | undefined) {
   return ['showcase-post', postId, userId ?? undefined] as const;
+}
+
+export function resolveMobileShowcaseFeedFilterId(
+  value: string | string[] | null | undefined
+): MobileShowcaseFeedFilterId {
+  const filter = Array.isArray(value) ? value[0] : value;
+  if (
+    filter === 'unlocks' ||
+    filter === 'free' ||
+    filter === 'paid' ||
+    filter === 'remixable'
+  ) {
+    return filter;
+  }
+
+  return 'all';
 }
 
 export function getShowcaseFeedPageParams(params: ShowcaseFeedPageParams = {}): ShowcaseFeedApiParams {

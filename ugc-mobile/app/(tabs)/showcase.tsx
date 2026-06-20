@@ -2,7 +2,7 @@ import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-l
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { FileText, Heart, Images, Lock, Play, RefreshCw, Repeat2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -31,6 +31,8 @@ import {
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getShowcaseFeedPageParams,
+  resolveMobileShowcaseFeedFilterId,
+  type MobileShowcaseFeedFilterId,
   type ShowcaseFeedFilters,
 } from '@/lib/showcase-feed-query';
 import {
@@ -45,7 +47,7 @@ import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/li
 import { accentColor, appTheme } from '@/lib/theme';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 
-type FeedFilterId = 'all' | 'unlocks' | 'free' | 'paid' | 'remixable';
+type FeedFilterId = MobileShowcaseFeedFilterId;
 
 const FEED_FILTERS: Array<{
   id: FeedFilterId;
@@ -95,6 +97,7 @@ const FEED_HORIZONTAL_PADDING = appTheme.spacing.screen;
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
+  const routeParams = useLocalSearchParams<{ filter?: string | string[] }>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -102,7 +105,8 @@ export default function ShowcaseScreen() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const gridLayout = getShowcaseGridLayout(width);
-  const [activeFilterId, setActiveFilterId] = useState<FeedFilterId>('all');
+  const routeFilterId = resolveMobileShowcaseFeedFilterId(routeParams.filter);
+  const [activeFilterId, setActiveFilterId] = useState<FeedFilterId>(routeFilterId);
   const activeFilter = FEED_FILTERS.find((filter) => filter.id === activeFilterId) ?? FEED_FILTERS[0];
   const queryKey = useMemo(() => createShowcaseFeedQueryKey(activeFilter.params), [activeFilter]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
@@ -135,6 +139,10 @@ export default function ShowcaseScreen() {
   const hasItems = showcaseItems.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
   const isRefreshing = showcaseQuery.isRefetching && !showcaseQuery.isFetchingNextPage;
+
+  useEffect(() => {
+    setActiveFilterId((current) => current === routeFilterId ? current : routeFilterId);
+  }, [routeFilterId]);
 
   useEffect(() => {
     setActiveVideoIds([]);
