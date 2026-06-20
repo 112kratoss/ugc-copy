@@ -78,7 +78,6 @@ function RootLayoutNav() {
                 <Stack.Screen name="create/[tool]" options={{ title: 'Create' }} />
                 <Stack.Screen name="post/new" options={{ title: 'Post' }} />
                 <Stack.Screen name="viewer" options={{ headerShown: false }} />
-                <Stack.Screen name="media-feed" options={{ headerShown: false }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
