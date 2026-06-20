@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import {
   BellRing,
@@ -16,7 +15,7 @@ import {
 import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppText, Card, IconButton, MetricCard, PrimaryButton, StatusBlock, SurfaceSection } from '@/components/ui';
+import { AppText, Card, IconButton, PrimaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -144,6 +143,7 @@ export default function StudioScreen() {
         <NotificationHeader
           signedIn={Boolean(user)}
           unreadCount={unreadCount}
+          totalCount={notifications.length}
           isRefreshing={notificationsQuery.isRefetching}
           onRefresh={() => notificationsQuery.refetch()}
           onMarkAllRead={() => markAllReadMutation.mutate()}
@@ -161,16 +161,14 @@ export default function StudioScreen() {
           </>
         ) : (
           <>
-            <NotificationSummary
-              unreadCount={unreadCount}
-              totalCount={notifications.length}
-              isRefreshing={notificationsQuery.isRefetching}
-            />
-            <PushPermissionCard
+            <PushControlCard
               result={enablePushMutation.data ?? devicePushQuery.data ?? null}
+              preferences={preferencesQuery.data?.preferences ?? null}
               isLoading={devicePushQuery.isLoading}
               isPending={enablePushMutation.isPending}
+              preferencesDisabled={preferencesQuery.isLoading || updatePreferenceMutation.isPending}
               onEnable={() => enablePushMutation.mutate()}
+              onTogglePush={(value) => updatePreferenceMutation.mutate({ pushEnabled: value })}
             />
             {notificationsQuery.isLoading ? (
               <LoadingState />
@@ -192,7 +190,6 @@ export default function StudioScreen() {
               disabled={preferencesQuery.isLoading || updatePreferenceMutation.isPending}
               onToggle={(key, value) => updatePreferenceMutation.mutate({ [key]: value })}
             />
-            <NotificationCategoryList />
           </>
         )}
       </ScrollView>
@@ -203,6 +200,7 @@ export default function StudioScreen() {
 function NotificationHeader({
   signedIn,
   unreadCount,
+  totalCount,
   isRefreshing,
   onRefresh,
   onMarkAllRead,
@@ -210,71 +208,39 @@ function NotificationHeader({
 }: {
   signedIn: boolean;
   unreadCount: number;
+  totalCount: number;
   isRefreshing: boolean;
   onRefresh: () => void;
   onMarkAllRead: () => void;
   canMarkAllRead: boolean;
 }) {
+  const alertLabel = totalCount === 1 ? '1 alert' : `${totalCount} alerts`;
+  const deliveryLabel = isRefreshing ? 'Syncing' : 'Mobile';
+
   return (
-    <View style={{ gap: 16 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
-          <AppText
-            numberOfLines={1}
-            variant="pageTitle"
-            style={{ fontSize: 34, lineHeight: 38 }}
-          >
-            Notifications
-          </AppText>
-          <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
-            {signedIn ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}` : 'Mobile notification history'}
-          </AppText>
-        </View>
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+      <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
+        <AppText
+          numberOfLines={1}
+          variant="pageTitle"
+          style={{ fontSize: 34, lineHeight: 38 }}
+        >
+          Notifications
+        </AppText>
+        <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
+          {signedIn
+            ? `${unreadCount} unread | ${alertLabel} | ${deliveryLabel}`
+            : 'Sign in to view alerts'}
+        </AppText>
+      </View>
+      {signedIn ? (
         <View style={{ flexDirection: 'row', gap: 9 }}>
           <IconButton icon={RefreshCw} label="Refresh notifications" disabled={isRefreshing} onPress={onRefresh} accent="motion" />
-          <IconButton icon={CheckCheck} label="Mark all notifications read" disabled={!canMarkAllRead} onPress={onMarkAllRead} accent="workflow" />
+          {unreadCount > 0 ? (
+            <IconButton icon={CheckCheck} label="Mark all notifications read" disabled={!canMarkAllRead} onPress={onMarkAllRead} accent="workflow" />
+          ) : null}
         </View>
-      </View>
-
-      <LinearGradient
-        colors={['rgba(217,70,239,0.2)', 'rgba(124,58,237,0.13)', 'rgba(34,211,238,0.09)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{
-          minHeight: 98,
-          borderRadius: 24,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: 'rgba(168,85,247,0.28)',
-          padding: 16,
-          justifyContent: 'center',
-        }}
-      >
-        <AppText variant="cardTitle">
-          Your mobile notification history.
-        </AppText>
-        <AppText variant="bodySm" color="muted" style={{ marginTop: 5 }}>
-          Results, unlocks, and creator activity stay here after each push alert fades.
-        </AppText>
-      </LinearGradient>
-    </View>
-  );
-}
-
-function NotificationSummary({
-  unreadCount,
-  totalCount,
-  isRefreshing,
-}: {
-  unreadCount: number;
-  totalCount: number;
-  isRefreshing: boolean;
-}) {
-  return (
-    <View style={{ flexDirection: 'row', gap: 10 }}>
-      <MetricCard label="Unread" value={String(unreadCount)} accent="motion" compact />
-      <MetricCard label="History" value={totalCount > 0 ? String(totalCount) : 'Empty'} accent="image" compact />
-      <MetricCard label="Delivery" value={isRefreshing ? 'Syncing' : 'Mobile'} accent="workflow" compact />
+      ) : null}
     </View>
   );
 }
@@ -283,7 +249,7 @@ function LoadingState() {
   return (
     <Card variant="soft" style={{ minHeight: 144, alignItems: 'center', justifyContent: 'center' }}>
       <ActivityIndicator color="#c084fc" />
-      <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>Loading notification history</AppText>
+      <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>Loading alerts</AppText>
     </Card>
   );
 }
@@ -297,7 +263,7 @@ function CaughtUpState() {
       <View style={{ gap: 6 }}>
         <AppText variant="cardTitle">You are all caught up.</AppText>
         <AppText variant="bodySm" color="muted">
-          New mobile notifications appear here with unread state, timestamps, and quick paths back into the right screen.
+          New alerts will appear here with direct links back to the right screen.
         </AppText>
       </View>
     </Card>
@@ -334,19 +300,17 @@ function NotificationPreferences({
   onToggle: (key: keyof PreferenceState, value: boolean) => void;
 }) {
   const rows: Array<{ key: keyof PreferenceState; title: string; body: string }> = [
-    { key: 'pushEnabled', title: 'Push alerts', body: 'Native mobile delivery for this device.' },
     { key: 'generationEnabled', title: 'Generation', body: 'Finished and failed renders.' },
     { key: 'commerceEnabled', title: 'Credits & unlocks', body: 'Purchases, restores, and resource access.' },
     { key: 'socialEnabled', title: 'Creator activity', body: 'Follows, saves, remixes, and shares.' },
   ];
 
   return (
-    <SurfaceSection
-      eyebrow="Preferences"
-      title="Push preferences"
-      body="Tune alerts without leaving the mobile inbox."
-      accent="workflow"
-    >
+    <Card accent="workflow" variant="soft" padding="sm" style={{ gap: 12 }}>
+      <View style={{ gap: 4 }}>
+        <AppText variant="body" style={{ fontWeight: '900' }}>Alert types</AppText>
+        <AppText variant="caption" color="muted">Choose which updates can become push alerts.</AppText>
+      </View>
       <View
         style={{
           borderRadius: appTheme.radii.lg,
@@ -370,7 +334,7 @@ function NotificationPreferences({
               disabled={disabled || !preferences}
               onPress={() => onToggle(row.key, !enabled)}
               style={({ pressed }) => ({
-                minHeight: 64,
+                minHeight: 58,
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 12,
@@ -390,73 +354,167 @@ function NotificationPreferences({
           );
         })}
       </View>
-    </SurfaceSection>
+    </Card>
   );
 }
 
-function PushPermissionCard({
+function PushControlCard({
   result,
+  preferences,
   isLoading,
   isPending,
+  preferencesDisabled,
   onEnable,
+  onTogglePush,
 }: {
   result: MobilePushRegistrationResult | null;
+  preferences: PreferenceState | null;
   isLoading: boolean;
   isPending: boolean;
+  preferencesDisabled: boolean;
   onEnable: () => void;
+  onTogglePush: (value: boolean) => void;
 }) {
-  if (result?.status === 'registered' || result?.status === 'not-mobile') {
-    return null;
+  const preferencesReady = Boolean(preferences);
+  const pushEnabled = preferences?.pushEnabled ?? false;
+  let title = 'Push alerts';
+  let body = 'Syncing your push preference.';
+  let actionLabel = 'Enable';
+  let action: (() => void) | undefined;
+  let actionAccent: 'motion' | 'image' = 'motion';
+  let showToggle = result?.status === 'registered' || result?.status === 'not-mobile';
+
+  if (preferencesReady) {
+    title = pushEnabled ? 'Push alerts' : 'Push alerts paused';
+    body = pushEnabled
+      ? 'Native delivery is on for this device.'
+      : 'History still appears here. Turn push back on when you want native delivery.';
   }
 
-  let title = 'Enable push alerts';
-  let body = 'Turn on native alerts for finished renders, creator activity, and unlock updates on this device.';
-  let actionLabel = 'Enable push alerts';
-  let action: (() => void) | undefined = onEnable;
-  let actionAccent: 'motion' | 'image' = 'motion';
-
   if (isLoading) {
-    title = 'Checking this device';
-    body = 'Looking up notification access and syncing the current push state.';
+    title = 'Checking push alerts';
+    body = 'Syncing notification access for this device.';
     actionLabel = 'Checking';
-    action = undefined;
+    showToggle = false;
+  } else if (result?.status === 'permission-required' || result === null) {
+    title = 'Enable push alerts';
+    body = 'Get finished renders, creator activity, and unlock updates as native alerts.';
+    action = onEnable;
+    showToggle = false;
   } else if (result?.status === 'denied') {
     title = 'Push alerts are off';
-    body = 'Notifications are disabled for this device. Re-enable them in system settings to get native alerts again.';
-    actionLabel = 'Open system settings';
+    body = 'Notifications are disabled for this device. Re-enable them in system settings.';
+    actionLabel = 'Settings';
     action = () => {
       void Linking.openSettings();
     };
     actionAccent = 'image';
+    showToggle = false;
   } else if (result?.status === 'missing-firebase-setup') {
     title = 'Android push setup is incomplete';
-    body = 'This build can show inbox history, but native Android delivery still needs Firebase credentials.';
-    actionLabel = 'Refresh status';
+    body = 'Inbox history works, but Android delivery still needs Firebase credentials.';
+    actionLabel = 'Retry';
     action = onEnable;
     actionAccent = 'image';
+    showToggle = false;
   } else if (result?.status === 'missing-project-id') {
     title = 'Push project setup is incomplete';
-    body = 'The app is missing its Expo project identifier, so this device cannot register for push yet.';
-    actionLabel = 'Refresh status';
+    body = 'The app is missing its Expo project identifier.';
+    actionLabel = 'Retry';
     action = onEnable;
     actionAccent = 'image';
+    showToggle = false;
   }
 
+  const iconColor = actionAccent === 'image' ? appTheme.colors.image : appTheme.colors.motion;
+
   return (
-    <SurfaceSection
-      eyebrow="Device alerts"
-      title={title}
-      body={body}
+    <Card
       accent={actionAccent}
+      variant="soft"
+      padding="sm"
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+      }}
     >
-      <PrimaryButton
-        label={actionLabel}
-        onPress={action}
-        disabled={!action}
-        loading={isPending}
-        accent={actionAccent}
-      />
-    </SurfaceSection>
+      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${iconColor}1f`, borderWidth: 1, borderColor: `${iconColor}55` }}>
+        <BellRing size={20} color={iconColor} strokeWidth={2.4} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+        <AppText variant="body" style={{ fontWeight: '900' }}>{title}</AppText>
+        <AppText variant="caption" color="muted">{body}</AppText>
+      </View>
+      {showToggle ? (
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityLabel="Push alerts"
+          accessibilityState={{ checked: pushEnabled, disabled: preferencesDisabled || !preferences }}
+          disabled={preferencesDisabled || !preferences}
+          onPress={() => onTogglePush(!pushEnabled)}
+          style={({ pressed }) => ({
+            opacity: preferencesDisabled || !preferences ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          {pushEnabled ? (
+            <ToggleRight size={34} color="#6ee7b7" strokeWidth={2.2} />
+          ) : (
+            <ToggleLeft size={34} color={appTheme.colors.faint} strokeWidth={2.2} />
+          )}
+        </Pressable>
+      ) : (
+        <CompactActionButton
+          label={actionLabel}
+          onPress={action}
+          loading={isPending}
+          accent={actionAccent}
+        />
+      )}
+    </Card>
+  );
+}
+
+function CompactActionButton({
+  label,
+  onPress,
+  loading,
+  accent,
+}: {
+  label: string;
+  onPress?: () => void;
+  loading?: boolean;
+  accent: 'motion' | 'image';
+}) {
+  const color = accent === 'image' ? appTheme.colors.image : appTheme.colors.motion;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={!onPress || loading}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 40,
+        minWidth: 88,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: appTheme.radii.pill,
+        backgroundColor: `${color}24`,
+        borderWidth: 1,
+        borderColor: `${color}66`,
+        opacity: !onPress ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: 12,
+      })}
+    >
+      {loading ? (
+        <ActivityIndicator color={color} />
+      ) : (
+        <AppText selectable={false} variant="caption" color={color} style={{ fontWeight: '900' }} numberOfLines={1}>
+          {label}
+        </AppText>
+      )}
+    </Pressable>
   );
 }
 

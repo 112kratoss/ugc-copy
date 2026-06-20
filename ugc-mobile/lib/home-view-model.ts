@@ -1,6 +1,7 @@
 import type { CreatorToolId, GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '@/lib/types';
 import type { ToolAccent } from '@/lib/theme';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
+import { getGenerationKind, getGenerationLabel } from './generation-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 
 export type HomeToolShortcutId = CreatorToolId | 'workflow';
@@ -22,6 +23,9 @@ export interface HomeGenerationCard {
   label: string;
   timeLabel: string;
   mediaUrl: string | null;
+  previewUrl?: string | null;
+  previewThumbhash?: string | null;
+  previewCacheKey?: string;
   previewText: string;
   artVariant: 'kingdom' | 'city' | 'runner' | 'tree';
   viewerSource: PreviewViewerSource;
@@ -36,6 +40,8 @@ export interface HomeCommunityCard {
   body: string;
   mediaUrl: string | null;
   previewUrl?: string | null;
+  previewThumbhash?: string | null;
+  previewCacheKey?: string;
   mediaKind: 'image' | 'video' | null;
   previewKind: 'media' | 'text';
   timeLabel: string;
@@ -191,14 +197,17 @@ export function formatRelativeTime(value: string | null | undefined, now = new D
 }
 
 export function generationToHomeCard(item: GenerationListItem): HomeGenerationCard {
-  const kind = generationKind(item);
+  const kind = getGenerationKind(item);
   return {
     id: item.id,
     title: item.title || item.prompt || 'Untitled creation',
     kind,
-    label: generationLabel(kind),
+    label: getGenerationLabel(kind),
     timeLabel: formatRelativeTime(item.completed_at ?? item.created_at),
-    mediaUrl: item.output_urls?.[0] ?? item.output_url ?? null,
+    mediaUrl: item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null,
+    previewUrl: item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null,
+    previewThumbhash: item.media?.thumbhash ?? null,
+    previewCacheKey: item.media?.cacheKey ?? item.id,
     previewText: item.prompt || item.description || item.title || 'A saved Magic Booklet generation.',
     artVariant: kind === 'text' ? 'tree' : kind === 'motion' ? 'runner' : kind === 'video' ? 'city' : 'kingdom',
     viewerSource: 'home-creations',
@@ -207,13 +216,22 @@ export function generationToHomeCard(item: GenerationListItem): HomeGenerationCa
 }
 
 export function generationsToHomeCards(items: GenerationListItem[]) {
-  return items.slice(0, 6).map(generationToHomeCard);
+  return items
+    .filter((item) => {
+      const kind = getGenerationKind(item);
+      if (kind === 'text') return item.status === 'succeeded';
+      return item.status === 'succeeded' && (item.media?.gridReady ?? Boolean(item.previewUrl ?? item.preview_url));
+    })
+    .slice(0, 6)
+    .map(generationToHomeCard);
 }
 
 export function showcaseToCommunityCard(item: ShowcaseFeedItem): HomeCommunityCard {
   const hasUsableMedia = Boolean(item.mediaUrl && item.mediaKind);
   const previewKind = isTextOnlyShowcasePost(item) || !hasUsableMedia ? 'text' : 'media';
 
+  const cover = item.mediaItems?.[0];
+  const preview = cover?.preview;
   return {
     id: item.id,
     creatorName: item.creator.name,
@@ -221,30 +239,18 @@ export function showcaseToCommunityCard(item: ShowcaseFeedItem): HomeCommunityCa
     title: item.title || item.prompt || 'Community creation',
     body: getShowcasePostDisplayText(item),
     mediaUrl: item.mediaUrl,
-    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
+    previewUrl: preview?.previewUrl ?? cover?.previewUrl ?? null,
+    previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
+    previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
     mediaKind: item.mediaKind,
     previewKind,
     timeLabel: formatRelativeTime(item.createdAt),
     saveLabel: formatCompactCount(item.saveCount),
     accessLabel: item.asset ? (item.asset.accessMode === 'free' ? 'Free unlock' : 'Paywalled') : 'Open',
-    artVariant: item.category === 'video' ? 'city' : item.category === 'motion' ? 'portal' : 'tree',
+    artVariant: item.creationMode === 'motion' ? 'portal' : item.category === 'video' ? 'city' : 'tree',
     viewerSource: 'home-community',
     sourceId: item.id,
   };
-}
-
-function generationKind(item: GenerationListItem): HomeGenerationCard['kind'] {
-  if (item.category === 'video') return 'video';
-  if (item.category === 'motion') return 'motion';
-  if (item.category === 'text') return 'text';
-  return 'image';
-}
-
-function generationLabel(kind: HomeGenerationCard['kind']) {
-  if (kind === 'motion') return 'Motion';
-  if (kind === 'video') return 'Video';
-  if (kind === 'text') return 'Text';
-  return 'Image';
 }
 
 function trimOneDecimal(value: number) {

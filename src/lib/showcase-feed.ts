@@ -57,6 +57,7 @@ interface PostRow {
   title: string | null;
   body: string | null;
   category: ShowcaseItemCategory;
+  creation_mode?: 'motion' | null;
   post_format: ShowcasePostFormat;
   save_count: number | null;
   remix_count: number | null;
@@ -95,7 +96,7 @@ interface LegacyGenerationRow {
   model: string;
   prompt: string | null;
   title: string | null;
-  category: ShowcaseItemCategory | null;
+  category: string | null;
   save_count: number | null;
   remix_count: number | null;
   created_at: string;
@@ -104,10 +105,9 @@ interface LegacyGenerationRow {
 
 const FILTERED_FEED_BATCH_SIZE = 48;
 
-function resolveItemCategory(category: ShowcaseItemCategory | null): ShowcaseItemCategory {
-  if (category === 'video' || category === 'motion' || category === 'ugc-ad' || category === 'text') {
-    return category;
-  }
+function resolveItemCategory(category: string | null): ShowcaseItemCategory {
+  if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
+  if (category === 'text') return 'text';
 
   return 'image';
 }
@@ -147,7 +147,7 @@ async function fetchPostRows(
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -179,7 +179,7 @@ async function fetchPostRows(
 
   const result = await query.range(offset, offset + limit - 1);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
     if (category === 'text') {
       return [];
     }
@@ -483,6 +483,7 @@ export async function resolvePostRowsToFeedItems(
         prompt: post.prompt || '',
         body,
         category: resolveItemCategory(post.category),
+        creationMode: post.creation_mode ?? ((post.category as string) === 'motion' ? 'motion' : null),
         postFormat: post.post_format,
         saveCount: post.save_count || 0,
         remixCount: post.remix_count || 0,
@@ -841,6 +842,7 @@ export async function getShowcaseFeedPage(options: {
   unlock?: ShowcaseUnlockFilter;
   resource?: ShowcaseResourceFilter;
   countryCode?: string | null;
+  bypassCache?: boolean;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
   const adminSupabase = createServiceClient();
@@ -848,7 +850,9 @@ export async function getShowcaseFeedPage(options: {
   const toolSlug = slugifySourceTool(options.tool);
   const unlockFilter = options.unlock ?? 'all';
   const resourceFilter = options.resource ?? 'all';
-  const baseFeed = await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
+  const baseFeed = options.bypassCache
+    ? await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
+    : await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
   const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
   const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
 

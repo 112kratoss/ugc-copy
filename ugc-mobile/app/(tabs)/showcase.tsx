@@ -200,8 +200,9 @@ export default function ShowcaseScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
-      <FlashList
+    <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+        <FlashList
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
@@ -278,9 +279,9 @@ export default function ShowcaseScreen() {
         }
         ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
         viewabilityConfig={viewabilityConfig}
-      />
-      <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia} />
-    </View>
+        />
+      </View>
+    </WorkspaceSideMenuGestureLayer>
   );
 }
 
@@ -488,6 +489,8 @@ function CardMediaCarousel({
                   <FeedVideoPreview
                     url={item.url}
                     previewUrl={item.previewUrl}
+                    previewCacheKey={item.preview?.cacheKey ?? item.previewCacheKey}
+                    previewThumbhash={item.preview?.thumbhash ?? item.previewThumbhash}
                     active={true}
                     height={height}
                     radius={radius}
@@ -497,6 +500,8 @@ function CardMediaCarousel({
                   <FeedVideoPreview
                     url={item.url}
                     previewUrl={item.previewUrl}
+                    previewCacheKey={item.preview?.cacheKey ?? item.previewCacheKey}
+                    previewThumbhash={item.preview?.thumbhash ?? item.previewThumbhash}
                     active={false}
                     height={height}
                     radius={radius}
@@ -506,8 +511,10 @@ function CardMediaCarousel({
               ) : (
                 <FeedMediaFrame
                   kind="image"
-                  url={item.url}
+                  url={item.preview?.previewUrl ?? item.previewUrl ?? item.url}
                   backdropUrl={item.previewUrl}
+                  cacheKey={item.preview?.cacheKey ?? item.previewCacheKey}
+                  thumbhash={item.preview?.thumbhash ?? item.previewThumbhash}
                   transition={120}
                   recyclingKey={`showcase:${cardId}:${item.id}`}
                   radius={radius}
@@ -640,8 +647,10 @@ function MasonryPin({
         ) : card.mediaUrl && !isVideoCard ? (
           <FeedMediaFrame
             kind="image"
-            url={card.mediaUrl}
+            url={card.previewUrl ?? card.mediaUrl}
             backdropUrl={card.previewUrl}
+            cacheKey={card.previewCacheKey}
+            thumbhash={card.previewThumbhash}
             transition={120}
             recyclingKey={`showcase:${card.id}`}
             radius={layout.mediaRadius}
@@ -654,6 +663,8 @@ function MasonryPin({
           <FeedVideoPreview
             url={card.mediaUrl}
             previewUrl={card.previewUrl}
+            previewCacheKey={card.previewCacheKey}
+            previewThumbhash={card.previewThumbhash}
             active
             height={mediaHeight}
             radius={layout.mediaRadius}
@@ -664,6 +675,8 @@ function MasonryPin({
             <FeedVideoPreview
               url={card.mediaUrl}
               previewUrl={card.previewUrl}
+              previewCacheKey={card.previewCacheKey}
+              previewThumbhash={card.previewThumbhash}
               active={false}
               height={mediaHeight}
               radius={layout.mediaRadius}

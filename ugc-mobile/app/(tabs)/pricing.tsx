@@ -1,10 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { CheckCircle2, Circle } from 'lucide-react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  useWindowDimensions,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 import type { PurchasesPackage } from 'react-native-purchases';
 
-import { AppText, Card, MetricCard, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
+import { AppText, Card, Kicker, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
   configureIapForUser,
@@ -14,11 +23,91 @@ import {
   resolveCreditEntitlement,
   restorePurchases,
 } from '@/lib/iap';
-import { MOBILE_PRICING_PLANS } from '@/lib/pricing';
+import {
+  DEFAULT_MOBILE_PRICING_PLAN_ID,
+  formatPricingDisplayPrice,
+  getPricingPlanCarouselOffset,
+  getPricingPlanIdForCarouselOffset,
+  getPurchaseButtonLabel,
+  resolveSelectedPricingPlan,
+} from '@/lib/pricing-view-model';
+import { MOBILE_PRICING_PLANS, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
 
 function packageProductId(item: PurchasesPackage) {
   return item.product.identifier;
+}
+
+function PricingPlanCard({
+  plan,
+  price,
+  selected,
+  width,
+  onPress,
+}: {
+  plan: MobilePricingPlan;
+  price: string;
+  selected: boolean;
+  width: number;
+  onPress: () => void;
+}) {
+  const SelectionIcon = selected ? CheckCircle2 : Circle;
+
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={`${plan.name}, ${plan.credits.toLocaleString('en-IN')} credits, ${price}`}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width,
+        minHeight: 188,
+        justifyContent: 'space-between',
+        gap: appTheme.spacing.gap,
+        borderWidth: 1,
+        borderColor: selected ? `${appTheme.colors.commerce}88` : appTheme.colors.borderSubtle,
+        borderRadius: appTheme.radii.xl,
+        borderCurve: 'continuous',
+        backgroundColor: selected ? `${appTheme.colors.commerce}16` : appTheme.colors.panel,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+        padding: appTheme.spacing.card,
+      })}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
+          <AppText selectable={false} variant="label" color={selected ? 'commerce' : 'muted'}>
+            {plan.name}
+          </AppText>
+          {plan.popular ? <Pill label="Popular" accent="motion" style={{ minHeight: 28, paddingVertical: 4 }} /> : null}
+        </View>
+        <SelectionIcon
+          color={selected ? appTheme.colors.commerce : appTheme.colors.faint}
+          size={appTheme.icon.default}
+          strokeWidth={selected ? 2.5 : 2}
+        />
+      </View>
+      <View style={{ gap: appTheme.spacing.compact }}>
+        <AppText
+          selectable={false}
+          variant="sectionTitle"
+          style={{ fontSize: 28, fontVariant: ['tabular-nums'] }}
+        >
+          {plan.credits.toLocaleString('en-IN')} credits
+        </AppText>
+        <AppText variant="bodySm" color="muted" numberOfLines={2}>
+          {plan.description}
+        </AppText>
+      </View>
+      <AppText
+        variant="label"
+        color={selected ? 'text' : 'textSecondary'}
+        numberOfLines={1}
+        style={{ fontVariant: ['tabular-nums'] }}
+      >
+        {price}
+      </AppText>
+    </Pressable>
+  );
 }
 
 export default function PricingScreen() {
@@ -26,7 +115,15 @@ export default function PricingScreen() {
   const [isConfigured, setIsConfigured] = useState(false);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<PricingPlanId>(DEFAULT_MOBILE_PRICING_PLAN_ID);
+  const carouselRef = useRef<ScrollView>(null);
+  const { width: screenWidth } = useWindowDimensions();
   const os = Platform.OS;
+  const carouselViewportWidth = Math.max(280, screenWidth - appTheme.spacing.screen * 2);
+  const carouselPeek = appTheme.spacing.panel + appTheme.spacing.unit;
+  const carouselCardWidth = Math.max(240, carouselViewportWidth - carouselPeek * 2);
+  const carouselGap = appTheme.spacing.gap;
+  const carouselSnapInterval = carouselCardWidth + carouselGap;
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +166,41 @@ export default function PricingScreen() {
     const entries = (packageQuery.data ?? []).map((item) => [packageProductId(item), item] as const);
     return new Map(entries);
   }, [packageQuery.data]);
+
+  const selectedPlan = resolveSelectedPricingPlan(selectedPlanId);
+  const selectedNativePackage = packagesByProductId.get(selectedPlan.productId);
+  const selectedPrice = formatPricingDisplayPrice(
+    selectedPlan,
+    selectedNativePackage?.product.priceString
+  );
+  const purchaseBusy = busyProductId === selectedPlan.productId;
+  const purchaseDisabled =
+    !isConfigured
+    || packageQuery.isLoading
+    || !user
+    || !selectedNativePackage
+    || busyProductId !== null;
+  const selectedPackageUnavailable =
+    isConfigured
+    && Boolean(user)
+    && packageQuery.isSuccess
+    && !selectedNativePackage;
+  const selectedPlanIndex = MOBILE_PRICING_PLANS.findIndex((plan) => plan.id === selectedPlan.id);
+
+  const selectPlan = (planId: PricingPlanId) => {
+    setSelectedPlanId(planId);
+    carouselRef.current?.scrollTo({
+      x: getPricingPlanCarouselOffset(planId, carouselSnapInterval),
+      animated: true,
+    });
+  };
+
+  const syncPlanFromCarousel = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    setSelectedPlanId(getPricingPlanIdForCarouselOffset(
+      event.nativeEvent.contentOffset.x,
+      carouselSnapInterval
+    ));
+  };
 
   const buyCredits = async (productId: string) => {
     if (!user) {
@@ -135,10 +267,25 @@ export default function PricingScreen() {
   return (
     <Screen insideTab>
       <SectionTitle
-        eyebrow="Pricing"
-        title="Credits for mobile creation."
-        body={`${credits ?? 0} credits available. Sign in before buying so RevenueCat purchases stay attached to your Magic Booklet account. Razorpay stays on web.`}
+        eyebrow="Credits"
+        title="Top up credits"
+        body="One-time credit packs for image, video, and motion creation."
       />
+
+      <Card accent="commerce" padding="sm">
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.gap, padding: appTheme.spacing.compact }}>
+          <View style={{ flex: 1, gap: 4 }}>
+            <Kicker color="commerce">Available balance</Kicker>
+            <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>
+              {(credits ?? 0).toLocaleString('en-IN')} credits
+            </AppText>
+          </View>
+          <Pill
+            label={`${storeLabel} - ${isConfigured ? 'Ready' : 'Setup needed'}`}
+            accent={isConfigured ? 'workflow' : 'motion'}
+          />
+        </View>
+      </Card>
 
       {!isIapConfigured(os) ? (
         <StatusBlock
@@ -159,59 +306,83 @@ export default function PricingScreen() {
         />
       ) : null}
       {notice ? <StatusBlock title="Purchase status" body={notice} /> : null}
-
-      <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
-        <MetricCard
-          label="Balance"
-          value={String(credits ?? 0)}
-          body="credits available"
-          accent="amber"
-          compact
+      {selectedPackageUnavailable ? (
+        <StatusBlock
+          title="This credit pack is not available"
+          body="Choose another pack or try again after the store finishes updating."
         />
-        <MetricCard
-          label="Store"
-          value={isConfigured ? 'Ready' : 'Setup'}
-          body={storeLabel}
-          accent={isConfigured ? 'workflow' : 'motion'}
-          compact
-        />
-      </View>
+      ) : null}
 
-      <View style={{ gap: 14 }}>
-        {MOBILE_PRICING_PLANS.map((plan) => {
-          const nativePackage = packagesByProductId.get(plan.productId);
-          const price = nativePackage?.product.priceString ?? `Web equivalent Rs ${plan.webPriceInr}`;
-
-          return (
-            <Card key={plan.id} accent={plan.popular ? 'motion' : 'amber'}>
-              <View style={{ gap: 6 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
-                  <AppText variant="cardTitle">{plan.name}</AppText>
-                  {plan.popular ? <Pill label="Popular" accent="motion" /> : null}
-                </View>
-                <AppText variant="sectionTitle" color="success" style={{ fontSize: 28, fontVariant: ['tabular-nums'] }}>
-                  {plan.credits.toLocaleString()} credits
-                </AppText>
-                <AppText variant="bodySm" color="muted">{plan.description}</AppText>
-                <AppText variant="label" color="faint">{price}</AppText>
-              </View>
-              <PrimaryButton
-                label={busyProductId === plan.productId ? 'Processing...' : 'Buy with App Store / Play'}
-                onPress={() => void buyCredits(plan.productId)}
-                loading={busyProductId === plan.productId}
-                disabled={!isConfigured || packageQuery.isLoading || !user}
-                accent={plan.popular ? 'motion' : 'amber'}
+      <View style={{ gap: appTheme.spacing.gap }}>
+        <View style={{ gap: appTheme.spacing.compact }}>
+          <Kicker>Choose a pack</Kicker>
+          <ScrollView
+            ref={carouselRef}
+            horizontal
+            accessibilityLabel="Credit pack carousel"
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            disableIntervalMomentum
+            snapToInterval={carouselSnapInterval}
+            snapToAlignment="start"
+            contentOffset={{
+              x: getPricingPlanCarouselOffset(DEFAULT_MOBILE_PRICING_PLAN_ID, carouselSnapInterval),
+              y: 0,
+            }}
+            contentContainerStyle={{
+              gap: carouselGap,
+              paddingHorizontal: carouselPeek,
+            }}
+            onLayout={() => {
+              carouselRef.current?.scrollTo({
+                x: getPricingPlanCarouselOffset(selectedPlan.id, carouselSnapInterval),
+                animated: false,
+              });
+            }}
+            onMomentumScrollEnd={syncPlanFromCarousel}
+          >
+            {MOBILE_PRICING_PLANS.map((plan) => (
+              <PricingPlanCard
+                key={plan.id}
+                plan={plan}
+                price={formatPricingDisplayPrice(
+                  plan,
+                  packagesByProductId.get(plan.productId)?.product.priceString
+                )}
+                selected={plan.id === selectedPlanId}
+                width={carouselCardWidth}
+                onPress={() => selectPlan(plan.id)}
               />
-            </Card>
-          );
-        })}
-      </View>
+            ))}
+          </ScrollView>
+          <AppText
+            selectable={false}
+            variant="caption"
+            color="faint"
+            style={{ alignSelf: 'center', fontVariant: ['tabular-nums'] }}
+          >
+            {selectedPlan.name} - {selectedPlanIndex + 1} of {MOBILE_PRICING_PLANS.length}
+          </AppText>
+        </View>
 
-      <SecondaryButton
-        label={busyProductId === 'restore' ? 'Restoring...' : 'Restore purchases'}
-        onPress={() => void restore()}
-        disabled={busyProductId === 'restore'}
-      />
+        <PrimaryButton
+          label={getPurchaseButtonLabel({
+            plan: selectedPlan,
+            price: selectedPrice,
+            loading: packageQuery.isLoading,
+            processing: purchaseBusy,
+          })}
+          onPress={() => void buyCredits(selectedPlan.productId)}
+          loading={purchaseBusy}
+          disabled={purchaseDisabled}
+          accent="commerce"
+        />
+        <SecondaryButton
+          label={busyProductId === 'restore' ? 'Restoring...' : 'Restore purchases'}
+          onPress={() => void restore()}
+          disabled={busyProductId !== null}
+        />
+      </View>
     </Screen>
   );
 }

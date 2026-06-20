@@ -95,6 +95,11 @@ export function ProfileMediaFeedScreen() {
     staleTime: 1000 * 45,
   });
 
+  useEffect(() => {
+    if (!isFocused) return;
+    void sourceQuery.refetch?.();
+  }, [isFocused, sourceQuery.refetch]);
+
   const ownerInfo = useMemo(() => ({
     creatorLabel: user ? getProfileHandle(profileQuery.data, user.email) : '@creator',
     creatorAvatar: profileQuery.data?.avatarUrl ?? null,
@@ -371,6 +376,10 @@ export function ProfileMediaFeedScreen() {
             }}
             onRecreate={() => void recreateItem(activeItem)}
             onShare={() => void shareItem(activeItem)}
+            onDeleted={() => {
+              setActionsOpenItemId(null);
+              setDetailsOpenItemId(null);
+            }}
             onSourceRefresh={() => void sourceQuery.refetch()}
             visible={actionsOpenItemId === activeItem.id}
           />
@@ -650,6 +659,8 @@ function ProfileFeedMediaFrame({ active, mediaItem, width, height }: { active: b
         <ActiveProfileFeedVideo
           url={mediaItem.url}
           previewUrl={posterUrl}
+          previewCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+          previewThumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
           width={width}
           height={height}
           recyclingKey={`profile-feed:${mediaItem.id}`}
@@ -664,6 +675,8 @@ function ProfileFeedMediaFrame({ active, mediaItem, width, height }: { active: b
             kind="image"
             url={posterUrl}
             backdropUrl={posterUrl}
+            cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+            thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
             recyclingKey={`profile-feed:${mediaItem.id}`}
             radius={0}
             style={{ width, height }}
@@ -693,6 +706,8 @@ function ProfileFeedMediaFrame({ active, mediaItem, width, height }: { active: b
         kind="image"
         url={mediaItem.url}
         backdropUrl={mediaItem.previewUrl}
+        cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+        thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
         recyclingKey={`profile-feed:${mediaItem.id}`}
         radius={0}
         style={{ width, height }}
@@ -710,12 +725,16 @@ function ProfileFeedMediaFrame({ active, mediaItem, width, height }: { active: b
 function ActiveProfileFeedVideo({
   url,
   previewUrl,
+  previewCacheKey,
+  previewThumbhash,
   width,
   height,
   recyclingKey,
 }: {
   url: string;
   previewUrl?: string | null;
+  previewCacheKey?: string;
+  previewThumbhash?: string | null;
   width: number;
   height: number;
   recyclingKey: string;
@@ -782,6 +801,8 @@ function ActiveProfileFeedVideo({
         backdropUrl={previewUrl}
         posterUrl={previewUrl}
         posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+        cacheKey={previewCacheKey}
+        thumbhash={previewThumbhash}
         recyclingKey={recyclingKey}
         radius={0}
         style={{ width, height }}

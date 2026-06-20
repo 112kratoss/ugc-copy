@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const nextCacheState = vi.hoisted(() => ({
+  invocations: [] as unknown[][],
+}));
+
+vi.mock('next/cache', () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => async (...args: unknown[]) => {
+    nextCacheState.invocations.push(args);
+    return fn(...args);
+  },
+}));
+
 type ProfileRow = {
   id: string;
   username: string | null;
@@ -516,6 +527,7 @@ describe('showcase feed', () => {
     postResourceBundlePurchasesState = [];
     postsSchemaMissingState = false;
     lastPurchaseBundleIds = null;
+    nextCacheState.invocations = [];
   });
 
   afterEach(() => {
@@ -573,6 +585,23 @@ describe('showcase feed', () => {
         ],
       }),
     });
+    expect(nextCacheState.invocations).toHaveLength(1);
+  });
+
+  it('bypasses the feed base cache when requested for personalized refreshes', async () => {
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+      viewerUserId: 'user-1',
+      bypassCache: true,
+    });
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].id).toBe('post-1');
+    expect(nextCacheState.invocations).toHaveLength(0);
   });
 
   it('returns ordered media items while keeping the first item as the legacy cover', async () => {

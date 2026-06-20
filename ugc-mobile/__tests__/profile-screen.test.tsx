@@ -7,16 +7,28 @@ const authState = vi.hoisted(() => ({
   isLoading: false,
 }));
 
+const paramsState = vi.hoisted(() => ({
+  params: {} as { tab?: string; postId?: string },
+}));
+
+const dashboardPropsState = vi.hoisted(() => ({
+  props: null as null | Record<string, unknown>,
+}));
+
 vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
 vi.mock('@/components/profile-dashboard', () => ({
-  ProfileDashboard: () => React.createElement('profile-dashboard'),
+  ProfileDashboard: (props: Record<string, unknown>) => {
+    dashboardPropsState.props = props;
+    return React.createElement('profile-dashboard', props);
+  },
 }));
 
 vi.mock('expo-router', () => ({
   Redirect: ({ href }: { href: string }) => React.createElement('redirect', { href }),
+  useLocalSearchParams: () => paramsState.params,
 }));
 
 import ProfileScreen from '../app/(tabs)/profile';
@@ -25,6 +37,8 @@ describe('profile screen', () => {
   beforeEach(() => {
     authState.user = null;
     authState.isLoading = false;
+    paramsState.params = {};
+    dashboardPropsState.props = null;
   });
 
   it('waits for auth before choosing a route', () => {
@@ -56,5 +70,33 @@ describe('profile screen', () => {
     });
 
     expect(tree!.toJSON()).toMatchObject({ type: 'profile-dashboard' });
+  });
+
+  it('passes normalized Posts tab params into the profile dashboard', () => {
+    authState.user = { id: 'user-1', email: 'user@example.com' };
+    paramsState.params = { tab: 'posts', postId: 'post-123' };
+
+    renderer.act(() => {
+      renderer.create(<ProfileScreen />);
+    });
+
+    expect(dashboardPropsState.props).toMatchObject({
+      initialTab: 'Posts',
+      highlightedPostId: 'post-123',
+    });
+  });
+
+  it('defaults unknown profile tab params to Saved', () => {
+    authState.user = { id: 'user-1', email: 'user@example.com' };
+    paramsState.params = { tab: 'wat', postId: 'post-123' };
+
+    renderer.act(() => {
+      renderer.create(<ProfileScreen />);
+    });
+
+    expect(dashboardPropsState.props).toMatchObject({
+      initialTab: 'Saved',
+      highlightedPostId: 'post-123',
+    });
   });
 });

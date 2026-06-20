@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Heart, Image as ImageIcon, Video, Layers, Users, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X } from 'lucide-react';
+import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PublicShareButton from '@/app/components/PublicShareButton';
@@ -42,7 +42,6 @@ const CATEGORIES: Array<{
     { id: 'all', label: 'All posts', icon: Layers },
     { id: 'image', label: 'Images', icon: ImageIcon },
     { id: 'video', label: 'Videos', icon: Video },
-    { id: 'motion', label: 'Motion', icon: Users },
     { id: 'text', label: 'Tips', icon: BookText },
 ];
 

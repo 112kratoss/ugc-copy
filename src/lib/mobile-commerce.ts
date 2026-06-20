@@ -150,7 +150,7 @@ export function normalizeMobileCommercePayload(body: unknown): NormalizedMobileC
   };
 }
 
-function resolveMobileCreditProduct(productId: string): PricingPlan | null {
+export function resolveMobileCreditProduct(productId: string): PricingPlan | null {
   const planId = MOBILE_CREDIT_PRODUCTS[productId as MobileCreditProductId];
   return planId ? PRICING_PLAN_MAP[planId] : null;
 }
@@ -397,6 +397,7 @@ export async function completeMobileCreditPurchase({
         amount: plan.priceInr * 100,
         credits: plan.credits,
         status: 'created',
+        mobile_product_id: productId,
       })
       .select('id, credits, status')
       .single();

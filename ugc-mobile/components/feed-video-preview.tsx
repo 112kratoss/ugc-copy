@@ -8,6 +8,8 @@ import { appTheme } from '@/lib/theme';
 export function FeedVideoPreview({
   url,
   previewUrl,
+  previewCacheKey,
+  previewThumbhash,
   active,
   height,
   radius,
@@ -15,6 +17,8 @@ export function FeedVideoPreview({
 }: {
   url: string;
   previewUrl?: string | null;
+  previewCacheKey?: string;
+  previewThumbhash?: string | null;
   active: boolean;
   height: number;
   radius: number;
@@ -27,6 +31,8 @@ export function FeedVideoPreview({
         kind="image"
         url={previewUrl}
         backdropUrl={previewUrl}
+        cacheKey={previewCacheKey}
+        thumbhash={previewThumbhash}
         radius={radius}
         borderWidth={1}
         borderColor={`${accent}4d`}
@@ -37,20 +43,15 @@ export function FeedVideoPreview({
       );
     }
 
-    return (
-      <PassiveFeedVideoPreview
-        url={url}
-        height={height}
-        radius={radius}
-        accent={accent}
-      />
-    );
+    return <View style={{ height, borderRadius: radius, backgroundColor: '#050506' }} />;
   }
 
   return (
     <ActiveFeedVideoPreview
       url={url}
       previewUrl={previewUrl}
+      previewCacheKey={previewCacheKey}
+      previewThumbhash={previewThumbhash}
       height={height}
       radius={radius}
       accent={accent}
@@ -58,55 +59,27 @@ export function FeedVideoPreview({
   );
 }
 
-function PassiveFeedVideoPreview({
-  url,
-  height,
-  radius,
-  accent,
-}: {
-  url: string;
-  height: number;
-  radius: number;
-  accent: string;
-}) {
-  const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
-    instance.loop = false;
-    instance.muted = true;
-    instance.volume = 0;
-    instance.showNowPlayingNotification = false;
-    instance.staysActiveInBackground = false;
-  });
-
-  return (
-    <FeedMediaFrame
-      kind="video"
-      player={player}
-      radius={radius}
-      borderWidth={1}
-      borderColor={`${accent}4d`}
-      backgroundColor="#050506"
-      recyclingKey={`${url}:passive`}
-      style={{ height }}
-    />
-  );
-}
-
 function ActiveFeedVideoPreview({
   url,
   previewUrl,
+  previewCacheKey,
+  previewThumbhash,
   height,
   radius,
   accent,
 }: {
   url: string;
   previewUrl?: string | null;
+  previewCacheKey?: string;
+  previewThumbhash?: string | null;
   height: number;
   radius: number;
   accent: string;
 }) {
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [hasError, setHasError] = useState(false);
+  const [errorUrl, setErrorUrl] = useState<string | null>(null);
   const hasFrame = frameUrl === url;
+  const hasError = errorUrl === url;
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = true;
@@ -120,18 +93,13 @@ function ActiveFeedVideoPreview({
   }, [player]);
 
   useEffect(() => {
-    setFrameUrl(null);
-    setHasError(false);
-  }, [url]);
-
-  useEffect(() => {
     const subscription = player.addListener('statusChange', (event) => {
-      setHasError(event.status === 'error');
+      setErrorUrl(event.status === 'error' ? url : null);
     });
     return () => {
       subscription.remove();
     };
-  }, [player]);
+  }, [player, url]);
 
   return (
     <FeedMediaFrame
@@ -140,6 +108,8 @@ function ActiveFeedVideoPreview({
       backdropUrl={previewUrl}
       posterUrl={previewUrl}
       posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+      cacheKey={previewCacheKey}
+      thumbhash={previewThumbhash}
       radius={radius}
       borderWidth={1}
       borderColor={`${accent}4d`}
@@ -147,7 +117,7 @@ function ActiveFeedVideoPreview({
       recyclingKey={url}
       onFirstFrameRender={() => {
         setFrameUrl(url);
-        setHasError(false);
+        setErrorUrl(null);
       }}
       style={{
         height,

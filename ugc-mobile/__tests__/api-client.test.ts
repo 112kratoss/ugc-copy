@@ -28,7 +28,33 @@ describe('mobile api client caching', () => {
     });
   });
 
-  it('deduplicates anonymous showcase feed requests inside the content cache window', async () => {
+  it('requests fresh authenticated showcase feed data by default', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      items: [],
+      pageInfo: {
+        hasMore: false,
+        nextOffset: null,
+        offset: 0,
+        limit: 12,
+      },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getShowcaseFeed({ limit: 12, sort: 'recent' });
+    await api.getShowcaseFeed({ limit: 12, sort: 'recent' });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const [, firstInit] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const [, secondInit] = fetcher.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    expect((firstInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect((secondInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('deduplicates explicitly anonymous showcase feed requests inside the content cache window', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       items: [],
       pageInfo: {
@@ -44,8 +70,8 @@ describe('mobile api client caching', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    await api.getShowcaseFeed({ limit: 12, sort: 'recent' });
-    await api.getShowcaseFeed({ limit: 12, sort: 'recent' });
+    await api.getShowcaseFeed({ limit: 12, sort: 'recent' }, { auth: false });
+    await api.getShowcaseFeed({ limit: 12, sort: 'recent' }, { auth: false });
 
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -305,5 +331,47 @@ describe('mobile api client caching', () => {
     const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(url).toBe('https://magicbooklet.test/api/posts/post-123/restore');
     expect(init.method).toBe('POST');
+  });
+
+  it('deletes owner posts without a JSON body by default', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      deleted: true,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.deletePost('post-123');
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-123');
+    expect(init.method).toBe('DELETE');
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Headers).get('Content-Type')).toBeNull();
+  });
+
+  it('sends force delete for owner posts when requested', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      deleted: true,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.deletePost('post-123', { force: true });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/post-123');
+    expect(init.method).toBe('DELETE');
+    expect(JSON.parse(String(init.body))).toEqual({ force: true });
+    expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
   });
 });

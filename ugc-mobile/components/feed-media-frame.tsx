@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
+import { StableMediaImage } from '@/components/media-preview';
 
 type FeedMediaFrameBaseProps = {
   backdropUrl?: string | null;
@@ -14,6 +15,8 @@ type FeedMediaFrameBaseProps = {
   priority?: 'low' | 'normal' | 'high';
   radius?: number;
   recyclingKey?: string;
+  cacheKey?: string;
+  thumbhash?: string | null;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -91,15 +94,13 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
               <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.34)' }]} />
             </>
           ) : null}
-          <Image
-            source={{ uri: props.url }}
+          <StableMediaImage
+            url={props.url}
+            cacheKey={props.cacheKey ?? (props.recyclingKey ? `${props.recyclingKey}:foreground` : props.url)}
+            thumbhash={props.thumbhash}
             contentFit={props.imageContentFit ?? 'contain'}
-            cachePolicy="memory-disk"
             onError={props.onImageError}
-            priority={props.priority ?? 'normal'}
-            recyclingKey={props.recyclingKey ? `${props.recyclingKey}:foreground` : undefined}
             transition={props.transition}
-            pointerEvents="none"
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
           />
         </>
@@ -127,13 +128,11 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
           />
           {props.posterVisible && props.posterUrl ? (
-            <Image
-              source={{ uri: props.posterUrl }}
+            <StableMediaImage
+              url={props.posterUrl}
+              cacheKey={props.cacheKey ?? (props.recyclingKey ? `${props.recyclingKey}:video-poster` : props.posterUrl)}
+              thumbhash={props.thumbhash}
               contentFit="contain"
-              cachePolicy="memory-disk"
-              priority={props.priority ?? 'normal'}
-              recyclingKey={props.recyclingKey ? `${props.recyclingKey}:video-poster` : undefined}
-              pointerEvents="none"
               style={[absoluteFill, { backgroundColor: 'transparent' }]}
             />
           ) : null}

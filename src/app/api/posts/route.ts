@@ -256,15 +256,7 @@ function resolveCategory(
     return inferred;
   }
 
-  if (inferred === 'image') {
-    return requestedCategory === 'image' || requestedCategory === 'ugc-ad'
-      ? requestedCategory
-      : null;
-  }
-
-  return requestedCategory === 'video' || requestedCategory === 'motion' || requestedCategory === 'ugc-ad'
-    ? requestedCategory
-    : null;
+  return requestedCategory === inferred ? requestedCategory : null;
 }
 
 function normalizeVisibility(value: string | null): ShowcaseVisibility {
@@ -604,6 +596,11 @@ export async function POST(request: NextRequest) {
         persistedMediaItems.push({
           storagePath,
           previewStoragePath: preview?.previewStoragePath ?? null,
+          previewThumbhash: preview?.previewThumbhash ?? null,
+          previewStatus: preview?.previewStatus ?? 'failed',
+          previewAttemptCount: 1,
+          previewError: preview ? null : 'Preview generation failed.',
+          previewGeneratedAt: preview ? new Date().toISOString() : null,
           mediaKind: getSubmittedMediaKind(mediaItem),
           contentType: mediaItem.contentType || mediaBody.type || null,
           originalName: mediaItem.originalName,

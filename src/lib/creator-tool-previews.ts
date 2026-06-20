@@ -10,7 +10,9 @@ export function buildCreatorToolPreviewMap(items: ShowcaseFeedItem[]): CreatorTo
   return {
     image: mediaFeedItems.find((item) => item.category === 'image') ?? null,
     video: mediaFeedItems.find((item) => item.category === 'video') ?? null,
-    motion: mediaFeedItems.find((item) => item.category === 'motion') ?? null,
+    motion: mediaFeedItems.find((item) => item.creationMode === 'motion')
+      ?? mediaFeedItems.find((item) => item.category === 'video' && /motion/i.test(item.sourceTool ?? ''))
+      ?? null,
     workflow: null,
   };
 }
@@ -32,14 +34,17 @@ export async function loadCreatorToolPreviewMap(options?: {
   const fallbackFeeds = await Promise.all(
     missingToolIds.map(async (toolId) => {
       const feed = await getShowcaseFeedPage({
-        category: toolId,
+        category: toolId === 'motion' ? 'video' : toolId,
         sort: 'top-saves',
         offset: 0,
-        limit: 1,
+        limit: toolId === 'motion' ? 12 : 1,
         viewerUserId,
       });
 
-      return { toolId, item: feed.items.find((item) => item.mediaUrl) ?? null };
+      return {
+        toolId,
+        item: feed.items.find((item) => item.mediaUrl && (toolId !== 'motion' || item.creationMode === 'motion')) ?? null,
+      };
     })
   );
 

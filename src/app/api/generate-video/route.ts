@@ -228,6 +228,7 @@ export async function POST(request: NextRequest) {
 
         const result = await startVideoGeneration({
             supabase,
+            creditSupabase: createServiceClient(),
             userId: user.id,
             model: model as VideoModelId,
             prompt: typeof prompt === 'string' ? prompt : '',
@@ -404,7 +405,7 @@ export async function GET(request: NextRequest) {
                         completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
                     })
                     .eq('prediction_id', predictionId);
-                await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
             }
         } else {
             const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
@@ -450,7 +451,7 @@ export async function GET(request: NextRequest) {
                         completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
                     })
                     .eq('prediction_id', predictionId);
-                await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
             }
         }
 

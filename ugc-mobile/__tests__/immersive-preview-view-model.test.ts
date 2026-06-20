@@ -277,6 +277,31 @@ describe('immersive preview view model', () => {
     });
   });
 
+  it('treats ugc-ad generations as video viewer items', () => {
+    const [item] = buildImmersiveGenerationItems('profile-creations', [
+      generation({
+        id: 'ugc-ad-1',
+        category: 'ugc-ad',
+        output_url: 'https://cdn.example.com/ugc-ad.mp4',
+        title: 'Creator ad',
+        prompt: 'A creator ad spot',
+      }),
+    ], {
+      creatorLabel: '@batman',
+      creatorAvatar: null,
+    });
+
+    expect(item).toMatchObject({
+      id: 'ugc-ad-1',
+      mediaKind: 'video',
+      badge: 'Video',
+      recreateTool: 'video',
+      details: {
+        categoryLabel: 'Video',
+      },
+    });
+  });
+
   it('maps owner posts with body, prompt, and title fallback for display text', () => {
     const items = buildImmersiveOwnerPostItems('profile-posts', [
       ownerPost({ id: 'body-post', body: 'Body wins', prompt: 'Prompt', title: 'Title' }),
@@ -354,9 +379,58 @@ describe('immersive preview view model', () => {
 
   describe('action builder available and disabled actions', () => {
     it('returns correct actions for saved media', () => {
-      const [item] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({ id: 'saved-item' })]);
+      const [item] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({ id: 'saved-item', generationId: 'gen-saved', canRemix: true })]);
       expect(item.availableActions).toEqual(['unsave', 'share', 'recreate', 'view-details', 'open-original']);
       expect(item.disabledActions).toEqual({});
+    });
+
+    it('keeps recreate locked for paid remix unlocks until the viewer has access', () => {
+      const [lockedItem, unlockedItem] = buildImmersiveShowcaseItems('showcase-feed', [
+        showcaseItem({
+          id: 'locked-paid-remix-post',
+          generationId: 'gen-paid',
+          canRemix: false,
+          asset: {
+            id: 'asset-paid-remix',
+            postId: 'locked-paid-remix-post',
+            title: 'Paid remix kit',
+            accessMode: 'paid',
+            priceUsdCents: 900,
+            previewText: 'Unlock remix access.',
+            allowRemix: true,
+            resourceKinds: ['prompt', 'remix'],
+            priceQuote: { formatted: '$9' },
+          },
+        }),
+        showcaseItem({
+          id: 'unlocked-paid-remix-post',
+          generationId: 'gen-paid-unlocked',
+          canRemix: true,
+          asset: {
+            id: 'asset-paid-remix-unlocked',
+            postId: 'unlocked-paid-remix-post',
+            title: 'Paid remix kit',
+            accessMode: 'paid',
+            priceUsdCents: 900,
+            previewText: 'Unlock remix access.',
+            allowRemix: true,
+            resourceKinds: ['prompt', 'remix'],
+            priceQuote: { formatted: '$9' },
+          },
+        }),
+      ]);
+
+      expect(lockedItem.availableActions).toEqual(['save', 'share', 'unlock-remix', 'view-details', 'open-original']);
+      expect(unlockedItem.availableActions).toContain('recreate');
+    });
+
+    it('does not offer recreate for showcase posts that were not created in the app', () => {
+      const [item] = buildImmersiveShowcaseItems('showcase-feed', [
+        showcaseItem({ id: 'manual-showcase-post', generationId: null, canRemix: true }),
+      ]);
+
+      expect(item.availableActions).toEqual(['save', 'share', 'view-details', 'open-original']);
+      expect(item.generationId).toBeNull();
     });
 
     it('returns correct actions for unposted creation', () => {
@@ -432,7 +506,8 @@ describe('immersive preview view model', () => {
       const [item] = buildImmersiveOwnerPostItems('profile-posts', [
         ownerPost({ id: 'active-post', archivedAt: null }),
       ], { creatorLabel: '@batman' });
-      expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'share', 'download', 'view-details']);
+      expect(item.isManualOwnerPost).toBe(true);
+      expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'delete-post', 'share', 'download', 'view-details']);
       expect(item.disabledActions).toEqual({});
     });
 
@@ -440,11 +515,21 @@ describe('immersive preview view model', () => {
       const [item] = buildImmersiveOwnerPostItems('profile-posts', [
         ownerPost({ id: 'archived-post', archivedAt: '2026-06-10T00:00:00Z' }),
       ], { creatorLabel: '@batman' });
-      expect(item.availableActions).toEqual(['restore', 'share', 'download', 'view-details']);
+      expect(item.isManualOwnerPost).toBe(true);
+      expect(item.availableActions).toEqual(['restore', 'delete-post', 'share', 'download', 'view-details']);
       expect(item.disabledActions).toEqual({
         'edit-post': 'This post is archived',
         'change-visibility': 'This post is archived',
       });
+    });
+
+    it('does not offer permanent delete for generated owner posts', () => {
+      const [item] = buildImmersiveOwnerPostItems('profile-posts', [
+        ownerPost({ id: 'generated-post', generationId: 'gen-1', archivedAt: null }),
+      ], { creatorLabel: '@batman' });
+      expect(item.isManualOwnerPost).toBe(false);
+      expect(item.generationId).toBe('gen-1');
+      expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'share', 'download', 'recreate', 'view-details']);
     });
 
     it('returns correct actions for archived creation', () => {

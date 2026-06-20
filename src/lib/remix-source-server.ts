@@ -57,9 +57,8 @@ export class RemixSourceError extends Error {
 }
 
 function normalizeCategory(category: string | null, model: string | null): ShowcaseItemCategory | null {
-  if (category === 'image' || category === 'video' || category === 'motion' || category === 'ugc-ad') {
-    return category;
-  }
+  if (category === 'motion' || category === 'ugc-ad') return 'video';
+  if (category === 'image' || category === 'video') return category;
 
   if (!model) {
     return null;
@@ -70,7 +69,7 @@ function normalizeCategory(category: string | null, model: string | null): Showc
   }
 
   if (isMotionModel(model)) {
-    return 'motion';
+    return 'video';
   }
 
   if (isAudioModel(model)) {
@@ -213,6 +212,7 @@ export async function loadRemixSourceBundle(
     typedGeneration.workflow_settings && typeof typedGeneration.workflow_settings === 'object'
       ? typedGeneration.workflow_settings
       : {};
+  const isMotionWorkflow = typedGeneration.category === 'motion' || workflowSettings.creationMode === 'motion';
   const includeInputMedia = isOwner || (typedGeneration.is_public === true && typedGeneration.share_input_media_for_remix === true);
   const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, includeInputMedia);
   const durableInputMediaMap = includeInputMedia
@@ -370,7 +370,7 @@ export async function loadRemixSourceBundle(
       };
     }
 
-    if (category === 'video' || category === 'ugc-ad') {
+    if (category === 'video' && !isMotionWorkflow) {
       const startFrame = accessibleInputMedia.find((item) => item.role === 'start_frame');
       const endFrame = accessibleInputMedia.find((item) => item.role === 'end_frame');
       if (startFrame && !startFrame.url) {
@@ -394,7 +394,7 @@ export async function loadRemixSourceBundle(
       };
     }
 
-    if (category === 'motion') {
+    if (isMotionWorkflow) {
       const characterImage = accessibleInputMedia.find((item) => item.role === 'character_image');
       const referenceVideo = accessibleInputMedia.find((item) => item.role === 'motion_reference_video');
       if (characterImage && !characterImage.url) {
@@ -416,7 +416,7 @@ export async function loadRemixSourceBundle(
       };
     }
 
-    if (category === 'video' || category === 'ugc-ad') {
+    if (category === 'video' && !isMotionWorkflow) {
       bundle.inputs.video = {
         referenceMode: workflowSettings.referenceMode === 'elements' ? 'elements' : 'frames',
         startFrame: await resolveAssetDescriptor(
@@ -435,7 +435,7 @@ export async function loadRemixSourceBundle(
       };
     }
 
-    if (category === 'motion') {
+    if (isMotionWorkflow) {
       bundle.inputs.motion = {
         characterImage: await resolveAssetDescriptor(
           workflowSettings.characterImage,

@@ -47,8 +47,6 @@ const tabHashes: Record<TabType, string> = {
 const categoryLabels: Record<CreatorItem['category'], string> = {
   image: 'Image',
   video: 'Video',
-  motion: 'Motion',
-  'ugc-ad': 'UGC ad',
   text: 'Tip',
 };
 

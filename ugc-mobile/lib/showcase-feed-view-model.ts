@@ -13,6 +13,8 @@ export interface ShowcaseMasonryCard {
   creatorAvatar: string | null;
   mediaUrl: string | null;
   previewUrl: string | null;
+  previewThumbhash: string | null;
+  previewCacheKey: string;
   mediaKind: 'image' | 'video' | null;
   badge: string;
   accent: ToolAccent;
@@ -39,7 +41,13 @@ export interface ShowcaseGridLayout {
 }
 
 export function buildShowcaseMasonry(items: ShowcaseFeedItem[]) {
-  return items.map(showcaseToMasonryCard);
+  return items.filter(isShowcaseGridReady).map(showcaseToMasonryCard);
+}
+
+export function isShowcaseGridReady(item: ShowcaseFeedItem) {
+  if (item.category === 'text' || item.postFormat === 'text') return true;
+  const cover = item.mediaItems?.[0];
+  return cover?.preview?.gridReady ?? cover?.gridReady ?? false;
 }
 
 export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
@@ -53,9 +61,11 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
 }
 
 export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCard {
-  const accent = categoryAccent(item.category);
+  const accent = item.creationMode === 'motion' ? 'motion' : categoryAccent(item.category);
   const textOnly = (item.category === 'text' || item.postFormat === 'text') && !item.mediaUrl;
   const unlock = cardUnlock(item);
+  const cover = item.mediaItems?.[0];
+  const preview = cover?.preview;
 
   return {
     id: item.id,
@@ -66,7 +76,9 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
     creatorLabel: item.creator.username || item.creator.name,
     creatorAvatar: item.creator.avatar,
     mediaUrl: item.mediaUrl,
-    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
+    previewUrl: preview?.previewUrl ?? cover?.previewUrl ?? null,
+    previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
+    previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
     mediaKind: item.mediaKind,
     badge: unlock?.label ?? cardBadge(item),
     accent,
@@ -90,10 +102,10 @@ export function getShowcaseMediaHeight(card: ShowcaseMasonryCard, columnWidth: n
 function cardBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return 'Free unlock';
   if (item.asset?.priceQuote?.formatted) return item.asset.priceQuote.formatted;
-  if (item.canRemix || item.asset?.allowRemix) return 'Remix';
+  if (canRecreateShowcaseItem(item)) return 'Remix';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
+  if (item.creationMode === 'motion') return 'Motion';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
-  if (item.category === 'motion') return 'Motion';
   return 'Image';
 }
 
@@ -108,7 +120,7 @@ function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null {
     };
   }
 
-  if (item.canRemix) {
+  if (canRecreateShowcaseItem(item)) {
     return {
       label: 'Remixable',
       summary: 'Use this post as a starting point',
@@ -118,6 +130,14 @@ function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null {
   }
 
   return null;
+}
+
+function isAppCreatedShowcaseItem(item: ShowcaseFeedItem) {
+  return typeof item.generationId === 'string' && item.generationId.trim().length > 0;
+}
+
+function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
+  return isAppCreatedShowcaseItem(item) && item.canRemix;
 }
 
 function resourceSummary(kinds: string[] | undefined, allowRemix: boolean) {
@@ -139,8 +159,8 @@ function resourceKindLabel(kind: string) {
 function cardHeight(item: ShowcaseFeedItem) {
   const variant = stableHeightVariant(item);
   if (item.category === 'text' || item.postFormat === 'text') return [188, 214, 240][variant];
+  if (item.creationMode === 'motion') return [236, 268, 304][variant];
   if (item.mediaKind === 'video' || item.category === 'video') return [226, 260, 292][variant];
-  if (item.category === 'motion') return [236, 268, 304][variant];
   return [218, 248, 284][variant];
 }
 
@@ -154,7 +174,6 @@ function getCardAspectRatio(item: ShowcaseFeedItem) {
 
 function categoryAccent(category: ShowcaseFeedItem['category']): ToolAccent {
   if (category === 'video') return 'video';
-  if (category === 'motion') return 'motion';
   if (category === 'text') return 'amber';
   return 'image';
 }

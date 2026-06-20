@@ -25,6 +25,7 @@ import {
   type PostMediaSummary,
 } from '@/lib/post-media';
 import { createServiceClient } from '@/lib/server-helpers';
+import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -220,17 +221,38 @@ export async function getPublicPostDetail(
       return null;
     }
 
+    const mediaKind = generation.category === 'image' ? 'image' : 'video';
+    const preview = buildVisualMediaDescriptor({
+      id: `${generation.id}:cover`,
+      kind: mediaKind,
+      url: generation.url,
+      storageKey: generation.id,
+      previewUrl: generation.previewUrl,
+      previewStorageKey: generation.previewUrl,
+      previewThumbhash: null,
+      previewStatus: generation.previewUrl ? 'ready' : 'pending',
+      expiresAt: null,
+      width: null,
+      height: null,
+      durationSeconds: null,
+    });
+
     return {
       id: generation.id,
       generationId: generation.id,
       visibility: 'public',
       mediaUrl: generation.url,
-      mediaKind: generation.category === 'image' ? 'image' : 'video',
+      mediaKind,
       mediaItems: [{
         id: `${generation.id}:cover`,
         url: generation.url,
         previewUrl: generation.previewUrl,
-        mediaKind: generation.category === 'image' ? 'image' : 'video',
+        previewThumbhash: preview.thumbhash,
+        previewStatus: preview.status,
+        previewCacheKey: preview.cacheKey,
+        gridReady: preview.gridReady,
+        preview,
+        mediaKind,
         contentType: null,
         originalName: null,
         width: null,

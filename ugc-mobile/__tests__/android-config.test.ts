@@ -17,6 +17,13 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
   });
 
+  it('enables native Sign in with Apple for iOS builds', () => {
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+
+    expect(appJson.expo.ios.usesAppleSignIn).toBe(true);
+    expect(appJson.expo.plugins).toContain('expo-apple-authentication');
+  });
+
   it('sets a manifest placeholder and debug-only Gradle values for local HTTP', () => {
     const manifest: {
       manifest: {

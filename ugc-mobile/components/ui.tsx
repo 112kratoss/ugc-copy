@@ -360,6 +360,7 @@ export function MetricCard({
   body,
   accent,
   onPress,
+  trailing,
   compact = false,
 }: {
   icon?: React.ReactNode;
@@ -368,6 +369,7 @@ export function MetricCard({
   body?: string;
   accent?: ToolAccent;
   onPress?: () => void;
+  trailing?: React.ReactNode;
   compact?: boolean;
 }) {
   const content = (
@@ -397,6 +399,18 @@ export function MetricCard({
           </AppText>
         ) : null}
       </View>
+      {trailing ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: compact ? 13 : 17,
+            right: compact ? 12 : 16,
+          }}
+        >
+          {trailing}
+        </View>
+      ) : null}
     </>
   );
 
@@ -604,9 +618,11 @@ export function PrimaryButton({
   accent?: ToolAccent;
 }) {
   const fillColor = accentColor(accent);
-  const textColor = accent === 'image' || accent === 'amber' || accent === 'commerce'
-    ? appTheme.colors.textInverse
-    : '#ffffff';
+  const textColor = disabled
+    ? appTheme.colors.muted
+    : accent === 'image' || accent === 'amber' || accent === 'commerce'
+      ? appTheme.colors.textInverse
+      : '#ffffff';
 
   return (
     <Pressable

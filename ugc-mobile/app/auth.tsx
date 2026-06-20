@@ -1,12 +1,13 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { AlertCircle, Apple, ArrowLeft, Eye, LockKeyhole, Mail, Sparkles, WandSparkles, X } from 'lucide-react-native';
 import { useState } from 'react';
 
 import { useAuth } from '@/lib/auth';
+import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { leaveAuthScreen } from '@/lib/auth-navigation';
 
 const workspace = {
@@ -21,13 +22,14 @@ const workspace = {
 };
 
 export default function AuthScreen() {
-  const { signInWithPassword, signUpWithPassword, isAuthConfigured, missingEnvKeys } = useAuth();
+  const { signInWithPassword, signUpWithPassword, signInWithApple, isAuthConfigured, missingEnvKeys } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const isCompact = width < 390 || height < 820;
@@ -49,8 +51,22 @@ export default function AuthScreen() {
     }
   };
 
+  const signInWithNativeApple = async () => {
+    setIsAppleSubmitting(true);
+    setError(null);
+    try {
+      await signInWithApple(mode);
+    } catch (nextError) {
+      if (!isAppleAuthCanceled(nextError)) {
+        setError(nextError instanceof Error ? nextError.message : 'Apple sign-in failed.');
+      }
+    } finally {
+      setIsAppleSubmitting(false);
+    }
+  };
+
   const showOAuthNotice = () => {
-    setError('Google and Apple sign-in can be wired after the native deep links are registered.');
+    setError('Google sign-in can be wired after the native deep links are registered.');
   };
 
   return (
@@ -87,12 +103,15 @@ export default function AuthScreen() {
             onTogglePassword={() => setShowPassword((current) => !current)}
             onSubmit={submit}
             onOAuthNotice={showOAuthNotice}
+            onAppleSignIn={signInWithNativeApple}
             onForgotPassword={() => setError('Password reset can be connected after Supabase deep links are registered.')}
             onBack={() => leaveAuthScreen(router)}
             canSubmit={canSubmit}
             isSubmitting={isSubmitting}
+            isAppleSubmitting={isAppleSubmitting}
             isAuthConfigured={isAuthConfigured}
             missingEnvKeys={missingEnvKeys}
+            showAppleSignIn={Platform.OS === 'ios'}
           />
         </View>
       </ScrollView>
@@ -141,12 +160,15 @@ function AuthPanel({
   onTogglePassword,
   onSubmit,
   onOAuthNotice,
+  onAppleSignIn,
   onForgotPassword,
   onBack,
   canSubmit,
   isSubmitting,
+  isAppleSubmitting,
   isAuthConfigured,
   missingEnvKeys,
+  showAppleSignIn,
 }: {
   mode: 'login' | 'signup';
   onModeChange: (mode: 'login' | 'signup') => void;
@@ -158,12 +180,15 @@ function AuthPanel({
   onTogglePassword: () => void;
   onSubmit: () => void;
   onOAuthNotice: () => void;
+  onAppleSignIn: () => void;
   onForgotPassword: () => void;
   onBack: () => void;
   canSubmit: boolean;
   isSubmitting: boolean;
+  isAppleSubmitting: boolean;
   isAuthConfigured: boolean;
   missingEnvKeys: string[];
+  showAppleSignIn: boolean;
 }) {
   return (
     <View
@@ -243,9 +268,16 @@ function AuthPanel({
         <SocialButton label="Google" onPress={onOAuthNotice}>
           <GoogleGlyph />
         </SocialButton>
-        <SocialButton label="Apple" onPress={onOAuthNotice}>
-          <Apple size={23} color="#ffffff" fill="#ffffff" strokeWidth={1.2} />
-        </SocialButton>
+        {showAppleSignIn ? (
+          <SocialButton
+            label="Apple"
+            onPress={onAppleSignIn}
+            disabled={!isAuthConfigured || isAppleSubmitting}
+            loading={isAppleSubmitting}
+          >
+            <Apple size={23} color="#ffffff" fill="#ffffff" strokeWidth={1.2} />
+          </SocialButton>
+        ) : null}
       </View>
 
       <View style={{ alignItems: 'center', gap: 9 }}>
@@ -389,11 +421,24 @@ function PrimaryButton({
   );
 }
 
-function SocialButton({ children, label, onPress }: { children: React.ReactNode; label: string; onPress: () => void }) {
+function SocialButton({
+  children,
+  label,
+  onPress,
+  disabled,
+  loading,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => ({
         flex: 1,
@@ -403,12 +448,12 @@ function SocialButton({ children, label, onPress }: { children: React.ReactNode;
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: 'rgba(255,255,255,0.07)',
-        opacity: pressed ? 0.76 : 1,
+        opacity: disabled ? 0.48 : pressed ? 0.76 : 1,
         borderWidth: 1,
         borderColor: workspace.border,
       })}
     >
-      {children}
+      {loading ? <ActivityIndicator color="#ffffff" /> : children}
     </Pressable>
   );
 }

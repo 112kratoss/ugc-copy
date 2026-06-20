@@ -322,6 +322,7 @@ describe('/api/generations route', () => {
     expect(response.status).toBe(200);
     expect(syncGenerationStatusesMock).toHaveBeenCalledWith({
       supabase: expect.any(Object),
+      creditSupabase: expect.any(Object),
       generationIds: ['gen-1'],
     });
     expect(data.generations[0].status).toBe('succeeded');
@@ -451,6 +452,16 @@ describe('/api/generations route', () => {
     expect(data.generations[0].preview_url).toBe('https://signed.example.com/generated_images/user-1/image-output.jpg');
     expect(data.generations[1].preview_url).toBe('https://signed.example.com/generated_videos/user-1/video-output.preview.webp');
     expect(data.generations[1].output_url).toBe('https://signed.example.com/generated_videos/user-1/video-output.mp4');
+    expect(data.generations[1].media).toMatchObject({
+      id: 'gen-video-1',
+      kind: 'video',
+      url: 'https://signed.example.com/generated_videos/user-1/video-output.mp4',
+      previewUrl: 'https://signed.example.com/generated_videos/user-1/video-output.preview.webp',
+      cacheKey: 'generated_videos/user-1/video-output.preview.webp',
+      status: 'ready',
+      gridReady: true,
+    });
+    expect(data.generations[1].media.expiresAt).toEqual(expect.any(String));
   });
 
   it('falls back to base generation columns when preview columns are not deployed yet', async () => {
@@ -645,6 +656,7 @@ describe('/api/generations route', () => {
     expect(response.status).toBe(200);
     expect(syncGenerationStatusesMock).toHaveBeenCalledWith({
       supabase: expect.any(Object),
+      creditSupabase: expect.any(Object),
       generationIds: ['gen-1'],
     });
     expect(data.generations[0].status).toBe('processing');

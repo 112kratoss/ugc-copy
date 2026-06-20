@@ -66,10 +66,12 @@ export function getImmersiveVideoBlockerId({
   actionsOpenItemId,
   detailsPageOpenItemId,
   detailsSheetOpenItemId,
+  unlockRemixOpenItemId,
 }: {
   actionsOpenItemId: string | null;
   detailsPageOpenItemId: string | null;
   detailsSheetOpenItemId: string | null;
+  unlockRemixOpenItemId?: string | null;
 }) {
-  return detailsPageOpenItemId ?? detailsSheetOpenItemId ?? actionsOpenItemId;
+  return unlockRemixOpenItemId ?? detailsPageOpenItemId ?? detailsSheetOpenItemId ?? actionsOpenItemId;
 }

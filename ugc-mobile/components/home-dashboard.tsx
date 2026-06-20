@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { FlashList } from '@shopify/flash-list';
+import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -21,7 +22,7 @@ import {
   UserPlus,
   WandSparkles,
 } from 'lucide-react-native';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -42,6 +43,7 @@ import {
   type HomeGenerationCard,
   type HomeToolShortcut,
 } from '@/lib/home-view-model';
+import { isShowcaseGridReady } from '@/lib/showcase-feed-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { HOME_RAIL_DRAW_DISTANCE } from '@/lib/media-performance';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -105,6 +107,7 @@ const TOOL_PREVIEW_IMAGES = {
 
 export function HomeDashboard() {
   const { user, api, credits, signOut } = useAuth();
+  const isFocused = useIsFocused();
   const [menuVisible, setMenuVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -138,6 +141,14 @@ export function HomeDashboard() {
     queryFn: () => api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
   });
 
+  useEffect(() => {
+    if (!isFocused || !user) return;
+    void Promise.all([
+      generationsQuery.refetch?.(),
+      sellerPostsQuery.refetch?.(),
+    ]);
+  }, [isFocused, user?.id]);
+
   const showcaseQuery = useInfiniteQuery({
     queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }),
     initialPageParam: 0,
@@ -158,7 +169,10 @@ export function HomeDashboard() {
   const activeGenerationCount = rawGenerations.filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
 
   const communityCards = useMemo(() => {
-    const items = flattenShowcaseFeedPages(showcaseQuery.data?.pages).slice(0, 4).map(showcaseToCommunityCard);
+    const items = flattenShowcaseFeedPages(showcaseQuery.data?.pages)
+      .filter(isShowcaseGridReady)
+      .slice(0, 4)
+      .map(showcaseToCommunityCard);
     return items.length > 0 ? items : FALLBACK_COMMUNITY;
   }, [showcaseQuery.data]);
 
@@ -591,7 +605,15 @@ function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: 
       {isText ? (
         <TextPreviewCard text={item.previewText} accent={accentColor('amber')} height={160} radius={18} lines={4} />
       ) : item.mediaUrl && item.kind === 'image' ? (
-        <FeedMediaFrame kind="image" url={item.mediaUrl} recyclingKey={`home-generation:${item.id}`} radius={18} style={{ position: 'absolute', inset: 0 }} />
+        <FeedMediaFrame
+          kind="image"
+          url={item.previewUrl ?? item.mediaUrl}
+          cacheKey={item.previewCacheKey}
+          thumbhash={item.previewThumbhash}
+          recyclingKey={`home-generation:${item.id}`}
+          radius={18}
+          style={{ position: 'absolute', inset: 0 }}
+        />
       ) : (
         <FantasyPortalArt variant={item.artVariant} muted />
       )}
@@ -681,6 +703,8 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
             kind="image"
             url={item.previewUrl || item.mediaUrl as string}
             backdropUrl={item.previewUrl}
+            cacheKey={item.previewCacheKey}
+            thumbhash={item.previewThumbhash}
             recyclingKey={`home-community:${item.id}`}
             style={{ position: 'absolute', inset: 0 }}
           />

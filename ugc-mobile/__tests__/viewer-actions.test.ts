@@ -16,12 +16,15 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionLabel('edit-post')).toBe('Edit post');
     expect(getViewerActionLabel('view-linked')).toBe('View linked post');
     expect(getViewerActionLabel('view-details')).toBe('View details');
+    expect(getViewerActionLabel('unlock-remix')).toBe('Remix');
+    expect(getViewerActionLabel('delete-post')).toBe('Delete permanently');
   });
 
   it('marks only removal-style commands as destructive', () => {
     expect(isDestructiveViewerAction('unsave')).toBe(true);
     expect(isDestructiveViewerAction('save')).toBe(false);
     expect(isDestructiveViewerAction('archive')).toBe(true);
+    expect(isDestructiveViewerAction('delete-post')).toBe(true);
     expect(isDestructiveViewerAction('restore')).toBe(false);
     expect(isDestructiveViewerAction('share')).toBe(false);
   });
@@ -31,6 +34,7 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionGroupLabel('view-linked')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('edit-linked')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('archive')).toBe('Library');
+    expect(getViewerActionGroupLabel('delete-post')).toBe('Library');
     expect(getViewerActionGroupLabel('share')).toBe('Media actions');
   });
 

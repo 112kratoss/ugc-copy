@@ -12,6 +12,15 @@ vi.mock('expo-image', () => ({
   Image: (props: MockProps) => React.createElement('image', props),
 }));
 
+vi.mock('@/components/media-preview', () => ({
+  StableMediaImage: ({ url, cacheKey, thumbhash, ...props }: MockProps) => React.createElement('image', {
+    ...props,
+    source: { uri: url, cacheKey },
+    recyclingKey: cacheKey,
+    placeholder: thumbhash ? { thumbhash } : undefined,
+  }),
+}));
+
 vi.mock('expo-blur', () => ({
   BlurView: ({ children, ...props }: MockProps) =>
     React.createElement('blur-view', props, children),
@@ -69,7 +78,7 @@ describe('FeedMediaFrame', () => {
 
     const images = tree!.root.findAll((node) => node.type === 'image');
     expect(images).toHaveLength(1);
-    expect(images[0].props.source).toEqual({ uri: 'https://cdn.example.com/profile-tile.jpg' });
+    expect(images[0].props.source).toMatchObject({ uri: 'https://cdn.example.com/profile-tile.jpg' });
     expect(images[0].props.contentFit).toBe('cover');
     expect(images[0].props.blurRadius).toBeUndefined();
     expect(images[0].props.recyclingKey).toBe('profile:media-1:foreground');
@@ -124,7 +133,7 @@ describe('FeedMediaFrame', () => {
 
     const posters = tree!.root.findAll((node) => node.type === 'image');
     expect(posters).toHaveLength(2);
-    expect(posters[1].props.source).toEqual({ uri: 'https://cdn.example.com/video-poster.jpg' });
+    expect(posters[1].props.source).toMatchObject({ uri: 'https://cdn.example.com/video-poster.jpg' });
     expect(posters[1].props.contentFit).toBe('contain');
     expect(posters[1].props.blurRadius).toBeUndefined();
     expect(posters[1].props.recyclingKey).toBe('video-2:video-poster');

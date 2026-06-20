@@ -6,10 +6,11 @@ import type {
     PostResourceBundleLockedPreview,
     PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import type { VisualMediaDescriptor } from '@/lib/media-descriptor';
 
 export const SHOWCASE_PAGE_SIZE = 12;
 
-export type ShowcaseCategory = 'all' | 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
+export type ShowcaseCategory = 'all' | 'image' | 'video' | 'text';
 export type ShowcaseSort = 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
 export type ShowcaseUnlockFilter = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseResourceFilter = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
@@ -55,6 +56,11 @@ export interface ShowcaseMediaItem {
     id: string;
     url: string;
     previewUrl?: string | null;
+    previewThumbhash?: string | null;
+    previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';
+    previewCacheKey?: string;
+    gridReady?: boolean;
+    preview?: VisualMediaDescriptor;
     mediaKind: ShowcaseMediaKind;
     contentType: string | null;
     originalName: string | null;
@@ -74,6 +80,7 @@ export interface ShowcaseFeedItem {
     prompt: string;
     body: string;
     category: ShowcaseItemCategory;
+    creationMode?: 'motion' | null;
     postFormat: ShowcasePostFormat;
     saveCount: number;
     remixCount: number;
@@ -165,7 +172,8 @@ export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPa
 }
 
 export function normalizeShowcaseCategory(value: string | null | undefined): ShowcaseCategory {
-    if (value === 'image' || value === 'video' || value === 'motion' || value === 'ugc-ad' || value === 'text') {
+    if (value === 'motion' || value === 'ugc-ad') return 'video';
+    if (value === 'image' || value === 'video' || value === 'text') {
         return value;
     }
 
@@ -189,7 +197,7 @@ export function normalizeShowcaseSourceKind(value: string | null | undefined): S
 }
 
 export function isShowcaseItemCategory(value: string | null | undefined): value is ShowcaseItemCategory {
-    return value === 'image' || value === 'video' || value === 'motion' || value === 'ugc-ad' || value === 'text';
+    return value === 'image' || value === 'video' || value === 'text';
 }
 
 export function getShowcaseMediaKind(
@@ -200,7 +208,7 @@ export function getShowcaseMediaKind(
         return null;
     }
 
-    return category === 'video' || category === 'motion' ? 'video' : 'image';
+    return category === 'video' ? 'video' : 'image';
 }
 
 export function normalizeShowcaseSort(value: string | null | undefined): ShowcaseSort {

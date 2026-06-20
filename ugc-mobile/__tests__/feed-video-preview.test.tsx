@@ -26,7 +26,10 @@ vi.mock('expo-video', () => ({
 }));
 
 vi.mock('expo-image', () => ({
-  Image: (props: Record<string, unknown>) => React.createElement('image', props),
+  Image: Object.assign(
+    (props: Record<string, unknown>) => React.createElement('image', props),
+    { prefetch: vi.fn(async () => true) }
+  ),
 }));
 
 vi.mock('expo-blur', () => ({
@@ -34,8 +37,18 @@ vi.mock('expo-blur', () => ({
     React.createElement('blur-view', props, children),
 }));
 
+vi.mock('expo-linear-gradient', () => ({
+  LinearGradient: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
+    React.createElement('linear-gradient', props, children),
+}));
+
+vi.mock('lucide-react-native', () => ({
+  ImageOff: (props: Record<string, unknown>) => React.createElement('image-off', props),
+}));
+
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: Record<string, unknown>) => React.createElement('activity-indicator', props),
+  Text: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('text', props, children),
   View: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
     React.createElement('view', props, children),
 }));
@@ -115,7 +128,7 @@ describe('FeedVideoPreview', () => {
     expect(images.some((node) => node.props.contentFit === 'contain')).toBe(true);
   });
 
-  it('renders a muted video frame while inactive when no poster exists', () => {
+  it('does not mount a video player while an inactive poster is unavailable', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 
     renderer.act(() => {
@@ -131,15 +144,9 @@ describe('FeedVideoPreview', () => {
       );
     });
 
-    expect(videoState.useVideoPlayer).toHaveBeenCalledWith({
-      uri: 'https://cdn.example.com/video-without-poster.mp4',
-      useCaching: true,
-    });
+    expect(videoState.useVideoPlayer).not.toHaveBeenCalled();
     expect(videoState.player.play).not.toHaveBeenCalled();
-    expect(videoState.player.muted).toBe(true);
-    expect(videoState.player.volume).toBe(0);
     const videoViews = tree!.root.findAll((node) => String(node.type) === 'video-view');
-    expect(videoViews).toHaveLength(1);
-    expect(videoViews[0].props.contentFit).toBe('contain');
+    expect(videoViews).toHaveLength(0);
   });
 });

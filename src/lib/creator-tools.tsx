@@ -94,7 +94,7 @@ export const CREATOR_TOOLS: CreatorToolDefinition[] = [
     idealFor: 'UGC hooks, creator remixes, performance-driven product spots',
     outcomes: ['Influencer-style delivery', 'Motion-led product demo', 'Character performance remix'],
     launchLabel: 'Start with motion',
-    inspirationHref: '/showcase?category=motion',
+    inspirationHref: '/showcase?category=video',
     inspirationLabel: 'Browse motion inspiration',
   },
   {

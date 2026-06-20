@@ -6,13 +6,18 @@ import {
     loadGenerationInputMediaMap,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, getStoredMediaLocation, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { classifyVisualMedia } from '@/lib/media-contract';
+import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
 
 type GenerationRow = {
     id: string;
     output_url: string | null;
     preview_url?: string | null;
     thumbnail_url?: string | null;
+    preview_thumbhash?: string | null;
+    preview_status?: MediaPreviewStatus;
+    creation_mode?: 'motion' | null;
     showcase_asset_path?: string | null;
     status: string;
     workflow_settings?: unknown;
@@ -37,6 +42,14 @@ function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(valu
 
 function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function inferVisualContentType(value: string | null): string | null {
+    if (!value) return null;
+    if (/\.(mp4|mov|m4v|webm)(\?|$)/i.test(value) || value.startsWith('generated_videos/')) return 'video/unknown';
+    if (/\.(avif|gif|jpe?g|png|webp)(\?|$)/i.test(value) || value.startsWith('generated_images/')) return 'image/unknown';
+    if (/\.(mp3|m4a|wav|aac)(\?|$)/i.test(value) || value.startsWith('generated_audio/')) return 'audio/unknown';
+    return null;
 }
 
 async function getPersistedOutputUrls(
@@ -119,7 +132,7 @@ function isMissingGenerationPreviewColumnError(error: unknown) {
     const { code, message = '' } = error as SupabaseSchemaError;
     return (
         (code === '42703' || code === 'PGRST204')
-        && (message.includes('preview_url') || message.includes('thumbnail_url'))
+        && /preview_(url|thumbhash|status)|thumbnail_url|creation_mode/.test(message)
     );
 }
 
@@ -146,6 +159,7 @@ export async function GET(request: NextRequest) {
         const fetchGenerations = async (): Promise<GenerationRow[]> => {
             const baseColumns = 'id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at';
             const selectCandidates = [
+                `${baseColumns}, preview_url, thumbnail_url, preview_thumbhash, preview_status, creation_mode`,
                 `${baseColumns}, preview_url, thumbnail_url`,
                 `${baseColumns}, preview_url`,
                 `${baseColumns}, thumbnail_url`,
@@ -190,6 +204,7 @@ export async function GET(request: NextRequest) {
             try {
                 await syncGenerationStatuses({
                     supabase,
+                    creditSupabase: createServiceClient(),
                     generationIds: processingGenerationIds,
                 });
                 generations = await fetchGenerations();
@@ -253,11 +268,43 @@ export async function GET(request: NextRequest) {
             });
             const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation);
             const previewUrl = await resolveGenerationPreviewUrl(adminSupabase, generation, outputUrl);
+            const classification = classifyVisualMedia({
+                category: generation.category,
+                contentType: inferVisualContentType(generation.output_url),
+            });
+            const canonicalCategory = classification?.category ?? generation.category;
+            const previewSource = generation.preview_url || generation.thumbnail_url || null;
+            const previewStatus: MediaPreviewStatus = generation.preview_status
+                ?? (previewSource ? 'ready' : 'pending');
+            const expiresAt = getStoredMediaLocation(generation.output_url ?? '')
+                ? new Date(Date.now() + 55 * 60 * 1000).toISOString()
+                : null;
+            const media = outputUrl && classification?.kind
+                ? buildVisualMediaDescriptor({
+                    id: generation.id,
+                    kind: classification.kind,
+                    url: outputUrl,
+                    storageKey: generation.showcase_asset_path || generation.output_url || generation.id,
+                    previewUrl,
+                    previewStorageKey: previewSource,
+                    previewThumbhash: generation.preview_thumbhash ?? null,
+                    previewStatus,
+                    expiresAt,
+                    width: null,
+                    height: null,
+                    durationSeconds: typeof (generation as GenerationRow & { duration?: unknown }).duration === 'number'
+                        ? (generation as GenerationRow & { duration: number }).duration
+                        : null,
+                })
+                : null;
 
             if (!outputUrl) {
                 const rest = withoutWorkflowSettings(generation);
                 return {
                     ...rest,
+                    category: canonicalCategory,
+                    creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
+                    media,
                     preview_url: previewUrl,
                     ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
                     input_media: inputMedia,
@@ -272,6 +319,9 @@ export async function GET(request: NextRequest) {
             const rest = withoutWorkflowSettings(generation);
             return {
                 ...rest,
+                category: canonicalCategory,
+                creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
+                media,
                 output_url: outputUrl,
                 preview_url: previewUrl,
                 ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),

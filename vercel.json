@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/mobile-push-receipts",
       "schedule": "15 0 * * *"
+    },
+    {
+      "path": "/api/cron/media-preview-repair",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

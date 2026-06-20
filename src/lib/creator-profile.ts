@@ -109,10 +109,9 @@ export interface CreatorProfilePageData {
   };
 }
 
-function resolveItemCategory(category: ShowcaseItemCategory | null): ShowcaseItemCategory {
-  if (category === 'video' || category === 'motion' || category === 'ugc-ad' || category === 'text') {
-    return category;
-  }
+function resolveItemCategory(category: string | null): ShowcaseItemCategory {
+  if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
+  if (category === 'text') return 'text';
 
   return 'image';
 }

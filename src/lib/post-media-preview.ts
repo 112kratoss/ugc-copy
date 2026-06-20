@@ -1,25 +1,26 @@
-import 'server-only';
-
 import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
 import { createVideoPosterBuffer } from '@/lib/generation-media-preview';
+import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const PREVIEW_MAX_SIZE = 720;
 
 type PostMediaPreviewResult = {
   previewStoragePath: string;
+  previewThumbhash: string;
+  previewStatus: 'ready';
   width: number | null;
   height: number | null;
 };
 
-export function buildPostMediaPreviewPath(storagePath: string) {
+export function buildPostMediaPreviewPath(storagePath: string, contentHash: string) {
   const extensionIndex = storagePath.lastIndexOf('.');
   const basePath = extensionIndex > storagePath.lastIndexOf('/')
     ? storagePath.slice(0, extensionIndex)
     : storagePath;
-  return `${basePath}.preview.webp`;
+  return `${basePath}.preview.${contentHash}.webp`;
 }
 
 export async function createPostMediaImagePreview({
@@ -51,7 +52,7 @@ export async function createPostMediaImagePreview({
     })
     .webp({ quality: 72 })
     .toBuffer();
-  const previewStoragePath = buildPostMediaPreviewPath(storagePath);
+  const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(preview));
   const upload = await supabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
     .upload(previewStoragePath, preview, {
@@ -66,6 +67,8 @@ export async function createPostMediaImagePreview({
 
   return {
     previewStoragePath,
+    previewThumbhash: await getPreviewThumbhash(preview),
+    previewStatus: 'ready',
     width: metadata.width ?? null,
     height: metadata.height ?? null,
   } satisfies PostMediaPreviewResult;
@@ -97,8 +100,8 @@ export async function createPostMediaPreview({
     return null;
   }
 
-  const previewStoragePath = buildPostMediaPreviewPath(storagePath);
   const poster = await createVideoPosterBuffer(body);
+  const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(poster));
   const upload = await supabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
     .upload(previewStoragePath, poster, {
@@ -113,6 +116,8 @@ export async function createPostMediaPreview({
 
   return {
     previewStoragePath,
+    previewThumbhash: await getPreviewThumbhash(poster),
+    previewStatus: 'ready',
     width: null,
     height: null,
   };

@@ -3,9 +3,12 @@ import { router } from 'expo-router';
 import { Alert, Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 
 import { AppText } from '@/components/ui';
+import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { appTheme } from '@/lib/theme';
+import type { OwnerPostsResponse } from '@/lib/types';
 import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
 
 export function ViewerActionSheet({
@@ -14,6 +17,8 @@ export function ViewerActionSheet({
   onDetails,
   onRecreate,
   onShare,
+  onDeleted,
+  onUnlockRemix,
   onSourceRefresh,
   visible,
 }: {
@@ -22,6 +27,8 @@ export function ViewerActionSheet({
   onDetails: () => void;
   onRecreate: () => void;
   onShare: () => void;
+  onDeleted?: (postId: string) => void;
+  onUnlockRemix?: () => void;
   onSourceRefresh: () => void;
   visible: boolean;
 }) {
@@ -39,6 +46,52 @@ export function ViewerActionSheet({
       queryClient.invalidateQueries({ queryKey: ['home-seller-posts', user?.id] }),
     ]);
     onSourceRefresh();
+  };
+
+  const removeDeletedPostFromCaches = (postId: string) => {
+    const removeFromOwnerPosts = (data: OwnerPostsResponse | undefined): OwnerPostsResponse | undefined =>
+      data ? { ...data, posts: data.posts.filter((post) => post.id !== postId) } : data;
+    const removeFromSource = (data: ImmersiveSourceData | undefined): ImmersiveSourceData | undefined =>
+      data?.ownerPosts
+        ? { ...data, ownerPosts: data.ownerPosts.filter((post) => post.id !== postId) }
+        : data;
+
+    queryClient.setQueryData<OwnerPostsResponse>(['profile-owner-posts', user?.id], removeFromOwnerPosts);
+    queryClient.setQueryData<OwnerPostsResponse>(['home-seller-posts', user?.id], removeFromOwnerPosts);
+    queryClient.setQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] }, removeFromSource);
+  };
+
+  const deletePost = async (force = false) => {
+    try {
+      if (force) {
+        await api.deletePost(item.id, { force: true });
+      } else {
+        await api.deletePost(item.id);
+      }
+      removeDeletedPostFromCaches(item.id);
+      await refreshMedia();
+      onDeleted?.(item.id);
+    } catch (error) {
+      if (!force && isForceDeleteRequired(error)) {
+        Alert.alert(
+          'Delete post with paid unlocks?',
+          'This post has paid unlock sales. Permanent delete removes the post for everyone and cannot be undone.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete permanently',
+              style: 'destructive',
+              onPress: () => {
+                void deletePost(true);
+              },
+            },
+          ]
+        );
+        return;
+      }
+
+      Alert.alert('Could not delete post', error instanceof Error ? error.message : 'Please try again.');
+    }
   };
 
   const confirmMutation = (
@@ -114,6 +167,23 @@ export function ViewerActionSheet({
       );
       return;
     }
+    if (action === 'delete-post') {
+      Alert.alert(
+        'Delete post permanently?',
+        'This will permanently delete this post. This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              void deletePost();
+            },
+          },
+        ]
+      );
+      return;
+    }
     if (action === 'publish') {
       router.push({ pathname: '/post/new', params: { generationId: item.id } } as never);
       return;
@@ -158,6 +228,10 @@ export function ViewerActionSheet({
     }
     if (action === 'recreate') {
       onRecreate();
+      return;
+    }
+    if (action === 'unlock-remix') {
+      onUnlockRemix?.();
       return;
     }
     if (action === 'open-original' && item.showcasePostId) {
@@ -290,4 +364,15 @@ function groupViewerActions(actions: string[]) {
   }
 
   return groups;
+}
+
+function isForceDeleteRequired(error: unknown) {
+  return error instanceof ApiError
+    && error.status === 409
+    && isRecord(error.details)
+    && error.details.requiresForceDelete === true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

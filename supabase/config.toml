@@ -318,8 +318,8 @@ secret = "env(GOOGLE_CLIENT_SECRET)"
 skip_nonce_check = false
 
 [auth.external.apple]
-enabled = false
-client_id = ""
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_APPLE_CLIENT_ID)"
 # DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
 secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
 # Overrides the default auth redirectUrl.

@@ -73,6 +73,7 @@ describe('/api/showcase/feed route', () => {
       unlock: 'all',
       resource: 'all',
       countryCode: null,
+      bypassCache: false,
     });
   });
 
@@ -91,6 +92,7 @@ describe('/api/showcase/feed route', () => {
       unlock: 'all',
       resource: 'all',
       countryCode: null,
+      bypassCache: false,
     });
   });
 
@@ -117,6 +119,7 @@ describe('/api/showcase/feed route', () => {
       unlock: 'all',
       resource: 'all',
       countryCode: null,
+      bypassCache: true,
     });
   });
 

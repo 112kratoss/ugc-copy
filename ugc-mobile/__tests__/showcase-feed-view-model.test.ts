@@ -4,7 +4,7 @@ import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight } f
 import type { ShowcaseFeedItem } from '../lib/types';
 
 function item(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
-  return {
+  const result: ShowcaseFeedItem = {
     id: 'post-1',
     mediaUrl: null,
     mediaKind: null,
@@ -22,6 +22,33 @@ function item(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
     asset: null,
     canRemix: false,
     ...overrides,
+  };
+
+  if (result.postFormat === 'text' || result.category === 'text') {
+    return { ...result, mediaUrl: null, mediaKind: null, mediaItems: undefined };
+  }
+
+  const mediaKind = result.mediaKind ?? 'image';
+  const mediaUrl = result.mediaUrl ?? `https://cdn.example.com/${result.id}.${mediaKind === 'video' ? 'mp4' : 'jpg'}`;
+  return {
+    ...result,
+    mediaKind,
+    mediaUrl,
+    mediaItems: (result.mediaItems ?? [{
+      id: `${result.id}:media`,
+      url: mediaUrl,
+      mediaKind,
+      contentType: null,
+      originalName: null,
+      width: null,
+      height: null,
+      durationSeconds: null,
+      sortOrder: 0,
+    }]).map((media) => ({
+      ...media,
+      previewUrl: media.previewUrl ?? `${media.url}.preview.webp`,
+      gridReady: media.gridReady ?? true,
+    })),
   };
 }
 
@@ -96,6 +123,7 @@ describe('showcase feed view model', () => {
       }),
       item({
         id: 'remix-post',
+        generationId: 'gen-remix',
         canRemix: true,
       }),
     ]);
@@ -112,6 +140,19 @@ describe('showcase feed view model', () => {
       label: 'Remixable',
       summary: 'Use this post as a starting point',
     });
+  });
+
+  it('does not show a remix CTA for manual or external posts without an app generation', () => {
+    const [card] = buildShowcaseMasonry([
+      item({
+        id: 'external-remix-post',
+        generationId: null,
+        canRemix: true,
+      }),
+    ]);
+
+    expect(card?.badge).toBe('Image');
+    expect(card?.unlock).toBeNull();
   });
 
   it('keeps mobile masonry columns visually separated', () => {

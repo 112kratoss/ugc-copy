@@ -105,6 +105,25 @@ describe('home view model', () => {
     });
   });
 
+  it('treats ugc-ad generations as video creations in the recent rail', () => {
+    expect(generationToHomeCard({
+      id: 'ugc-ad-1',
+      output_url: 'https://example.com/ugc-ad.mp4',
+      status: 'succeeded',
+      created_at: '2026-05-13T11:00:00.000Z',
+      model: 'ugc-ad-model',
+      category: 'ugc-ad',
+      title: 'Creator ad',
+      prompt: 'A creator ad spot',
+    })).toMatchObject({
+      id: 'ugc-ad-1',
+      kind: 'video',
+      label: 'Video',
+      mediaUrl: 'https://example.com/ugc-ad.mp4',
+      artVariant: 'city',
+    });
+  });
+
   it('does not invent recent studio cards when no generations exist', () => {
     expect(generationsToHomeCards([])).toEqual([]);
   });

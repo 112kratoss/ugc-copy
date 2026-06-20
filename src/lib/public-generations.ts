@@ -47,10 +47,8 @@ export interface PublicGenerationDetail {
   creator: ShowcaseCreator;
 }
 
-function resolveItemCategory(category: ShowcaseItemCategory | null): ShowcaseItemCategory {
-  if (category === 'video' || category === 'motion' || category === 'ugc-ad') {
-    return category;
-  }
+function resolveItemCategory(category: string | null): ShowcaseItemCategory {
+  if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
 
   return 'image';
 }

@@ -99,6 +99,7 @@ export async function POST(request: NextRequest) {
 
         const result = await startImageGeneration({
             supabase,
+            creditSupabase: createServiceClient(),
             userId: user.id,
             model,
             prompt,
@@ -275,7 +276,7 @@ export async function GET(request: NextRequest) {
                 .eq('prediction_id', predictionId);
 
             // Refund credits for async failure (idempotent)
-            await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+            await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
             if (localGeneration?.id && localGeneration?.user_id) {
                 await notifyGenerationStatus(adminSupabase, {
                     id: localGeneration.id,

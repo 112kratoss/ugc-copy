@@ -1,5 +1,7 @@
 import type {
   GenerationListItem,
+  OwnerPostListItem,
+  OwnerPostsResponse,
   PostResourceAttachment,
   PostResourceBundleAccessMode,
   PostResourceBundleInput,
@@ -150,6 +152,7 @@ export interface PostComposerPublishAction {
   visibility: PostComposerVisibility;
   variant: 'primary' | 'secondary';
   disabled: boolean;
+  loading: boolean;
 }
 
 export const POST_COMPOSER_MODES: Array<{ id: PostComposerMode; label: string; body: string }> = [
@@ -162,8 +165,6 @@ export const POST_COMPOSER_CATEGORY_OPTIONS: Array<{ id: PostComposerCategory; l
   { id: 'text', label: 'Text' },
   { id: 'image', label: 'Image' },
   { id: 'video', label: 'Video' },
-  { id: 'motion', label: 'Motion' },
-  { id: 'ugc-ad', label: 'UGC ad' },
 ];
 
 export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
@@ -347,7 +348,9 @@ export function getDefaultPostComposerDraft(): PostComposerDraft {
 export function getPublishableGenerations(items: GenerationListItem[] | null | undefined) {
   return (items ?? []).filter((item) => {
     const hasOutput = Boolean(item.output_url || item.output_urls?.length);
-    return item.status === 'succeeded' && hasOutput && !item.linked_post_id;
+    const previewReady = item.media?.gridReady
+      ?? Boolean(item.previewUrl ?? item.preview_url);
+    return item.status === 'succeeded' && hasOutput && previewReady && !item.linked_post_id;
   });
 }
 
@@ -506,6 +509,117 @@ export function buildPostComposerMediaItemsPayload(draft: PostComposerDraft): Po
       };
     })
     .filter((item): item is PostComposerMediaItemPayload => item !== null);
+}
+
+export function buildOptimisticOwnerPostListItem(
+  postId: string | null | undefined,
+  draft: PostComposerDraft,
+  createdAt = new Date().toISOString()
+): OwnerPostListItem | null {
+  if (!postId || draft.mode === 'creation') return null;
+
+  const mediaItems = buildOptimisticProfileMediaItems(draft);
+  if (draft.mode === 'upload' && mediaItems.length === 0) return null;
+
+  const coverMedia = mediaItems[0] ?? null;
+  const isTextPost = isTextProof(draft);
+  const sourceTools = !isTextPost || draft.mode === 'upload'
+    ? buildSourceToolsPayload(draft)
+    : [];
+  const primarySourceTool = sourceTools[0];
+  const title = trimOrUndefined(draft.title)
+    ?? trimOrUndefined(draft.contentText)
+    ?? trimOrUndefined(draft.caption)
+    ?? 'Untitled post';
+
+  return {
+    id: postId,
+    title,
+    createdAt,
+    visibility: draft.visibility,
+    mediaUrl: coverMedia?.url ?? null,
+    mediaKind: isTextPost ? null : coverMedia?.mediaKind ?? inferMediaKindFromDraft(draft),
+    ...(mediaItems.length > 0 ? { mediaItems } : {}),
+    description: trimOrUndefined(draft.description) ?? trimOrUndefined(draft.caption),
+    prompt: isTextPost ? trimOrUndefined(draft.contentText) : undefined,
+    body: getCreatePostBody(draft),
+    category: draft.category,
+    postFormat: getCreatePostFormat(draft),
+    sourceLabel: primarySourceTool?.modelLabel
+      ? `${primarySourceTool.toolLabel} · ${primarySourceTool.modelLabel}`
+      : primarySourceTool?.toolLabel ?? trimOrUndefined(draft.sourceTool),
+    publicPath: draft.visibility === 'private' ? null : `/showcase/${postId}`,
+    ownerPath: `/showcase/${postId}`,
+    bundle: null,
+    archivedAt: null,
+    generationId: null,
+    sourceTool: primarySourceTool?.toolLabel ?? trimOrUndefined(draft.sourceTool) ?? null,
+    sourceToolSlug: primarySourceTool?.toolSlug ?? trimOrUndefined(draft.sourceToolSlug) ?? null,
+    sourceTools,
+  };
+}
+
+export function upsertOptimisticOwnerPostResponse(
+  current: OwnerPostsResponse | undefined,
+  post: OwnerPostListItem
+): OwnerPostsResponse {
+  return {
+    success: current?.success ?? true,
+    ...current,
+    posts: [
+      post,
+      ...(current?.posts ?? []).filter((item) => item.id !== post.id),
+    ],
+  };
+}
+
+function buildOptimisticProfileMediaItems(draft: PostComposerDraft): NonNullable<OwnerPostListItem['mediaItems']> {
+  const items = draft.mediaItems.length
+    ? draft.mediaItems
+    : draft.upload
+      ? [{
+          id: 'optimistic-upload',
+          uri: draft.upload.uri,
+          previewUrl: draft.upload.uri,
+          name: draft.upload.name,
+          type: draft.upload.type,
+          mediaKind: inferMediaKindFromContentType(draft.upload.type, draft),
+          storagePath: null,
+          existingId: null,
+        }]
+      : [];
+
+  return items.map((item, index) => {
+    const url = item.previewUrl || item.uri;
+
+    return {
+      id: item.existingId ?? item.id,
+      url,
+      previewUrl: item.mediaKind === 'image' ? url : null,
+      mediaKind: item.mediaKind,
+      contentType: item.type || null,
+      originalName: item.name || null,
+      width: null,
+      height: null,
+      durationSeconds: null,
+      sortOrder: index,
+    };
+  });
+}
+
+function inferMediaKindFromContentType(
+  contentType: string | null | undefined,
+  draft: PostComposerDraft
+): 'image' | 'video' {
+  if (contentType?.startsWith('video/')) return 'video';
+  if (contentType?.startsWith('image/')) return 'image';
+  return inferMediaKindFromDraft(draft) === 'video' ? 'video' : 'image';
+}
+
+function inferMediaKindFromDraft(draft: PostComposerDraft): 'image' | 'video' | null {
+  if (draft.category === 'video') return 'video';
+  if (draft.category === 'image') return 'image';
+  return null;
 }
 
 export function buildPostResourceBundleInput(resource: PostComposerResourceDraft): PostResourceBundleInput | null {
@@ -732,35 +846,36 @@ export function getPostComposerPublishActions(params: {
   selectedVisibility: PostComposerVisibility;
   isEditMode: boolean;
   isPending: boolean;
+  pendingVisibility?: PostComposerVisibility | null;
 }): PostComposerPublishAction[] {
-  const pendingLabel = params.isPending ? 'Saving' : null;
-  const actions: PostComposerPublishAction[] = [
-    {
-      id: 'private',
-      label: pendingLabel ?? 'Save private',
-      visibility: 'private',
-      variant: 'secondary',
+  const createAction = (
+    visibility: PostComposerVisibility,
+    label: string,
+    variant: 'primary' | 'secondary'
+  ): PostComposerPublishAction => {
+    const loading = params.isPending
+      && (params.pendingVisibility ? params.pendingVisibility === visibility : params.selectedVisibility === visibility);
+    const pendingLabel = params.isEditMode ? 'Saving' : visibility === 'public' ? 'Publishing' : 'Saving';
+
+    return {
+      id: visibility,
+      label: loading ? pendingLabel : label,
+      visibility,
+      variant,
       disabled: params.isPending,
-    },
+      loading,
+    };
+  };
+
+  const actions: PostComposerPublishAction[] = [
+    createAction('private', 'Save private', 'secondary'),
   ];
 
   if (params.selectedVisibility === 'unlisted') {
-    actions.push({
-      id: 'unlisted',
-      label: pendingLabel ?? 'Save unlisted',
-      visibility: 'unlisted',
-      variant: 'secondary',
-      disabled: params.isPending,
-    });
+    actions.push(createAction('unlisted', 'Save unlisted', 'secondary'));
   }
 
-  actions.push({
-    id: 'public',
-    label: pendingLabel ?? 'Publish public',
-    visibility: 'public',
-    variant: 'primary',
-    disabled: params.isPending,
-  });
+  actions.push(createAction('public', 'Publish public', 'primary'));
 
   return actions;
 }
@@ -810,13 +925,13 @@ export function getPublishGenerationTitle(item: GenerationListItem) {
 }
 
 export function getPublishGenerationSubtitle(item: GenerationListItem) {
-  const category = getGenerationCategoryLabel(item.category);
+  const category = item.creationMode === 'motion' ? 'Motion' : getGenerationCategoryLabel(item.category);
   return `${category} · ${item.model || 'Magicbooklet'}`;
 }
 
 export function getPublishGenerationMediaKind(item: GenerationListItem): 'image' | 'video' | null {
   const category = normalizeGenerationCategory(item.category);
-  if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
+  if (category === 'video') return 'video';
   if (category === 'text') return null;
   return 'image';
 }
@@ -848,7 +963,8 @@ export function willAttachGenerationReferences(
 export const willAttachFreeGenerationReferenceBundle = willAttachGenerationReferences;
 
 function normalizeGenerationCategory(category: string | null | undefined) {
-  if (category === 'video' || category === 'motion' || category === 'ugc-ad' || category === 'text') {
+  if (category === 'motion' || category === 'ugc-ad') return 'video';
+  if (category === 'video' || category === 'text') {
     return category;
   }
   return 'image';
@@ -1298,8 +1414,6 @@ function getDefaultResourcePreview(kinds: PostResourceKind[]) {
 
 function getGenerationCategoryLabel(category: string | null | undefined) {
   const normalized = normalizeGenerationCategory(category);
-  if (normalized === 'ugc-ad') return 'UGC ad';
-  if (normalized === 'motion') return 'Motion';
   if (normalized === 'video') return 'Video';
   if (normalized === 'text') return 'Text';
   return 'Image';

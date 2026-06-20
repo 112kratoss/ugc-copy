@@ -37,6 +37,7 @@ export async function GET(request: NextRequest) {
             unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
             resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
             countryCode: request.headers.get('x-vercel-ip-country'),
+            bypassCache: Boolean(viewerUserId),
         });
         const cacheControl = viewerUserId
             ? 'private, no-store'

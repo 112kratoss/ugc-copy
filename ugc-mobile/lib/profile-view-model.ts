@@ -1,7 +1,10 @@
 import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 
+import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount, formatRelativeTime, formatUsdCents } from './home-view-model';
+
+export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'artFallback';
 
 export interface ProfileMediaCard {
   id: string;
@@ -10,9 +13,17 @@ export interface ProfileMediaCard {
   meta: string;
   mediaUrl: string | null;
   previewUrl?: string | null;
+  previewThumbhash?: string | null;
+  previewCacheKey?: string;
+  previewExpiresAt?: string | null;
+  previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';
   mediaKind: 'image' | 'video' | null;
   previewKind?: 'text';
   previewText?: string;
+  previewState?: ProfilePreviewState;
+  previewStatusLabel?: string;
+  isGridReady?: boolean;
+  isArchived?: boolean;
   badge?: string;
   detailLabel?: string;
   statusLabel?: string;
@@ -47,6 +58,8 @@ export const FALLBACK_PROFILE_MEDIA: ProfileMediaCard[] = [
     meta: 'Preview',
     mediaUrl: null,
     mediaKind: 'image',
+    previewState: 'artFallback',
+    isGridReady: true,
     avatarLabel: 'Preview',
     countLabel: '0',
     viewerSource: 'profile-saved',
@@ -61,6 +74,8 @@ export const FALLBACK_PROFILE_MEDIA: ProfileMediaCard[] = [
     meta: 'Preview',
     mediaUrl: null,
     mediaKind: 'image',
+    previewState: 'artFallback',
+    isGridReady: true,
     avatarLabel: 'Preview',
     countLabel: '0',
     viewerSource: 'profile-creations',
@@ -75,6 +90,8 @@ export const FALLBACK_PROFILE_MEDIA: ProfileMediaCard[] = [
     meta: 'Preview',
     mediaUrl: null,
     mediaKind: 'video',
+    previewState: 'artFallback',
+    isGridReady: true,
     avatarLabel: 'Preview',
     countLabel: '0',
     viewerSource: 'profile-posts',
@@ -148,10 +165,26 @@ export function getProfileMediaSwipeTarget(currentTab: ProfileMediaTab, directio
 }
 
 export function generationToProfileMediaCard(item: GenerationListItem): ProfileMediaCard {
-  const kind = generationKind(item);
-  const mediaKind = kind === 'text' ? null : kind === 'image' ? 'image' : 'video';
-  const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
-  const previewUrl = item.previewUrl ?? item.preview_url ?? (mediaKind === 'image' ? mediaUrl : null);
+  const kind = getGenerationKind(item);
+  const mediaKind = getGenerationRenderableMediaKind(kind);
+  const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
+  const posterUrl = item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null;
+  const previewUrl = mediaKind === 'image' ? posterUrl ?? mediaUrl : posterUrl;
+  const previewText = kind === 'text' ? item.prompt || item.description || item.title || 'Saved text generation' : undefined;
+  const previewState = getProfilePreviewState({
+    mediaKind,
+    mediaUrl,
+    previewKind: kind === 'text' ? 'text' : undefined,
+    previewText,
+    previewUrl,
+  });
+  const isArchived = Boolean(item.archived_at);
+  const hasGridContent = kind === 'text' ? Boolean(previewText?.trim()) : Boolean(mediaUrl && posterUrl);
+  const derivativeReady = kind === 'text'
+    ? hasGridContent
+    : item.media?.gridReady ?? Boolean(posterUrl);
+  const isGridReady = !isArchived && item.status === 'succeeded' && derivativeReady;
+  const label = getGenerationLabel(kind);
 
   return {
     id: item.id,
@@ -160,11 +193,19 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
     meta: formatRelativeTime(item.completed_at ?? item.created_at),
     mediaUrl,
     previewUrl,
+    previewThumbhash: item.media?.thumbhash ?? null,
+    previewCacheKey: item.media?.cacheKey ?? posterUrl ?? item.id,
+    previewExpiresAt: item.media?.expiresAt ?? null,
+    previewStatus: item.media?.status ?? (posterUrl ? 'ready' : 'pending'),
     mediaKind,
     previewKind: kind === 'text' ? 'text' : undefined,
-    previewText: kind === 'text' ? item.prompt || item.description || item.title || 'Saved text generation' : undefined,
-    badge: generationToolLabel(kind),
-    detailLabel: generationToolLabel(kind),
+    previewText,
+    previewState,
+    previewStatusLabel: previewState === 'videoFallback' ? 'Preview unavailable' : undefined,
+    isGridReady,
+    isArchived,
+    badge: label,
+    detailLabel: label,
     statusLabel: generationStatusLabel(item.status),
     linkedPostLabel: item.linked_post_id
       ? item.linked_post_archived_at
@@ -183,6 +224,9 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
 
 export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMediaCard {
   const isTextPost = item.category === 'text' || item.postFormat === 'text';
+  const primaryMedia = item.mediaItems?.[0];
+  const descriptor = primaryMedia?.preview;
+  const previewUrl = descriptor?.previewUrl ?? primaryMedia?.previewUrl ?? null;
   const previewText =
     item.body?.trim()
     || item.prompt?.trim()
@@ -196,10 +240,26 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     label: 'Post',
     meta: item.visibility || formatRelativeTime(item.createdAt),
     mediaUrl: item.mediaUrl,
-    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
+    previewUrl,
+    previewThumbhash: descriptor?.thumbhash ?? primaryMedia?.previewThumbhash ?? null,
+    previewCacheKey: descriptor?.cacheKey ?? primaryMedia?.previewCacheKey ?? previewUrl ?? item.id,
+    previewExpiresAt: descriptor?.expiresAt ?? null,
+    previewStatus: descriptor?.status ?? primaryMedia?.previewStatus ?? (previewUrl ? 'ready' : 'pending'),
     mediaKind: item.mediaKind,
     previewKind: isTextPost ? 'text' : undefined,
     previewText,
+    previewState: getProfilePreviewState({
+      mediaKind: item.mediaKind,
+      mediaUrl: item.mediaUrl,
+      previewKind: isTextPost ? 'text' : undefined,
+      previewText,
+      previewUrl,
+    }),
+    previewStatusLabel: item.mediaKind === 'video' && !previewUrl ? 'Preview unavailable' : undefined,
+    isGridReady: !item.archivedAt && (isTextPost
+      ? Boolean(previewText.trim())
+      : descriptor?.gridReady ?? primaryMedia?.gridReady ?? Boolean(previewUrl)),
+    isArchived: Boolean(item.archivedAt),
     badge: ownerPostBadge(item),
     statusLabel: item.archivedAt ? 'Archived' : 'Published',
     visibilityLabel: postVisibilityLabel(item.visibility),
@@ -213,35 +273,53 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
 }
 
 export function showcaseToSavedProfileMediaCard(item: ShowcaseFeedItem): ProfileMediaCard {
+  const isTextPost = item.category === 'text' || item.postFormat === 'text';
+  const previewText = isTextPost ? item.body || item.prompt || item.title : undefined;
+  const primaryMedia = item.mediaItems?.[0];
+  const descriptor = primaryMedia?.preview;
+  const previewUrl = descriptor?.previewUrl ?? primaryMedia?.previewUrl ?? null;
+
   return {
     id: item.id,
     title: item.title || item.prompt || 'Saved media',
     label: 'Saved',
     meta: item.creator.name,
     mediaUrl: item.mediaUrl,
-    previewUrl: item.mediaItems?.[0]?.previewUrl ?? null,
+    previewUrl,
+    previewThumbhash: descriptor?.thumbhash ?? primaryMedia?.previewThumbhash ?? null,
+    previewCacheKey: descriptor?.cacheKey ?? primaryMedia?.previewCacheKey ?? previewUrl ?? item.id,
+    previewExpiresAt: descriptor?.expiresAt ?? null,
+    previewStatus: descriptor?.status ?? primaryMedia?.previewStatus ?? (previewUrl ? 'ready' : 'pending'),
     mediaKind: item.mediaKind,
-    previewKind: item.category === 'text' || item.postFormat === 'text' ? 'text' : undefined,
-    previewText: item.category === 'text' || item.postFormat === 'text' ? item.body || item.prompt || item.title : undefined,
+    previewKind: isTextPost ? 'text' : undefined,
+    previewText,
+    previewState: getProfilePreviewState({
+      mediaKind: item.mediaKind,
+      mediaUrl: item.mediaUrl,
+      previewKind: isTextPost ? 'text' : undefined,
+      previewText,
+      previewUrl,
+    }),
+    previewStatusLabel: item.mediaKind === 'video' && !previewUrl ? 'Preview unavailable' : undefined,
+    isGridReady: isTextPost
+      ? Boolean(previewText?.trim())
+      : descriptor?.gridReady ?? primaryMedia?.gridReady ?? Boolean(previewUrl),
+    isArchived: false,
     avatarUrl: item.creator.avatar,
     avatarLabel: item.creator.name || item.creator.username || 'Creator',
     countLabel: formatCompactCount(item.saveCount),
     viewerSource: 'profile-saved',
     sourceId: item.id,
-    artVariant: item.category === 'video' ? 'city' : item.category === 'motion' ? 'runner' : 'tree',
+    artVariant: item.creationMode === 'motion' ? 'runner' : item.category === 'video' ? 'city' : 'tree',
     href: `/showcase/${item.id}`,
   };
 }
 
 export function savedShowcaseToProfileMediaCards(items: ShowcaseFeedItem[] | null | undefined) {
-  return (items ?? []).filter((item) => item.isSaved).map(showcaseToSavedProfileMediaCard);
-}
-
-function generationKind(item: GenerationListItem) {
-  if (item.category === 'video') return 'video';
-  if (item.category === 'motion') return 'motion';
-  if (item.category === 'text') return 'text';
-  return 'image';
+  return (items ?? [])
+    .filter((item) => item.isSaved)
+    .map(showcaseToSavedProfileMediaCard)
+    .filter((card) => card.isGridReady);
 }
 
 function ownerPostBadge(item: OwnerPostListItem) {
@@ -249,15 +327,7 @@ function ownerPostBadge(item: OwnerPostListItem) {
   if (item.bundle?.accessMode === 'paid') return formatUsdCents(item.bundle.priceUsdCents);
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
-  if (item.category === 'motion') return 'Motion';
   return 'Post';
-}
-
-function generationToolLabel(kind: ReturnType<typeof generationKind>) {
-  if (kind === 'motion') return 'Motion';
-  if (kind === 'video') return 'Video';
-  if (kind === 'text') return 'Text';
-  return 'Image';
 }
 
 function generationStatusLabel(status: string | null | undefined) {
@@ -266,6 +336,25 @@ function generationStatusLabel(status: string | null | undefined) {
   if (status === 'waiting') return 'Queued';
   if (status === 'failed') return 'Failed';
   return status ? capitalize(status) : 'Draft';
+}
+
+function getProfilePreviewState({
+  mediaKind,
+  mediaUrl,
+  previewKind,
+  previewText,
+  previewUrl,
+}: {
+  mediaKind: 'image' | 'video' | null;
+  mediaUrl: string | null;
+  previewKind?: 'text';
+  previewText?: string;
+  previewUrl?: string | null;
+}): ProfilePreviewState {
+  if (previewKind === 'text' && previewText?.trim()) return 'text';
+  if (mediaKind === 'video') return previewUrl ? 'videoPoster' : mediaUrl ? 'videoFallback' : 'artFallback';
+  if (mediaKind === 'image' && (previewUrl || mediaUrl)) return 'image';
+  return 'artFallback';
 }
 
 function postVisibilityLabel(visibility: string | null | undefined) {

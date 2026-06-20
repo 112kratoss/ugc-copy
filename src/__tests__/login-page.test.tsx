@@ -139,6 +139,40 @@ describe('LoginPage onboarding redirects', () => {
     const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
     const redirectTo = new URL(oauthPayload.options.redirectTo);
 
+    expect(oauthPayload.provider).toBe('google');
+    expect(redirectTo.origin).toBe('https://magicbooklet.com');
+    expect(redirectTo.pathname).toBe('/auth/callback');
+    expect(redirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
+  });
+
+  it('keeps Apple login pointed at the requested return URL', async () => {
+    mocks.searchParams = new URLSearchParams('returnUrl=/create');
+    render(<LoginPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^apple$/i }));
+
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
+    const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
+    const redirectTo = new URL(oauthPayload.options.redirectTo);
+
+    expect(oauthPayload.provider).toBe('apple');
+    expect(redirectTo.origin).toBe('https://magicbooklet.com');
+    expect(redirectTo.pathname).toBe('/auth/callback');
+    expect(redirectTo.searchParams.get('next')).toBe('/create');
+  });
+
+  it('uses profile setup as the Apple target when the user is in signup mode', async () => {
+    mocks.searchParams = new URLSearchParams('returnUrl=/create');
+    render(<LoginPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^apple$/i }));
+
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
+    const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
+    const redirectTo = new URL(oauthPayload.options.redirectTo);
+
+    expect(oauthPayload.provider).toBe('apple');
     expect(redirectTo.origin).toBe('https://magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
     expect(redirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
@@ -154,6 +188,7 @@ describe('LoginPage onboarding redirects', () => {
     const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
     const redirectTo = new URL(oauthPayload.options.redirectTo);
 
+    expect(oauthPayload.provider).toBe('google');
     expect(redirectTo.origin).toBe('https://www.magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
   });

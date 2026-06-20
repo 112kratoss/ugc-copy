@@ -35,12 +35,13 @@ const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
 function detectCategoryFromModel(model: string): ShowcaseCategory {
     if (model.includes('banana')) return 'image';
     if (model === 'kling-3.0/video' || model.includes('/video')) return 'video';
-    if (model.startsWith('kling-')) return 'motion';
+    if (model.startsWith('kling-')) return 'video';
     return 'image';
 }
 
-function isPublishableShowcaseCategory(value: string | null | undefined): value is ShowcaseCategory {
-    return value === 'image' || value === 'video' || value === 'motion' || value === 'ugc-ad';
+function normalizePublishableShowcaseCategory(value: string | null | undefined): ShowcaseCategory | undefined {
+    if (value === 'motion' || value === 'ugc-ad') return 'video';
+    return value === 'image' || value === 'video' ? value : undefined;
 }
 
 function inferExtension(sourceName: string, category: ShowcaseCategory): string {
@@ -154,7 +155,7 @@ export async function POST(request: NextRequest) {
 
         let generationQuery = await supabase
             .from('generations')
-            .select('id, user_id, status, model, category, output_url, showcase_asset_path, title, description, prompt')
+            .select('id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt')
             .eq('id', generationId)
             .single();
 
@@ -229,11 +230,8 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Audio generations are not publishable to the showcase yet' }, { status: 400 });
         }
 
-        let detectedCategory: ShowcaseCategory | undefined = isPublishableShowcaseCategory(category)
-            ? category
-            : isPublishableShowcaseCategory(generation.category)
-                ? generation.category
-                : undefined;
+        let detectedCategory = normalizePublishableShowcaseCategory(category)
+            ?? normalizePublishableShowcaseCategory(generation.category);
         if (!detectedCategory && shouldExposePost) {
             detectedCategory = detectCategoryFromModel(generation.model);
         }
@@ -346,6 +344,7 @@ export async function POST(request: NextRequest) {
             source_tool: normalizedAppSourceTool.label ?? 'magicbooklet',
             source_tool_slug: normalizedAppSourceTool.slug ?? 'magicbooklet',
             generation_id: generation.id,
+            creation_mode: generation.creation_mode ?? (generation.category === 'motion' ? 'motion' : null),
             showcase_asset_path: nextShowcaseAssetPath,
             output_url: nextOutputUrl,
         };

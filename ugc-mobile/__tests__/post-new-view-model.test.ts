@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCreatePostFormData,
+  buildOptimisticOwnerPostListItem,
   buildPostComposerMediaItemsPayload,
   buildPostResourceBundleInput,
   buildPublishGenerationPayload,
@@ -25,6 +26,7 @@ function generation(overrides: Partial<GenerationListItem>): GenerationListItem 
   return {
     id: 'gen-1',
     output_url: 'https://cdn.example.com/output.png',
+    preview_url: 'https://cdn.example.com/output.preview.webp',
     status: 'succeeded',
     created_at: '2026-01-01T00:00:00.000Z',
     completed_at: '2026-01-01T00:01:00.000Z',
@@ -56,22 +58,22 @@ describe('post new view model', () => {
       title: 'Image result',
       description: 'A polished image',
       prompt: 'Make a glossy product photo',
-      category: 'motion',
+      category: 'video',
     });
   });
 
   it('uses readable subtitles for the publish list', () => {
     expect(getPublishGenerationSubtitle(generation({ category: 'video', model: 'seedance' }))).toContain('Video');
-    expect(getPublishGenerationSubtitle(generation({ category: 'ugc-ad', model: 'seedance' }))).toContain('UGC ad');
+    expect(getPublishGenerationSubtitle(generation({ category: 'ugc-ad', model: 'seedance' }))).toContain('Video');
     expect(getPublishGenerationSubtitle(generation({ category: null, model: 'seedream' }))).toContain('Image');
   });
 
-  it('preserves ugc-ad generation category and treats it as video media', () => {
+  it('normalizes legacy ugc-ad generation category to video media', () => {
     const item = generation({ id: 'gen-ugc', category: 'ugc-ad', output_url: 'https://cdn.example.com/ad.mp4' });
 
     expect(buildPublishGenerationPayload(item)).toMatchObject({
       generationId: 'gen-ugc',
-      category: 'ugc-ad',
+      category: 'video',
     });
     expect(getPublishGenerationMediaKind(item)).toBe('video');
   });
@@ -614,18 +616,61 @@ describe('post new view model', () => {
 
   it('returns web-style publish actions with explicit target visibility', () => {
     expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: false, isPending: false })).toEqual([
-      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false },
-      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false },
+      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false, loading: false },
+      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false, loading: false },
     ]);
     expect(getPostComposerPublishActions({ selectedVisibility: 'unlisted', isEditMode: false, isPending: false })).toEqual([
-      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false },
-      { id: 'unlisted', label: 'Save unlisted', visibility: 'unlisted', variant: 'secondary', disabled: false },
-      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false },
+      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false, loading: false },
+      { id: 'unlisted', label: 'Save unlisted', visibility: 'unlisted', variant: 'secondary', disabled: false, loading: false },
+      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false, loading: false },
     ]);
-    expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: true, isPending: true })).toEqual([
-      { id: 'private', label: 'Saving', visibility: 'private', variant: 'secondary', disabled: true },
-      { id: 'public', label: 'Saving', visibility: 'public', variant: 'primary', disabled: true },
+    expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: true, isPending: true, pendingVisibility: 'public' })).toEqual([
+      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: true, loading: false },
+      { id: 'public', label: 'Saving', visibility: 'public', variant: 'primary', disabled: true, loading: true },
     ]);
+  });
+
+  it('builds an optimistic owner post with the selected upload preview', () => {
+    const post = buildOptimisticOwnerPostListItem('post-123', {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload',
+      proofMode: 'media',
+      title: 'Manual upload',
+      caption: 'Uploaded from phone',
+      visibility: 'public',
+      category: 'image',
+      mediaItems: [{
+        id: 'media-1',
+        uri: 'file:///tmp/cover.png',
+        previewUrl: 'file:///tmp/cover.png',
+        name: 'cover.png',
+        type: 'image/png',
+        mediaKind: 'image',
+        storagePath: 'uploads/user-1/cover.png',
+      }],
+    }, '2026-06-18T07:30:00.000Z');
+
+    expect(post).toMatchObject({
+      id: 'post-123',
+      title: 'Manual upload',
+      visibility: 'public',
+      mediaUrl: 'file:///tmp/cover.png',
+      mediaKind: 'image',
+      description: 'Uploaded from phone',
+      category: 'image',
+      postFormat: 'mixed',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaItems: [{
+        id: 'media-1',
+        url: 'file:///tmp/cover.png',
+        previewUrl: 'file:///tmp/cover.png',
+        mediaKind: 'image',
+        contentType: 'image/png',
+        originalName: 'cover.png',
+        sortOrder: 0,
+      }],
+    });
   });
 
   it('returns submit labels for publish visibility and edit states', () => {

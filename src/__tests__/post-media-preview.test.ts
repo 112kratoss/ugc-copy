@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 const videoPosterState = vi.hoisted(() => ({
-  createVideoPosterBuffer: vi.fn(async () => Buffer.from('poster-webp')),
+  createVideoPosterBuffer: vi.fn(async () => Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  )),
 }));
 
 vi.mock('@/lib/generation-media-preview', async (importOriginal) => {
@@ -27,8 +30,8 @@ describe('post media image previews', () => {
   });
 
   it('uses a deterministic sibling WebP path', () => {
-    expect(buildPostMediaPreviewPath('posts/post-1/0/portrait.png')).toBe(
-      'posts/post-1/0/portrait.preview.webp'
+    expect(buildPostMediaPreviewPath('posts/post-1/0/portrait.png', 'abc123')).toBe(
+      'posts/post-1/0/portrait.preview.abc123.webp'
     );
   });
 
@@ -60,13 +63,16 @@ describe('post media image previews', () => {
       supabase: supabase as never,
     });
 
-    expect(result).toEqual({
-      previewStoragePath: 'posts/post-1/0/portrait.preview.webp',
+    expect(result).toMatchObject({
       width: 1200,
       height: 800,
+      previewStatus: 'ready',
     });
+    expect(result?.previewStoragePath).toMatch(/^posts\/post-1\/0\/portrait\.preview\.[a-f0-9]{16}\.webp$/);
+    expect(result?.previewThumbhash).toEqual(expect.any(String));
+    expect(result?.previewThumbhash.length).toBeGreaterThan(8);
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(upload.mock.calls[0]?.[0]).toBe('posts/post-1/0/portrait.preview.webp');
+    expect(upload.mock.calls[0]?.[0]).toBe(result?.previewStoragePath);
     expect(upload.mock.calls[0]?.[2]).toMatchObject({
       cacheControl: '31536000',
       contentType: 'image/webp',
@@ -114,15 +120,17 @@ describe('post media image previews', () => {
       supabase: supabase as never,
     });
 
-    expect(result).toEqual({
-      previewStoragePath: 'posts/post-1/0/video.preview.webp',
+    expect(result).toMatchObject({
       width: null,
       height: null,
+      previewStatus: 'ready',
     });
+    expect(result?.previewStoragePath).toMatch(/^posts\/post-1\/0\/video\.preview\.[a-f0-9]{16}\.webp$/);
+    expect(result?.previewThumbhash).toEqual(expect.any(String));
     expect(videoPosterState.createVideoPosterBuffer).toHaveBeenCalledWith(body);
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(upload.mock.calls[0]?.[0]).toBe('posts/post-1/0/video.preview.webp');
-    expect(upload.mock.calls[0]?.[1]).toEqual(Buffer.from('poster-webp'));
+    expect(upload.mock.calls[0]?.[0]).toBe(result?.previewStoragePath);
+    expect(upload.mock.calls[0]?.[1]).toEqual(await videoPosterState.createVideoPosterBuffer.mock.results[0]?.value);
     expect(upload.mock.calls[0]?.[2]).toMatchObject({
       cacheControl: '31536000',
       contentType: 'image/webp',

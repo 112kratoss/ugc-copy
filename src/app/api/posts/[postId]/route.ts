@@ -92,6 +92,11 @@ type ExistingPostMediaRow = {
   id: string;
   storage_path: string | null;
   preview_storage_path?: string | null;
+  preview_thumbhash?: string | null;
+  preview_status?: 'pending' | 'processing' | 'ready' | 'failed';
+  preview_attempt_count?: number;
+  preview_error?: string | null;
+  preview_generated_at?: string | null;
   external_url: string | null;
   media_kind: 'image' | 'video';
   content_type: string | null;
@@ -224,7 +229,7 @@ async function loadOwnedPostMedia(postId: string): Promise<ExistingPostMediaRow[
   const adminSupabase = createServiceClient();
   const previewResult = await adminSupabase
     .from('post_media')
-    .select('id, storage_path, preview_storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select('id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
     .eq('post_id', postId)
     .order('sort_order', { ascending: true });
   let data = previewResult.data as ExistingPostMediaRow[] | null;
@@ -233,7 +238,7 @@ async function loadOwnedPostMedia(postId: string): Promise<ExistingPostMediaRow[
   if (
     error
     && (error.code === '42703' || error.code === 'PGRST204')
-    && error.message.includes('preview_storage_path')
+    && /preview_(storage_path|thumbhash|status|attempt_count|error|generated_at)/.test(error.message)
   ) {
     const legacyResult = await adminSupabase
       .from('post_media')
@@ -563,6 +568,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
             persistedMediaItems.push({
               storagePath: item.row.storage_path,
               previewStoragePath: item.row.preview_storage_path ?? null,
+              previewThumbhash: item.row.preview_thumbhash ?? null,
+              previewStatus: item.row.preview_status ?? (item.row.preview_storage_path ? 'ready' : 'pending'),
+              previewAttemptCount: item.row.preview_attempt_count ?? 0,
+              previewError: item.row.preview_error ?? null,
+              previewGeneratedAt: item.row.preview_generated_at ?? null,
               externalUrl: item.row.external_url,
               mediaKind: item.row.media_kind,
               contentType: item.row.content_type,
@@ -615,6 +625,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
           persistedMediaItems.push({
             storagePath,
             previewStoragePath: preview?.previewStoragePath ?? null,
+            previewThumbhash: preview?.previewThumbhash ?? null,
+            previewStatus: preview?.previewStatus ?? 'failed',
+            previewAttemptCount: 1,
+            previewError: preview ? null : 'Preview generation failed.',
+            previewGeneratedAt: preview ? new Date().toISOString() : null,
             externalUrl: null,
             mediaKind: item.mediaKind,
             contentType: item.contentType,

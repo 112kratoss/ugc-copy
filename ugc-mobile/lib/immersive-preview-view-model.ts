@@ -1,5 +1,6 @@
 import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResourceKind, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
+import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount } from './home-view-model';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 
@@ -92,6 +93,7 @@ export interface ImmersivePreviewItem {
   linkedPostOwnerPath?: string | null;
   archivedAt?: string | null;
   visibility?: string | null;
+  isManualOwnerPost?: boolean;
   availableActions: string[];
   disabledActions: Record<string, string>;
 }
@@ -252,6 +254,8 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
   const textOnly = isTextOnlyShowcasePost(item);
   const creatorLabel = creatorHandle(item.creator.username, item.creator.name);
   const isSaved = Boolean(item.isSaved) || source === 'profile-saved';
+  const canRecreate = canRecreateShowcaseItem(item);
+  const canUnlockRemix = canUnlockRemixShowcaseItem(item);
 
   return {
     id: item.id,
@@ -306,7 +310,14 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     linkedPostVisibility: null,
     archivedAt: null,
     visibility: 'public',
-    availableActions: [isSaved ? 'unsave' : 'save', 'share', 'recreate', 'view-details', 'open-original'],
+    availableActions: [
+      isSaved ? 'unsave' : 'save',
+      'share',
+      ...(canRecreate ? ['recreate'] : []),
+      ...(canUnlockRemix ? ['unlock-remix'] : []),
+      'view-details',
+      'open-original',
+    ],
     disabledActions: {},
   };
 }
@@ -317,10 +328,10 @@ function generationToImmersiveItem(
   owner: { creatorLabel: string; creatorAvatar?: string | null },
   ownerPosts: OwnerPostListItem[]
 ): ImmersivePreviewItem {
-  const kind = generationKind(item);
+  const kind = getGenerationKind(item);
   const displayText = item.prompt?.trim() || item.description?.trim() || item.title?.trim() || 'Saved Magicbooklet generation.';
   const title = item.title?.trim() || displayText;
-  const mediaKind = kind === 'text' ? null : kind === 'image' ? 'image' : 'video';
+  const mediaKind = getGenerationRenderableMediaKind(kind);
   const previewUrl = item.previewUrl ?? item.preview_url ?? null;
   const linkedPost = findLinkedOwnerPost(item, ownerPosts);
   const linkedPostId = linkedPost?.id ?? item.linked_post_id ?? null;
@@ -342,7 +353,7 @@ function generationToImmersiveItem(
     previewKind: kind === 'text' ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
-    badge: generationBadge(kind),
+    badge: getGenerationLabel(kind),
     saveLabel: 'Saved',
     saveCount: 0,
     isSaved: true,
@@ -358,7 +369,7 @@ function generationToImmersiveItem(
       title,
       prompt: item.prompt?.trim() ?? '',
       body: item.description?.trim() ?? '',
-      categoryLabel: kind === 'motion' ? 'Motion' : kind === 'video' ? 'Video' : kind === 'text' ? 'Text' : 'Image',
+      categoryLabel: getGenerationLabel(kind),
       sourceLabel: 'Creations',
       creatorLabel: owner.creatorLabel,
       creatorAvatar: owner.creatorAvatar ?? null,
@@ -432,6 +443,9 @@ function ownerPostToImmersiveItem(
   const displayText = item.body?.trim() || item.prompt?.trim() || item.title.trim() || 'Community post';
   const prompt = item.prompt?.trim() || item.body?.trim() || item.description?.trim() || item.title.trim();
   const title = item.title.trim() || displayText;
+  const isManualOwnerPost = item.generationId == null;
+  const deleteActions = isManualOwnerPost ? ['delete-post'] : [];
+  const activeGeneratedPostActions = isManualOwnerPost ? [] : ['recreate'];
 
   return {
     id: item.id,
@@ -455,8 +469,9 @@ function ownerPostToImmersiveItem(
     recreateTool: toolForOwnerPost(item),
     recreatePrompt: prompt,
     showcasePostId: item.id,
-    generationId: null,
+    generationId: item.generationId ?? null,
     ownerPostId: item.id,
+    isManualOwnerPost,
     resource: ownerPostResource(item, displayText),
     details: {
       title,
@@ -485,8 +500,8 @@ function ownerPostToImmersiveItem(
     archivedAt: item.archivedAt ?? null,
     visibility: item.visibility,
     availableActions: item.archivedAt
-      ? ['restore', 'share', 'download', 'view-details']
-      : ['edit-post', 'change-visibility', 'archive', 'share', 'download', 'view-details'],
+      ? ['restore', ...deleteActions, 'share', 'download', 'view-details']
+      : ['edit-post', 'change-visibility', 'archive', ...deleteActions, 'share', 'download', ...activeGeneratedPostActions, 'view-details'],
     disabledActions: item.archivedAt
       ? {
           'edit-post': 'This post is archived',
@@ -501,13 +516,30 @@ function creatorHandle(username: string | null, name: string) {
   return name.trim() || '@creator';
 }
 
+function hasAppGenerationId(generationId: string | null | undefined) {
+  return typeof generationId === 'string' && generationId.trim().length > 0;
+}
+
+function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
+  return hasAppGenerationId(item.generationId) && item.canRemix;
+}
+
+function canUnlockRemixShowcaseItem(item: ShowcaseFeedItem) {
+  return (
+    hasAppGenerationId(item.generationId)
+    && !item.canRemix
+    && item.asset?.accessMode === 'paid'
+    && Boolean(item.asset.allowRemix)
+  );
+}
+
 function showcaseBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return 'Free unlock';
   if (item.asset?.priceQuote?.formatted) return item.asset.priceQuote.formatted;
-  if (item.canRemix || item.asset?.allowRemix) return 'Remix';
+  if (canRecreateShowcaseItem(item)) return 'Remix';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
+  if (item.creationMode === 'motion') return 'Motion';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
-  if (item.category === 'motion') return 'Motion';
   return 'Image';
 }
 
@@ -516,7 +548,6 @@ function ownerPostBadge(item: OwnerPostListItem) {
   if (item.bundle?.accessMode === 'paid') return 'Paid unlock';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
-  if (item.category === 'motion') return 'Motion';
   return 'Post';
 }
 
@@ -525,8 +556,6 @@ function categoryLabel(
   postFormat?: ShowcaseFeedItem['postFormat'] | OwnerPostListItem['postFormat']
 ) {
   if (category === 'text' || postFormat === 'text') return 'Prompt';
-  if (category === 'ugc-ad') return 'UGC Ad';
-  if (category === 'motion') return 'Motion';
   if (category === 'video') return 'Video';
   return 'Image';
 }
@@ -572,28 +601,13 @@ function ownerPostResource(item: OwnerPostListItem, displayText: string): Immers
   };
 }
 
-function generationKind(item: GenerationListItem) {
-  if (item.category === 'video') return 'video';
-  if (item.category === 'motion') return 'motion';
-  if (item.category === 'text') return 'text';
-  return 'image';
-}
-
-function generationBadge(kind: ReturnType<typeof generationKind>) {
-  if (kind === 'motion') return 'Motion';
-  if (kind === 'video') return 'Video';
-  if (kind === 'text') return 'Text';
-  return 'Image';
-}
-
 function toolForShowcaseItem(item: ShowcaseFeedItem): CreatorToolId {
-  if (item.category === 'video' || item.category === 'ugc-ad') return 'video';
-  if (item.category === 'motion') return 'motion';
+  if (item.creationMode === 'motion') return 'motion';
+  if (item.category === 'video') return 'video';
   return 'image';
 }
 
 function toolForOwnerPost(item: OwnerPostListItem): CreatorToolId {
   if (item.category === 'video' || item.mediaKind === 'video') return 'video';
-  if (item.category === 'motion') return 'motion';
   return 'image';
 }

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { FlashList } from '@shopify/flash-list';
+import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -16,13 +17,12 @@ import {
   UserRound,
   Wallet,
 } from 'lucide-react-native';
-import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, PanResponder, Platform, Pressable, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FeedMediaFrame } from '@/components/feed-media-frame';
-import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { FantasyPortalArt } from '@/components/fantasy-portal-art';
+import { StableMediaImage } from '@/components/media-preview';
 import { AppText, ChoiceChip, IconButton, MetricCard, PrimaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
@@ -56,9 +56,16 @@ const PROFILE_MEDIA_SWIPE_START_DISTANCE = 28;
 const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 
-export function ProfileDashboard() {
+export function ProfileDashboard({
+  initialTab = 'Saved',
+  highlightedPostId = null,
+}: {
+  initialTab?: ProfileMediaTab;
+  highlightedPostId?: string | null;
+} = {}) {
   const { user, api, credits } = useAuth();
-  const [activeTab, setActiveTab] = useState<ProfileMediaTab>('Saved');
+  const isFocused = useIsFocused();
+  const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -77,13 +84,13 @@ export function ProfileDashboard() {
   const generationsQuery = useQuery({
     queryKey: ['profile-generations', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.listGenerations(true),
+    queryFn: () => api.listGenerations(false),
   });
 
   const postsQuery = useQuery({
     queryKey: ['profile-owner-posts', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
+    queryFn: () => api.listOwnerPosts({ includeArchived: false, visibility: 'all' }),
   });
 
   const savedQuery = useQuery({
@@ -92,17 +99,42 @@ export function ProfileDashboard() {
     queryFn: () => api.getSavedMedia({ limit: 24 }),
   });
 
+  useEffect(() => {
+    if (!isFocused || !user) return;
+    void Promise.all([
+      generationsQuery.refetch?.(),
+      postsQuery.refetch?.(),
+      savedQuery.refetch?.(),
+    ]);
+  }, [isFocused, user?.id]);
+
   const savedCards = useMemo(
     () => savedShowcaseToProfileMediaCards(savedQuery.data?.items),
     [savedQuery.data]
   );
-  const creationCards = useMemo(
-    () => (generationsQuery.data?.generations ?? []).slice(0, 12).map(generationToProfileMediaCard),
+  const allCreationCards = useMemo(
+    () => (generationsQuery.data?.generations ?? []).map(generationToProfileMediaCard),
     [generationsQuery.data]
   );
-  const postCards = useMemo(
-    () => (postsQuery.data?.posts ?? []).slice(0, 12).map(ownerPostToProfileMediaCard),
+  const readyCreationCount = useMemo(
+    () => allCreationCards.filter((card) => card.isGridReady).length,
+    [allCreationCards]
+  );
+  const creationCards = useMemo(
+    () => allCreationCards.filter((card) => card.isGridReady).slice(0, 12),
+    [allCreationCards]
+  );
+  const allPostCards = useMemo(
+    () => (postsQuery.data?.posts ?? []).map(ownerPostToProfileMediaCard),
     [postsQuery.data]
+  );
+  const readyPostCount = useMemo(
+    () => allPostCards.filter((card) => card.isGridReady).length,
+    [allPostCards]
+  );
+  const postCards = useMemo(
+    () => allPostCards.filter((card) => card.isGridReady).slice(0, 12),
+    [allPostCards]
   );
   const salesSummary = useMemo(
     () => getOwnerPostSalesSummary(postsQuery.data?.posts),
@@ -113,8 +145,8 @@ export function ProfileDashboard() {
   const handle = getProfileHandle(profile, user?.email);
   const initials = getProfileInitials(profile, user?.email);
   const stats = getProfileStats({
-    generationsCount: generationsQuery.data?.generations?.length ?? 0,
-    postsCount: postsQuery.data?.posts?.length ?? 0,
+    generationsCount: readyCreationCount,
+    postsCount: readyPostCount,
     savedCount: savedCards.length,
   });
   const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
@@ -141,6 +173,10 @@ export function ProfileDashboard() {
     }
     void postsQuery.refetch();
   };
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   if (!user) {
     return (
@@ -189,13 +225,24 @@ export function ProfileDashboard() {
             onEdit={() => router.push('/edit-profile' as never)}
           />
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            <BalanceCard icon={<Crown size={22} color="#fbbf24" />} label="Credits" value={String(credits ?? profile?.credits ?? 0)} />
-            <BalanceCard icon={<Wallet size={22} color="#22d3ee" />} label="Wallet" value={formatUsdCents(salesSummary.earningsUsdCents)} />
+            <BalanceCard
+              icon={<Crown size={22} color="#fbbf24" />}
+              label="Credits"
+              value={String(credits ?? profile?.credits ?? 0)}
+              onPress={() => router.push('/pricing' as never)}
+            />
+            <BalanceCard
+              icon={<Wallet size={22} color="#22d3ee" />}
+              label="Wallet"
+              value={formatUsdCents(salesSummary.earningsUsdCents)}
+              onPress={() => router.push('/seller-dashboard' as never)}
+            />
           </View>
           <SellerDashboardButton />
         </>
       )}
       horizontalPadding={horizontalPadding}
+      highlightedPostId={highlightedPostId}
       isLoading={isMediaLoading}
       onRefresh={refreshActiveMedia}
       onSwipeTab={handleMediaSwipe}
@@ -215,6 +262,7 @@ function ProfileMediaList({
   fallbackAvatarUrl,
   header,
   horizontalPadding,
+  highlightedPostId,
   isLoading,
   onRefresh,
   onSwipeTab,
@@ -230,6 +278,7 @@ function ProfileMediaList({
   fallbackAvatarUrl?: string | null;
   header: React.ReactNode;
   horizontalPadding: number;
+  highlightedPostId?: string | null;
   isLoading: boolean;
   onRefresh?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
@@ -280,7 +329,7 @@ function ProfileMediaList({
           <ProfileMediaEmpty title={emptyTitle} />
         )}
         numColumns={PROFILE_GALLERY_COLUMNS}
-        removeClippedSubviews={Platform.OS === 'android'}
+        removeClippedSubviews={false}
         renderItem={({ item, index }) => (
           <View
             style={{
@@ -295,6 +344,7 @@ function ProfileMediaList({
               height={cardHeight}
               fallbackAvatarUrl={fallbackAvatarUrl}
               fallbackAvatarInitials={fallbackAvatarInitials}
+              highlighted={activeTab === 'Posts' && highlightedPostId === item.sourceId}
             />
           </View>
         )}
@@ -470,13 +520,25 @@ function ProfileAvatar({ profile, initials }: { profile?: ProfileResponse | null
   );
 }
 
-function BalanceCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function BalanceCard({
+  icon,
+  label,
+  value,
+  onPress,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  onPress: () => void;
+}) {
   return (
     <MetricCard
       icon={icon}
       label={label}
       value={value}
       accent={label === 'Wallet' ? 'workflow' : 'amber'}
+      onPress={onPress}
+      trailing={<ChevronRight size={17} color={appTheme.colors.muted} strokeWidth={2.3} />}
       compact
     />
   );
@@ -627,12 +689,14 @@ function ProfileMediaTile({
   height,
   fallbackAvatarUrl,
   fallbackAvatarInitials,
+  highlighted,
 }: {
   item: ProfileMediaCard;
   width: number;
   height: number;
   fallbackAvatarUrl?: string | null;
   fallbackAvatarInitials: string;
+  highlighted?: boolean;
 }) {
   const avatarUrl = item.avatarUrl ?? fallbackAvatarUrl ?? null;
   const avatarInitials = item.avatarUrl
@@ -671,11 +735,14 @@ function ProfileMediaTile({
       })}
     >
       <View
+        testID={highlighted ? 'profile-highlighted-post-tile' : undefined}
         style={{
           flex: 1,
           overflow: 'hidden',
           borderRadius: 12,
           borderCurve: 'continuous',
+          borderWidth: highlighted ? 2 : 0,
+          borderColor: highlighted ? 'rgba(103,255,69,0.72)' : 'transparent',
           backgroundColor: '#090914',
         }}
       >
@@ -849,53 +916,159 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
 }
 
 function ProfileGalleryPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
-  const previewMediaUrl = item.mediaKind === 'video' ? item.previewUrl : item.mediaUrl;
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-
-  if (previewMediaUrl && failedUrl !== previewMediaUrl) {
+  const previewMediaUrl = item.previewState === 'videoPoster'
+    ? item.previewUrl
+    : item.previewState === 'image'
+      ? item.previewUrl ?? item.mediaUrl
+      : item.mediaKind === 'image'
+        ? item.previewUrl ?? item.mediaUrl
+        : null;
+  if (previewMediaUrl) {
     return (
-      <FeedMediaFrame
-        kind="image"
-        url={previewMediaUrl}
-        imageBackdrop="none"
-        imageContentFit="cover"
-        transition={120}
-        onImageError={() => setFailedUrl(previewMediaUrl)}
-        recyclingKey={`profile:${item.id}`}
-        radius={12}
-        style={{ width: '100%', height }}
-      />
+      <View style={{ width: '100%', height, overflow: 'hidden', backgroundColor: '#090914' }}>
+        <StableMediaImage
+          url={previewMediaUrl}
+          cacheKey={item.previewCacheKey ?? item.id}
+          thumbhash={item.previewThumbhash}
+          contentFit="cover"
+          transition={120}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      </View>
     );
   }
 
   if (item.mediaKind === 'video' && item.mediaUrl) {
-    return (
-      <FeedVideoPreview
-        url={item.mediaUrl}
-        active={false}
-        height={height}
-        radius={12}
-        accent="#e879f9"
-      />
-    );
+    return <ProfileVideoFallback item={item} height={height} />;
   }
 
   if (item.previewKind === 'text') {
-    return (
-      <LinearGradient
-        colors={['#231426', '#11131e', '#07070c']}
-        style={{ height, justifyContent: 'center', padding: 10 }}
-      >
-        <Text numberOfLines={5} style={{ color: '#fff', fontSize: 13, lineHeight: 16, fontWeight: '900' }}>
-          {item.previewText || item.title}
-        </Text>
-      </LinearGradient>
-    );
+    return <ProfileTextPreview item={item} height={height} />;
   }
 
   return (
-    <View style={{ position: 'absolute', inset: 0 }}>
-      <FantasyPortalArt variant={item.artVariant} muted />
+    <ProfileUnavailableFallback item={item} height={height} showTitle={item.label !== 'Post'} />
+  );
+}
+
+function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
+  const accent = item.label === 'Creation' ? '#e879f9' : '#67e8f9';
+  const label = item.label === 'Creation' ? 'Text creation' : 'Text post';
+
+  return (
+    <View testID="profile-text-preview" style={{ height, overflow: 'hidden', backgroundColor: '#090914' }}>
+      <LinearGradient
+        colors={['#2a1740', '#171827', '#080810']}
+        locations={[0, 0.48, 1]}
+        style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingTop: 46, paddingBottom: 14 }}
+      >
+        <View
+          style={{
+            alignSelf: 'flex-start',
+            borderRadius: 999,
+            backgroundColor: 'rgba(103,232,249,0.12)',
+            borderWidth: 1,
+            borderColor: 'rgba(103,232,249,0.42)',
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            marginBottom: 8,
+          }}
+        >
+          <Text numberOfLines={1} style={{ color: accent, fontSize: 9, fontWeight: '900' }}>{label}</Text>
+        </View>
+        <Text numberOfLines={5} style={{ color: '#ffffff', fontSize: 13, lineHeight: 16, fontWeight: '900' }}>
+          {item.previewText || item.title}
+        </Text>
+      </LinearGradient>
+    </View>
+  );
+}
+
+function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height: number }) {
+  const label = item.badge ?? 'Video';
+  const statusLabel = item.previewStatusLabel ?? (item.label === 'Creation' ? 'Tap to view media' : 'Preview unavailable');
+
+  return (
+    <View testID="profile-video-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: '#090914' }}>
+      <LinearGradient
+        colors={['#26143a', '#111827', '#05050a']}
+        locations={[0, 0.52, 1]}
+        style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 12 }}
+      >
+        <View
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 21,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(232,121,249,0.18)',
+            borderWidth: 1,
+            borderColor: 'rgba(232,121,249,0.52)',
+          }}
+        >
+          <Play size={18} color="#ffffff" fill="#ffffff" strokeWidth={2.3} />
+        </View>
+        <Text style={{ marginTop: 10, color: '#ffffff', fontSize: 12, fontWeight: '900' }}>{label}</Text>
+        <Text
+          numberOfLines={1}
+          style={{ marginTop: 3, color: 'rgba(255,255,255,0.66)', fontSize: 9, fontWeight: '800' }}
+        >
+          {statusLabel}
+        </Text>
+      </LinearGradient>
+    </View>
+  );
+}
+
+function ProfileUnavailableFallback({
+  item,
+  height,
+  showTitle = true,
+  statusLabel,
+}: {
+  item: ProfileMediaCard;
+  height: number;
+  showTitle?: boolean;
+  statusLabel?: string;
+}) {
+  const accent = item.label === 'Creation' ? '#e879f9' : '#67e8f9';
+
+  return (
+    <View testID="profile-art-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: '#090914' }}>
+      <LinearGradient
+        colors={['#182235', '#11131e', '#07070c']}
+        locations={[0, 0.5, 1]}
+        style={{ flex: 1, justifyContent: 'center', padding: 10 }}
+      >
+        <View
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 14,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(103,232,249,0.12)',
+            borderWidth: 1,
+            borderColor: 'rgba(103,232,249,0.48)',
+          }}
+        >
+          {item.label === 'Creation'
+            ? <Sparkles size={14} color={accent} strokeWidth={2.4} />
+            : <ImageIcon size={14} color={accent} strokeWidth={2.4} />}
+        </View>
+        {showTitle ? (
+          <Text numberOfLines={2} style={{ marginTop: 10, color: '#ffffff', fontSize: 11, lineHeight: 14, fontWeight: '900' }}>
+            {item.title}
+          </Text>
+        ) : null}
+        <Text
+          numberOfLines={1}
+          style={{ marginTop: showTitle ? 4 : 10, color: 'rgba(255,255,255,0.66)', fontSize: 9, fontWeight: '800' }}
+        >
+          {statusLabel ?? item.previewStatusLabel ?? 'Preview unavailable'}
+        </Text>
+      </LinearGradient>
     </View>
   );
 }

@@ -63,6 +63,23 @@ describe('studio feed view model', () => {
     });
   });
 
+  it('treats ugc-ad generations as video creation cards', () => {
+    expect(generationToStudioCreationCard(generation({
+      id: 'ugc-ad-1',
+      category: 'ugc-ad',
+      output_url: 'https://example.com/ugc-ad.mp4',
+      title: 'Creator ad',
+      prompt: 'A creator ad spot',
+    }))).toMatchObject({
+      id: 'ugc-ad-1',
+      kind: 'video',
+      label: 'Video',
+      mediaKind: 'video',
+      accent: 'video',
+      height: 268,
+    });
+  });
+
   it('builds balanced two-column creation feed columns', () => {
     const columns = buildStudioCreationMasonry([
       generation({ id: 'image-1', category: 'image' }),

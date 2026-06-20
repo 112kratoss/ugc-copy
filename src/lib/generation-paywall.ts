@@ -211,6 +211,7 @@ function formatModeLabel(modelId: string | null, mode: string | null): string | 
 
 function getModelDisplayName(category: string | null | undefined, workflowSettings: Record<string, unknown>, model: string | null | undefined): string | null {
   const workflowModel = typeof workflowSettings.model === 'string' ? workflowSettings.model : null;
+  const isMotionWorkflow = category === 'motion' || workflowSettings.creationMode === 'motion';
 
   if (workflowModel) {
     if (workflowModel in IMAGE_MODELS) {
@@ -236,7 +237,7 @@ function getModelDisplayName(category: string | null | undefined, workflowSettin
     }
   }
 
-  if (category === 'video' || category === 'ugc-ad') {
+  if ((category === 'video' && !isMotionWorkflow) || category === 'ugc-ad') {
     const videoModel = Object.values(VIDEO_MODELS).find(
       (candidate) => candidate.id === model || candidate.apiModelId === model
     );
@@ -245,7 +246,7 @@ function getModelDisplayName(category: string | null | undefined, workflowSettin
     }
   }
 
-  if (category === 'motion') {
+  if (isMotionWorkflow) {
     const motionModel = Object.values(MOTION_MODELS).find(
       (candidate) => candidate.id === model || candidate.apiModelId === model
     );
@@ -289,12 +290,13 @@ function getSavedReferenceCount(kindCounts: Partial<Record<GenerationInputMediaT
 export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPrefillSource): boolean {
   const workflowSettings =
     source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
+  const isMotionWorkflow = source.category === 'motion' || workflowSettings.creationMode === 'motion';
 
   if (source.category === 'image') {
     return countRecoverableDescriptors(workflowSettings.elements) > 0;
   }
 
-  if (source.category === 'video' || source.category === 'ugc-ad') {
+  if ((source.category === 'video' && !isMotionWorkflow) || source.category === 'ugc-ad') {
     return (
       countRecoverableDescriptors(workflowSettings.elements) > 0 ||
       countRecoverableDescriptors(workflowSettings.klingVideoElements) > 0 ||
@@ -303,7 +305,7 @@ export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPre
     );
   }
 
-  if (source.category === 'motion') {
+  if (isMotionWorkflow) {
     return (
       hasRecoverableDescriptor(workflowSettings.characterImage, 'image') &&
       hasRecoverableDescriptor(workflowSettings.referenceVideo, 'video')
@@ -455,13 +457,14 @@ export function buildGenerationPaywallNotes(source: GenerationPaywallPrefillSour
   const workflowSettings =
     source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
   const modelLabel = getModelDisplayName(source.category, workflowSettings, source.model);
+  const isMotionWorkflow = source.category === 'motion' || workflowSettings.creationMode === 'motion';
 
   const details =
     source.category === 'image'
       ? buildImageNotes(modelLabel, workflowSettings)
-      : source.category === 'video' || source.category === 'ugc-ad'
+      : (source.category === 'video' && !isMotionWorkflow) || source.category === 'ugc-ad'
         ? buildVideoNotes(modelLabel, workflowSettings)
-        : source.category === 'motion'
+        : isMotionWorkflow
           ? buildMotionNotes(modelLabel, workflowSettings)
           : [];
 

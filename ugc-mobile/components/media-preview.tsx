@@ -1,9 +1,9 @@
-import { Image } from 'expo-image';
+import { Image, type ImageProps } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { ImageOff } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Text } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
 
@@ -18,11 +18,8 @@ export function MediaPreview({
   height?: number;
   radius?: number;
 }) {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [url]);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const imageFailed = failedUrl === url;
 
   if (!url) {
     return <MediaFallback height={height} radius={radius} label="No media" />;
@@ -37,10 +34,11 @@ export function MediaPreview({
   }
 
   return (
-    <Image
-      source={{ uri: url }}
+    <StableMediaImage
+      url={url}
+      cacheKey={url}
       contentFit="cover"
-      onError={() => setImageFailed(true)}
+      onError={() => setFailedUrl(url)}
       style={{
         width: '100%',
         aspectRatio: 4 / 5,
@@ -50,6 +48,56 @@ export function MediaPreview({
         borderColor: appTheme.colors.border,
         backgroundColor: '#050506',
       }}
+    />
+  );
+}
+
+export function StableMediaImage({
+  url,
+  cacheKey,
+  thumbhash,
+  contentFit = 'cover',
+  onDisplay,
+  onError,
+  style,
+  transition = 120,
+}: {
+  url: string;
+  cacheKey: string;
+  thumbhash?: string | null;
+  contentFit?: ImageProps['contentFit'];
+  onDisplay?: ImageProps['onDisplay'];
+  onError?: ImageProps['onError'];
+  style?: ImageProps['style'];
+  transition?: number;
+}) {
+  const [failedCacheKey, setFailedCacheKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    void Image.prefetch(url, 'memory-disk');
+  }, [cacheKey, url]);
+
+  if (failedCacheKey === cacheKey) {
+    return <MediaFallback radius={0} label="Preview unavailable" />;
+  }
+
+  return (
+    <Image
+      key={cacheKey}
+      source={{ uri: url, cacheKey }}
+      placeholder={thumbhash ? { thumbhash } : undefined}
+      placeholderContentFit={contentFit}
+      contentFit={contentFit}
+      cachePolicy="memory-disk"
+      recyclingKey={cacheKey}
+      transition={transition}
+      onDisplay={onDisplay}
+      onError={(event) => {
+        setFailedCacheKey(cacheKey);
+        onError?.(event);
+      }}
+      pointerEvents="none"
+      style={style}
     />
   );
 }

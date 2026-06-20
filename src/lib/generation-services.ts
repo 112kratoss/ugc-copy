@@ -132,8 +132,8 @@ function requireApiKey(): string {
   return KIE_API_KEY;
 }
 
-async function deductCreditsOrThrow(supabase: SupabaseClient, userId: string, cost: number): Promise<number> {
-  const { data: remainingCredits, error } = await supabase.rpc('deduct_credits', {
+async function deductCreditsOrThrow(creditSupabase: SupabaseClient, userId: string, cost: number): Promise<number> {
+  const { data: remainingCredits, error } = await creditSupabase.rpc('deduct_credits', {
     p_user_id: userId,
     p_cost: cost,
   });
@@ -149,9 +149,9 @@ async function deductCreditsOrThrow(supabase: SupabaseClient, userId: string, co
   return remainingCredits;
 }
 
-async function refundCreditsQuietly(supabase: SupabaseClient, userId: string, amount: number) {
+async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: string, amount: number) {
   try {
-    await supabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
+    await creditSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
   } catch (error) {
     console.error('Failed to refund credits:', error);
   }
@@ -428,10 +428,20 @@ async function createGenerationPreviewQuietly({
       storagePath,
       supabase,
     });
-    return preview?.previewStoragePath ?? null;
+    return {
+      previewUrl: preview?.previewStoragePath ?? null,
+      previewThumbhash: preview?.previewThumbhash ?? null,
+      previewStatus: preview ? 'ready' as const : 'failed' as const,
+      previewError: preview ? null : 'Unsupported or invalid visual media.',
+    };
   } catch (error) {
     console.error('Failed to create generation preview poster:', error);
-    return null;
+    return {
+      previewUrl: null,
+      previewThumbhash: null,
+      previewStatus: 'failed' as const,
+      previewError: error instanceof Error ? error.message.slice(0, 500) : 'Preview generation failed.',
+    };
   }
 }
 
@@ -480,6 +490,9 @@ async function persistGeneratedOutput(
           status: 'succeeded',
           output_url: tempUrl,
           preview_url: getFallbackPreviewUrl(generation.category, mediaBlob.type, tempUrl),
+          preview_status: 'failed',
+          preview_attempt_count: 1,
+          preview_error: 'Generated output could not be persisted for preview processing.',
           completed_at: completedAt ?? new Date().toISOString(),
         })
         .eq('id', generation.id);
@@ -487,7 +500,7 @@ async function persistGeneratedOutput(
     }
 
     const storagePath = `${bucket}/${fileName}`;
-    const previewUrl = await createGenerationPreviewQuietly({
+    const preview = await createGenerationPreviewQuietly({
       body: mediaBlob,
       category: generation.category,
       contentType: mediaBlob.type,
@@ -500,7 +513,12 @@ async function persistGeneratedOutput(
       .update({
         status: 'succeeded',
         output_url: storagePath,
-        preview_url: previewUrl,
+        preview_url: preview.previewUrl,
+        preview_thumbhash: preview.previewThumbhash,
+        preview_status: preview.previewStatus,
+        preview_attempt_count: 1,
+        preview_error: preview.previewError,
+        preview_generated_at: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
         completed_at: completedAt ?? new Date().toISOString(),
       })
       .eq('id', generation.id);
@@ -512,6 +530,9 @@ async function persistGeneratedOutput(
         status: 'succeeded',
         output_url: tempUrl,
         preview_url: getFallbackPreviewUrl(generation.category, null, tempUrl),
+        preview_status: 'failed',
+        preview_attempt_count: 1,
+        preview_error: error instanceof Error ? error.message.slice(0, 500) : 'Generated output persistence failed.',
         completed_at: completedAt ?? new Date().toISOString(),
       })
       .eq('id', generation.id);
@@ -526,7 +547,12 @@ export async function persistGeneratedOutputList(
 ): Promise<PersistedGenerationOutput[]> {
   const bucket = getStorageBucket(generation.category, generation.model);
   const outputs: PersistedGenerationOutput[] = [];
-  let primaryPreviewUrl: string | null = null;
+  let primaryPreview = {
+    previewUrl: null as string | null,
+    previewThumbhash: null as string | null,
+    previewStatus: 'pending' as 'pending' | 'ready' | 'failed',
+    previewError: null as string | null,
+  };
 
   for (const [index, tempUrl] of tempUrls.entries()) {
     try {
@@ -557,7 +583,7 @@ export async function persistGeneratedOutputList(
       });
 
       if (index === 0) {
-        primaryPreviewUrl = await createGenerationPreviewQuietly({
+        primaryPreview = await createGenerationPreviewQuietly({
           body: mediaBlob,
           category: generation.category,
           contentType: mediaBlob.type,
@@ -572,7 +598,12 @@ export async function persistGeneratedOutputList(
         storagePath: tempUrl,
       });
       if (index === 0) {
-        primaryPreviewUrl = getFallbackPreviewUrl(generation.category, null, tempUrl);
+        primaryPreview = {
+          previewUrl: getFallbackPreviewUrl(generation.category, null, tempUrl),
+          previewThumbhash: null,
+          previewStatus: 'failed',
+          previewError: error instanceof Error ? error.message.slice(0, 500) : 'Preview generation failed.',
+        };
       }
     }
   }
@@ -585,7 +616,12 @@ export async function persistGeneratedOutputList(
   const updatePayload: Record<string, unknown> = {
     status: 'succeeded',
     output_url: primaryOutput,
-    preview_url: primaryPreviewUrl ?? getFallbackPreviewUrl(generation.category, null, primaryOutput),
+    preview_url: primaryPreview.previewUrl ?? getFallbackPreviewUrl(generation.category, null, primaryOutput),
+    preview_thumbhash: primaryPreview.previewThumbhash,
+    preview_status: primaryPreview.previewStatus,
+    preview_attempt_count: 1,
+    preview_error: primaryPreview.previewError,
+    preview_generated_at: primaryPreview.previewStatus === 'ready' ? new Date().toISOString() : null,
     completed_at: completedAt ?? new Date().toISOString(),
   };
 
@@ -607,6 +643,7 @@ export async function persistGeneratedOutputList(
 
 async function markGenerationFailed(
   supabase: SupabaseClient,
+  creditSupabase: SupabaseClient,
   generation: SyncableGenerationRecord,
   completedAt?: string | null
 ) {
@@ -614,7 +651,7 @@ async function markGenerationFailed(
     .from('generations')
     .update({ status: 'failed', completed_at: completedAt ?? new Date().toISOString() })
     .eq('id', generation.id);
-  await supabase.rpc('refund_generation', { p_prediction_id: generation.prediction_id });
+  await creditSupabase.rpc('refund_generation', { p_prediction_id: generation.prediction_id });
 }
 
 function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
@@ -622,7 +659,11 @@ function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
   return workflowModel === 'veo-3.1' || generation.model === 'veo3' || generation.model === 'veo3_fast';
 }
 
-async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: SyncableGenerationRecord) {
+async function syncSingleGenerationStatus(
+  supabase: SupabaseClient,
+  creditSupabase: SupabaseClient,
+  generation: SyncableGenerationRecord
+) {
   if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
     return;
   }
@@ -670,7 +711,7 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
     }
 
     if (successFlag === 2 || successFlag === 3) {
-      await markGenerationFailed(supabase, generation, toIsoTimestamp(timing.completedAtMs));
+      await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
       return;
     }
 
@@ -735,7 +776,7 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
   }
 
   if (state === 'fail') {
-    await markGenerationFailed(supabase, generation, toIsoTimestamp(timing.completedAtMs));
+    await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
     return;
   }
 
@@ -747,6 +788,7 @@ async function syncSingleGenerationStatus(supabase: SupabaseClient, generation: 
 
 export async function syncGenerationStatuses(params: {
   supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
   generationIds: string[];
 }) {
   requireApiKey();
@@ -763,7 +805,7 @@ export async function syncGenerationStatuses(params: {
 
   for (const generation of (generations || []) as SyncableGenerationRecord[]) {
     try {
-      await syncSingleGenerationStatus(params.supabase, generation);
+      await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
     } catch (error) {
       console.error(`Failed to sync generation ${generation.id}:`, error);
     }
@@ -772,6 +814,7 @@ export async function syncGenerationStatuses(params: {
 
 export async function startImageGeneration(params: {
   supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
   userId: string;
   prompt: string;
   model: ImageModelId;
@@ -788,6 +831,7 @@ export async function startImageGeneration(params: {
   requireApiKey();
   const {
     supabase,
+    creditSupabase,
     userId,
     prompt,
     model,
@@ -881,7 +925,7 @@ export async function startImageGeneration(params: {
     qualityMode,
     referenceCount: resolvedImageUrls.length,
   });
-  const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
+  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
 
   try {
@@ -975,13 +1019,14 @@ export async function startImageGeneration(params: {
       generationId: insert.data?.id,
     };
   } catch (error) {
-    await refundCreditsQuietly(supabase, userId, cost);
+    await refundCreditsQuietly(creditSupabase, userId, cost);
     throw error;
   }
 }
 
 export async function startVideoGeneration(params: {
   supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
   userId: string;
   prompt: string;
   model: VideoModelId;
@@ -1011,6 +1056,7 @@ export async function startVideoGeneration(params: {
   requireApiKey();
   const {
     supabase,
+    creditSupabase,
     userId,
     prompt,
     model,
@@ -1277,7 +1323,7 @@ export async function startVideoGeneration(params: {
     resolution,
     hasReferenceVideo: resolvedReferenceVideoUrls.length > 0,
   });
-  const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
+  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   try {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
@@ -1577,13 +1623,14 @@ export async function startVideoGeneration(params: {
       generationId: insert.data?.id,
     };
   } catch (error) {
-    await refundCreditsQuietly(supabase, userId, cost);
+    await refundCreditsQuietly(creditSupabase, userId, cost);
     throw error;
   }
 }
 
 export async function startMotionGeneration(params: {
   supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
   userId: string;
   prompt: string;
   model: MotionModelId;
@@ -1596,6 +1643,7 @@ export async function startMotionGeneration(params: {
   requireApiKey();
   const {
     supabase,
+    creditSupabase,
     userId,
     prompt,
     model,
@@ -1616,7 +1664,7 @@ export async function startMotionGeneration(params: {
   }
 
   const cost = getMotionCost(model, mode, duration);
-  const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
+  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   const webhookSecret = process.env.WEBHOOK_SECRET ?? 'kd92mxp4n7qbt1ej';
   const callbackUrl = `https://ildfmhozpibwiopeavfg.supabase.co/functions/v1/kie-webhook?secret=${webhookSecret}`;
 
@@ -1643,8 +1691,10 @@ export async function startMotionGeneration(params: {
         prediction_id: predictionId,
         status: 'processing',
         prompt: prompt.trim(),
-        category: 'motion',
+        category: 'video',
+        creation_mode: 'motion',
         workflow_settings: {
+          creationMode: 'motion',
           model,
           characterOrientation,
           mode,
@@ -1683,13 +1733,14 @@ export async function startMotionGeneration(params: {
       generationId: insert.data?.id,
     };
   } catch (error) {
-    await refundCreditsQuietly(supabase, userId, cost);
+    await refundCreditsQuietly(creditSupabase, userId, cost);
     throw error;
   }
 }
 
 export async function startVoiceoverGeneration(params: {
   supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
   userId: string;
   model: VoiceoverModelId;
   text?: string;
@@ -1705,6 +1756,7 @@ export async function startVoiceoverGeneration(params: {
   requireApiKey();
   const {
     supabase,
+    creditSupabase,
     userId,
     model,
     text,
@@ -1737,7 +1789,7 @@ export async function startVoiceoverGeneration(params: {
     text: trimmedText,
     dialogueTurns: normalizedDialogueTurns,
   });
-  const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
+  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   try {
     let input: Record<string, unknown>;
@@ -1803,13 +1855,14 @@ export async function startVoiceoverGeneration(params: {
       generationId: insert.data?.id,
     };
   } catch (error) {
-    await refundCreditsQuietly(supabase, userId, cost);
+    await refundCreditsQuietly(creditSupabase, userId, cost);
     throw error;
   }
 }
 
 export async function startSoundEffectGeneration(params: {
   supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
   userId: string;
   prompt: string;
   model?: SoundEffectModelId;
@@ -1821,6 +1874,7 @@ export async function startSoundEffectGeneration(params: {
   requireApiKey();
   const {
     supabase,
+    creditSupabase,
     userId,
     prompt,
     model = 'sound-effect-v2',
@@ -1837,7 +1891,7 @@ export async function startSoundEffectGeneration(params: {
   }
 
   const cost = getSoundEffectCost(model, duration);
-  const remainingCredits = await deductCreditsOrThrow(supabase, userId, cost);
+  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   try {
     const predictionId = await createKieTask({
@@ -1880,7 +1934,7 @@ export async function startSoundEffectGeneration(params: {
       generationId: insert.data?.id,
     };
   } catch (error) {
-    await refundCreditsQuietly(supabase, userId, cost);
+    await refundCreditsQuietly(creditSupabase, userId, cost);
     throw error;
   }
 }

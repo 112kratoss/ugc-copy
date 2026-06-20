@@ -70,7 +70,8 @@ describe('creator tool previews', () => {
           title: 'Motion',
           prompt: '',
           body: '',
-          category: 'motion',
+          category: 'video',
+          creationMode: 'motion',
           postFormat: 'media',
           saveCount: 0,
           remixCount: 0,
@@ -138,10 +139,10 @@ describe('creator tool previews', () => {
 
     expect(previewMap.motion?.id).toBe('motion-1');
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
-      category: 'motion',
+      category: 'video',
       sort: 'top-saves',
       offset: 0,
-      limit: 1,
+      limit: 12,
       viewerUserId: null,
     });
   });

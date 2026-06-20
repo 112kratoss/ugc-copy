@@ -168,6 +168,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     const result = await startVoiceoverGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       model: 'text-to-speech-turbo-2-5',
       text: 'Narrate this quickly.',
@@ -191,6 +192,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     const result = await startSoundEffectGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'A soft whoosh and sparkle.',
       duration: 6,
@@ -217,6 +219,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     const result = await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'A product spins on a marble pedestal.',
       model: 'kling-3.0-video',
@@ -256,6 +259,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     await startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Use @hero on a clean tabletop scene.',
       model: 'nano-banana-2',
@@ -303,6 +307,7 @@ describe('generation services', () => {
     const { supabase, uploads, inputMediaRows } = createSupabaseMock();
     const result = await startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Use @hero in a clean scene.',
       model: 'nano-banana-2',
@@ -351,6 +356,7 @@ describe('generation services', () => {
     const { supabase, generations, rpcCalls } = createSupabaseMock();
     await startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'A premium skincare product hero image.',
       model: 'gpt-image-2',
@@ -395,6 +401,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     await startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Keep @hero but change the background to warm marble.',
       model: 'gpt-image-2',
@@ -439,6 +446,7 @@ describe('generation services', () => {
 
     await expect(startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'A square product visual.',
       model: 'gpt-image-2',
@@ -465,6 +473,7 @@ describe('generation services', () => {
     const { supabase, generations, rpcCalls } = createSupabaseMock();
     await startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'A surreal product launch poster.',
       model: 'grok-imagine-image',
@@ -510,6 +519,7 @@ describe('generation services', () => {
     const { supabase, generations, rpcCalls } = createSupabaseMock();
     await startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Restyle @hero as a neon storefront campaign.',
       model: 'grok-imagine-image',
@@ -549,6 +559,7 @@ describe('generation services', () => {
 
     await expect(startImageGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Combine these references.',
       model: 'grok-imagine-image',
@@ -574,6 +585,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Move smoothly between the supplied frames.',
       model: 'veo-3.1',
@@ -609,6 +621,7 @@ describe('generation services', () => {
     const { supabase, generations, rpcCalls } = createSupabaseMock();
     await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'A playful product reveal with quick camera energy.',
       model: 'grok-imagine-video',
@@ -660,6 +673,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Animate the still with a slow push-in.',
       model: 'grok-imagine-video',
@@ -694,6 +708,7 @@ describe('generation services', () => {
 
     await expect(startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Move between these images.',
       model: 'grok-imagine-video',
@@ -723,6 +738,7 @@ describe('generation services', () => {
     const { supabase, generations, inputMediaRows } = createSupabaseMock();
     await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Replace the background motion with @reference_dancer.',
       model: 'kling-3.0-video',
@@ -790,6 +806,7 @@ describe('generation services', () => {
     const { supabase } = createSupabaseMock();
     await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: '',
       model: 'kling-3.0-video',
@@ -845,6 +862,7 @@ describe('generation services', () => {
     const { supabase, generations } = createSupabaseMock();
     await startVideoGeneration({
       supabase,
+      creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Match the motion and timing references.',
       model: 'seedance-2-fast',
@@ -930,6 +948,7 @@ describe('generation services', () => {
 
     await syncGenerationStatuses({
       supabase,
+      creditSupabase: supabase,
       generationIds: ['gen-audio-1'],
     });
 
@@ -971,6 +990,7 @@ describe('generation services', () => {
 
     await syncGenerationStatuses({
       supabase,
+      creditSupabase: supabase,
       generationIds: ['gen-audio-2'],
     });
 

@@ -48,11 +48,25 @@ const sourceToolsState = vi.hoisted(() => ({
 const mutationState = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
+  options: null as null | {
+    onMutate?: (visibility?: 'public' | 'unlisted' | 'private') => { submittedDraft?: unknown } | void;
+    onSuccess?: (
+      response: { postId?: string | null },
+      visibility?: 'public' | 'unlisted' | 'private',
+      context?: { submittedDraft?: unknown } | void
+    ) => void;
+  },
+}));
+
+const queryClientState = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(),
+  setQueryData: vi.fn(),
 }));
 
 const generationItem = {
   id: 'gen-1',
   output_url: 'https://cdn.example.com/output.png',
+  preview_url: 'https://cdn.example.com/output.preview.webp',
   status: 'succeeded',
   created_at: '2026-01-01T00:00:00.000Z',
   completed_at: '2026-01-01T00:01:00.000Z',
@@ -72,10 +86,11 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({
-    invalidateQueries: vi.fn(),
-  }),
-  useMutation: () => mutationState,
+  useQueryClient: () => queryClientState,
+  useMutation: (options: typeof mutationState.options) => {
+    mutationState.options = options;
+    return mutationState;
+  },
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
     if (queryKey[0] === 'post-new-generations') {
       return {
@@ -138,6 +153,10 @@ vi.mock('expo-image', () => ({
 vi.mock('expo-linear-gradient', () => ({
   LinearGradient: ({ children, ...props }: MockProps) =>
     React.createElement('linear-gradient', props, children),
+}));
+
+vi.mock('@/components/media-preview', () => ({
+  StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props),
 }));
 
 vi.mock('lucide-react-native', () => ({
@@ -220,7 +239,10 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     paramsState.params = { generationId: 'gen-1' };
     routerState.push.mockClear();
     routerState.replace.mockClear();
+    queryClientState.invalidateQueries.mockClear();
+    queryClientState.setQueryData.mockClear();
     mutationState.mutate.mockClear();
+    mutationState.options = null;
     mutationState.isPending = false;
     vi.mocked(pickMediaList).mockReset();
     vi.mocked(uploadPickedMedia).mockReset();
@@ -448,6 +470,96 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text.filter((value) => value === 'Add media')).toHaveLength(1);
     expect(text).not.toContain('Video');
     expect(text).toContain('Cover first · max 5');
+  });
+
+  it('routes newly created manual posts to the profile Posts tab', () => {
+    paramsState.params = {};
+
+    renderer.act(() => {
+      renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      mutationState.options?.onSuccess?.({ postId: 'post-123' });
+    });
+
+    expect(routerState.replace).toHaveBeenCalledWith({
+      pathname: '/(tabs)/profile',
+      params: {
+        tab: 'posts',
+        postId: 'post-123',
+      },
+    });
+  });
+
+  it('primes the profile Posts cache with uploaded media after publish', async () => {
+    paramsState.params = {};
+    vi.mocked(pickMediaList).mockResolvedValue([
+      { uri: 'file:///28.png', fileName: '28.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+    ]);
+    vi.mocked(uploadPickedMedia).mockImplementation(async (uri, options) => ({
+      signedUrl: uri,
+      storagePath: `uploads/${options?.fileName ?? 'media.png'}`,
+      mimeType: options?.mimeType ?? 'image/png',
+      fileName: options?.fileName ?? 'media.png',
+      kind: 'image',
+      durationSeconds: null,
+      sizeBytes: options?.sizeBytes ?? null,
+    }));
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Add media').props.onPress();
+    });
+
+    let mutationContext: { submittedDraft?: unknown } | void;
+    renderer.act(() => {
+      mutationContext = mutationState.options?.onMutate?.('public');
+    });
+    renderer.act(() => {
+      mutationState.options?.onSuccess?.({ postId: 'post-123' }, 'public', mutationContext);
+    });
+
+    expect(queryClientState.setQueryData).toHaveBeenCalledWith(
+      ['profile-owner-posts', 'user-123'],
+      expect.any(Function)
+    );
+    const updateProfilePosts = queryClientState.setQueryData.mock.calls[0]?.[1] as
+      | ((current: { success: boolean; posts: unknown[] }) => { posts: Array<{ mediaUrl: string | null; mediaItems?: Array<{ url: string }> }> })
+      | undefined;
+    expect(updateProfilePosts?.({ success: true, posts: [] }).posts[0]).toMatchObject({
+      id: 'post-123',
+      mediaUrl: 'file:///28.png',
+      mediaItems: [{ url: 'file:///28.png' }],
+    });
+  });
+
+  it('shows the publish loading animation only on the clicked action', () => {
+    mutationState.mutate.mockImplementation(() => {
+      mutationState.isPending = true;
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Publish public').props.onPress();
+    });
+    renderer.act(() => {
+      tree!.update(<NewPostScreen />);
+    });
+
+    expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(1);
+    expect(collectText(tree!.root)).toContain('Save private');
   });
 
   it('uses the center upload target to attach mixed media', async () => {

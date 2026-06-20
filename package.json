@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
-    "backfill:generation-video-previews": "node scripts/backfill-generation-video-previews.mjs",
-    "backfill:post-media-previews": "node scripts/backfill-post-media-previews.mjs",
+    "backfill:media-previews": "tsx scripts/backfill-media-previews.ts",
+    "backfill:generation-video-previews": "npm run backfill:media-previews",
+    "backfill:post-media-previews": "npm run backfill:media-previews",
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
@@ -31,7 +32,8 @@
     "react-dom": "19.2.3",
     "remark": "^15.0.1",
     "remark-html": "^16.0.1",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "thumbhash": "^0.1.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
@@ -45,6 +47,7 @@
     "eslint-config-next": "16.1.6",
     "jsdom": "^28.1.0",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5",
     "vitest": "^4.1.0"
   }

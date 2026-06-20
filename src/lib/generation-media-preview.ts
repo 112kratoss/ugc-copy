@@ -1,23 +1,24 @@
-import 'server-only';
-
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import ffmpegStaticPath from 'ffmpeg-static';
 import sharp from 'sharp';
+
+import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 
 const PREVIEW_MAX_SIZE = 720;
 
-export function buildGenerationPreviewPath(storagePath: string) {
+export function buildGenerationPreviewPath(storagePath: string, contentHash: string) {
   const normalized = storagePath.replace(/^\/+/, '');
   const extensionIndex = normalized.lastIndexOf('.');
   const slashIndex = normalized.lastIndexOf('/');
   const basePath = extensionIndex > slashIndex
     ? normalized.slice(0, extensionIndex)
     : normalized;
-  return `${basePath}.preview.webp`;
+  return `${basePath}.preview.${contentHash}.webp`;
 }
 
 export function isImageGenerationPreview(category: string | null | undefined, contentType: string | null | undefined) {
@@ -43,7 +44,7 @@ export async function createGenerationOutputPreview({
 }) {
   const resolvedContentType = contentType || body.type || null;
   if (isImageGenerationPreview(category, resolvedContentType)) {
-    return { previewStoragePath: storagePath };
+    return createGenerationImagePreview({ body, storagePath, supabase });
   }
 
   if (!isVideoGenerationPreview(category, resolvedContentType)) {
@@ -66,16 +67,50 @@ export async function createGenerationVideoPoster({
   storagePath: string;
   supabase: SupabaseClient;
 }) {
-  const previewStoragePath = buildGenerationPreviewPath(storagePath);
-  const location = getStorageLocation(previewStoragePath);
-  if (!location) {
-    return null;
-  }
-
   const poster = await createVideoPosterBuffer(body);
+  return uploadGenerationPreview({ preview: poster, storagePath, supabase });
+}
+
+async function createGenerationImagePreview({
+  body,
+  storagePath,
+  supabase,
+}: {
+  body: Blob;
+  storagePath: string;
+  supabase: SupabaseClient;
+}) {
+  const input = Buffer.from(await body.arrayBuffer());
+  const preview = await sharp(input)
+    .rotate()
+    .resize({
+      width: PREVIEW_MAX_SIZE,
+      height: PREVIEW_MAX_SIZE,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .webp({ quality: 72 })
+    .toBuffer();
+
+  return uploadGenerationPreview({ preview, storagePath, supabase });
+}
+
+async function uploadGenerationPreview({
+  preview,
+  storagePath,
+  supabase,
+}: {
+  preview: Buffer;
+  storagePath: string;
+  supabase: SupabaseClient;
+}) {
+  const previewStoragePath = buildGenerationPreviewPath(storagePath, getMediaContentHash(preview));
+  const location = getStorageLocation(previewStoragePath);
+  if (!location) return null;
+
   const upload = await supabase.storage
     .from(location.bucket)
-    .upload(location.filePath, poster, {
+    .upload(location.filePath, preview, {
       cacheControl: '31536000',
       contentType: 'image/webp',
       upsert: true,
@@ -85,7 +120,11 @@ export async function createGenerationVideoPoster({
     throw upload.error;
   }
 
-  return { previewStoragePath };
+  return {
+    previewStoragePath,
+    previewThumbhash: await getPreviewThumbhash(preview),
+    previewStatus: 'ready' as const,
+  };
 }
 
 export async function createVideoPosterBuffer(body: Blob) {
@@ -158,14 +197,7 @@ function getFfmpegPath() {
     return process.env.FFMPEG_PATH;
   }
 
-  try {
-    const staticPath = require('ffmpeg-static') as string | null;
-    if (staticPath) {
-      return staticPath;
-    }
-  } catch {
-    // Fall through to PATH lookup for local/dev machines.
-  }
+  if (ffmpegStaticPath) return ffmpegStaticPath;
 
   return 'ffmpeg';
 }

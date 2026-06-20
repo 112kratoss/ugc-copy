@@ -65,12 +65,16 @@ export function getViewerActionLabel(action: string) {
       return 'Share';
     case 'recreate':
       return 'Recreate / Remix';
+    case 'unlock-remix':
+      return 'Remix';
     case 'publish':
       return 'Post this creation';
     case 'archive':
       return 'Archive';
     case 'restore':
       return 'Restore';
+    case 'delete-post':
+      return 'Delete permanently';
     case 'edit-post':
       return 'Edit post';
     case 'change-visibility':
@@ -97,7 +101,7 @@ export function getViewerActionLabel(action: string) {
 }
 
 export function isDestructiveViewerAction(action: string) {
-  return action === 'unsave' || action === 'archive';
+  return action === 'unsave' || action === 'archive' || action === 'delete-post';
 }
 
 export function getViewerActionGroupLabel(action: string) {
@@ -114,7 +118,7 @@ export function getViewerActionGroupLabel(action: string) {
     return 'Creation to post';
   }
 
-  if (action === 'archive' || action === 'restore' || action === 'unsave') {
+  if (action === 'archive' || action === 'restore' || action === 'unsave' || action === 'delete-post') {
     return 'Library';
   }
 

@@ -481,6 +481,7 @@ async function hydrateRunSteps(params: {
   if (syncGenerationState) {
     await syncGenerationStatuses({
       supabase,
+      creditSupabase: createServiceClient(),
       generationIds,
     });
   }
@@ -559,6 +560,7 @@ async function executeRunnableNode(params: {
   graph: WorkflowCanvasGraph;
 }): Promise<RunnableExecutionResult> {
   const { supabase, userId, node, graph } = params;
+  const creditSupabase = createServiceClient();
   const inputs = resolveNodeInputs(graph, node.id);
 
   if (node.type === 'image-generate') {
@@ -567,6 +569,7 @@ async function executeRunnableNode(params: {
     const elementPayload = getRunnableElementPayload(graph, node.id);
     const result = await startImageGeneration({
       supabase,
+      creditSupabase,
       userId,
       prompt: inputs.prompt,
       model: data.model,
@@ -610,6 +613,7 @@ async function executeRunnableNode(params: {
       : [];
     const result = await startVideoGeneration({
       supabase,
+      creditSupabase,
       userId,
       prompt: inputs.prompt || '',
       model: data.model,
@@ -655,6 +659,7 @@ async function executeRunnableNode(params: {
 
     const result = await startMotionGeneration({
       supabase,
+      creditSupabase,
       userId,
       prompt,
       model: data.model,
@@ -688,6 +693,7 @@ async function executeRunnableNode(params: {
 
     const result = await startVoiceoverGeneration({
       supabase,
+      creditSupabase,
       userId,
       model: data.model,
       text: inputs.prompt || undefined,
@@ -726,6 +732,7 @@ async function executeRunnableNode(params: {
     const data = node.data as SoundEffectsGenerateNodeData;
     const result = await startSoundEffectGeneration({
       supabase,
+      creditSupabase,
       userId,
       prompt: inputs.prompt,
       model: data.model,

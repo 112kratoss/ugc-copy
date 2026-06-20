@@ -16,6 +16,7 @@ import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostResourceReferences } from '@/components/post-resource-references';
 import { Pill } from '@/components/ui';
+import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -84,6 +85,7 @@ export default function ImmersivePreviewViewerScreen() {
   const [detailsPageOpenItemId, setDetailsPageOpenItemId] = useState<string | null>(null);
   const [detailsSheetOpenItemId, setDetailsSheetOpenItemId] = useState<string | null>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
+  const [unlockRemixOpenItemId, setUnlockRemixOpenItemId] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
 
   const profileQuery = useQuery({
@@ -107,6 +109,11 @@ export default function ImmersivePreviewViewerScreen() {
     staleTime: 1000 * 45,
   });
 
+  useEffect(() => {
+    if (!isFocused) return;
+    void sourceQuery.refetch?.();
+  }, [isFocused, sourceQuery.refetch]);
+
   const ownerInfo = useMemo(() => ({
     creatorLabel: user ? getProfileHandle(profileQuery.data, user.email) : '@creator',
     creatorAvatar: profileQuery.data?.avatarUrl ?? null,
@@ -121,11 +128,16 @@ export default function ImmersivePreviewViewerScreen() {
     actionsOpenItemId,
     detailsPageOpenItemId,
     detailsSheetOpenItemId,
+    unlockRemixOpenItemId,
   });
   const activeVideoId = isFocused
     ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
     : null;
   const activeItem = items[activeIndex];
+  const unlockRemixItem = useMemo(
+    () => items.find((item) => item.id === unlockRemixOpenItemId) ?? null,
+    [items, unlockRemixOpenItemId]
+  );
 
   useEffect(() => {
     if (!items.length) return;
@@ -277,6 +289,7 @@ export default function ImmersivePreviewViewerScreen() {
           setDetailsPageOpenItemId(null);
           setDetailsSheetOpenItemId(null);
           setActionsOpenItemId(null);
+          setUnlockRemixOpenItemId(null);
         }}
         onScrollToIndexFailed={({ index }) => {
           requestAnimationFrame(() => {
@@ -298,6 +311,7 @@ export default function ImmersivePreviewViewerScreen() {
             onRecreate={recreateItem}
             onSave={saveItem}
             onShare={shareItem}
+            onUnlockRemix={(nextItem) => setUnlockRemixOpenItemId(nextItem.id)}
             saveLoading={saveMutation.isPending && saveMutation.variables?.postId === item.showcasePostId}
             topInset={topInset}
             width={width}
@@ -336,6 +350,7 @@ export default function ImmersivePreviewViewerScreen() {
           onRecreate={recreateItem}
           onSave={saveItem}
           onShare={shareItem}
+          onUnlockRemix={(item) => setUnlockRemixOpenItemId(item.id)}
           saveLoading={saveMutation.isPending && saveMutation.variables?.postId === activeItem.showcasePostId}
           topInset={topInset}
           visible={detailsSheetOpenItemId === activeItem.id}
@@ -352,10 +367,28 @@ export default function ImmersivePreviewViewerScreen() {
           }}
           onRecreate={() => void recreateItem(activeItem)}
           onShare={() => void shareItem(activeItem)}
+          onUnlockRemix={() => {
+            setActionsOpenItemId(null);
+            setUnlockRemixOpenItemId(activeItem.id);
+          }}
+          onDeleted={() => {
+            setActionsOpenItemId(null);
+            router.replace({
+              pathname: '/(tabs)/profile',
+              params: { tab: 'posts' },
+            } as never);
+          }}
           onSourceRefresh={() => void sourceQuery.refetch()}
           visible={actionsOpenItemId === activeItem.id}
         />
       ) : null}
+      <UnlockRemixPrompt
+        bottomInset={bottomInset}
+        item={unlockRemixItem}
+        onClose={() => setUnlockRemixOpenItemId(null)}
+        onUnlocked={(item) => recreateItem(item)}
+        visible={Boolean(unlockRemixOpenItemId)}
+      />
       {sourceQuery.isFetching && activeItem ? (
         <View style={{ position: 'absolute', top: topInset + 24, right: 20 }}>
           <ActivityIndicator color="rgba(255,255,255,0.72)" />
@@ -392,6 +425,7 @@ function ImmersiveSlide({
   onRecreate,
   onSave,
   onShare,
+  onUnlockRemix,
   saveLoading,
   topInset,
   width,
@@ -407,6 +441,7 @@ function ImmersiveSlide({
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
+  onUnlockRemix: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
   topInset: number;
   width: number;
@@ -452,6 +487,8 @@ function ImmersiveSlide({
 
   const mediaCount = item.mediaItems?.length ?? 0;
   const isTextPost = item.previewKind === 'text';
+  const canRecreate = item.availableActions.includes('recreate');
+  const canUnlockRemix = item.availableActions.includes('unlock-remix');
   const videoPlaybackActive = active && activeVideoId === item.id && !currentPageIsDetails;
 
   const renderOverlays = () => {
@@ -561,12 +598,14 @@ function ImmersiveSlide({
               onPress={openDetailsPage}
             />
           ) : null}
-          <RailActionButton
-            primary
-            icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
-            label="Create"
-            onPress={() => void onRecreate(item)}
-          />
+          {canRecreate || canUnlockRemix ? (
+            <RailActionButton
+              primary
+              icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
+              label={canUnlockRemix ? 'Remix' : 'Create'}
+              onPress={canUnlockRemix ? () => onUnlockRemix(item) : () => void onRecreate(item)}
+            />
+          ) : null}
         </View>
 
         {/* Bottom text descriptions */}
@@ -615,6 +654,7 @@ function ImmersiveSlide({
           onRecreate={onRecreate}
           onSave={onSave}
           onShare={onShare}
+          onUnlockRemix={onUnlockRemix}
           page={pages[0] ?? { type: 'text' }}
           saveLoading={saveLoading}
           topInset={topInset}
@@ -660,6 +700,7 @@ function ImmersiveSlide({
             onRecreate={onRecreate}
             onSave={onSave}
             onShare={onShare}
+            onUnlockRemix={onUnlockRemix}
             page={page}
             saveLoading={saveLoading}
             topInset={topInset}
@@ -684,6 +725,7 @@ function MediaSlidePage({
   onRecreate,
   onSave,
   onShare,
+  onUnlockRemix,
   page,
   saveLoading,
   topInset,
@@ -696,6 +738,7 @@ function MediaSlidePage({
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
+  onUnlockRemix: (item: ImmersivePreviewItem) => void;
   page: ImmersiveSlidePage;
   saveLoading: boolean;
   topInset: number;
@@ -712,6 +755,7 @@ function MediaSlidePage({
           onRecreate={onRecreate}
           onSave={onSave}
           onShare={onShare}
+          onUnlockRemix={onUnlockRemix}
           saveLoading={saveLoading}
           sheet={false}
           topInset={topInset}
@@ -739,6 +783,7 @@ function ViewerDetailsSheet({
   onRecreate,
   onSave,
   onShare,
+  onUnlockRemix,
   saveLoading,
   topInset,
   visible,
@@ -751,6 +796,7 @@ function ViewerDetailsSheet({
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
+  onUnlockRemix: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
   topInset: number;
   visible: boolean;
@@ -824,6 +870,7 @@ function ViewerDetailsSheet({
             onRecreate={onRecreate}
             onSave={onSave}
             onShare={onShare}
+            onUnlockRemix={onUnlockRemix}
             saveLoading={saveLoading}
             sheet
             topInset={0}
@@ -843,6 +890,7 @@ function PostDetailsPage({
   onRecreate,
   onSave,
   onShare,
+  onUnlockRemix,
   saveLoading,
   sheet = false,
   topInset,
@@ -855,6 +903,7 @@ function PostDetailsPage({
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
+  onUnlockRemix: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
   sheet?: boolean;
   topInset: number;
@@ -946,6 +995,8 @@ function PostDetailsPage({
   const unlockError = unlockMutation.error instanceof Error ? unlockMutation.error.message : null;
   const unlockAccent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const unlockPriceLabel = unlock ? bundle?.priceQuote?.formatted ?? unlock.priceLabel : null;
+  const canRecreate = item.availableActions.includes('recreate');
+  const canUnlockRemix = item.availableActions.includes('unlock-remix');
 
   return (
     <View style={{ width, height, backgroundColor: appTheme.colors.app }}>
@@ -989,12 +1040,23 @@ function PostDetailsPage({
         </DetailSection>
 
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-          <DetailActionButton
-            label="Recreate"
-            icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
-            primary
-            onPress={() => void onRecreate(item)}
-          />
+          {canRecreate ? (
+            <DetailActionButton
+              label="Recreate"
+              icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
+              primary
+              onPress={() => void onRecreate(item)}
+            />
+          ) : null}
+          {canUnlockRemix && unlock ? (
+            <DetailActionButton
+              label="Remix"
+              accent={unlockAccent}
+              icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
+              primary
+              onPress={() => onUnlockRemix(item)}
+            />
+          ) : null}
           <DetailActionButton
             disabled={!item.canSave}
             label={item.isSaved ? 'Saved' : 'Save'}
@@ -1273,7 +1335,14 @@ function formatCount(value: number) {
 function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: ShowcaseMediaItem; active: boolean; width: number; height: number }) {
   if (mediaItem.mediaKind === 'video') {
     if (active && mediaItem.url) {
-      return <ActiveVideo url={mediaItem.url} previewUrl={mediaItem.previewUrl} width={width} height={height} />;
+      return <ActiveVideo
+        url={mediaItem.url}
+        previewUrl={mediaItem.previewUrl}
+        previewCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+        previewThumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+        width={width}
+        height={height}
+      />;
     }
 
     if (mediaItem.previewUrl) {
@@ -1283,6 +1352,8 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
             kind="image"
             url={mediaItem.previewUrl}
             backdropUrl={mediaItem.previewUrl}
+            cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+            thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
             recyclingKey={`viewer:${mediaItem.id}`}
             style={{ width, height }}
           />
@@ -1325,6 +1396,8 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
         kind="image"
         url={mediaItem.url}
         backdropUrl={mediaItem.previewUrl}
+        cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+        thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
         transition={120}
         recyclingKey={`viewer:${mediaItem.id}`}
         style={{ width, height }}
@@ -1342,7 +1415,21 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
   );
 }
 
-function ActiveVideo({ url, previewUrl, width, height }: { url: string; previewUrl?: string | null; width: number; height: number }) {
+function ActiveVideo({
+  url,
+  previewUrl,
+  previewCacheKey,
+  previewThumbhash,
+  width,
+  height,
+}: {
+  url: string;
+  previewUrl?: string | null;
+  previewCacheKey?: string;
+  previewThumbhash?: string | null;
+  width: number;
+  height: number;
+}) {
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
@@ -1402,6 +1489,8 @@ function ActiveVideo({ url, previewUrl, width, height }: { url: string; previewU
         backdropUrl={previewUrl}
         posterUrl={previewUrl}
         posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+        cacheKey={previewCacheKey}
+        thumbhash={previewThumbhash}
         onFirstFrameRender={() => {
           setHasFrame(true);
           setHasError(false);

@@ -127,7 +127,7 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
 });
 
 vi.mock('@/lib/server-helpers', () => ({
-  createServiceClient: vi.fn(),
+  createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(),
 }));
 

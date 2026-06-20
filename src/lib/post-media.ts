@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { buildVisualMediaDescriptor, type VisualMediaDescriptor } from '@/lib/media-descriptor';
 import { getPostMediaKind, resolvePostMediaUrl, type PostMediaRow as LegacyPostMediaRow } from '@/lib/posts-server';
 import type { ShowcaseMediaKind, ShowcasePostFormat, ShowcaseItemCategory } from '@/lib/showcase';
 
@@ -14,6 +15,11 @@ export interface PostMediaSummary {
   id: string;
   url: string;
   previewUrl: string | null;
+  previewThumbhash: string | null;
+  previewStatus: 'pending' | 'processing' | 'ready' | 'failed';
+  previewCacheKey: string;
+  gridReady: boolean;
+  preview: VisualMediaDescriptor;
   mediaKind: ShowcaseMediaKind;
   contentType: string | null;
   originalName: string | null;
@@ -26,6 +32,11 @@ export interface PostMediaSummary {
 export interface PostMediaPersistInput {
   storagePath: string | null;
   previewStoragePath?: string | null;
+  previewThumbhash?: string | null;
+  previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';
+  previewAttemptCount?: number;
+  previewError?: string | null;
+  previewGeneratedAt?: string | null;
   externalUrl?: string | null;
   mediaKind: ShowcaseMediaKind;
   contentType: string | null;
@@ -41,6 +52,11 @@ interface PostMediaDbRow {
   post_id: string;
   storage_path: string | null;
   preview_storage_path?: string | null;
+  preview_thumbhash?: string | null;
+  preview_status?: 'pending' | 'processing' | 'ready' | 'failed';
+  preview_attempt_count?: number;
+  preview_error?: string | null;
+  preview_generated_at?: string | null;
   external_url: string | null;
   media_kind: ShowcaseMediaKind;
   content_type: string | null;
@@ -62,7 +78,7 @@ function isMissingPostMediaPreviewColumnError(error: unknown): boolean {
   }
 
   const { code, message = '' } = error as SupabaseSchemaError;
-  return (code === '42703' || code === 'PGRST204') && message.includes('preview_storage_path');
+  return (code === '42703' || code === 'PGRST204') && /preview_(storage_path|thumbhash|status|attempt_count|error|generated_at)/.test(message);
 }
 
 export function isMissingPostMediaSchemaError(error: unknown): boolean {
@@ -124,12 +140,33 @@ async function resolvePostMediaDbRows(
           return null;
         }
 
+        const previewUrl = row.preview_storage_path
+          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.preview_storage_path).data.publicUrl
+          : null;
+        const previewStatus = row.preview_status ?? (previewUrl ? 'ready' : 'pending');
+        const preview = buildVisualMediaDescriptor({
+          id: row.id,
+          kind: row.media_kind,
+          url,
+          storageKey: row.storage_path ?? row.external_url ?? row.id,
+          previewUrl,
+          previewStorageKey: row.preview_storage_path ?? null,
+          previewThumbhash: row.preview_thumbhash ?? null,
+          previewStatus,
+          expiresAt: null,
+          width: row.width,
+          height: row.height,
+          durationSeconds: row.duration_seconds,
+        });
         return {
           id: row.id,
           url,
-          previewUrl: row.preview_storage_path
-            ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.preview_storage_path).data.publicUrl
-            : null,
+          previewUrl,
+          previewThumbhash: row.preview_thumbhash ?? null,
+          previewStatus,
+          previewCacheKey: row.preview_storage_path ?? row.storage_path ?? row.external_url ?? row.id,
+          gridReady: preview.gridReady,
+          preview,
           mediaKind: row.media_kind,
           contentType: row.content_type,
           originalName: row.original_name,
@@ -155,7 +192,7 @@ export async function loadPostMediaItemsMap(
 
   const previewResult = await supabase
     .from('post_media')
-    .select('id, post_id, storage_path, preview_storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select('id, post_id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
   let data = previewResult.data as PostMediaDbRow[] | null;
@@ -210,10 +247,29 @@ export async function buildLegacyPostMediaItems(params: {
     return [];
   }
 
+  const preview = buildVisualMediaDescriptor({
+    id: `${params.postId}:cover`,
+    kind: mediaKind,
+    url,
+    storageKey: params.row.showcase_asset_path ?? params.row.output_url ?? `${params.postId}:cover`,
+    previewUrl: null,
+    previewStorageKey: null,
+    previewThumbhash: null,
+    previewStatus: 'pending',
+    expiresAt: null,
+    width: null,
+    height: null,
+    durationSeconds: null,
+  });
   return [{
     id: `${params.postId}:cover`,
     url,
     previewUrl: null,
+    previewThumbhash: null,
+    previewStatus: 'pending',
+    previewCacheKey: params.row.showcase_asset_path ?? params.row.output_url ?? `${params.postId}:cover`,
+    gridReady: false,
+    preview,
     mediaKind,
     contentType: null,
     originalName: null,
@@ -237,6 +293,11 @@ export async function insertPostMediaItems(params: {
       post_id: params.postId,
       storage_path: item.storagePath,
       preview_storage_path: item.previewStoragePath ?? null,
+      preview_thumbhash: item.previewThumbhash ?? null,
+      preview_status: item.previewStatus ?? (item.previewStoragePath ? 'ready' : 'pending'),
+      preview_attempt_count: item.previewAttemptCount ?? (item.previewStoragePath ? 1 : 0),
+      preview_error: item.previewError ?? null,
+      preview_generated_at: item.previewGeneratedAt ?? (item.previewStoragePath ? new Date().toISOString() : null),
       external_url: item.externalUrl ?? null,
       media_kind: item.mediaKind,
       content_type: item.contentType,
@@ -254,6 +315,11 @@ export async function insertPostMediaItems(params: {
     const legacyRows = rows.map((row) => {
       const legacyRow = { ...row };
       delete (legacyRow as Partial<typeof row>).preview_storage_path;
+      delete (legacyRow as Partial<typeof row>).preview_thumbhash;
+      delete (legacyRow as Partial<typeof row>).preview_status;
+      delete (legacyRow as Partial<typeof row>).preview_attempt_count;
+      delete (legacyRow as Partial<typeof row>).preview_error;
+      delete (legacyRow as Partial<typeof row>).preview_generated_at;
       return legacyRow;
     });
     const legacyResult = await params.supabase.from('post_media').insert(legacyRows);

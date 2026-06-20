@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
+import { signInWithNativeApple } from './apple-auth';
 import { createApiClient, type MagicbookletApiClient } from './api-client';
 import { getProfileCreditsOrNull } from './auth-profile';
 import {
@@ -18,6 +19,8 @@ import {
 } from './supabase';
 import { isInvalidRefreshTokenError } from './supabase-auth-recovery';
 
+export type AuthMode = 'login' | 'signup';
+
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
@@ -28,6 +31,7 @@ interface AuthContextValue {
   api: MagicbookletApiClient;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUpWithPassword: (email: string, password: string) => Promise<void>;
+  signInWithApple: (mode: AuthMode) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateCredits: (credits: number | null) => void;
@@ -182,6 +186,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.replace('/(tabs)/profile');
   };
 
+  const signInWithApple = async (mode: AuthMode) => {
+    if (!isSupabaseConfigured) {
+      throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
+    }
+
+    if (Platform.OS !== 'ios') {
+      throw new Error('Apple sign-in is available on iOS only.');
+    }
+
+    await initializeSupabaseAuth();
+    await signInWithNativeApple(supabase);
+    await refreshProfile();
+    router.replace(mode === 'signup' ? '/(tabs)/profile' : '/(tabs)');
+  };
+
   const signOut = async () => {
     if (isSupabaseConfigured) {
       await unregisterMobilePushNotifications(api);
@@ -204,6 +223,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         api,
         signInWithPassword,
         signUpWithPassword,
+        signInWithApple,
         signOut,
         refreshProfile,
         updateCredits: setCredits,

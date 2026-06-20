@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/server-helpers';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string;
@@ -58,8 +59,9 @@ export async function POST(req: Request) {
             return NextResponse.json({ success: true, alreadyProcessed: true });
         }
 
-        // Call RPC to add credits atomically
-        const { data: rpcSuccess, error: rpcError } = await supabase.rpc('add_credits', {
+        // Credit mutation is service-role-only; ownership was established above.
+        const adminSupabase = createServiceClient();
+        const { data: rpcSuccess, error: rpcError } = await adminSupabase.rpc('add_credits', {
             p_user_id: userId,
             p_credits: txn.credits,
             p_transaction_id: txn.id,

@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { Check, ChevronDown, ImageIcon, Lock, Play, Plus, Sparkles, X } from 'lucide-react-native';
@@ -8,13 +7,14 @@ import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, TextInput
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { StableMediaImage } from '@/components/media-preview';
 import { useAuth } from '@/lib/auth';
 import { formatRelativeTime } from '@/lib/home-view-model';
-import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia } from '@/lib/media';
 import {
   buildPostComposerMediaItemsPayload,
   buildCreatePostFormData,
+  buildOptimisticOwnerPostListItem,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
   applyCreationPromptResource,
@@ -33,6 +33,7 @@ import {
   POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
   hasGenerationReferences,
+  upsertOptimisticOwnerPostResponse,
   type PostComposerCategory,
   type PostComposerDraft,
   type PostComposerMadeWithRow,
@@ -42,7 +43,7 @@ import {
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme, type ToolAccent } from '@/lib/theme';
-import type { GenerationListItem, PostResourceAttachment, PostResourceBundleAccessMode, SourceToolOption } from '@/lib/types';
+import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, SourceToolOption } from '@/lib/types';
 
 const getDefaultResourceDraft = () => ({
   accessMode: 'none' as const,
@@ -103,6 +104,7 @@ export default function NewPostScreen() {
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
+  const [pendingPublishVisibility, setPendingPublishVisibility] = useState<PostComposerDraft['visibility'] | null>(null);
 
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id],
@@ -145,7 +147,7 @@ export default function NewPostScreen() {
       if (found) {
         setDraft((current) => {
           if (current.selectedGenerationId === generationId) return current;
-          const category = found.category === 'video' || found.category === 'motion' || found.category === 'ugc-ad' ? found.category : 'image';
+          const category = found.category === 'video' || found.category === 'motion' || found.category === 'ugc-ad' ? 'video' : 'image';
           return {
             ...current,
             mode: 'creation',
@@ -283,21 +285,36 @@ export default function NewPostScreen() {
 
       return api.createPost(buildCreatePostFormData(effectiveDraft));
     },
-    onSuccess: (response) => {
+    onMutate: (targetVisibility?: PostComposerDraft['visibility']) => {
+      const submittedDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
+      setPendingPublishVisibility(submittedDraft.visibility);
+      return { submittedDraft };
+    },
+    onSuccess: (response, _targetVisibility, context) => {
       setMessage({
         tone: 'success',
         title: isEditMode ? 'Saved' : 'Posted',
         body: isEditMode ? 'Your post has been updated.' : 'Your post is now live in your profile.',
       });
-      void invalidatePostCaches(queryClient, user?.id);
       const targetPostId = response.postId || postId;
+      if (!isEditMode) {
+        const optimisticPost = buildOptimisticOwnerPostListItem(targetPostId, context?.submittedDraft ?? draft);
+        if (optimisticPost) {
+          queryClient.setQueryData<OwnerPostsResponse>(
+            ['profile-owner-posts', user?.id],
+            (current) => upsertOptimisticOwnerPostResponse(current, optimisticPost)
+          );
+        }
+      }
+      void invalidatePostCaches(queryClient, user?.id);
       if (targetPostId) {
-        router.replace(
-          immersiveViewerHref({
-            source: 'profile-posts',
-            initialId: targetPostId,
-          }) as never
-        );
+        router.replace({
+          pathname: '/(tabs)/profile',
+          params: {
+            tab: 'posts',
+            postId: targetPostId,
+          },
+        } as never);
       }
     },
     onError: (error) => {
@@ -306,6 +323,9 @@ export default function NewPostScreen() {
         title: isEditMode ? 'Could not save' : 'Could not publish',
         body: error instanceof Error ? error.message : 'Try again.',
       });
+    },
+    onSettled: () => {
+      setPendingPublishVisibility(null);
     },
   });
 
@@ -610,6 +630,7 @@ export default function NewPostScreen() {
     selectedVisibility: draft.visibility,
     isEditMode,
     isPending: publishMutation.isPending,
+    pendingVisibility: pendingPublishVisibility,
   });
   const showMadeWith = draft.proofMode === 'media';
   const unlockSection = (
@@ -703,9 +724,9 @@ export default function NewPostScreen() {
         <PublishSection
           actions={publishActions}
           canSubmit={canSubmit}
-          isPending={publishMutation.isPending}
           onSubmit={(visibility) => {
             setMessage(null);
+            setPendingPublishVisibility(visibility);
             publishMutation.mutate(visibility);
           }}
         />
@@ -1545,12 +1566,10 @@ function UnlockSection({
 function PublishSection({
   actions,
   canSubmit,
-  isPending,
   onSubmit,
 }: {
   actions: ReturnType<typeof getPostComposerPublishActions>;
   canSubmit: boolean;
-  isPending: boolean;
   onSubmit: (visibility: PostComposerDraft['visibility']) => void;
 }) {
   return (
@@ -1572,7 +1591,7 @@ function PublishSection({
             variant={action.variant}
             label={action.label}
             body={getPublishActionBody(action.visibility)}
-            loading={isPending}
+            loading={action.loading}
             disabled={!canSubmit || action.disabled}
             onPress={() => onSubmit(action.visibility)}
           />
@@ -1591,10 +1610,10 @@ function GeneratedProofCard({
   disabled: boolean;
   onChange: () => void;
 }) {
-  const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
+  const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
   const previewUrl = getGenerationPreviewImageUrl(item);
   const mediaKind = getPublishGenerationMediaKind(item);
-  const visualUrl = mediaKind === 'video' ? previewUrl : mediaUrl;
+  const visualUrl = item.media?.previewUrl ?? (mediaKind === 'video' ? previewUrl : mediaUrl);
 
   return (
     <View
@@ -1637,7 +1656,13 @@ function GeneratedProofCard({
         }}
       >
         {visualUrl ? (
-          <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+          <StableMediaImage
+            url={visualUrl}
+            cacheKey={item.media?.cacheKey ?? item.id}
+            thumbhash={item.media?.thumbhash}
+            contentFit="cover"
+            style={{ position: 'absolute', inset: 0 }}
+          />
         ) : (
           <LinearGradient colors={['#17131d', '#0b0c12', '#1d1020']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.gap }}>
             <Sparkles size={34} color={appTheme.colors.motion} />
@@ -2179,7 +2204,12 @@ function MediaGalleryCard({
     >
       <View style={{ height: 132, backgroundColor: '#080912' }}>
         {item.mediaKind === 'image' ? (
-          <Image source={{ uri: item.previewUrl ?? item.uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+          <StableMediaImage
+            url={item.previewUrl ?? item.uri}
+            cacheKey={`composer:${item.id}`}
+            contentFit="cover"
+            style={{ position: 'absolute', inset: 0 }}
+          />
         ) : (
           <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <Play size={34} color="#fff" fill="#fff" />
@@ -2321,10 +2351,10 @@ function CreationContent({
 }
 
 function CreationCard({ item, selected, onPress, disabled = false }: { item: GenerationListItem; selected: boolean; onPress: () => void; disabled?: boolean }) {
-  const mediaUrl = item.output_urls?.[0] ?? item.output_url ?? null;
+  const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
   const previewUrl = getGenerationPreviewImageUrl(item);
   const mediaKind = getPublishGenerationMediaKind(item);
-  const visualUrl = mediaKind === 'video' ? previewUrl : mediaUrl;
+  const visualUrl = item.media?.previewUrl ?? (mediaKind === 'video' ? previewUrl : mediaUrl);
   return (
     <Pressable
       accessibilityRole="button"
@@ -2343,7 +2373,13 @@ function CreationCard({ item, selected, onPress, disabled = false }: { item: Gen
     >
       <View style={{ height: 148, backgroundColor: '#080912' }}>
         {visualUrl ? (
-          <Image source={{ uri: visualUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+          <StableMediaImage
+            url={visualUrl}
+            cacheKey={item.media?.cacheKey ?? item.id}
+            thumbhash={item.media?.thumbhash}
+            contentFit="cover"
+            style={{ position: 'absolute', inset: 0 }}
+          />
         ) : (
           <LinearGradient colors={mediaKind === 'video' ? ['#111827', '#271233', '#080912'] : ['#121226', '#171123', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             {mediaKind === 'video' ? <Play size={31} color="#fff" fill="#fff" /> : <Sparkles size={31} color="#fff" />}
@@ -2495,7 +2531,7 @@ function validateCurrentDraft(draft: PostComposerDraft, selectedGeneration: Gene
 }
 
 function generationToPostCategory(item: GenerationListItem): PostComposerCategory {
-  if (item.category === 'video' || item.category === 'motion' || item.category === 'ugc-ad') return item.category;
+  if (item.category === 'video' || item.category === 'motion' || item.category === 'ugc-ad') return 'video';
   return 'image';
 }
 

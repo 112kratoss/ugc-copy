@@ -546,7 +546,7 @@ function buildSectionResourceItems(sections: ResourceSectionRow[], startingSortO
 
 function formatGeneratedCategory(value: string | null | undefined): PostMediaCategory {
   if (value === 'video' || value === 'motion' || value === 'ugc-ad') {
-    return value;
+    return 'video';
   }
 
   return 'image';
@@ -2306,7 +2306,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
                             </div>
                           ) : prefilledGeneration?.outputUrl ? (
-                            category === 'video' || category === 'motion' ? (
+                            category === 'video' ? (
                               <video
                                 src={prefilledGeneration.outputUrl}
                                 controls

@@ -3,6 +3,7 @@ import Razorpay from 'razorpay';
 import { createClient } from '@supabase/supabase-js';
 
 import { PRICING_PLAN_MAP } from '@/lib/pricing';
+import { createServiceClient } from '@/lib/server-helpers';
 
 // Initialize Supabase with User Auth Token
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
@@ -16,10 +17,10 @@ export async function POST(req: Request) {
             key_secret: process.env.RAZORPAY_KEY_SECRET as string,
         });
 
-        const { planId, userId } = await req.json();
+        const { planId } = await req.json();
 
-        if (!planId || !userId) {
-            return NextResponse.json({ error: 'Missing planId or userId' }, { status: 400 });
+        if (!planId) {
+            return NextResponse.json({ error: 'Missing planId' }, { status: 400 });
         }
 
         const plan = PRICING_PLAN_MAP[planId as keyof typeof PRICING_PLAN_MAP];
@@ -27,24 +28,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Invalid planId' }, { status: 400 });
         }
 
-        // Amount in subunits (paise). Razorpay needs INR for UPI.
-        const amountInSubunits = plan.priceInr * 100;
-
-        // Create order in Razorpay
-        const shortUserId = userId.substring(0, 8);
-        const orderOptions = {
-            amount: amountInSubunits,
-            currency: 'INR',
-            receipt: `rcpt_${shortUserId}_${Date.now()}`,
-        };
-
-        const razorpayOrder = await razorpay.orders.create(orderOptions);
-
-        if (!razorpayOrder || !razorpayOrder.id) {
-            return NextResponse.json({ error: 'Failed to create Razorpay Order' }, { status: 500 });
-        }
-
-        // Insert transaction record in Supabase
+        // Authenticate before creating an external order or privileged transaction row.
         const supabase = createClient(supabaseUrl, supabaseAnonKey, {
             global: { headers: { Authorization: req.headers.get('Authorization')! } },
         });
@@ -58,7 +42,18 @@ export async function POST(req: Request) {
             );
         }
 
-        const { data: txnData, error: txnError } = await supabase
+        const amountInSubunits = plan.priceInr * 100;
+        const razorpayOrder = await razorpay.orders.create({
+            amount: amountInSubunits,
+            currency: 'INR',
+            receipt: `rcpt_${user.id.substring(0, 8)}_${Date.now()}`,
+        });
+
+        if (!razorpayOrder?.id) {
+            return NextResponse.json({ error: 'Failed to create Razorpay Order' }, { status: 500 });
+        }
+
+        const { data: txnData, error: txnError } = await createServiceClient()
             .from('transactions')
             .insert({
                 user_id: user.id,
@@ -75,7 +70,6 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Failed to record transaction' }, { status: 500 });
         }
 
-        // Return the Razorpay order ID to the client
         return NextResponse.json({
             orderId: razorpayOrder.id,
             amount: amountInSubunits,

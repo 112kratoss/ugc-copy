@@ -129,7 +129,8 @@ export async function POST(request: NextRequest) {
         const normalizedReferenceVideo = normalizeRemixMediaAssetDescriptor(referenceVideo, 'video');
 
         // Deduct Credits
-        const { data: remainingCredits, error: creditError } = await supabase.rpc('deduct_credits', {
+        const adminSupabase = createServiceClient();
+        const { data: remainingCredits, error: creditError } = await adminSupabase.rpc('deduct_credits', {
             p_user_id: user.id,
             p_cost: COST
         });
@@ -152,7 +153,7 @@ export async function POST(request: NextRequest) {
         }
 
         refundState = {
-            supabase,
+            supabase: adminSupabase,
             userId: user.id,
             amount: COST,
             shouldRefund: true,
@@ -213,9 +214,11 @@ export async function POST(request: NextRequest) {
                 prediction_id: taskId,
                 status: 'processing',
                 prompt: (prompt || '').trim(),
-                category: 'motion',
+                category: 'video',
+                creation_mode: 'motion',
                 source_generation_id: validatedSourceGenerationId,
                 workflow_settings: {
+                    creationMode: 'motion',
                     model,
                     characterOrientation,
                     mode,
@@ -395,18 +398,19 @@ export async function GET(request: NextRequest) {
                         } else {
                             // Store the storage path, not a public URL
                             const storagePath = `generated_videos/${fileName}`;
-                            let previewUrl: string | null = null;
+                            let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
+                            let previewError: string | null = null;
                             try {
-                                const preview = await createGenerationOutputPreview({
+                                preview = await createGenerationOutputPreview({
                                     body: videoBlob,
-                                    category: 'motion',
+                                    category: 'video',
                                     contentType: videoBlob.type || 'video/mp4',
                                     storagePath,
                                     supabase,
                                 });
-                                previewUrl = preview?.previewStoragePath ?? null;
                             } catch (posterError) {
                                 console.error('Failed to create motion generation preview poster:', posterError);
+                                previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
                             }
                             // Generate a signed URL for the client
                             const { data: signedData } = await supabase.storage
@@ -419,7 +423,12 @@ export async function GET(request: NextRequest) {
                                 .update({
                                     status: 'succeeded',
                                     output_url: storagePath,
-                                    preview_url: previewUrl,
+                                    preview_url: preview?.previewStoragePath ?? null,
+                                    preview_thumbhash: preview?.previewThumbhash ?? null,
+                                    preview_status: preview ? 'ready' : 'failed',
+                                    preview_attempt_count: 1,
+                                    preview_error: previewError,
+                                    preview_generated_at: preview ? new Date().toISOString() : null,
                                     completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
                                 })
                                 .eq('prediction_id', predictionId);
@@ -456,7 +465,7 @@ export async function GET(request: NextRequest) {
                 .eq('prediction_id', predictionId);
 
             // Refund credits for async failure (idempotent)
-            await supabase.rpc('refund_generation', { p_prediction_id: predictionId });
+            await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
         }
 
         if (localGeneration?.id && localGeneration?.user_id) {

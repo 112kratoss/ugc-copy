@@ -1,5 +1,22 @@
 export type CreatorToolId = 'image' | 'video' | 'motion';
 
+export type MediaPreviewStatus = 'pending' | 'processing' | 'ready' | 'failed';
+
+export interface VisualMediaDescriptor {
+  id: string;
+  kind: 'image' | 'video';
+  url: string;
+  previewUrl: string | null;
+  thumbhash: string | null;
+  cacheKey: string;
+  expiresAt: string | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  status: MediaPreviewStatus;
+  gridReady: boolean;
+}
+
 export interface ProfileResponse {
   id: string;
   username: string | null;
@@ -22,6 +39,8 @@ export interface GenerationListItem {
   output_urls?: string[];
   preview_url?: string | null;
   previewUrl?: string | null;
+  media?: VisualMediaDescriptor | null;
+  creationMode?: 'motion' | null;
   status: string;
   created_at: string;
   completed_at?: string | null;
@@ -187,6 +206,11 @@ export interface ShowcaseMediaItem {
   id: string;
   url: string;
   previewUrl?: string | null;
+  previewThumbhash?: string | null;
+  previewStatus?: MediaPreviewStatus;
+  previewCacheKey?: string;
+  gridReady?: boolean;
+  preview?: VisualMediaDescriptor;
   mediaKind: 'image' | 'video';
   contentType: string | null;
   originalName: string | null;
@@ -205,7 +229,8 @@ export interface ShowcaseFeedItem {
   title: string;
   prompt: string;
   body: string;
-  category: 'image' | 'video' | 'motion' | 'ugc-ad' | 'text';
+  category: 'image' | 'video' | 'text';
+  creationMode?: 'motion' | null;
   postFormat: 'text' | 'media' | 'mixed';
   saveCount: number;
   remixCount: number;

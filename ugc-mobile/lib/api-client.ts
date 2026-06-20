@@ -105,6 +105,11 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
     output_urls: item.output_urls?.map((url) => absolutizeMediaUrl(root, url)).filter((url): url is string => Boolean(url)),
     preview_url: previewUrl,
     previewUrl,
+    media: item.media ? {
+      ...item.media,
+      url: absolutizeMediaUrl(root, item.media.url) ?? item.media.url,
+      previewUrl: absolutizeMediaUrl(root, item.media.previewUrl),
+    } : item.media,
     input_media: item.input_media?.map((media) => ({
       ...media,
       url: absolutizeMediaUrl(root, media.url),
@@ -259,9 +264,9 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request<GenerationStatusResponse>(`/api/generate${buildQuery({ id: predictionId })}`),
     enhancePrompt: (body: PromptEnhancementRequest) =>
       request<PromptEnhancementResponse>('/api/enhance-prompt', { method: 'POST', body: JSON.stringify(body) }),
-    getShowcaseFeed: (params?: Record<string, QueryValue>, options: RequestOptions = { auth: false }) =>
+    getShowcaseFeed: (params?: Record<string, QueryValue>, options: RequestOptions = {}) =>
       request<ShowcaseFeedResponse>(`/api/showcase/feed${buildQuery(params)}`, {}, {
-        cacheTtlMs: CONTENT_CACHE_TTL_MS,
+        ...(options.auth === false ? { cacheTtlMs: CONTENT_CACHE_TTL_MS } : {}),
         ...options,
       }),
     getSavedMedia: (params?: Record<string, QueryValue>) =>
@@ -328,6 +333,14 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request<{ success: boolean; archived: boolean }>(`/api/posts/${postId}/archive`, { method: 'POST' }),
     restorePost: (postId: string) =>
       request<{ success: boolean; restored: boolean }>(`/api/posts/${postId}/restore`, { method: 'POST' }),
+    deletePost: (postId: string, options: { force?: boolean } = {}) =>
+      request<{ success: boolean; deleted: boolean }>(
+        `/api/posts/${postId}`,
+        {
+          method: 'DELETE',
+          ...(options.force ? { body: JSON.stringify({ force: true }) } : {}),
+        }
+      ),
     listMarketplaceResources: (params?: Record<string, QueryValue>) =>
       request<MarketplaceResourceList>(`/api/marketplace/resources${buildQuery(params)}`, {}, {
         auth: false,
