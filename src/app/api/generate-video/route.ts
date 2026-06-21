@@ -39,6 +39,7 @@ import {
 } from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration';
 
 function buildImageUrls(startImageUrl: string | null, endImageUrl: string | null): string[] {
     const imageUrls: string[] = [];
@@ -404,7 +405,7 @@ export async function GET(request: NextRequest) {
 
         const { data: localGeneration } = await supabase
             .from('generations')
-            .select('*')
+            .select(VIDEO_STATUS_GENERATION_SELECT)
             .eq('prediction_id', predictionId)
             .single();
 

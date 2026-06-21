@@ -31,6 +31,7 @@ function createSupabaseMock(
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
+  const selects: string[] = [];
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
     if (fn === 'deduct_credits') {
       return { data: 1576, error: null };
@@ -74,6 +75,7 @@ function createSupabaseMock(
   return {
     inserts,
     updates,
+    selects,
     client: {
       auth: {
         getUser: vi.fn(async () => ({
@@ -90,7 +92,8 @@ function createSupabaseMock(
         }
 
         return {
-          select() {
+          select(columns = '') {
+            selects.push(columns);
             return {
               eq(column: string, value: unknown) {
                 return {
@@ -611,6 +614,8 @@ describe('/api/generate-video route', () => {
       phaseLabel: 'Queued at provider',
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
     });
+    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration');
+    expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

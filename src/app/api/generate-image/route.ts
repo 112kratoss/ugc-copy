@@ -47,6 +47,7 @@ import {
 } from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+const IMAGE_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings';
 
 function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' ? value as Record<string, unknown> : null;
@@ -257,7 +258,7 @@ export async function GET(request: NextRequest) {
         // Check local DB cache first
         const { data: localGeneration } = await supabase
             .from('generations')
-            .select('*')
+            .select(IMAGE_STATUS_GENERATION_SELECT)
             .eq('prediction_id', predictionId)
             .single();
 
