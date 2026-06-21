@@ -5,10 +5,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+let cachedServiceClient: SupabaseClient | null = null;
 
 // ─── Supabase Client Factories ────────────────────────────────────────────────
 
@@ -29,10 +30,21 @@ export function createUserClient(request: NextRequest): SupabaseClient {
 
 /** Creates a privileged Supabase client for server-only operations (webhooks, service tasks). */
 export function createServiceClient(): SupabaseClient {
-    return createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    if (!cachedServiceClient) {
+        cachedServiceClient = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!,
+            {
+                auth: {
+                    autoRefreshToken: false,
+                    detectSessionInUrl: false,
+                    persistSession: false,
+                },
+            }
+        );
+    }
+
+    return cachedServiceClient;
 }
 
 export { getStoredMediaLocation, isMediaBucket, type MediaBucket } from '@/lib/media-urls';
