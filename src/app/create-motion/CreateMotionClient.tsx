@@ -35,6 +35,7 @@ import {
     setPersistedFile,
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
+import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
@@ -114,6 +115,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
+    const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const characterImageInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
 
@@ -551,6 +553,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     };
 
     const handleGenerate = async () => {
+        if (activeGenerationRequestKeyRef.current) return;
         if (!characterImageFile && !characterImage) { alert('Please upload a character image'); return; }
         if (!referenceVideoFile && !referenceVideo) { alert('Please upload a reference video'); return; }
         const effectiveDuration = Math.ceil(duration);
@@ -558,6 +561,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (quotePending) { setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.'); return; }
         if (insufficientCredits) { setError(`Insufficient credits. This costs ${estimatedCost} credits.`); return; }
 
+        const idempotencyKey = createGenerationIdempotencyKey('motion');
+        activeGenerationRequestKeyRef.current = idempotencyKey;
         setIsGenerating(true); setError(null); setOutputVideo(null);
         setLatestGenerationId(null); setLatestIsPublic(false); setPublishedMeta(null);
         const startedAtMs = Date.now();
@@ -620,7 +625,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
             const response = await fetch('/api/generate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session.access_token}`,
+                    'Idempotency-Key': idempotencyKey,
+                },
                 body: JSON.stringify({
                     model: selectedModel,
                     characterImageUrl: imageUrl,
@@ -665,6 +674,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 setGenerationTiming(null);
             }
         } finally {
+            activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
     };

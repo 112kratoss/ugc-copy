@@ -51,6 +51,7 @@ import {
     type PersistedImageElementDraft,
 } from '@/lib/image-elements';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
+import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
@@ -185,6 +186,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
     const hasRestoredPersistedMedia = useRef(false);
+    const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
@@ -870,6 +872,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, []);
 
     const handleGenerate = async () => {
+        if (activeGenerationRequestKeyRef.current) return;
         if (!prompt.trim()) { setError('Please enter a prompt'); return; }
         if (quotePending) { setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.'); return; }
         if (staleElementMentions.length > 0) {
@@ -878,6 +881,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         }
         if (userCredits !== null && userCredits < currentCost) { setError(`Insufficient credits. Image generation costs ${currentCost} credits.`); return; }
 
+        const idempotencyKey = createGenerationIdempotencyKey('image');
+        activeGenerationRequestKeyRef.current = idempotencyKey;
         setIsGenerating(true);
         setError(null);
         setOutputImage(null);
@@ -962,7 +967,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session.access_token}`
+                    'Authorization': `Bearer ${session.access_token}`,
+                    'Idempotency-Key': idempotencyKey
                 },
                 body: JSON.stringify({
                     model: selectedModel,
@@ -1007,6 +1013,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 setGenerationTiming(null);
             }
         } finally {
+            activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
     };

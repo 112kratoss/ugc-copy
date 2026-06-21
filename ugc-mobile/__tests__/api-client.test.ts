@@ -121,7 +121,7 @@ describe('mobile api client caching', () => {
   });
 
   it('posts FormData without forcing a JSON content type', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    const fetcher = vi.fn(async () => jsonResponse({
       success: true,
       postId: 'post-1',
       visibility: 'public',
@@ -238,6 +238,34 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  it('sends idempotency keys on generation starts', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      predictionId: 'prediction-1',
+      generationId: 'gen-1',
+      status: 'processing',
+      remainingCredits: 92,
+      cost: 8,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.startImageGeneration({
+      model: 'nano-banana-2',
+      prompt: 'A product hero shot.',
+      catalogRevision: 'catalog-1',
+    }, 'image:stable-request-1');
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generate-image');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect((init.headers as Headers).get('Idempotency-Key')).toBe('image:stable-request-1');
+  });
+
   it('saves showcase posts with an idempotent target state and source surface', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,
@@ -276,7 +304,7 @@ describe('mobile api client caching', () => {
   });
 
   it('uploads post resource files as FormData without forcing a JSON content type', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    const fetcher = vi.fn(async () => jsonResponse({
       success: true,
       attachment: {
         label: 'workflow.json',

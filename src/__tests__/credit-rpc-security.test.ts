@@ -57,8 +57,8 @@ describe('credit mutation security boundary', () => {
 
     expect(razorpayOrder).toMatch(/createServiceClient\(\)\s*\.from\('transactions'\)/);
     expect(razorpayVerify).toContain("adminSupabase.rpc('add_credits'");
-    expect(generate).toContain("adminSupabase.rpc('deduct_credits'");
-    expect(generate).toContain('supabase: adminSupabase');
+    expect(generate).toContain('startMotionGeneration');
+    expect(generate).toContain('creditSupabase: adminSupabase');
     expect(generate).toContain("adminSupabase.rpc('refund_generation'");
     expect(generateImage).toContain("adminSupabase.rpc('refund_generation'");
     expect(generateVideo).toContain("adminSupabase.rpc('refund_generation'");

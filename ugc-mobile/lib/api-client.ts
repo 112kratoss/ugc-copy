@@ -135,6 +135,25 @@ function buildQuery(params?: Record<string, QueryValue>) {
   return text ? `?${text}` : '';
 }
 
+function createGenerationIdempotencyKey(prefix: string): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return `${prefix}:${randomUUID()}`;
+  }
+
+  return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+}
+
+function generationStartInit(body: unknown, prefix: string, idempotencyKey?: string): RequestInit {
+  return {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': idempotencyKey ?? createGenerationIdempotencyKey(prefix),
+    },
+    body: JSON.stringify(body),
+  };
+}
+
 function isNotFoundError(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 404;
 }
@@ -256,16 +275,16 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request(`/api/generations/${generationId}/archive`, { method: 'POST' }),
     restoreGeneration: (generationId: string) =>
       request(`/api/generations/${generationId}/restore`, { method: 'POST' }),
-    startImageGeneration: (body: ImageGenerationRequest) =>
-      request<GenerationStartResponse>('/api/generate-image', { method: 'POST', body: JSON.stringify(body) }),
+    startImageGeneration: (body: ImageGenerationRequest, idempotencyKey?: string) =>
+      request<GenerationStartResponse>('/api/generate-image', generationStartInit(body, 'image', idempotencyKey)),
     getImageGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate-image${buildQuery({ id: predictionId })}`),
-    startVideoGeneration: (body: VideoGenerationRequest) =>
-      request<GenerationStartResponse>('/api/generate-video', { method: 'POST', body: JSON.stringify(body) }),
+    startVideoGeneration: (body: VideoGenerationRequest, idempotencyKey?: string) =>
+      request<GenerationStartResponse>('/api/generate-video', generationStartInit(body, 'video', idempotencyKey)),
     getVideoGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate-video${buildQuery({ id: predictionId })}`),
-    startMotionGeneration: (body: MotionGenerationRequest) =>
-      request<GenerationStartResponse>('/api/generate', { method: 'POST', body: JSON.stringify(body) }),
+    startMotionGeneration: (body: MotionGenerationRequest, idempotencyKey?: string) =>
+      request<GenerationStartResponse>('/api/generate', generationStartInit(body, 'motion', idempotencyKey)),
     getMotionGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate${buildQuery({ id: predictionId })}`),
     enhancePrompt: (body: PromptEnhancementRequest) =>

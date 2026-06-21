@@ -29,6 +29,12 @@ import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-s
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
+import {
+    GenerationStartIdempotencyError,
+    getGenerationStartIdempotencyKey,
+    getGenerationStartLockOwner,
+    withGenerationStartIdempotency,
+} from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -180,6 +186,7 @@ async function persistVideoOutput(
 
 export async function POST(request: NextRequest) {
     try {
+        const body = await request.json() as Record<string, unknown>;
         const {
             model = 'kling-3.0-video',
             isMultiShot,
@@ -204,7 +211,11 @@ export async function POST(request: NextRequest) {
             seedanceAssets = null,
             sourceGenerationId = null,
             catalogRevision = null,
-        } = await request.json();
+        } = body;
+        const idempotencyKey = getGenerationStartIdempotencyKey(request, body);
+        const selectedModel = typeof model === 'string' ? model : 'kling-3.0-video';
+        const selectedSourceGenerationId = typeof sourceGenerationId === 'string' ? sourceGenerationId : null;
+        const selectedCatalogRevision = typeof catalogRevision === 'string' ? catalogRevision : null;
 
         if (!KIE_API_KEY) {
             console.error('KIE_AI_API_KEY not found in environment variables');
@@ -241,7 +252,7 @@ export async function POST(request: NextRequest) {
         try {
             quote = quoteGenerationModel({
                 kind: 'video',
-                modelId: model,
+                modelId: selectedModel,
                 settings: {
                     mode,
                     aspectRatio,
@@ -262,7 +273,7 @@ export async function POST(request: NextRequest) {
                     ),
                     audios: Array.isArray(referenceAudioUrls) ? referenceAudioUrls.length : 0,
                 },
-                catalogRevision,
+                catalogRevision: selectedCatalogRevision,
             });
         } catch (error) {
             if (error instanceof CatalogError) {
@@ -278,7 +289,7 @@ export async function POST(request: NextRequest) {
 
         let validatedSourceGenerationId: string | null = null;
         try {
-            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
+            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, selectedSourceGenerationId);
         } catch (error) {
             if (error instanceof SourceGenerationValidationError) {
                 return NextResponse.json({ error: error.message }, { status: error.status });
@@ -293,33 +304,43 @@ export async function POST(request: NextRequest) {
             key: user.id,
         });
 
-        const result = await startVideoGeneration({
-            supabase,
-            creditSupabase: adminSupabase,
+        const result = await withGenerationStartIdempotency({
+            client: adminSupabase,
             userId: user.id,
-            model: model as VideoModelId,
-            prompt: typeof prompt === 'string' ? prompt : '',
-            isMultiShot: Boolean(isMultiShot),
-            multiPrompts,
-            elements,
-            elementImageUrls,
-            referenceVideoUrls,
-            referenceAudioUrls,
-            klingVideoElements,
-            startImageUrl,
-            endImageUrl,
-            imageUrls: buildImageUrls(startImageUrl, endImageUrl),
-            mode: String(normalizedSettings.mode),
-            aspectRatio: String(normalizedSettings.aspectRatio),
-            sound: Boolean(normalizedSettings.sound),
-            duration: Number(normalizedSettings.duration),
-            resolution: String(normalizedSettings.resolution),
-            fixedLens: Boolean(normalizedSettings.fixedLens),
-            referenceMode,
-            startFrame,
-            endFrame,
-            seedanceAssets,
-            sourceGenerationId: validatedSourceGenerationId,
+            idempotencyKey,
+            owner: getGenerationStartLockOwner(request),
+            start: (clientRequestKeyHash) => startVideoGeneration({
+                supabase,
+                creditSupabase: adminSupabase,
+                userId: user.id,
+                clientRequestKeyHash,
+                model: selectedModel as VideoModelId,
+                prompt: typeof prompt === 'string' ? prompt : '',
+                isMultiShot: Boolean(isMultiShot),
+                multiPrompts: Array.isArray(multiPrompts) ? multiPrompts : undefined,
+                elements: Array.isArray(elements) ? elements : [],
+                elementImageUrls: Array.isArray(elementImageUrls) ? elementImageUrls : [],
+                referenceVideoUrls: Array.isArray(referenceVideoUrls) ? referenceVideoUrls : [],
+                referenceAudioUrls: Array.isArray(referenceAudioUrls) ? referenceAudioUrls : [],
+                klingVideoElements: Array.isArray(klingVideoElements) ? klingVideoElements : [],
+                startImageUrl: typeof startImageUrl === 'string' ? startImageUrl : null,
+                endImageUrl: typeof endImageUrl === 'string' ? endImageUrl : null,
+                imageUrls: buildImageUrls(
+                    typeof startImageUrl === 'string' ? startImageUrl : null,
+                    typeof endImageUrl === 'string' ? endImageUrl : null
+                ),
+                mode: String(normalizedSettings.mode),
+                aspectRatio: String(normalizedSettings.aspectRatio),
+                sound: Boolean(normalizedSettings.sound),
+                duration: Number(normalizedSettings.duration),
+                resolution: String(normalizedSettings.resolution),
+                fixedLens: Boolean(normalizedSettings.fixedLens),
+                referenceMode: referenceMode === 'elements' ? 'elements' : 'frames',
+                startFrame: startFrame && typeof startFrame === 'object' ? startFrame as never : null,
+                endFrame: endFrame && typeof endFrame === 'object' ? endFrame as never : null,
+                seedanceAssets: seedanceAssets && typeof seedanceAssets === 'object' ? seedanceAssets as never : null,
+                sourceGenerationId: validatedSourceGenerationId,
+            }),
         });
 
         return NextResponse.json({
@@ -329,8 +350,16 @@ export async function POST(request: NextRequest) {
             status: 'processing',
             remainingCredits: result.remainingCredits,
             cost: result.cost,
+            ...(result.idempotentReplay ? { idempotentReplay: true } : {}),
         });
     } catch (error: unknown) {
+        if (error instanceof GenerationStartIdempotencyError) {
+            return NextResponse.json(
+                { code: error.code, error: error.message },
+                { status: error.status }
+            );
+        }
+
         if (error instanceof BackendRateLimitError) {
             return createBackendRateLimitResponse(error);
         }

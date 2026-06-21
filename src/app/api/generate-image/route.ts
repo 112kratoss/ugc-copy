@@ -37,6 +37,12 @@ import type {
     ImageResolution,
 } from '@/lib/models';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
+import {
+    GenerationStartIdempotencyError,
+    getGenerationStartIdempotencyKey,
+    getGenerationStartLockOwner,
+    withGenerationStartIdempotency,
+} from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -68,6 +74,7 @@ async function resolveOutputPaths(adminSupabase: ReturnType<typeof createService
 
 export async function POST(request: NextRequest) {
     try {
+        const body = await request.json() as Record<string, unknown>;
         const {
             model = 'nano-banana-2',
             prompt,
@@ -80,7 +87,11 @@ export async function POST(request: NextRequest) {
             googleSearch = false,
             sourceGenerationId = null,
             catalogRevision = null,
-        } = await request.json();
+        } = body;
+        const idempotencyKey = getGenerationStartIdempotencyKey(request, body);
+        const selectedModel = typeof model === 'string' ? model : 'nano-banana-2';
+        const selectedSourceGenerationId = typeof sourceGenerationId === 'string' ? sourceGenerationId : null;
+        const selectedCatalogRevision = typeof catalogRevision === 'string' ? catalogRevision : null;
 
         if (!KIE_API_KEY) {
             console.error('KIE_AI_API_KEY not found in environment variables');
@@ -111,7 +122,7 @@ export async function POST(request: NextRequest) {
         try {
             quote = quoteGenerationModel({
                 kind: 'image',
-                modelId: model,
+                modelId: selectedModel,
                 settings: {
                     aspectRatio,
                     resolution,
@@ -127,7 +138,7 @@ export async function POST(request: NextRequest) {
                     videos: 0,
                     audios: 0,
                 },
-                catalogRevision,
+                catalogRevision: selectedCatalogRevision,
             });
         } catch (error) {
             if (error instanceof CatalogError) {
@@ -143,7 +154,7 @@ export async function POST(request: NextRequest) {
 
         let validatedSourceGenerationId: string | null = null;
         try {
-            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
+            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, selectedSourceGenerationId);
         } catch (error) {
             if (error instanceof SourceGenerationValidationError) {
                 return NextResponse.json({ error: error.message }, { status: error.status });
@@ -158,20 +169,27 @@ export async function POST(request: NextRequest) {
             key: user.id,
         });
 
-        const result = await startImageGeneration({
-            supabase,
-            creditSupabase: adminSupabase,
+        const result = await withGenerationStartIdempotency({
+            client: adminSupabase,
             userId: user.id,
-            model: model as ImageModelId,
-            prompt,
-            imageUrls,
-            elements,
-            aspectRatio: String(normalizedSettings.aspectRatio),
-            resolution: normalizedSettings.resolution as ImageResolution,
-            qualityMode: normalizedSettings.qualityMode as ImageQualityMode | undefined,
-            outputFormat: normalizedSettings.outputFormat as ImageOutputFormat,
-            googleSearch: Boolean(normalizedSettings.googleSearch),
-            sourceGenerationId: validatedSourceGenerationId,
+            idempotencyKey,
+            owner: getGenerationStartLockOwner(request),
+            start: (clientRequestKeyHash) => startImageGeneration({
+                supabase,
+                creditSupabase: adminSupabase,
+                userId: user.id,
+                clientRequestKeyHash,
+                model: selectedModel as ImageModelId,
+                prompt: typeof prompt === 'string' ? prompt : '',
+                imageUrls: Array.isArray(imageUrls) ? imageUrls : [],
+                elements: Array.isArray(elements) ? elements : [],
+                aspectRatio: String(normalizedSettings.aspectRatio),
+                resolution: normalizedSettings.resolution as ImageResolution,
+                qualityMode: normalizedSettings.qualityMode as ImageQualityMode | undefined,
+                outputFormat: normalizedSettings.outputFormat as ImageOutputFormat,
+                googleSearch: Boolean(normalizedSettings.googleSearch),
+                sourceGenerationId: validatedSourceGenerationId,
+            }),
         });
 
         return NextResponse.json({
@@ -181,9 +199,17 @@ export async function POST(request: NextRequest) {
             status: 'processing',
             remainingCredits: result.remainingCredits,
             cost: result.cost,
+            ...(result.idempotentReplay ? { idempotentReplay: true } : {}),
         });
 
     } catch (error: unknown) {
+        if (error instanceof GenerationStartIdempotencyError) {
+            return NextResponse.json(
+                { code: error.code, error: error.message },
+                { status: error.status }
+            );
+        }
+
         if (error instanceof BackendRateLimitError) {
             return createBackendRateLimitResponse(error);
         }

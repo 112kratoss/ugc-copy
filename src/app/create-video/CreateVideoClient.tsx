@@ -48,6 +48,7 @@ import {
     setPersistedValue,
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
+import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     buildElementHandle,
     createElementHandleReplacementMap,
@@ -447,6 +448,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
+    const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const startImageInputRef = useRef<HTMLInputElement>(null);
     const endImageInputRef = useRef<HTMLInputElement>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
@@ -2243,6 +2245,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, []);
 
     const handleGenerate = async () => {
+        if (activeGenerationRequestKeyRef.current) return;
         if (isMultiShot) {
             if (multiPrompts.some((shot) => !shot.prompt.trim())) {
                 setError('All shots must have a prompt');
@@ -2338,6 +2341,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
+        const idempotencyKey = createGenerationIdempotencyKey('video');
+        activeGenerationRequestKeyRef.current = idempotencyKey;
         setIsGenerating(true);
         setError(null);
         setOutputVideo(null);
@@ -2586,6 +2591,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 headers: {
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${session.access_token}`,
+                    'Idempotency-Key': idempotencyKey,
                 },
                 body: JSON.stringify(payload),
             });
@@ -2616,6 +2622,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 setGenerationTiming(null);
             }
         } finally {
+            activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
     };

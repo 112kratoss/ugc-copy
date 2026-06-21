@@ -13,6 +13,7 @@ type GenerationRow = {
   prompt?: string;
   cost?: number;
   duration?: number;
+  client_request_key_hash?: string | null;
   created_at?: string;
   completed_at?: string | null;
 };
@@ -65,6 +66,9 @@ function createSupabaseMock(initialRows: GenerationRow[] = []) {
             prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
             cost: typeof record.cost === 'number' ? record.cost : undefined,
             duration: typeof record.duration === 'number' ? record.duration : undefined,
+            client_request_key_hash: typeof record.client_request_key_hash === 'string'
+              ? record.client_request_key_hash
+              : null,
             created_at: typeof record.created_at === 'string' ? record.created_at : new Date().toISOString(),
             completed_at: typeof record.completed_at === 'string' ? record.completed_at : null,
           };
@@ -386,6 +390,27 @@ describe('generation services', () => {
       model: 'gpt-image-2',
       providerModel: 'gpt-image-2-text-to-image',
     });
+  });
+
+  it('stores generation start idempotency hashes on created image rows', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-idempotent-1' } }),
+    } as Response);
+
+    const { supabase, generations } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'a'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2',
+    });
+
+    expect(generations[0].client_request_key_hash).toBe('a'.repeat(64));
   });
 
   it('uses GPT Image 2 image-to-image provider payload when references are attached', async () => {
@@ -741,7 +766,7 @@ describe('generation services', () => {
       duration: 6,
       characterOrientation: 'image',
       mode: '1080p',
-    })).rejects.toThrow('WEBHOOK_SECRET is not configured');
+    })).rejects.toThrow('Server configuration error: webhook secret missing');
 
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();

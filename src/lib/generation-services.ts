@@ -60,15 +60,9 @@ import {
 } from '@/lib/generation-media-preview';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
+import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
-
-interface StartGenerationResult {
-  predictionId: string;
-  remainingCredits: number;
-  cost: number;
-  generationId?: string;
-}
 
 interface DialogueTurnInput {
   text: string;
@@ -817,6 +811,7 @@ export async function startImageGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   userId: string;
+  clientRequestKeyHash?: string | null;
   prompt: string;
   model: ImageModelId;
   references?: ReferenceImageInput[];
@@ -828,12 +823,13 @@ export async function startImageGeneration(params: {
   outputFormat?: ImageOutputFormat;
   googleSearch?: boolean;
   sourceGenerationId?: string | null;
-}): Promise<StartGenerationResult> {
+}): Promise<GenerationStartResult> {
   requireApiKey();
   const {
     supabase,
     creditSupabase,
     userId,
+    clientRequestKeyHash = null,
     prompt,
     model,
     references,
@@ -979,6 +975,7 @@ export async function startImageGeneration(params: {
         model,
         cost,
         prediction_id: predictionId,
+        client_request_key_hash: clientRequestKeyHash,
         status: 'processing',
         prompt: trimmedPrompt,
         category: 'image',
@@ -1029,6 +1026,7 @@ export async function startVideoGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   userId: string;
+  clientRequestKeyHash?: string | null;
   prompt: string;
   model: VideoModelId;
   references?: ReferenceImageInput[];
@@ -1053,12 +1051,13 @@ export async function startVideoGeneration(params: {
   endFrame?: RemixMediaAssetDescriptor | null;
   seedanceAssets?: SeedanceAssetCollections | null;
   sourceGenerationId?: string | null;
-}): Promise<StartGenerationResult> {
+}): Promise<GenerationStartResult> {
   requireApiKey();
   const {
     supabase,
     creditSupabase,
     userId,
+    clientRequestKeyHash = null,
     prompt,
     model,
     references,
@@ -1470,6 +1469,7 @@ export async function startVideoGeneration(params: {
         cost,
         duration: totalDuration,
         prediction_id: predictionId,
+        client_request_key_hash: clientRequestKeyHash,
         status: 'processing',
         prompt: isMultiShot ? normalizedMultiPrompts[0]?.prompt || '' : trimmedPrompt,
         category: 'video',
@@ -1633,6 +1633,7 @@ export async function startMotionGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   userId: string;
+  clientRequestKeyHash?: string | null;
   prompt: string;
   model: MotionModelId;
   referenceVideoUrl: string;
@@ -1640,12 +1641,16 @@ export async function startMotionGeneration(params: {
   duration: number;
   characterOrientation?: 'video' | 'image';
   mode?: '720p' | '1080p';
-}): Promise<StartGenerationResult> {
+  sourceGenerationId?: string | null;
+  characterImage?: RemixMediaAssetDescriptor | null;
+  referenceVideo?: RemixMediaAssetDescriptor | null;
+}): Promise<GenerationStartResult> {
   requireApiKey();
   const {
     supabase,
     creditSupabase,
     userId,
+    clientRequestKeyHash = null,
     prompt,
     model,
     referenceVideoUrl,
@@ -1653,6 +1658,9 @@ export async function startMotionGeneration(params: {
     duration,
     characterOrientation = 'video',
     mode = '720p',
+    sourceGenerationId = null,
+    characterImage = null,
+    referenceVideo = null,
   } = params;
 
   if (!referenceVideoUrl || !characterImageUrl) {
@@ -1665,7 +1673,13 @@ export async function startMotionGeneration(params: {
   }
 
   const cost = getMotionCost(model, mode, duration);
-  const callbackUrl = buildKieWebhookCallbackUrl();
+  let callbackUrl: string;
+  try {
+    callbackUrl = buildKieWebhookCallbackUrl();
+  } catch (error) {
+    console.error('Kie webhook callback is not configured:', error);
+    throw new GenerationServiceError('Server configuration error: webhook secret missing', 500);
+  }
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   try {
@@ -1689,16 +1703,20 @@ export async function startMotionGeneration(params: {
         duration,
         cost,
         prediction_id: predictionId,
+        client_request_key_hash: clientRequestKeyHash,
         status: 'processing',
         prompt: prompt.trim(),
         category: 'video',
         creation_mode: 'motion',
+        source_generation_id: sourceGenerationId,
         workflow_settings: {
           creationMode: 'motion',
           model,
           characterOrientation,
           mode,
           duration,
+          ...(characterImage ? { characterImage } : {}),
+          ...(referenceVideo ? { referenceVideo } : {}),
         },
       })
       .select('id')
@@ -1712,15 +1730,19 @@ export async function startMotionGeneration(params: {
         {
           mediaType: 'image',
           role: 'character_image',
-          label: 'Character image',
+          label: characterImage?.label ?? 'Character image',
           sourceUrl: characterImageUrl,
+          sourceStoragePath: characterImage?.storagePath ?? null,
+          sourceGenerationId: characterImage?.sourceGenerationId ?? null,
           sortOrder: 0,
         },
         {
           mediaType: 'video',
           role: 'motion_reference_video',
-          label: 'Motion reference video',
+          label: referenceVideo?.label ?? 'Motion reference video',
           sourceUrl: referenceVideoUrl,
+          sourceStoragePath: referenceVideo?.storagePath ?? null,
+          sourceGenerationId: referenceVideo?.sourceGenerationId ?? null,
           sortOrder: 1,
         },
       ],
@@ -1752,7 +1774,7 @@ export async function startVoiceoverGeneration(params: {
   speed?: number;
   timestamps?: boolean;
   dialogueTurns?: DialogueTurnInput[];
-}): Promise<StartGenerationResult> {
+}): Promise<GenerationStartResult> {
   requireApiKey();
   const {
     supabase,
@@ -1870,7 +1892,7 @@ export async function startSoundEffectGeneration(params: {
   loop?: boolean;
   promptInfluence?: number;
   outputFormat?: 'mp3' | 'wav';
-}): Promise<StartGenerationResult> {
+}): Promise<GenerationStartResult> {
   requireApiKey();
   const {
     supabase,

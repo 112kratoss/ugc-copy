@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
     estimateGenerationDurationMs,
@@ -24,34 +24,23 @@ import {
 } from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
-import { persistGenerationInputMedia } from '@/lib/generation-input-media';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
-import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
+import { GenerationServiceError, startMotionGeneration } from '@/lib/generation-services';
+import {
+    GenerationStartIdempotencyError,
+    getGenerationStartIdempotencyKey,
+    getGenerationStartLockOwner,
+    withGenerationStartIdempotency,
+} from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
 export async function POST(request: NextRequest) {
-    let refundState: {
-        supabase: SupabaseClient;
-        userId: string;
-        amount: number;
-        shouldRefund: boolean;
-    } | null = null;
-
-    const refundIfNeeded = async () => {
-        if (!refundState?.shouldRefund) return;
-
-        await refundState.supabase.rpc('refund_credits', {
-            p_user_id: refundState.userId,
-            p_amount: refundState.amount,
-        });
-        refundState.shouldRefund = false;
-    };
-
     try {
+        const body = await request.json() as Record<string, unknown>;
         const {
             model = 'kling-2.6',
             referenceVideoUrl,
@@ -64,7 +53,18 @@ export async function POST(request: NextRequest) {
             referenceVideo = null,
             sourceGenerationId = null,
             catalogRevision = null,
-        } = await request.json();
+        } = body;
+        const idempotencyKey = getGenerationStartIdempotencyKey(request, body);
+        const selectedModel = typeof model === 'string' ? model : 'kling-2.6';
+        const selectedSourceGenerationId = typeof sourceGenerationId === 'string' ? sourceGenerationId : null;
+        const selectedCatalogRevision = typeof catalogRevision === 'string' ? catalogRevision : null;
+        const numericRequestedDuration = typeof requestedDuration === 'number'
+            ? requestedDuration
+            : Number(requestedDuration);
+        const safeRequestedDuration = Number.isFinite(numericRequestedDuration)
+            ? numericRequestedDuration
+            : 10;
+        const promptText = typeof prompt === 'string' ? prompt : '';
 
         if (!referenceVideoUrl || !characterImageUrl) {
             return NextResponse.json(
@@ -73,16 +73,16 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const modelConfig = MOTION_MODELS[model as MotionModelId];
+        const modelConfig = MOTION_MODELS[selectedModel as MotionModelId];
         if (!modelConfig) {
             return NextResponse.json(
-                { error: `Unsupported model: ${model}` },
+                { error: `Unsupported model: ${selectedModel}` },
                 { status: 400 }
             );
         }
 
         // Validate Duration
-        if (requestedDuration <= 0 || requestedDuration > modelConfig.maxDuration) {
+        if (safeRequestedDuration <= 0 || safeRequestedDuration > modelConfig.maxDuration) {
             return NextResponse.json(
                 { error: `Invalid duration. Must be between 1 and ${modelConfig.maxDuration} seconds.` },
                 { status: 400 }
@@ -119,14 +119,14 @@ export async function POST(request: NextRequest) {
         try {
             quote = quoteGenerationModel({
                 kind: 'motion',
-                modelId: model,
+                modelId: selectedModel,
                 settings: {
                     resolution: requestedMode,
                     characterOrientation: requestedCharacterOrientation,
-                    duration: requestedDuration,
+                    duration: safeRequestedDuration,
                 },
                 inputCounts: { images: 1, videos: 1, audios: 0 },
-                catalogRevision,
+                catalogRevision: selectedCatalogRevision,
             });
         } catch (error) {
             if (error instanceof CatalogError) {
@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
 
         let validatedSourceGenerationId: string | null = null;
         try {
-            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
+            validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, selectedSourceGenerationId);
         } catch (error) {
             if (error instanceof SourceGenerationValidationError) {
                 return NextResponse.json({ error: error.message }, { status: error.status });
@@ -153,20 +153,8 @@ export async function POST(request: NextRequest) {
             throw error;
         }
 
-        const COST = quote.costCredits;
         const normalizedCharacterImage = normalizeRemixMediaAssetDescriptor(characterImage, 'image');
         const normalizedReferenceVideo = normalizeRemixMediaAssetDescriptor(referenceVideo, 'video');
-
-        let callBackUrl: string;
-        try {
-            callBackUrl = buildKieWebhookCallbackUrl();
-        } catch (error) {
-            console.error('Kie webhook callback is not configured:', error);
-            return NextResponse.json(
-                { error: 'Server configuration error: webhook secret missing' },
-                { status: 500 }
-            );
-        }
 
         const adminSupabase = createServiceClient();
         await enforceBackendRateLimit(adminSupabase, {
@@ -174,152 +162,57 @@ export async function POST(request: NextRequest) {
             key: user.id,
         });
 
-        // Deduct Credits
-        const { data: remainingCredits, error: creditError } = await adminSupabase.rpc('deduct_credits', {
-            p_user_id: user.id,
-            p_cost: COST
-        });
-
-        if (creditError) {
-            console.error('Error checking credits:', creditError);
-            return NextResponse.json({
-                error: 'Failed to verify credits',
-                details: creditError.message,
-                hint: creditError.hint,
-                code: creditError.code
-            }, { status: 500 });
-        }
-
-        if (remainingCredits === -1) {
-            return NextResponse.json(
-                { error: `Insufficient credits. This generation costs ${COST} credits.` },
-                { status: 402 }
-            );
-        }
-
-        refundState = {
-            supabase: adminSupabase,
+        const result = await withGenerationStartIdempotency({
+            client: adminSupabase,
             userId: user.id,
-            amount: COST,
-            shouldRefund: true,
-        };
-
-        const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${KIE_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: modelConfig.apiModelId,
-                callBackUrl,
-                input: {
-                    prompt: prompt.trim() || "The cartoon character is dancing.",
-                    input_urls: [characterImageUrl],
-                    video_urls: [referenceVideoUrl],
-                    character_orientation: characterOrientation,
-                    mode: mode
-                }
-            })
-        });
-
-        let data;
-        try {
-            data = await response.json();
-        } catch {
-            console.error('Kie.ai returned non-JSON response — refunding credits');
-            await refundIfNeeded();
-            return NextResponse.json({ error: 'Provider returned an invalid response' }, { status: 502 });
-        }
-
-        if (!response.ok || data.code !== 200) {
-            console.error('Kie.ai API rejected request — refunding credits', data);
-            await refundIfNeeded();
-            return NextResponse.json(
-                { error: data.msg || 'Provider rejected the request' },
-                { status: 502 }
-            );
-        }
-
-        const taskId = data.data.taskId;
-        refundState.shouldRefund = false;
-
-        // Log Generation with the model key (e.g. 'kling-3.0')
-        const { data: generationRecord, error: logError } = await supabase
-            .from('generations')
-            .insert({
-                user_id: user.id,
-                model: modelConfig.apiModelId,
-                duration: duration,
-                cost: COST,
-                prediction_id: taskId,
-                status: 'processing',
-                prompt: (prompt || '').trim(),
-                category: 'video',
-                creation_mode: 'motion',
-                source_generation_id: validatedSourceGenerationId,
-                workflow_settings: {
-                    creationMode: 'motion',
-                    model,
-                    characterOrientation,
-                    mode,
-                    duration,
-                    ...(normalizedCharacterImage ? { characterImage: normalizedCharacterImage } : {}),
-                    ...(normalizedReferenceVideo ? { referenceVideo: normalizedReferenceVideo } : {}),
-                },
-            })
-            .select('id')
-            .single();
-
-        if (logError) {
-            console.error('Error logging generation:', logError);
-        }
-
-        await persistGenerationInputMedia({
-            supabase,
-            generationId: generationRecord?.id,
-            userId: user.id,
-            candidates: [
-                {
-                    mediaType: 'image',
-                    role: 'character_image',
-                    label: normalizedCharacterImage?.label ?? 'Character image',
-                    sourceUrl: characterImageUrl,
-                    sourceStoragePath: normalizedCharacterImage?.storagePath ?? null,
-                    sourceGenerationId: normalizedCharacterImage?.sourceGenerationId ?? null,
-                    sortOrder: 0,
-                },
-                {
-                    mediaType: 'video',
-                    role: 'motion_reference_video',
-                    label: normalizedReferenceVideo?.label ?? 'Motion reference video',
-                    sourceUrl: referenceVideoUrl,
-                    sourceStoragePath: normalizedReferenceVideo?.storagePath ?? null,
-                    sourceGenerationId: normalizedReferenceVideo?.sourceGenerationId ?? null,
-                    sortOrder: 1,
-                },
-            ],
+            idempotencyKey,
+            owner: getGenerationStartLockOwner(request),
+            start: (clientRequestKeyHash) => startMotionGeneration({
+                supabase,
+                creditSupabase: adminSupabase,
+                userId: user.id,
+                clientRequestKeyHash,
+                model: selectedModel as MotionModelId,
+                referenceVideoUrl: typeof referenceVideoUrl === 'string' ? referenceVideoUrl : '',
+                characterImageUrl: typeof characterImageUrl === 'string' ? characterImageUrl : '',
+                duration,
+                characterOrientation: characterOrientation === 'image' ? 'image' : 'video',
+                mode: mode === '1080p' ? '1080p' : '720p',
+                prompt: promptText,
+                sourceGenerationId: validatedSourceGenerationId,
+                characterImage: normalizedCharacterImage,
+                referenceVideo: normalizedReferenceVideo,
+            }),
         });
 
         return NextResponse.json({
             success: true,
-            predictionId: taskId,
-            generationId: generationRecord?.id ?? null,
+            predictionId: result.predictionId,
+            generationId: result.generationId ?? null,
             status: 'processing',
-            remainingCredits: remainingCredits
+            remainingCredits: result.remainingCredits,
+            cost: result.cost,
+            ...(result.idempotentReplay ? { idempotentReplay: true } : {}),
         });
 
     } catch (error: unknown) {
-        await refundIfNeeded();
+        if (error instanceof GenerationStartIdempotencyError) {
+            return NextResponse.json(
+                { code: error.code, error: error.message },
+                { status: error.status }
+            );
+        }
+
         if (error instanceof BackendRateLimitError) {
             return createBackendRateLimitResponse(error);
         }
 
         console.error('Error starting video generation:', error);
         const message = error instanceof Error ? error.message : 'Failed to start video generation';
+        const status = error instanceof GenerationServiceError ? error.status : 500;
         return NextResponse.json(
             { error: message || 'Failed to start video generation' },
-            { status: 500 }
+            { status }
         );
     }
 }

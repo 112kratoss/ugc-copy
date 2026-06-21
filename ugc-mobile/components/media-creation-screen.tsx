@@ -152,6 +152,15 @@ function promptValidationMessage(error: string) {
   return null;
 }
 
+function createMobileGenerationIdempotencyKey(prefix: CreatorToolId) {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return `${prefix}:${randomUUID()}`;
+  }
+
+  return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+}
+
 export function MediaCreationScreen({
   initialTool = 'image',
   insideTab = false,
@@ -180,6 +189,7 @@ export function MediaCreationScreen({
   const [isPromptFocused, setIsPromptFocused] = useState(false);
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
+  const activeGenerationRequestKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!catalog) return;
@@ -478,6 +488,7 @@ export function MediaCreationScreen({
   };
 
   const generate = async () => {
+    if (activeGenerationRequestKeyRef.current) return;
     if (!user) {
       router.push('/auth');
       return;
@@ -502,21 +513,32 @@ export function MediaCreationScreen({
     setPromptMessage(null);
     setStatus(null);
     setLastGenerationId(null);
+    const idempotencyKey = createMobileGenerationIdempotencyKey(currentDraft.tool);
+    activeGenerationRequestKeyRef.current = idempotencyKey;
     setIsGenerating(true);
     try {
       let started: GenerationStartResponse;
       if (currentDraft.tool === 'image') {
-        started = await api.startImageGeneration(buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''));
+        started = await api.startImageGeneration(
+          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+          idempotencyKey
+        );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus }));
       } else if (currentDraft.tool === 'video') {
-        started = await api.startVideoGeneration(buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''));
+        started = await api.startVideoGeneration(
+          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+          idempotencyKey
+        );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus }));
       } else {
-        started = await api.startMotionGeneration(buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''));
+        started = await api.startMotionGeneration(
+          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+          idempotencyKey
+        );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus }));
@@ -526,6 +548,7 @@ export function MediaCreationScreen({
       setMessage(error instanceof Error ? error.message : 'Generation failed.');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
+      activeGenerationRequestKeyRef.current = null;
       setIsGenerating(false);
     }
   };
