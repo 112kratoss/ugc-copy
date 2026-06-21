@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   MobileCommerceError,
@@ -132,6 +132,57 @@ function createBundleCreditSupabase(options: {
         throw new Error(`Unexpected table: ${table}`);
       },
       async rpc(name: string, args: Record<string, unknown>) {
+        if (name === 'unlock_post_resource_bundle_with_credits') {
+          if (!bundle || bundle.post_id !== args.p_post_id || bundle.status !== 'published') {
+            return { data: { status: 'not_found' }, error: null };
+          }
+          if (bundle.owner_user_id === args.p_user_id) {
+            return { data: { status: 'owned_by_user' }, error: null };
+          }
+          if (bundle.access_mode !== 'paid' || bundle.price_usd_cents <= 0) {
+            return { data: { status: 'not_paid' }, error: null };
+          }
+          const existing = bundlePurchases.find((purchase) => (
+            purchase.bundle_id === bundle.id && purchase.buyer_user_id === args.p_user_id
+          ));
+          if (existing) {
+            return {
+              data: {
+                status: 'already_owned',
+                remaining_credits: credits,
+                post_id: bundle.post_id,
+                bundle_id: bundle.id,
+                owner_user_id: bundle.owner_user_id,
+                credit_cost: bundle.price_usd_cents,
+              },
+              error: null,
+            };
+          }
+          if (credits < bundle.price_usd_cents) {
+            return {
+              data: {
+                status: 'insufficient_credits',
+                remaining_credits: credits,
+                credit_cost: bundle.price_usd_cents,
+              },
+              error: null,
+            };
+          }
+          credits -= bundle.price_usd_cents;
+          bundlePurchases.push({ bundle_id: bundle.id, buyer_user_id: String(args.p_user_id) });
+          return {
+            data: {
+              status: 'completed',
+              remaining_credits: credits,
+              post_id: bundle.post_id,
+              bundle_id: bundle.id,
+              owner_user_id: bundle.owner_user_id,
+              credit_cost: bundle.price_usd_cents,
+            },
+            error: null,
+          };
+        }
+
         if (name === 'deduct_credits') {
           const cost = Number(args.p_cost ?? 0);
           if (credits < cost) {
@@ -282,6 +333,55 @@ function createMarketplaceCreditSupabase(options: {
         throw new Error(`Unexpected table: ${table}`);
       },
       async rpc(name: string, args: Record<string, unknown>) {
+        if (name === 'unlock_marketplace_asset_with_credits') {
+          if (!asset || asset.id !== args.p_asset_id || (asset.status !== 'active' && asset.status !== 'unlisted')) {
+            return { data: { status: 'not_found' }, error: null };
+          }
+          if (asset.seller_user_id === args.p_user_id) {
+            return { data: { status: 'owned_by_user' }, error: null };
+          }
+          if (asset.price_usd_cents <= 0) {
+            return { data: { status: 'not_paid' }, error: null };
+          }
+          const existing = marketplacePurchases.find((purchase) => (
+            purchase.asset_id === asset.id && purchase.buyer_user_id === args.p_user_id
+          ));
+          if (existing) {
+            return {
+              data: {
+                status: 'already_owned',
+                remaining_credits: credits,
+                asset_id: asset.id,
+                seller_user_id: asset.seller_user_id,
+                credit_cost: asset.price_usd_cents,
+              },
+              error: null,
+            };
+          }
+          if (credits < asset.price_usd_cents) {
+            return {
+              data: {
+                status: 'insufficient_credits',
+                remaining_credits: credits,
+                credit_cost: asset.price_usd_cents,
+              },
+              error: null,
+            };
+          }
+          credits -= asset.price_usd_cents;
+          marketplacePurchases.push({ asset_id: asset.id, buyer_user_id: String(args.p_user_id) });
+          return {
+            data: {
+              status: 'completed',
+              remaining_credits: credits,
+              asset_id: asset.id,
+              seller_user_id: asset.seller_user_id,
+              credit_cost: asset.price_usd_cents,
+            },
+            error: null,
+          };
+        }
+
         if (name === 'deduct_credits') {
           const cost = Number(args.p_cost ?? 0);
           if (credits < cost) {
@@ -399,5 +499,72 @@ describe('credit-funded mobile unlocks', () => {
     })).rejects.toMatchObject({
       status: 402,
     } satisfies Partial<MobileCommerceError>);
+  });
+
+  it('uses one atomic database call for an already-owned marketplace credit unlock', async () => {
+    const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      expect(name).toBe('unlock_marketplace_asset_with_credits');
+      expect(args).toEqual({ p_user_id: userId, p_asset_id: 'asset-1' });
+      return {
+        data: {
+          status: 'already_owned',
+          remaining_credits: 300,
+          asset_id: 'asset-1',
+          seller_user_id: ownerId,
+          credit_cost: 700,
+        },
+        error: null,
+      };
+    });
+    const from = vi.fn(() => {
+      throw new Error('Atomic marketplace unlocks must not perform client-side transaction steps.');
+    });
+
+    await expect(unlockMarketplaceAssetWithCredits({
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
+      userId,
+      assetId: 'asset-1',
+    })).resolves.toMatchObject({
+      success: true,
+      credits: 300,
+      alreadyProcessed: true,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it('uses one atomic database call for an already-owned post-resource credit unlock', async () => {
+    const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      expect(name).toBe('unlock_post_resource_bundle_with_credits');
+      expect(args).toEqual({ p_user_id: userId, p_post_id: 'post-1' });
+      return {
+        data: {
+          status: 'already_owned',
+          remaining_credits: 100,
+          post_id: 'post-1',
+          bundle_id: 'bundle-1',
+          owner_user_id: ownerId,
+          credit_cost: 900,
+        },
+        error: null,
+      };
+    });
+    const from = vi.fn(() => {
+      throw new Error('Atomic post-resource unlocks must not perform client-side transaction steps.');
+    });
+
+    await expect(unlockPostResourceBundleWithCredits({
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
+      userId,
+      postId: 'post-1',
+    })).resolves.toMatchObject({
+      success: true,
+      credits: 100,
+      alreadyProcessed: true,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(from).not.toHaveBeenCalled();
   });
 });

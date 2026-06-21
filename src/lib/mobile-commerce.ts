@@ -544,114 +544,59 @@ export async function unlockMarketplaceAssetWithCredits({
   userId: string;
   assetId: string;
 }): Promise<MobileCommerceSyncResult> {
-  const { data: asset, error: assetError } = await adminSupabase
-    .from('marketplace_assets')
-    .select('id, seller_user_id, price_usd_cents, status')
-    .eq('id', assetId)
-    .maybeSingle();
+  const { data, error } = await adminSupabase.rpc('unlock_marketplace_asset_with_credits', {
+    p_user_id: userId,
+    p_asset_id: assetId,
+  });
 
-  if (assetError) {
-    throw new MobileCommerceError('Failed to load marketplace unlock.', 500);
+  if (error || !isRecord(data)) {
+    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
   }
 
-  if (!asset || (asset.status !== 'active' && asset.status !== 'unlisted')) {
+  const status = normalizeOptionalString(data.status);
+  const remainingCredits = typeof data.remaining_credits === 'number' ? data.remaining_credits : null;
+  const creditCost = typeof data.credit_cost === 'number' ? data.credit_cost : 0;
+  const sellerUserId = normalizeOptionalString(data.seller_user_id);
+
+  if (status === 'not_found') {
     throw new MobileCommerceError('Marketplace unlock not found.', 404);
   }
 
-  if (asset.seller_user_id === userId) {
+  if (status === 'owned_by_user') {
     throw new MobileCommerceError('You already own this listing.', 400);
   }
 
-  if (asset.price_usd_cents <= 0) {
+  if (status === 'not_paid') {
     throw new MobileCommerceError('This listing does not require paid access.', 400);
   }
 
-  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
-    .from('marketplace_purchases')
-    .select('asset_id')
-    .eq('asset_id', assetId)
-    .eq('buyer_user_id', userId)
-    .maybeSingle();
-
-  if (existingPurchaseError) {
-    throw new MobileCommerceError('Failed to check marketplace purchase history.', 500);
-  }
-
-  if (existingPurchase) {
-    return {
-      success: true,
-      entitlement: 'marketplace_unlock',
-      assetId,
-      credits: await getProfileCredits(adminSupabase, userId),
-      alreadyProcessed: true,
-    };
-  }
-
-  const creditCost = asset.price_usd_cents;
-  const { data: remainingCredits, error: deductError } = await adminSupabase.rpc('deduct_credits', {
-    p_user_id: userId,
-    p_cost: creditCost,
-  });
-
-  if (deductError) {
-    throw new MobileCommerceError('Failed to deduct credits for this unlock.', 500);
-  }
-
-  if (typeof remainingCredits !== 'number' || remainingCredits < 0) {
+  if (status === 'insufficient_credits') {
     throw new MobileCommerceError(`Insufficient credits. This unlock costs ${creditCost} credits.`, 402);
   }
 
-  const externalOrderId = buildMobileExternalOrderId('revenuecat', `credits_asset_${asset.id}_${userId}`);
+  const alreadyProcessed = status === 'already_owned';
+  if (status !== 'completed' && !alreadyProcessed) {
+    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
+  }
 
-  const refundCredits = async () => {
-    await adminSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: creditCost });
-  };
-
-  const { error: orderError } = await adminSupabase
-    .from('marketplace_orders')
-    .insert({
-      asset_id: asset.id,
-      buyer_user_id: userId,
-      razorpay_order_id: externalOrderId,
-      razorpay_payment_id: `credits_${asset.id}_${userId}`,
-      amount_subunits: asset.price_usd_cents,
-      currency: 'USD',
-      status: 'created',
+  if (!alreadyProcessed) {
+    if (!sellerUserId) {
+      throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
+    }
+    await notifyMarketplaceUnlockCompleted(adminSupabase, {
+      buyerUserId: userId,
+      sellerUserId,
+      assetId,
+      alreadyProcessed: false,
     });
-
-  if (orderError) {
-    await refundCredits();
-    throw new MobileCommerceError('Failed to record credit unlock.', 500);
   }
-
-  const { data: completed, error: completionError } = await adminSupabase.rpc('complete_marketplace_purchase', {
-    p_razorpay_order_id: externalOrderId,
-    p_razorpay_payment_id: `credits_unlock_${asset.id}_${userId}`,
-  });
-
-  if (completionError) {
-    await refundCredits();
-    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
-  }
-
-  if (!completed) {
-    await refundCredits();
-    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
-  }
-
-  await notifyMarketplaceUnlockCompleted(adminSupabase, {
-    buyerUserId: userId,
-    sellerUserId: asset.seller_user_id,
-    assetId,
-    alreadyProcessed: false,
-  });
 
   return {
     success: true,
     entitlement: 'marketplace_unlock',
     assetId,
-    credits: await getProfileCredits(adminSupabase, userId),
-    alreadyProcessed: false,
+    credits: remainingCredits,
+    alreadyProcessed,
   };
 }
 
@@ -756,115 +701,61 @@ export async function unlockPostResourceBundleWithCredits({
   userId: string;
   postId: string;
 }): Promise<MobileCommerceSyncResult> {
-  const { data: bundle, error: bundleError } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, post_id, owner_user_id, access_mode, status, price_usd_cents')
-    .eq('post_id', postId)
-    .maybeSingle();
+  const { data, error } = await adminSupabase.rpc('unlock_post_resource_bundle_with_credits', {
+    p_user_id: userId,
+    p_post_id: postId,
+  });
 
-  if (bundleError) {
-    throw new MobileCommerceError('Failed to load post unlock.', 500);
+  if (error || !isRecord(data)) {
+    throw new MobileCommerceError('Failed to unlock post resources.', 500);
   }
 
-  if (!bundle || bundle.status !== 'published') {
+  const status = normalizeOptionalString(data.status);
+  const remainingCredits = typeof data.remaining_credits === 'number' ? data.remaining_credits : null;
+  const creditCost = typeof data.credit_cost === 'number' ? data.credit_cost : 0;
+  const bundleId = normalizeOptionalString(data.bundle_id);
+  const ownerUserId = normalizeOptionalString(data.owner_user_id);
+
+  if (status === 'not_found') {
     throw new MobileCommerceError('Post unlock not found.', 404);
   }
 
-  if (bundle.owner_user_id === userId) {
+  if (status === 'owned_by_user') {
     throw new MobileCommerceError('You already own this unlock.', 400);
   }
 
-  if (bundle.access_mode !== 'paid' || bundle.price_usd_cents <= 0) {
+  if (status === 'not_paid') {
     throw new MobileCommerceError('This post unlock does not require paid access.', 400);
   }
 
-  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
-    .from('post_resource_bundle_purchases')
-    .select('bundle_id')
-    .eq('bundle_id', bundle.id)
-    .eq('buyer_user_id', userId)
-    .maybeSingle();
-
-  if (existingPurchaseError) {
-    throw new MobileCommerceError('Failed to check post unlock purchase history.', 500);
-  }
-
-  if (existingPurchase) {
-    return {
-      success: true,
-      entitlement: 'post_resource_unlock',
-      postId,
-      credits: await getProfileCredits(adminSupabase, userId),
-      alreadyProcessed: true,
-    };
-  }
-
-  const creditCost = bundle.price_usd_cents;
-  const { data: remainingCredits, error: deductError } = await adminSupabase.rpc('deduct_credits', {
-    p_user_id: userId,
-    p_cost: creditCost,
-  });
-
-  if (deductError) {
-    throw new MobileCommerceError('Failed to deduct credits for this unlock.', 500);
-  }
-
-  if (typeof remainingCredits !== 'number' || remainingCredits < 0) {
+  if (status === 'insufficient_credits') {
     throw new MobileCommerceError(`Insufficient credits. This unlock costs ${creditCost} credits.`, 402);
   }
 
-  const externalOrderId = buildMobileExternalOrderId('revenuecat', `credits_bundle_${bundle.id}_${userId}`);
+  const alreadyProcessed = status === 'already_owned';
+  if (status !== 'completed' && !alreadyProcessed) {
+    throw new MobileCommerceError('Failed to unlock post resources.', 500);
+  }
 
-  const refundCredits = async () => {
-    await adminSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: creditCost });
-  };
-
-  const { error: orderError } = await adminSupabase
-    .from('post_resource_bundle_orders')
-    .insert({
-      bundle_id: bundle.id,
-      buyer_user_id: userId,
-      razorpay_order_id: externalOrderId,
-      razorpay_payment_id: `credits_${bundle.id}_${userId}`,
-      amount_subunits: bundle.price_usd_cents,
-      currency: 'USD',
-      status: 'created',
+  if (!alreadyProcessed) {
+    if (!ownerUserId || !bundleId) {
+      throw new MobileCommerceError('Failed to unlock post resources.', 500);
+    }
+    await notifyPostResourceUnlockCompleted(adminSupabase, {
+      buyerUserId: userId,
+      ownerUserId,
+      postId,
+      bundleId,
+      alreadyProcessed: false,
     });
-
-  if (orderError) {
-    await refundCredits();
-    throw new MobileCommerceError('Failed to record credit unlock.', 500);
   }
-
-  const { data: completed, error: completionError } = await adminSupabase.rpc('complete_post_resource_bundle_purchase', {
-    p_razorpay_order_id: externalOrderId,
-    p_razorpay_payment_id: `credits_unlock_${bundle.id}_${userId}`,
-  });
-
-  if (completionError) {
-    await refundCredits();
-    throw new MobileCommerceError('Failed to unlock post resources.', 500);
-  }
-
-  if (!completed) {
-    await refundCredits();
-    throw new MobileCommerceError('Failed to unlock post resources.', 500);
-  }
-
-  await notifyPostResourceUnlockCompleted(adminSupabase, {
-    buyerUserId: userId,
-    ownerUserId: bundle.owner_user_id,
-    postId,
-    bundleId: bundle.id,
-    alreadyProcessed: false,
-  });
 
   return {
     success: true,
     entitlement: 'post_resource_unlock',
     postId,
-    credits: await getProfileCredits(adminSupabase, userId),
-    alreadyProcessed: false,
+    credits: remainingCredits,
+    alreadyProcessed,
   };
 }
 
