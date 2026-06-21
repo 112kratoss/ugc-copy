@@ -14,15 +14,16 @@ type LocalGenerationRow = {
 };
 
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
+type LockDecision = boolean | ((args: Record<string, unknown>) => boolean);
 
 function createSupabaseMock(
   localGeneration: LocalGenerationRow | null = null,
-  lockAcquired = true,
+  lockAcquired: LockDecision = true,
   rateLimitAllowed = true
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
-  const rpc = vi.fn(async (fn: string) => {
+  const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
     if (fn === 'deduct_credits') {
       return { data: 88, error: null };
     }
@@ -36,7 +37,10 @@ function createSupabaseMock(
     }
 
     if (fn === 'try_acquire_backend_job_lock') {
-      return { data: lockAcquired, error: null };
+      return {
+        data: typeof lockAcquired === 'function' ? lockAcquired(args) : lockAcquired,
+        error: null,
+      };
     }
 
     if (fn === 'release_backend_job_lock') {
@@ -392,5 +396,47 @@ describe('/api/generate route', () => {
     });
     expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('throttles provider status checks while returning cached active motion state', async () => {
+    currentSupabaseMock = createSupabaseMock({
+      id: 'gen-motion-throttled-1',
+      prediction_id: 'task-motion-throttled-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0',
+      category: 'motion',
+      duration: 6,
+    }, (args) => !String(args.p_name).startsWith('generation-provider-status:'));
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate?id=task-motion-throttled-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'processing',
+      output: null,
+      error: null,
+      retryAfterMs: 15000,
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('try_acquire_backend_job_lock', expect.objectContaining({
+      p_name: 'generation-provider-status:task-motion-throttled-1',
+      p_ttl_seconds: 15,
+    }));
   });
 });

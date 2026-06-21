@@ -25,9 +25,11 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
     buildLockedGenerationStatusPayload,
+    GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
     GENERATION_STATUS_LOCK_TTL_SECONDS,
     getGenerationStatusLockName,
     getGenerationStatusLockOwner,
+    tryAcquireGenerationProviderStatusThrottle,
 } from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import type {
@@ -289,11 +291,25 @@ export async function GET(request: NextRequest) {
             referenceCount: Array.isArray(workflowSettings?.elements) ? workflowSettings.elements.length : 0,
         });
 
+        const lockOwner = getGenerationStatusLockOwner(request, startedAt);
         const lockResult = await withBackendJobLock(adminSupabase, {
             name: getGenerationStatusLockName(predictionId),
             ttlSeconds: GENERATION_STATUS_LOCK_TTL_SECONDS,
-            owner: getGenerationStatusLockOwner(request, startedAt),
+            owner: lockOwner,
         }, async () => {
+            const canCheckProvider = await tryAcquireGenerationProviderStatusThrottle(adminSupabase, {
+                predictionId,
+                owner: lockOwner,
+            });
+
+            if (!canCheckProvider) {
+                return buildLockedGenerationStatusPayload(
+                    localGeneration,
+                    estimatedTotalMs,
+                    GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS
+                );
+            }
+
             // Query Kie.ai for status
             const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
                 headers: { 'Authorization': `Bearer ${KIE_API_KEY}` },

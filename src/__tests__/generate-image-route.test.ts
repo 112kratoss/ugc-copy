@@ -20,16 +20,17 @@ type LocalGenerationRow = {
 };
 
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
+type LockDecision = boolean | ((args: Record<string, unknown>) => boolean);
 
 function createSupabaseMock(
   sourceGeneration: SourceGenerationRow | null,
   localGeneration: LocalGenerationRow | null = null,
-  lockAcquired = true,
+  lockAcquired: LockDecision = true,
   rateLimitAllowed = true
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
-  const rpc = vi.fn(async (fn: string) => {
+  const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
     if (fn === 'deduct_credits') {
       return { data: 92, error: null };
     }
@@ -43,7 +44,10 @@ function createSupabaseMock(
     }
 
     if (fn === 'try_acquire_backend_job_lock') {
-      return { data: lockAcquired, error: null };
+      return {
+        data: typeof lockAcquired === 'function' ? lockAcquired(args) : lockAcquired,
+        error: null,
+      };
     }
 
     if (fn === 'release_backend_job_lock') {
@@ -458,6 +462,50 @@ describe('/api/generate-image route', () => {
     });
     expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('throttles provider status checks while returning cached active image state', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-image-throttled-1',
+      prediction_id: 'task-image-throttled-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'nano-banana-2',
+      category: 'image',
+      workflow_settings: {
+        resolution: '1K',
+      },
+    }, (args) => !String(args.p_name).startsWith('generation-provider-status:'));
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=task-image-throttled-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'processing',
+      output: null,
+      error: null,
+      retryAfterMs: 15000,
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('try_acquire_backend_job_lock', expect.objectContaining({
+      p_name: 'generation-provider-status:task-image-throttled-1',
+      p_ttl_seconds: 15,
+    }));
   });
 
   it('persists and returns all Grok image outputs when the provider succeeds', async () => {

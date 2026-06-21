@@ -8,6 +8,18 @@ import {
 
 export const GENERATION_STATUS_LOCK_TTL_SECONDS = 120;
 export const GENERATION_STATUS_RETRY_AFTER_MS = 2000;
+export const GENERATION_PROVIDER_STATUS_THROTTLE_SECONDS = 15;
+export const GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS =
+  GENERATION_PROVIDER_STATUS_THROTTLE_SECONDS * 1000;
+
+type SupabaseRpcResult = {
+  data: unknown;
+  error: { message?: string } | Error | null;
+};
+
+type SupabaseRpcClient = {
+  rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<SupabaseRpcResult>;
+};
 
 type StoredGenerationStatusRow = {
   status?: string | null;
@@ -21,13 +33,38 @@ export function getGenerationStatusLockName(predictionId: string) {
   return `generation-status:${predictionId}`;
 }
 
+export function getGenerationProviderStatusThrottleLockName(predictionId: string) {
+  return `generation-provider-status:${predictionId}`;
+}
+
 export function getGenerationStatusLockOwner(request: Request, startedAt: number) {
   return `${request.headers.get('x-vercel-id') ?? randomUUID()}:${startedAt}`;
+}
+
+export async function tryAcquireGenerationProviderStatusThrottle(
+  client: SupabaseRpcClient,
+  params: {
+    predictionId: string;
+    owner: string;
+  },
+): Promise<boolean> {
+  const acquire = await client.rpc('try_acquire_backend_job_lock', {
+    p_name: getGenerationProviderStatusThrottleLockName(params.predictionId),
+    p_ttl_seconds: GENERATION_PROVIDER_STATUS_THROTTLE_SECONDS,
+    p_locked_by: params.owner,
+  });
+
+  if (acquire.error) {
+    throw acquire.error;
+  }
+
+  return acquire.data === true;
 }
 
 export function buildLockedGenerationStatusPayload(
   localGeneration: StoredGenerationStatusRow | null | undefined,
   estimatedTotalMs: number | null | undefined,
+  retryAfterMs = GENERATION_STATUS_RETRY_AFTER_MS,
 ) {
   const timing = withGenerationTimingEstimate(
     normalizeStoredGenerationTiming({
@@ -47,6 +84,6 @@ export function buildLockedGenerationStatusPayload(
     output: null,
     error: null,
     timing,
-    retryAfterMs: GENERATION_STATUS_RETRY_AFTER_MS,
+    retryAfterMs,
   };
 }
