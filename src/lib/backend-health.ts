@@ -26,6 +26,13 @@ type StalledGenerationRow = {
   created_at: string | null;
 };
 
+type GenerationCompletionQueueRow = {
+  status: string | null;
+  created_at: string | null;
+  next_attempt_at: string | null;
+  locked_at: string | null;
+};
+
 export type BackendHealthIssue = {
   severity: Exclude<BackendHealthStatus, 'ok'>;
   code: string;
@@ -59,6 +66,19 @@ export type BackendGenerationHealth = {
   oldestStalledCreatedAt: string | null;
 };
 
+export type BackendCompletionQueueHealth = {
+  status: BackendHealthStatus;
+  stalePendingAfterMinutes: number;
+  staleProcessingAfterMinutes: number;
+  pendingCount: number;
+  processingCount: number;
+  failedCount: number;
+  staleDuePendingCount: number;
+  staleProcessingCount: number;
+  oldestDuePendingNextAttemptAt: string | null;
+  oldestProcessingLockedAt: string | null;
+};
+
 export type BackendHealth = {
   status: BackendHealthStatus;
   checkedAt: string;
@@ -70,6 +90,7 @@ export type BackendHealth = {
   };
   jobs: BackendJobHealth[];
   generations: BackendGenerationHealth;
+  completionQueue: BackendCompletionQueueHealth;
   issues: BackendHealthIssue[];
 };
 
@@ -82,6 +103,8 @@ const JOB_THRESHOLDS: Array<{ name: string; expectedMaxAgeMinutes: number }> = [
 const JOB_LOOKBACK_HOURS = 48;
 const GENERATION_RECENT_WINDOW_MINUTES = 60;
 const GENERATION_STALLED_AFTER_MINUTES = 60;
+const COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES = 15;
+const COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES = 10;
 
 function minutesSince(timestamp: string, now: Date): number {
   const ms = now.getTime() - new Date(timestamp).getTime();
@@ -205,6 +228,86 @@ function buildGenerationHealth(
   };
 }
 
+function isDue(row: GenerationCompletionQueueRow, now: Date): boolean {
+  if (!row.next_attempt_at) return false;
+  return new Date(row.next_attempt_at).getTime() <= now.getTime();
+}
+
+function sortByTimestamp<T>(
+  rows: T[],
+  getTimestamp: (row: T) => string | null,
+): T[] {
+  return [...rows].sort((a, b) => {
+    const left = getTimestamp(a);
+    const right = getTimestamp(b);
+    if (!left && !right) return 0;
+    if (!left) return 1;
+    if (!right) return -1;
+    return new Date(left).getTime() - new Date(right).getTime();
+  });
+}
+
+function buildCompletionQueueHealth(
+  rows: GenerationCompletionQueueRow[],
+  now: Date,
+): { health: BackendCompletionQueueHealth; issues: BackendHealthIssue[] } {
+  const pendingRows = rows.filter((row) => row.status === 'pending');
+  const processingRows = rows.filter((row) => row.status === 'processing');
+  const failedRows = rows.filter((row) => row.status === 'failed');
+  const duePendingRows = pendingRows.filter((row) => isDue(row, now));
+  const staleDuePendingRows = duePendingRows.filter((row) => (
+    row.next_attempt_at
+    && minutesSince(row.next_attempt_at, now) > COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES
+  ));
+  const staleProcessingRows = processingRows.filter((row) => (
+    row.locked_at
+    && minutesSince(row.locked_at, now) > COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES
+  ));
+  const oldestDuePending = sortByTimestamp(duePendingRows, (row) => row.next_attempt_at)[0] ?? null;
+  const oldestProcessing = sortByTimestamp(processingRows, (row) => row.locked_at)[0] ?? null;
+  const issues: BackendHealthIssue[] = [];
+
+  if (failedRows.length > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'GENERATION_COMPLETION_QUEUE_FAILED',
+      message: `${failedRows.length} generation completion job(s) reached failed status.`,
+    });
+  }
+
+  if (staleDuePendingRows.length > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'GENERATION_COMPLETION_QUEUE_STALE_PENDING',
+      message: `${staleDuePendingRows.length} due generation completion job(s) are older than ${COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES} minutes.`,
+    });
+  }
+
+  if (staleProcessingRows.length > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'GENERATION_COMPLETION_QUEUE_STALE_LOCK',
+      message: `${staleProcessingRows.length} generation completion job lock(s) are older than ${COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES} minutes.`,
+    });
+  }
+
+  return {
+    health: {
+      status: issues.length > 0 ? 'degraded' : 'ok',
+      stalePendingAfterMinutes: COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES,
+      staleProcessingAfterMinutes: COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES,
+      pendingCount: pendingRows.length,
+      processingCount: processingRows.length,
+      failedCount: failedRows.length,
+      staleDuePendingCount: staleDuePendingRows.length,
+      staleProcessingCount: staleProcessingRows.length,
+      oldestDuePendingNextAttemptAt: oldestDuePending?.next_attempt_at ?? null,
+      oldestProcessingLockedAt: oldestProcessing?.locked_at ?? null,
+    },
+    issues,
+  };
+}
+
 export async function collectBackendHealth(
   client: SupabaseClient,
   now = new Date(),
@@ -217,7 +320,12 @@ export async function collectBackendHealth(
     now.getTime() - GENERATION_STALLED_AFTER_MINUTES * 60 * 1000,
   ).toISOString();
 
-  const [jobRunsResult, recentGenerationsResult, stalledGenerationsResult] = await Promise.all([
+  const [
+    jobRunsResult,
+    recentGenerationsResult,
+    stalledGenerationsResult,
+    completionQueueResult,
+  ] = await Promise.all([
     client
       .from('backend_job_runs')
       .select('job_name,status,started_at,finished_at,duration_ms,skip_reason,error_message')
@@ -236,17 +344,28 @@ export async function collectBackendHealth(
       .lt('created_at', stalledBefore)
       .order('created_at', { ascending: true })
       .limit(50),
+    client
+      .from('generation_completion_jobs')
+      .select('status,created_at,next_attempt_at,locked_at')
+      .in('status', ['pending', 'processing', 'failed'])
+      .order('created_at', { ascending: true })
+      .limit(200),
   ]);
 
   if (jobRunsResult.error) throw jobRunsResult.error;
   if (recentGenerationsResult.error) throw recentGenerationsResult.error;
   if (stalledGenerationsResult.error) throw stalledGenerationsResult.error;
+  if (completionQueueResult.error) throw completionQueueResult.error;
 
   const jobRows = (jobRunsResult.data ?? []) as BackendJobRunRow[];
   const jobResults = JOB_THRESHOLDS.map((job) => buildJobHealth(job, jobRows, now));
   const generationResult = buildGenerationHealth(
     (recentGenerationsResult.data ?? []) as GenerationStatusRow[],
     (stalledGenerationsResult.data ?? []) as StalledGenerationRow[],
+  );
+  const completionQueueResultHealth = buildCompletionQueueHealth(
+    (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[],
+    now,
   );
   const catalog = buildGenerationModelCatalog({
     platform: 'web',
@@ -255,10 +374,12 @@ export async function collectBackendHealth(
   const issues = [
     ...jobResults.flatMap((result) => result.issues),
     ...generationResult.issues,
+    ...completionQueueResultHealth.issues,
   ];
   const componentStatuses = [
     ...jobResults.map((result) => result.health.status),
     generationResult.health.status,
+    completionQueueResultHealth.health.status,
   ];
 
   return {
@@ -272,6 +393,7 @@ export async function collectBackendHealth(
     },
     jobs: jobResults.map((result) => result.health),
     generations: generationResult.health,
+    completionQueue: completionQueueResultHealth.health,
     issues,
   };
 }

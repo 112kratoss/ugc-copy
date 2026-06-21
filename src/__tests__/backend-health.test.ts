@@ -26,11 +26,15 @@ class FakeQueryBuilder {
 }
 
 function createClient(results: Record<string, QueryResult | QueryResult[]>) {
+  const tableResultsByName: Record<string, QueryResult | QueryResult[]> = {
+    generation_completion_jobs: { error: null, data: [] },
+    ...results,
+  };
   const builders: Record<string, FakeQueryBuilder[]> = {};
   const from = vi.fn((table: string) => {
-    const tableResults = Array.isArray(results[table])
-      ? results[table] as QueryResult[]
-      : [results[table] as QueryResult];
+    const tableResults = Array.isArray(tableResultsByName[table])
+      ? tableResultsByName[table] as QueryResult[]
+      : [tableResultsByName[table] as QueryResult];
     const index = builders[table]?.length ?? 0;
     const result = tableResults[index];
     if (!result) throw new Error(`Unexpected table query: ${table}`);
@@ -110,6 +114,7 @@ describe('collectBackendHealth', () => {
     });
     expect(db.from).toHaveBeenCalledWith('backend_job_runs');
     expect(db.from).toHaveBeenCalledWith('generations');
+    expect(db.from).toHaveBeenCalledWith('generation_completion_jobs');
     expect(db.builders.backend_job_runs[0].gte).toHaveBeenCalledWith(
       'started_at',
       '2026-06-19T10:00:00.000Z',
@@ -176,6 +181,78 @@ describe('collectBackendHealth', () => {
     expect(health.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'JOB_LATEST_RUN_FAILED', severity: 'degraded' }),
       expect.objectContaining({ code: 'GENERATION_STALLED_ACTIVE', severity: 'degraded' }),
+    ]));
+  });
+
+  it('degrades when the generation completion queue has failed or stale due jobs', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T00:15:00.000Z',
+            finished_at: '2026-06-21T00:15:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generation_completion_jobs: {
+        error: null,
+        data: [
+          {
+            status: 'pending',
+            created_at: '2026-06-21T09:20:00.000Z',
+            next_attempt_at: '2026-06-21T09:30:00.000Z',
+            locked_at: null,
+          },
+          {
+            status: 'failed',
+            created_at: '2026-06-21T09:40:00.000Z',
+            next_attempt_at: '2026-06-21T09:40:00.000Z',
+            locked_at: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.status).toBe('degraded');
+    expect(health.completionQueue).toMatchObject({
+      status: 'degraded',
+      pendingCount: 1,
+      failedCount: 1,
+      oldestDuePendingNextAttemptAt: '2026-06-21T09:30:00.000Z',
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'GENERATION_COMPLETION_QUEUE_FAILED', severity: 'degraded' }),
+      expect.objectContaining({ code: 'GENERATION_COMPLETION_QUEUE_STALE_PENDING', severity: 'degraded' }),
     ]));
   });
 
