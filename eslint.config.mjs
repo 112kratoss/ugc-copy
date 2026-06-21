@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Expo has its own TypeScript/test gates; the root config is Next.js-specific.
+    "ugc-mobile/**",
   ]),
 ]);
 
