@@ -128,6 +128,7 @@ describe('collectBackendHealth', () => {
     );
     expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost');
     expect(db.builders.generations[1].select).toHaveBeenCalledWith('created_at,cost');
+    expect(db.builders.generations[1].in).toHaveBeenCalledWith('status', ['pending', 'waiting', 'processing']);
   });
 
   it('warns when a scheduled job has no recent run records', async () => {

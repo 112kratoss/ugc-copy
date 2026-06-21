@@ -372,7 +372,7 @@ export async function collectBackendHealth(
     client
       .from('generations')
       .select('created_at,cost')
-      .in('status', ['waiting', 'processing'])
+      .in('status', ['pending', 'waiting', 'processing'])
       .lt('created_at', stalledBefore)
       .order('created_at', { ascending: true })
       .limit(50),
