@@ -137,7 +137,12 @@ describe('/api/webhooks/kie route', () => {
       serviceClientMock.client,
       {
         predictionId: 'task-1',
-        payload,
+        payload: {
+          ...payload,
+          magicbooklet: {
+            callbackGenerationId: 'gen-1',
+          },
+        },
       },
     );
   });

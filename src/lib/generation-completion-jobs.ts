@@ -51,6 +51,16 @@ export type GenerationCompletionProcessSummary = {
 
 type GenerationSyncResult = Awaited<ReturnType<typeof syncGenerationStatusByPredictionId>>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getCallbackGenerationId(payload: Record<string, unknown>): string | null {
+  const metadata = isRecord(payload.magicbooklet) ? payload.magicbooklet : null;
+  const generationId = metadata?.callbackGenerationId;
+  return typeof generationId === 'string' && generationId.trim() ? generationId.trim() : null;
+}
+
 export async function enqueueGenerationCompletionJob(
   client: RpcClient,
   params: { predictionId: string; payload: Record<string, unknown> },
@@ -171,6 +181,52 @@ function retryReason(result: GenerationSyncResult): string {
   return `Generation is still ${result.status}.`;
 }
 
+async function reattachProviderTaskFromCallbackId(
+  client: SupabaseClient,
+  params: { generationId: string; predictionId: string },
+) {
+  const { error } = await client
+    .from('generations')
+    .update({
+      prediction_id: params.predictionId,
+      status: 'processing',
+    })
+    .eq('id', params.generationId)
+    .is('prediction_id', null);
+
+  if (error) throw error;
+}
+
+async function syncCompletionJobGenerationStatus(params: {
+  supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
+  job: GenerationCompletionJob;
+}): Promise<GenerationSyncResult> {
+  const result = await syncGenerationStatusByPredictionId({
+    supabase: params.supabase,
+    creditSupabase: params.creditSupabase,
+    predictionId: params.job.prediction_id,
+    providerPayload: params.job.payload,
+  });
+
+  if (result.found) return result;
+
+  const callbackGenerationId = getCallbackGenerationId(params.job.payload);
+  if (!callbackGenerationId) return result;
+
+  await reattachProviderTaskFromCallbackId(params.supabase, {
+    generationId: callbackGenerationId,
+    predictionId: params.job.prediction_id,
+  });
+
+  return syncGenerationStatusByPredictionId({
+    supabase: params.supabase,
+    creditSupabase: params.creditSupabase,
+    predictionId: params.job.prediction_id,
+    providerPayload: params.job.payload,
+  });
+}
+
 export async function processGenerationCompletionJobs(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -193,11 +249,10 @@ export async function processGenerationCompletionJobs(params: {
 
   for (const job of jobs) {
     try {
-      const result = await syncGenerationStatusByPredictionId({
+      const result = await syncCompletionJobGenerationStatus({
         supabase: params.supabase,
         creditSupabase: params.creditSupabase,
-        predictionId: job.prediction_id,
-        providerPayload: job.payload,
+        job,
       });
 
       if (isTerminalGenerationSync(result)) {

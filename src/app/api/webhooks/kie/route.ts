@@ -51,6 +51,23 @@ async function attachCallbackGenerationId(
   }
 }
 
+function buildCompletionJobPayload(
+  payload: unknown,
+  params: { generationId: string | null },
+): Record<string, unknown> {
+  const completionPayload = isRecord(payload) ? payload : { payload };
+  const generationId = params.generationId?.trim();
+  if (!generationId) return completionPayload;
+
+  return {
+    ...completionPayload,
+    magicbooklet: {
+      ...(isRecord(completionPayload.magicbooklet) ? completionPayload.magicbooklet : {}),
+      callbackGenerationId: generationId,
+    },
+  };
+}
+
 export async function POST(request: Request) {
   let payload: unknown;
   try {
@@ -80,13 +97,14 @@ export async function POST(request: Request) {
   }
 
   const serviceClient = createServiceClient();
+  const callbackGenerationId = url.searchParams.get('generationId');
   await attachCallbackGenerationId(serviceClient, {
-    generationId: url.searchParams.get('generationId'),
+    generationId: callbackGenerationId,
     predictionId,
   });
   await enqueueGenerationCompletionJob(serviceClient, {
     predictionId,
-    payload: isRecord(payload) ? payload : { payload },
+    payload: buildCompletionJobPayload(payload, { generationId: callbackGenerationId }),
   });
 
   const lockedBy = `kie-webhook:${predictionId}:${Date.now()}`;

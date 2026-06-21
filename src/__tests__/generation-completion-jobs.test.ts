@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-services';
 import {
@@ -25,7 +25,26 @@ function createRpcClient(results: Array<{ data: unknown; error: Error | null }>)
   };
 }
 
+function createCompletionWorkerClient(results: Array<{ data: unknown; error: Error | null }>) {
+  const updateIs = vi.fn(async () => ({ data: null, error: null }));
+  const updateEq = vi.fn(() => ({ is: updateIs }));
+  const update = vi.fn(() => ({ eq: updateEq }));
+  const from = vi.fn(() => ({ update }));
+
+  return {
+    ...createRpcClient(results),
+    from,
+    update,
+    updateEq,
+    updateIs,
+  };
+}
+
 describe('generation completion jobs', () => {
+  beforeEach(() => {
+    vi.mocked(syncGenerationStatusByPredictionId).mockReset();
+  });
+
   it('enqueues a provider task completion idempotently', async () => {
     const client = createRpcClient([{ data: 'job-1', error: null }]);
 
@@ -182,6 +201,73 @@ describe('generation completion jobs', () => {
       p_lock_ttl_seconds: 300,
       p_prediction_id: null,
     });
+    expect(client.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
+      p_id: 'job-1',
+      p_locked_by: 'worker-1',
+      p_succeeded: true,
+      p_error: null,
+      p_retry_delay_seconds: 60,
+    });
+  });
+
+  it('reattaches callback generation ids and retries missing provider task lookups', async () => {
+    const webhookPayload = {
+      data: { taskId: 'task-1', state: 'success' },
+      magicbooklet: { callbackGenerationId: 'generation-1' },
+    };
+    const client = createCompletionWorkerClient([
+      {
+        data: [{
+          id: 'job-1',
+          prediction_id: 'task-1',
+          payload: webhookPayload,
+          status: 'processing',
+          attempt_count: 1,
+          locked_by: 'worker-1',
+        }],
+        error: null,
+      },
+      { data: 'succeeded', error: null },
+    ]);
+    vi.mocked(syncGenerationStatusByPredictionId)
+      .mockResolvedValueOnce({ found: false, status: 'missing', generation: null })
+      .mockResolvedValueOnce({
+        found: true,
+        status: 'succeeded',
+        generation: {
+          id: 'generation-1',
+          user_id: 'user-1',
+          prediction_id: 'task-1',
+          status: 'succeeded',
+          output_url: null,
+          category: 'image',
+          model: 'nanobanana',
+          workflow_settings: null,
+          created_at: '2026-06-21T10:00:00.000Z',
+          completed_at: '2026-06-21T10:01:00.000Z',
+        },
+      });
+
+    await expect(processGenerationCompletionJobs({
+      supabase: client as never,
+      creditSupabase: client as never,
+      lockedBy: 'worker-1',
+      limit: 5,
+    })).resolves.toEqual({
+      claimed: 1,
+      completed: 1,
+      retried: 0,
+      failed: 0,
+    });
+
+    expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(2);
+    expect(client.from).toHaveBeenCalledWith('generations');
+    expect(client.update).toHaveBeenCalledWith({
+      prediction_id: 'task-1',
+      status: 'processing',
+    });
+    expect(client.updateEq).toHaveBeenCalledWith('id', 'generation-1');
+    expect(client.updateIs).toHaveBeenCalledWith('prediction_id', null);
     expect(client.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
       p_id: 'job-1',
       p_locked_by: 'worker-1',
