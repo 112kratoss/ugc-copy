@@ -36,6 +36,43 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
       rpcCalls.push({ fn, args });
 
+      if (fn === 'start_generation') {
+        const insertError = generationInsertErrors.shift();
+        if (insertError) {
+          return { data: null, error: insertError };
+        }
+
+        const row: GenerationRow = {
+          id: `gen-${generations.length + 1}`,
+          user_id: String(args.p_user_id),
+          prediction_id: null,
+          status: 'pending',
+          output_url: null,
+          model: String(args.p_model),
+          category: args.p_category ? String(args.p_category) : null,
+          workflow_settings: (args.p_workflow_settings as Record<string, unknown>) ?? null,
+          prompt: typeof args.p_prompt === 'string' ? args.p_prompt : undefined,
+          cost: typeof args.p_cost === 'number' ? args.p_cost : undefined,
+          duration: typeof args.p_duration === 'number' ? args.p_duration : undefined,
+          client_request_key_hash: typeof args.p_client_request_key_hash === 'string'
+            ? args.p_client_request_key_hash
+            : null,
+          created_at: new Date().toISOString(),
+          completed_at: null,
+        };
+        generations.push(row);
+
+        return {
+          data: {
+            status: 'started',
+            generation_id: row.id,
+            remaining_credits: 100,
+            cost: args.p_cost,
+          },
+          error: null,
+        };
+      }
+
       if (fn === 'deduct_credits') {
         return { data: 100, error: null };
       }
@@ -602,7 +639,7 @@ describe('generation services', () => {
       },
     });
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 10 },
     });
     expect(generations[0]).toMatchObject({
@@ -612,6 +649,88 @@ describe('generation services', () => {
     expect(generations[0].workflow_settings).toMatchObject({
       model: 'gpt-image-2',
       providerModel: 'gpt-image-2-text-to-image',
+    });
+  });
+
+  it('reserves image credits and the pending generation row with one atomic backend RPC', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-atomic-start-1' } }),
+    } as Response);
+
+    const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+    const generationUpdates: Record<string, unknown>[] = [];
+    const atomicClient = {
+      rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
+        rpcCalls.push({ fn, args });
+        if (fn !== 'start_generation') {
+          throw new Error(`Generation starts must use start_generation, received ${fn}.`);
+        }
+
+        return {
+          data: {
+            status: 'started',
+            generation_id: 'gen-atomic-1',
+            remaining_credits: 91,
+            cost: args.p_cost,
+          },
+          error: null,
+        };
+      }),
+      from: vi.fn((table: string) => {
+        if (table !== 'generations') {
+          throw new Error(`Unexpected table access: ${table}`);
+        }
+
+        return {
+          insert() {
+            throw new Error('Generation starts must not deduct credits and insert rows as separate app-side steps.');
+          },
+          update(values: Record<string, unknown>) {
+            generationUpdates.push(values);
+            return {
+              async eq() {
+                return { data: null, error: null };
+              },
+            };
+          },
+        };
+      }),
+    };
+
+    const result = await startImageGeneration({
+      supabase: atomicClient as never,
+      creditSupabase: atomicClient as never,
+      userId: 'user-1',
+      clientRequestKeyHash: 'q'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2',
+      quotedCostCredits: 9,
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-image-atomic-start-1',
+      generationId: 'gen-atomic-1',
+      remainingCredits: 91,
+      cost: 9,
+    });
+    expect(rpcCalls).toEqual([
+      expect.objectContaining({
+        fn: 'start_generation',
+        args: expect.objectContaining({
+          p_user_id: 'user-1',
+          p_cost: 9,
+          p_model: 'nano-banana-2',
+          p_category: 'image',
+          p_client_request_key_hash: 'q'.repeat(64),
+        }),
+      }),
+    ]);
+    expect(generationUpdates[0]).toMatchObject({
+      prediction_id: 'task-image-atomic-start-1',
+      status: 'processing',
     });
   });
 
@@ -731,7 +850,7 @@ describe('generation services', () => {
     })).rejects.toThrow('Provider unavailable');
 
     expect(rpcCalls).toEqual(expect.arrayContaining([
-      expect.objectContaining({ fn: 'deduct_credits' }),
+      expect.objectContaining({ fn: 'start_generation' }),
       expect.objectContaining({ fn: 'refund_credits' }),
     ]));
     expect(generations).toHaveLength(1);
@@ -768,7 +887,7 @@ describe('generation services', () => {
     })).rejects.toThrow('Provider unavailable');
 
     expect(backendClient.rpcCalls).toEqual(expect.arrayContaining([
-      expect.objectContaining({ fn: 'deduct_credits' }),
+      expect.objectContaining({ fn: 'start_generation' }),
       expect.objectContaining({ fn: 'refund_credits' }),
     ]));
     expect(sharedGenerations[0]).toMatchObject({
@@ -993,7 +1112,7 @@ describe('generation services', () => {
       },
     });
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 5 },
     });
     expect(generations[0]).toMatchObject({
@@ -1026,7 +1145,7 @@ describe('generation services', () => {
 
     expect(result.cost).toBe(123);
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 123 },
     });
     expect(generations[0]).toMatchObject({
@@ -1075,7 +1194,7 @@ describe('generation services', () => {
     });
     expect((providerBody as unknown as { input: Record<string, unknown> }).input).not.toHaveProperty('enable_pro');
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 4 },
     });
     expect(generations[0].workflow_settings).toMatchObject({
@@ -1298,7 +1417,7 @@ describe('generation services', () => {
       },
     });
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 10 },
     });
     expect(generations[0]).toMatchObject({
@@ -1336,7 +1455,7 @@ describe('generation services', () => {
 
     expect(result.cost).toBe(234);
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 234 },
     });
     expect(generations[0]).toMatchObject({
@@ -1590,7 +1709,7 @@ describe('generation services', () => {
 
     expect(result.cost).toBe(345);
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'deduct_credits',
+      fn: 'start_generation',
       args: { p_cost: 345 },
     });
     expect(generations[0]).toMatchObject({

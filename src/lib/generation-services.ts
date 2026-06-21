@@ -236,6 +236,97 @@ async function reserveGenerationRecord(
   return generationId;
 }
 
+async function startGenerationRecord(
+  supabase: SupabaseClient,
+  record: Record<string, unknown>,
+): Promise<{
+  generationId: string;
+  remainingCredits: number;
+  cost: number;
+  predictionId?: string;
+  idempotentReplay?: boolean;
+}> {
+  const { data, error } = await supabase.rpc('start_generation', {
+    p_user_id: record.user_id,
+    p_cost: record.cost,
+    p_model: record.model,
+    p_prompt: record.prompt ?? null,
+    p_category: record.category ?? null,
+    p_duration: record.duration ?? null,
+    p_creation_mode: record.creation_mode ?? null,
+    p_source_generation_id: record.source_generation_id ?? null,
+    p_workflow_settings: record.workflow_settings ?? null,
+    p_client_request_key_hash: record.client_request_key_hash ?? null,
+  });
+
+  if (error || !isRecord(data)) {
+    throw new GenerationServiceError(
+      supabaseErrorMessage(error, 'Failed to start generation.'),
+      500,
+    );
+  }
+
+  const status = typeof data.status === 'string' ? data.status : null;
+  const generationId = typeof data.generation_id === 'string' ? data.generation_id : null;
+  const remainingCredits = typeof data.remaining_credits === 'number' ? data.remaining_credits : null;
+  const cost = typeof data.cost === 'number' ? data.cost : Number(record.cost ?? 0);
+  const predictionId = typeof data.prediction_id === 'string' ? data.prediction_id : null;
+
+  if (status === 'insufficient_credits') {
+    throw new GenerationServiceError(`Insufficient credits. This action costs ${cost} credits.`, 402);
+  }
+
+  if (status === 'invalid_cost' || status === 'invalid_request') {
+    throw new GenerationServiceError('Invalid generation start request.', 400);
+  }
+
+  if (status === 'profile_not_found') {
+    throw new GenerationServiceError('Could not find a credit profile for this account.', 401);
+  }
+
+  if (status === 'invalid_idempotency_key') {
+    throw new GenerationServiceError('Generation idempotency key is invalid.', 400);
+  }
+
+  if (status === 'in_progress') {
+    throw new GenerationServiceError(
+      'A generation with this idempotency key is already starting. Retry shortly.',
+      409,
+    );
+  }
+
+  if (status === 'key_already_used') {
+    throw new GenerationServiceError(
+      'This idempotency key was already used by a failed generation start. Retry with a new key.',
+      409,
+    );
+  }
+
+  if (status === 'already_started') {
+    if (!generationId || !predictionId || typeof remainingCredits !== 'number') {
+      throw new GenerationServiceError('Failed to replay generation start.', 500);
+    }
+
+    return {
+      generationId,
+      predictionId,
+      remainingCredits,
+      cost,
+      idempotentReplay: true,
+    };
+  }
+
+  if (status !== 'started' || !generationId || typeof remainingCredits !== 'number') {
+    throw new GenerationServiceError('Failed to start generation.', 500);
+  }
+
+  return {
+    generationId,
+    remainingCredits,
+    cost,
+  };
+}
+
 async function markGenerationProviderStarted(
   supabase: SupabaseClient,
   generationId: string,
@@ -1217,7 +1308,6 @@ export async function startImageGeneration(params: {
     referenceCount: resolvedImageUrls.length,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
-  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
 
   let generationId: string | null = null;
@@ -1264,7 +1354,7 @@ export async function startImageGeneration(params: {
       }
     }
 
-    generationId = await reserveGenerationRecord(creditSupabase, {
+    const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model,
       cost,
@@ -1289,6 +1379,16 @@ export async function startImageGeneration(params: {
           : {}),
       },
     });
+    generationId = reservation.generationId;
+    if (reservation.predictionId) {
+      return {
+        predictionId: reservation.predictionId,
+        remainingCredits: reservation.remainingCredits,
+        cost: reservation.cost,
+        generationId,
+        idempotentReplay: reservation.idempotentReplay,
+      };
+    }
 
     predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
@@ -1305,8 +1405,8 @@ export async function startImageGeneration(params: {
 
     return {
       predictionId,
-      remainingCredits,
-      cost,
+      remainingCredits: reservation.remainingCredits,
+      cost: reservation.cost,
       generationId,
     };
   } catch (error) {
@@ -1622,7 +1722,6 @@ export async function startVideoGeneration(params: {
     hasReferenceVideo: resolvedReferenceVideoUrls.length > 0,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
-  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   let generationId: string | null = null;
   let predictionId: string | null = null;
@@ -1761,7 +1860,7 @@ export async function startVideoGeneration(params: {
       };
     }
 
-    generationId = await reserveGenerationRecord(creditSupabase, {
+    const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model: providerModelId,
       cost,
@@ -1832,6 +1931,16 @@ export async function startVideoGeneration(params: {
           : {}),
       },
     });
+    generationId = reservation.generationId;
+    if (reservation.predictionId) {
+      return {
+        predictionId: reservation.predictionId,
+        remainingCredits: reservation.remainingCredits,
+        cost: reservation.cost,
+        generationId,
+        idempotentReplay: reservation.idempotentReplay,
+      };
+    }
 
     predictionId = await createKieTask(body, endpoint, { generationId });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
@@ -1916,8 +2025,8 @@ export async function startVideoGeneration(params: {
 
     return {
       predictionId,
-      remainingCredits,
-      cost,
+      remainingCredits: reservation.remainingCredits,
+      cost: reservation.cost,
       generationId,
     };
   } catch (error) {
@@ -1982,12 +2091,11 @@ export async function startMotionGeneration(params: {
     console.error('Kie webhook callback is not configured:', error);
     throw new GenerationServiceError('Server configuration error: webhook secret missing', 500);
   }
-  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
-    generationId = await reserveGenerationRecord(creditSupabase, {
+    const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model: selectedModel.apiModelId,
       duration,
@@ -2007,6 +2115,16 @@ export async function startMotionGeneration(params: {
         ...(referenceVideo ? { referenceVideo } : {}),
       },
     });
+    generationId = reservation.generationId;
+    if (reservation.predictionId) {
+      return {
+        predictionId: reservation.predictionId,
+        remainingCredits: reservation.remainingCredits,
+        cost: reservation.cost,
+        generationId,
+        idempotentReplay: reservation.idempotentReplay,
+      };
+    }
 
     predictionId = await createKieTask({
       model: selectedModel.apiModelId,
@@ -2048,8 +2166,8 @@ export async function startMotionGeneration(params: {
 
     return {
       predictionId,
-      remainingCredits,
-      cost,
+      remainingCredits: reservation.remainingCredits,
+      cost: reservation.cost,
       generationId,
     };
   } catch (error) {

@@ -14,6 +14,13 @@ function readHardeningMigration() {
   return readFileSync(join(migrationsDirectory, migrationName as string), 'utf8');
 }
 
+function readAllMigrations() {
+  return readdirSync(migrationsDirectory)
+    .sort()
+    .map((name) => readFileSync(join(migrationsDirectory, name), 'utf8'))
+    .join('\n');
+}
+
 describe('credit mutation security boundary', () => {
   it('limits every balance mutation RPC to the service role', () => {
     const sql = readHardeningMigration();
@@ -33,6 +40,22 @@ describe('credit mutation security boundary', () => {
       expect(sql).toContain(`GRANT EXECUTE ON FUNCTION public.${signature} TO service_role`);
     }
   });
+
+  it('keeps atomic generation start RPCs private to the service role', () => {
+    const sql = readAllMigrations();
+    const signatures = [
+      'start_ai_usage_event(uuid, integer, text, text, text, text, text, text)',
+      'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
+    ];
+
+    for (const signature of signatures) {
+      expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${signature} FROM PUBLIC`);
+      expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${signature} FROM anon`);
+      expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${signature} FROM authenticated`);
+      expect(sql).toContain(`GRANT EXECUTE ON FUNCTION public.${signature} TO service_role`);
+    }
+  });
+
 
   it('keeps transaction history readable but not writable by end users', () => {
     const sql = readHardeningMigration();
@@ -63,6 +86,7 @@ describe('credit mutation security boundary', () => {
     expect(generate).toContain("adminSupabase.rpc('refund_generation'");
     expect(generateImage).toContain("adminSupabase.rpc('refund_generation'");
     expect(generateVideo).toContain("adminSupabase.rpc('refund_generation'");
+    expect(generationServices).toContain("supabase.rpc('start_generation'");
     expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_generation'");

@@ -31,6 +31,32 @@ function createSupabaseMock(
   const selects: string[] = [];
   const eqs: Array<{ column: string; value: unknown }> = [];
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
+    if (fn === 'start_generation') {
+      inserts.push({
+        user_id: args.p_user_id,
+        model: args.p_model,
+        cost: args.p_cost,
+        duration: args.p_duration,
+        client_request_key_hash: args.p_client_request_key_hash,
+        prompt: args.p_prompt,
+        category: args.p_category,
+        creation_mode: args.p_creation_mode,
+        source_generation_id: args.p_source_generation_id,
+        workflow_settings: args.p_workflow_settings,
+        prediction_id: null,
+        status: 'pending',
+      });
+      return {
+        data: {
+          status: 'started',
+          generation_id: 'gen-motion-1',
+          remaining_credits: 88,
+          cost: args.p_cost,
+        },
+        error: null,
+      };
+    }
+
     if (fn === 'deduct_credits') {
       return { data: 88, error: null };
     }
@@ -326,7 +352,7 @@ describe('/api/generate route', () => {
       p_scope: 'media-generation:start',
       p_subject_key: 'user-1',
     }));
-    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('start_generation', expect.anything());
     expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.inserts).toHaveLength(0);
   });
@@ -360,7 +386,7 @@ describe('/api/generate route', () => {
     await expect(response.json()).resolves.toMatchObject({
       error: 'Server configuration error: webhook secret missing',
     });
-    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('start_generation', expect.anything());
     expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.inserts).toHaveLength(0);
   });
