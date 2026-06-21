@@ -3,7 +3,7 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -120,6 +120,15 @@ import { MediaCreationScreen } from '../components/media-creation-screen';
 import { pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 
+const mountedTrees: renderer.ReactTestRenderer[] = [];
+const createRenderer = renderer.create.bind(renderer);
+
+vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof renderer.create>) => {
+  const tree = createRenderer(...args);
+  mountedTrees.push(tree);
+  return tree;
+});
+
 function collectText(root: renderer.ReactTestInstance) {
   return root
     .findAll((node) => String(node.type) === 'text' && typeof node.props.children === 'string')
@@ -139,6 +148,14 @@ function findPressableByText(root: renderer.ReactTestInstance, text: string) {
 }
 
 describe('MediaCreationScreen Phase 3 create workspace', () => {
+  afterEach(() => {
+    renderer.act(() => {
+      for (const tree of mountedTrees.splice(0)) tree.unmount();
+    });
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     routerState.push.mockClear();
     authState.updateCredits.mockClear();
