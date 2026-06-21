@@ -5,6 +5,7 @@ import {
   claimGenerationCompletionJobs,
   enqueueGenerationCompletionJob,
   finishGenerationCompletionJob,
+  hasDueGenerationCompletionJobs,
   maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
   pruneGenerationCompletionJobs,
@@ -37,6 +38,26 @@ function createCompletionWorkerClient(results: Array<{ data: unknown; error: Err
     update,
     updateEq,
     updateIs,
+  };
+}
+
+function createDueProbeClient(results: Array<{ data: unknown[] | null; error: Error | null }>) {
+  const limit = vi.fn(async () => {
+    const result = results.shift();
+    if (!result) throw new Error('Unexpected due probe query');
+    return result;
+  });
+  const lte = vi.fn(() => ({ limit }));
+  const eq = vi.fn(() => ({ lte }));
+  const select = vi.fn(() => ({ eq }));
+  const from = vi.fn(() => ({ select }));
+
+  return {
+    from,
+    select,
+    eq,
+    lte,
+    limit,
   };
 }
 
@@ -108,6 +129,25 @@ describe('generation completion jobs', () => {
     expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 4))).toBe(true);
     expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 5))).toBe(false);
     expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 59))).toBe(false);
+  });
+
+  it('checks for due completion jobs with indexed one-row probes', async () => {
+    const client = createDueProbeClient([
+      { data: [], error: null },
+      { data: [{ id: 'job-2' }], error: null },
+    ]);
+
+    await expect(hasDueGenerationCompletionJobs(client as never, {
+      nowMs: Date.UTC(2026, 5, 21, 10, 15, 0),
+      lockTtlSeconds: 300,
+    })).resolves.toBe(true);
+
+    expect(client.from).toHaveBeenCalledWith('generation_completion_jobs');
+    expect(client.eq).toHaveBeenNthCalledWith(1, 'status', 'pending');
+    expect(client.lte).toHaveBeenNthCalledWith(1, 'next_attempt_at', '2026-06-21T10:15:00.000Z');
+    expect(client.eq).toHaveBeenNthCalledWith(2, 'status', 'processing');
+    expect(client.lte).toHaveBeenNthCalledWith(2, 'locked_at', '2026-06-21T10:10:00.000Z');
+    expect(client.limit).toHaveBeenCalledWith(1);
   });
 
   it('skips automatic completion queue pruning outside the cleanup window', async () => {

@@ -21,6 +21,11 @@ const mocks = vi.hoisted(() => ({
     void _options;
     return 3;
   }),
+  hasDueGenerationCompletionJobs: vi.fn(async (_client: unknown, _options?: unknown) => {
+    void _client;
+    void _options;
+    return true;
+  }),
   processGenerationCompletionJobs: vi.fn(),
   pruneGenerationCompletionJobs: vi.fn(),
   startBackendJobRun: vi.fn(async (_client, options: {
@@ -72,6 +77,9 @@ vi.mock('@/lib/generation-completion-jobs', async () => {
   );
   return {
     ...actual,
+    hasDueGenerationCompletionJobs: (client: unknown, options?: unknown) => (
+      mocks.hasDueGenerationCompletionJobs(client, options)
+    ),
     maybePruneGenerationCompletionJobs: (client: unknown, options?: unknown) => (
       mocks.maybePruneGenerationCompletionJobs(client, options)
     ),
@@ -85,6 +93,7 @@ describe('/api/cron/generation-completions route', () => {
     vi.resetModules();
     mocks.createServiceClient.mockReset();
     mocks.finishBackendJobRun.mockClear();
+    mocks.hasDueGenerationCompletionJobs.mockReset();
     mocks.pruneBackendJobRuns.mockClear();
     mocks.maybePruneGenerationCompletionJobs.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
@@ -98,6 +107,7 @@ describe('/api/cron/generation-completions route', () => {
       retried: 1,
       failed: 0,
     });
+    mocks.hasDueGenerationCompletionJobs.mockResolvedValue(true);
     mocks.maybePruneGenerationCompletionJobs.mockResolvedValue(3);
     mocks.pruneGenerationCompletionJobs.mockResolvedValue(3);
     mocks.withBackendJobLock.mockImplementation(async (_client, _options, task: () => Promise<unknown>): Promise<LockMockResult> => ({
@@ -164,6 +174,30 @@ describe('/api/cron/generation-completions route', () => {
         claimed: 2,
         pruned: 3,
       },
+    });
+  });
+
+  it('skips lock and job-run writes when no completion jobs are due', async () => {
+    mocks.hasDueGenerationCompletionJobs.mockResolvedValueOnce(false);
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+
+    expect(response.status).toBe(202);
+    expect(mocks.hasDueGenerationCompletionJobs).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
+    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
+    expect(mocks.processGenerationCompletionJobs).not.toHaveBeenCalled();
+    expect(mocks.finishBackendJobRun).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      skipped: true,
+      reason: 'no_due_jobs',
     });
   });
 });

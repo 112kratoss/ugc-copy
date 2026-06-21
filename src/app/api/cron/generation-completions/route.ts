@@ -10,6 +10,7 @@ import {
 } from '@/lib/backend-job-runs';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
 import {
+  hasDueGenerationCompletionJobs,
   maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
@@ -64,6 +65,29 @@ export async function GET(request: Request) {
 
     const currentServiceClient = createServiceClient();
     serviceClient = currentServiceClient;
+
+    const hasDueJobs = await hasDueGenerationCompletionJobs(currentServiceClient, {
+      nowMs: startedAt,
+    });
+
+    if (!hasDueJobs) {
+      const finishedAt = Date.now();
+      const pruned = await maybePruneGenerationCompletionJobs(currentServiceClient, { nowMs: startedAt });
+      const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
+      logCron('info', 'generation_completions_skipped_no_due_jobs', {
+        requestId,
+        ms: finishedAt - startedAt,
+        pruned,
+        prunedJobRuns,
+      });
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: 'no_due_jobs',
+        pruned,
+      }, { status: 202 });
+    }
+
     jobRun = await startBackendJobRun(currentServiceClient, {
       name: JOB_NAME,
       route: ROUTE,

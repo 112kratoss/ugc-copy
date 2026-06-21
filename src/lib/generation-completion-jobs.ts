@@ -17,6 +17,8 @@ type RpcClient = {
   rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<SupabaseRpcResult>;
 };
 
+type DueProbeClient = Pick<SupabaseClient, 'from'>;
+
 export type GenerationCompletionPruneOptions = {
   retentionDays?: number;
   limit?: number;
@@ -127,6 +129,48 @@ export async function pruneGenerationCompletionJobs(
 
   if (error) throw error;
   return typeof data === 'number' ? data : null;
+}
+
+function hasRows(data: unknown): boolean {
+  return Array.isArray(data) && data.length > 0;
+}
+
+export async function hasDueGenerationCompletionJobs(
+  client: DueProbeClient,
+  options: { nowMs?: number; lockTtlSeconds?: number } = {},
+): Promise<boolean> {
+  const nowMs = options.nowMs ?? Date.now();
+  const lockTtlSeconds = options.lockTtlSeconds ?? DEFAULT_LOCK_TTL_SECONDS;
+
+  if (!Number.isFinite(nowMs) || nowMs < 0) {
+    throw new Error('Generation completion due probe time must be a valid timestamp');
+  }
+
+  if (!Number.isInteger(lockTtlSeconds) || lockTtlSeconds < 1) {
+    throw new Error('Generation completion due probe lock TTL must be a positive integer');
+  }
+
+  const nowIso = new Date(nowMs).toISOString();
+  const pending = await client
+    .from('generation_completion_jobs')
+    .select('id')
+    .eq('status', 'pending')
+    .lte('next_attempt_at', nowIso)
+    .limit(1);
+
+  if (pending.error) throw pending.error;
+  if (hasRows(pending.data)) return true;
+
+  const staleLockIso = new Date(nowMs - lockTtlSeconds * 1000).toISOString();
+  const staleProcessing = await client
+    .from('generation_completion_jobs')
+    .select('id')
+    .eq('status', 'processing')
+    .lte('locked_at', staleLockIso)
+    .limit(1);
+
+  if (staleProcessing.error) throw staleProcessing.error;
+  return hasRows(staleProcessing.data);
 }
 
 export function shouldPruneGenerationCompletionJobs(
