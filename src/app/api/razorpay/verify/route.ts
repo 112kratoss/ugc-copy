@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { createClient } from '@supabase/supabase-js';
-import { createServiceClient } from '@/lib/server-helpers';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string;
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 export async function POST(req: Request) {
     try {
@@ -27,10 +23,8 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Invalid payment signature' }, { status: 400 });
         }
 
-        // Initialize Supabase client securely with user token
-        const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-            global: { headers: { Authorization: req.headers.get('Authorization')! } },
-        });
+        // Authenticate with the shared user-scoped Supabase helper.
+        const supabase = createUserClient(req);
 
         // Get authenticated user
         const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -46,7 +40,7 @@ export async function POST(req: Request) {
             .from('transactions')
             .select('id, credits, status')
             .eq('razorpay_order_id', razorpay_order_id)
-            .eq('user_id', userId)
+            .eq('user_id', user.id)
             .single();
 
         if (txnError || !txn) {
@@ -62,7 +56,7 @@ export async function POST(req: Request) {
         // Credit mutation is service-role-only; ownership was established above.
         const adminSupabase = createServiceClient();
         const { data: rpcSuccess, error: rpcError } = await adminSupabase.rpc('add_credits', {
-            p_user_id: userId,
+            p_user_id: user.id,
             p_credits: txn.credits,
             p_transaction_id: txn.id,
             p_payment_id: razorpay_payment_id,
