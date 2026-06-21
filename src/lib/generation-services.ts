@@ -1291,7 +1291,7 @@ export async function startImageGeneration(params: {
     });
 
     predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId });
-    await markGenerationProviderStarted(supabase, generationId, predictionId);
+    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
       supabase,
@@ -1834,7 +1834,7 @@ export async function startVideoGeneration(params: {
     });
 
     predictionId = await createKieTask(body, endpoint, { generationId });
-    await markGenerationProviderStarted(supabase, generationId, predictionId);
+    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     const videoInputCandidates: PersistGenerationInputCandidate[] = [];
     let inputSortOrder = 0;
@@ -2018,7 +2018,7 @@ export async function startMotionGeneration(params: {
         mode,
       },
     }, undefined, { generationId });
-    await markGenerationProviderStarted(supabase, generationId, predictionId);
+    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
       supabase,

@@ -20,10 +20,11 @@ type GenerationRow = {
 
 type SupabaseMockOptions = {
   generationUpdateErrors?: Error[];
+  sharedGenerations?: GenerationRow[];
 };
 
 function createSupabaseMock(initialRows: GenerationRow[] = [], options: SupabaseMockOptions = {}) {
-  const generations = [...initialRows];
+  const generations = options.sharedGenerations ?? [...initialRows];
   const uploads: Array<{ bucket: string; filePath: string }> = [];
   const inputMediaRows: Record<string, unknown>[] = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
@@ -555,6 +556,46 @@ describe('generation services', () => {
     });
   });
 
+  it('uses the backend client to attach provider task ids after provider work starts', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-backend-attach-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationUpdateErrors: [
+        new Error('user client cannot attach provider task 1'),
+        new Error('user client cannot attach provider task 2'),
+        new Error('user client cannot attach provider task 3'),
+      ],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startImageGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'h'.repeat(64),
+      prompt: 'A durable backend-attached image generation.',
+      model: 'nano-banana-2',
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-image-backend-attach-1',
+      generationId: 'gen-1',
+    });
+    expect(backendClient.rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
+    expect(sharedGenerations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-image-backend-attach-1',
+      client_request_key_hash: 'h'.repeat(64),
+    });
+  });
+
   it('keeps provider-started generations charged and pending when provider task attach cannot be saved', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);
@@ -880,6 +921,50 @@ describe('generation services', () => {
     });
   });
 
+  it('uses the backend client to attach video provider task ids after provider work starts', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-video-backend-attach-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationUpdateErrors: [
+        new Error('user client cannot attach video provider task 1'),
+        new Error('user client cannot attach video provider task 2'),
+        new Error('user client cannot attach video provider task 3'),
+      ],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startVideoGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'i'.repeat(64),
+      prompt: 'A durable backend-attached video generation.',
+      model: 'kling-3.0-video',
+      duration: 7,
+      mode: 'std',
+      aspectRatio: '16:9',
+      sound: true,
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-video-backend-attach-1',
+      generationId: 'gen-1',
+    });
+    expect(backendClient.rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
+    expect(sharedGenerations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-video-backend-attach-1',
+      client_request_key_hash: 'i'.repeat(64),
+    });
+  });
+
   it('uses Grok text-to-video provider payload without references', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -1096,6 +1181,51 @@ describe('generation services', () => {
       status: 'processing',
       prediction_id: 'task-motion-durable-1',
       client_request_key_hash: 'e'.repeat(64),
+    });
+  });
+
+  it('uses the backend client to attach motion provider task ids after provider work starts', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-motion-backend-attach-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationUpdateErrors: [
+        new Error('user client cannot attach motion provider task 1'),
+        new Error('user client cannot attach motion provider task 2'),
+        new Error('user client cannot attach motion provider task 3'),
+      ],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startMotionGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'j'.repeat(64),
+      prompt: 'A durable backend-attached motion generation.',
+      model: 'kling-2.6',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 10,
+      characterOrientation: 'video',
+      mode: '720p',
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-motion-backend-attach-1',
+      generationId: 'gen-1',
+    });
+    expect(backendClient.rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
+    expect(sharedGenerations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-motion-backend-attach-1',
+      client_request_key_hash: 'j'.repeat(64),
     });
   });
 
