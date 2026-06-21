@@ -87,3 +87,24 @@ export function buildLockedGenerationStatusPayload(
     retryAfterMs,
   };
 }
+
+export function buildFailedGenerationStatusPayload(
+  localGeneration: StoredGenerationStatusRow | null | undefined,
+) {
+  const timing = normalizeStoredGenerationTiming({
+    kind: getGenerationKind({
+      category: localGeneration?.category,
+      model: localGeneration?.model,
+    }),
+    status: localGeneration?.status,
+    createdAt: localGeneration?.created_at,
+    completedAt: localGeneration?.completed_at,
+  });
+
+  return {
+    status: timing.appStatus,
+    output: null,
+    error: null,
+    timing,
+  };
+}

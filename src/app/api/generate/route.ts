@@ -16,6 +16,7 @@ import {
     MEDIA_GENERATION_RATE_LIMIT,
 } from '@/lib/backend-rate-limit';
 import {
+    buildFailedGenerationStatusPayload,
     buildLockedGenerationStatusPayload,
     GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
     GENERATION_STATUS_LOCK_TTL_SECONDS,
@@ -247,6 +248,10 @@ export async function GET(request: NextRequest) {
 
         if (!localGeneration || localGeneration.user_id !== user.id) {
             return NextResponse.json({ error: 'Generation not found' }, { status: 404 });
+        }
+
+        if (localGeneration?.status === 'failed') {
+            return NextResponse.json(buildFailedGenerationStatusPayload(localGeneration));
         }
 
         const adminSupabase = createServiceClient();

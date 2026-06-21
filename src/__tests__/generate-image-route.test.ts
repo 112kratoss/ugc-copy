@@ -568,6 +568,52 @@ describe('/api/generate-image route', () => {
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
+  it('returns cached failed image state without lock or provider status calls', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-image-failed-1',
+      prediction_id: 'task-image-failed-1',
+      user_id: 'user-1',
+      status: 'failed',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: '2026-04-15T10:01:00.000Z',
+      model: 'nano-banana-2',
+      category: 'image',
+      workflow_settings: {
+        resolution: '1K',
+      },
+    });
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=task-image-failed-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'failed',
+      output: null,
+      error: null,
+      timing: expect.objectContaining({
+        appStatus: 'failed',
+      }),
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
+      'try_acquire_backend_job_lock',
+      expect.objectContaining({ p_name: 'generation-status:task-image-failed-1' })
+    );
+  });
+
   it('throttles provider status checks while returning cached active image state', async () => {
     currentSupabaseMock = createSupabaseMock(null, {
       id: 'gen-image-throttled-1',

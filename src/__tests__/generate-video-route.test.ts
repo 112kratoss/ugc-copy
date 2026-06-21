@@ -726,6 +726,49 @@ describe('/api/generate-video route', () => {
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
+  it('returns cached failed video state without lock or provider status calls', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-failed-1',
+      prediction_id: 'task-video-failed-1',
+      user_id: 'user-1',
+      status: 'failed',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: '2026-04-15T10:01:00.000Z',
+      model: 'kling-3.0-video',
+      category: 'video',
+    });
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-failed-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'failed',
+      output: null,
+      error: null,
+      timing: expect.objectContaining({
+        appStatus: 'failed',
+      }),
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
+      'try_acquire_backend_job_lock',
+      expect.objectContaining({ p_name: 'generation-status:task-video-failed-1' })
+    );
+  });
+
   it('throttles provider status checks while returning cached active video state', async () => {
     currentSupabaseMock = createSupabaseMock(null, {
       id: 'gen-video-throttled-1',

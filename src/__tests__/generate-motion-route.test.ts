@@ -501,6 +501,50 @@ describe('/api/generate route', () => {
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
+  it('returns cached failed motion state without lock or provider status calls', async () => {
+    currentSupabaseMock = createSupabaseMock({
+      id: 'gen-motion-failed-1',
+      prediction_id: 'task-motion-failed-1',
+      user_id: 'user-1',
+      status: 'failed',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: '2026-04-15T10:01:00.000Z',
+      model: 'kling-3.0',
+      category: 'motion',
+      duration: 6,
+    });
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate?id=task-motion-failed-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'failed',
+      output: null,
+      error: null,
+      timing: expect.objectContaining({
+        appStatus: 'failed',
+      }),
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
+      'try_acquire_backend_job_lock',
+      expect.objectContaining({ p_name: 'generation-status:task-motion-failed-1' })
+    );
+  });
+
   it('throttles provider status checks while returning cached active motion state', async () => {
     currentSupabaseMock = createSupabaseMock({
       id: 'gen-motion-throttled-1',
