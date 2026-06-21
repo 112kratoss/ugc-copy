@@ -7,7 +7,22 @@ type LockMockResult =
 
 const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
+  finishBackendJobRun: vi.fn(async (_client: unknown, _run: unknown, _options: unknown) => {
+    void _client;
+    void _run;
+    void _options;
+  }),
   processPendingMobilePushReceipts: vi.fn(),
+  startBackendJobRun: vi.fn(async (_client, options: {
+    name: string;
+    route: string;
+    requestId: string;
+    lockOwner: string;
+    startedAtMs: number;
+  }) => ({
+    id: 'run-1',
+    ...options,
+  })),
   withBackendJobLock: vi.fn(async (_client, _options, task: () => Promise<unknown>): Promise<LockMockResult> => ({
     acquired: true,
     value: await task(),
@@ -32,11 +47,29 @@ vi.mock('@/lib/backend-job-lock', () => ({
   ),
 }));
 
+vi.mock('@/lib/backend-job-runs', () => ({
+  finishBackendJobRun: (client: unknown, run: unknown, options: unknown) => (
+    mocks.finishBackendJobRun(client, run, options)
+  ),
+  startBackendJobRun: (client: unknown, options: unknown) => mocks.startBackendJobRun(
+    client,
+    options as {
+      name: string;
+      route: string;
+      requestId: string;
+      lockOwner: string;
+      startedAtMs: number;
+    },
+  ),
+}));
+
 describe('/api/cron/mobile-push-receipts route', () => {
   beforeEach(() => {
     vi.resetModules();
     mocks.createServiceClient.mockReset();
+    mocks.finishBackendJobRun.mockClear();
     mocks.processPendingMobilePushReceipts.mockReset();
+    mocks.startBackendJobRun.mockClear();
     mocks.withBackendJobLock.mockReset();
     mocks.createServiceClient.mockReturnValue({ service: 'supabase' });
     mocks.processPendingMobilePushReceipts.mockResolvedValue({
@@ -58,6 +91,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
 
     expect(response.status).toBe(401);
     expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
   });
 
   it('fails closed when the cron secret is missing', async () => {
@@ -71,6 +105,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
     }));
 
     expect(response.status).toBe(401);
+    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
     expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
     expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
   });
@@ -85,6 +120,13 @@ describe('/api/cron/mobile-push-receipts route', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
+    expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({
+        name: 'mobile-push-receipts',
+        route: '/api/cron/mobile-push-receipts',
+      }),
+    );
     expect(mocks.processPendingMobilePushReceipts).toHaveBeenCalledWith({ service: 'supabase' });
     expect(mocks.withBackendJobLock).toHaveBeenCalledWith(
       { service: 'supabase' },
@@ -93,6 +135,19 @@ describe('/api/cron/mobile-push-receipts route', () => {
         ttlSeconds: 840,
       }),
       expect.any(Function),
+    );
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({
+        status: 'succeeded',
+        summary: {
+          checkedCount: 1,
+          updatedCount: 1,
+          staleCount: 0,
+          disabledTokenCount: 0,
+        },
+      }),
     );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
@@ -114,11 +169,40 @@ describe('/api/cron/mobile-push-receipts route', () => {
     }));
 
     expect(response.status).toBe(202);
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({
+        status: 'skipped',
+        skipReason: 'already_running',
+      }),
+    );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       skipped: true,
       reason: 'already_running',
     });
     expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+  });
+
+  it('records failed receipt processing before returning a retryable error', async () => {
+    mocks.processPendingMobilePushReceipts.mockRejectedValueOnce(new Error('receipt processor failed'));
+
+    const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
+    const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {
+      headers: {
+        authorization: 'Bearer secret-123',
+      },
+    }));
+
+    expect(response.status).toBe(500);
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({
+        status: 'failed',
+        errorMessage: 'receipt processor failed',
+      }),
+    );
   });
 });

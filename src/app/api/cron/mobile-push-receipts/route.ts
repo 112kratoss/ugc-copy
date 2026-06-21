@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { withBackendJobLock } from '@/lib/backend-job-lock';
+import { finishBackendJobRun, startBackendJobRun, type BackendJobRunHandle } from '@/lib/backend-job-runs';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
 import { processPendingMobilePushReceipts } from '@/lib/mobile-notifications';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -40,22 +41,39 @@ export async function GET(request: Request) {
   const startedAt = Date.now();
   const requestId = request.headers.get('x-vercel-id') ?? randomUUID();
   const lockOwner = `${requestId}:${startedAt}`;
+  let serviceClient: ReturnType<typeof createServiceClient> | null = null;
+  let jobRun: BackendJobRunHandle | null = null;
 
   try {
     logCron('info', 'mobile_push_receipts_started', { requestId });
 
-    const serviceClient = createServiceClient();
-    const lockResult = await withBackendJobLock(serviceClient, {
+    const currentServiceClient = createServiceClient();
+    serviceClient = currentServiceClient;
+    jobRun = await startBackendJobRun(currentServiceClient, {
+      name: JOB_NAME,
+      route: ROUTE,
+      requestId,
+      lockOwner,
+      startedAtMs: startedAt,
+    });
+
+    const lockResult = await withBackendJobLock(currentServiceClient, {
       name: JOB_NAME,
       ttlSeconds: LOCK_TTL_SECONDS,
       owner: lockOwner,
-    }, () => processPendingMobilePushReceipts(serviceClient));
+    }, () => processPendingMobilePushReceipts(currentServiceClient));
 
     if (!lockResult.acquired) {
+      const finishedAt = Date.now();
+      await finishBackendJobRun(currentServiceClient, jobRun, {
+        status: 'skipped',
+        finishedAtMs: finishedAt,
+        skipReason: lockResult.reason,
+      });
       logCron('info', 'mobile_push_receipts_skipped', {
         requestId,
         reason: lockResult.reason,
-        ms: Date.now() - startedAt,
+        ms: finishedAt - startedAt,
       });
       return NextResponse.json({
         success: true,
@@ -64,16 +82,30 @@ export async function GET(request: Request) {
       }, { status: 202 });
     }
 
+    const finishedAt = Date.now();
+    await finishBackendJobRun(currentServiceClient, jobRun, {
+      status: 'succeeded',
+      finishedAtMs: finishedAt,
+      summary: lockResult.value,
+    });
     logCron('info', 'mobile_push_receipts_completed', {
       requestId,
-      ms: Date.now() - startedAt,
+      ms: finishedAt - startedAt,
       summary: lockResult.value,
     });
     return NextResponse.json({ success: true, summary: lockResult.value });
   } catch (error) {
+    const finishedAt = Date.now();
+    if (serviceClient) {
+      await finishBackendJobRun(serviceClient, jobRun, {
+        status: 'failed',
+        finishedAtMs: finishedAt,
+        errorMessage: errorMessage(error),
+      });
+    }
     logCron('error', 'mobile_push_receipts_failed', {
       requestId,
-      ms: Date.now() - startedAt,
+      ms: finishedAt - startedAt,
       error: errorMessage(error),
     });
     return NextResponse.json({ error: 'Failed to process mobile push receipts.' }, { status: 500 });
