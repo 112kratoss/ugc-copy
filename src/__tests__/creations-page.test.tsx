@@ -68,6 +68,8 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
     ...init,
   });
 
+const GENERATIONS_PAGE_URL = '/api/generations?includeArchived=true&limit=36';
+
 const makeGeneration = (overrides: Record<string, unknown> = {}) => ({
   id: 'gen-image',
   output_url: 'https://example.com/output.jpg',
@@ -147,7 +149,7 @@ describe('CreationsPage', () => {
     expect(await screen.findByRole('heading', { name: /studio/i })).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith('/api/generations?includeArchived=true', {
+      expect(fetch).toHaveBeenCalledWith(GENERATIONS_PAGE_URL, {
         headers: { Authorization: 'Bearer layout-session-token' },
       });
     });
@@ -198,7 +200,71 @@ describe('CreationsPage', () => {
 
     expect(await screen.findByText('Cached Campaign')).toBeInTheDocument();
     expect(screen.queryByText(/Start your portfolio loop/i)).not.toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/generations?includeArchived=true', {
+    expect(fetch).toHaveBeenCalledWith(GENERATIONS_PAGE_URL, {
+      headers: { Authorization: 'Bearer layout-session-token' },
+    });
+  });
+
+  it('loads the next creations page without refetching the whole history', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-first-page',
+              title: 'First page creation',
+            }),
+          ],
+          pagination: {
+            limit: 36,
+            hasMore: true,
+            nextCursor: '36',
+          },
+        }));
+      }
+
+      if (url === '/api/generations?includeArchived=true&limit=36&cursor=36') {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-second-page',
+              title: 'Second page creation',
+              created_at: '2026-05-31T10:00:00.000Z',
+            }),
+          ],
+          pagination: {
+            limit: 36,
+            hasMore: false,
+            nextCursor: null,
+          },
+        }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true') {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('First page creation')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+
+    expect(await screen.findByText('Second page creation')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /load more creations/i })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(GENERATIONS_PAGE_URL, {
+      headers: { Authorization: 'Bearer layout-session-token' },
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&limit=36&cursor=36', {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
   });
@@ -287,7 +353,7 @@ describe('CreationsPage', () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url === '/api/generations?includeArchived=true') {
+      if (url === GENERATIONS_PAGE_URL) {
         return Promise.resolve(jsonResponse({
           generations: [
             makeGeneration({
@@ -333,7 +399,7 @@ describe('CreationsPage', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url === '/api/generations?includeArchived=true') {
+      if (url === GENERATIONS_PAGE_URL) {
         return Promise.resolve(jsonResponse({
           generations: [
             makeGeneration({
@@ -528,7 +594,7 @@ describe('CreationsPage', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
-      if (url === '/api/generations?includeArchived=true') {
+      if (url === GENERATIONS_PAGE_URL) {
         return Promise.resolve(jsonResponse({
           generations: [
             {
@@ -784,7 +850,7 @@ describe('CreationsPage', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url === '/api/generations?includeArchived=true') {
+      if (url === GENERATIONS_PAGE_URL) {
         generationRequestCount += 1;
         return Promise.resolve(jsonResponse({
           generations: [

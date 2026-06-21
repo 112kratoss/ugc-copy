@@ -670,6 +670,9 @@ describe('NewPostClient', () => {
 
     expect(await screen.findByDisplayValue('A creator-style product image with warm natural light.')).toBeInTheDocument();
     expect(await screen.findByDisplayValue(/saved generation setup/i)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-paid-1&limit=1', {
+      headers: { Authorization: 'Bearer test-token' },
+    });
     expect(screen.getByText(/saved prompt, reusable setup notes, and remix access are ready/i)).toBeInTheDocument();
     expect(screen.getByText(/remix access is included in this unlock/i)).toBeInTheDocument();
 

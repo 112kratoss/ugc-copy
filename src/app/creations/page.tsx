@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, ArrowLeft, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, LockKeyhole, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
+import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, LockKeyhole, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
@@ -93,7 +93,17 @@ interface CreationsWorkspaceCache {
     profile: ProfileApiResponse | null;
 }
 
+interface GenerationsApiResponse {
+    generations?: Generation[];
+    pagination?: {
+        limit?: number;
+        hasMore?: boolean;
+        nextCursor?: string | null;
+    };
+}
+
 const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
+const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
 const STUDIO_GRID_CLASS = 'grid items-stretch gap-4 xl:gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,16rem),1fr))]';
 
 function getCreationsWorkspaceCacheKey(userId: string) {
@@ -198,10 +208,32 @@ function preserveStableMediaUrl(
     return incomingUrl;
 }
 
-function mergeGenerationRefresh(previousGenerations: Generation[], incomingGenerations: Generation[]): Generation[] {
+function buildGenerationsPageUrl(cursor?: string | null): string {
+    const params = new URLSearchParams({
+        includeArchived: 'true',
+        limit: String(CREATIONS_GENERATIONS_PAGE_SIZE),
+    });
+
+    if (cursor) {
+        params.set('cursor', cursor);
+    }
+
+    return `/api/generations?${params.toString()}`;
+}
+
+function getNextGenerationCursor(payload: GenerationsApiResponse): string | null {
+    const nextCursor = payload.pagination?.nextCursor;
+    return typeof nextCursor === 'string' && nextCursor.length > 0 ? nextCursor : null;
+}
+
+function mergeGenerationRefresh(
+    previousGenerations: Generation[],
+    incomingGenerations: Generation[],
+    options: { preserveMissing?: boolean } = {}
+): Generation[] {
     const previousById = new Map(previousGenerations.map((generation) => [generation.id, generation]));
 
-    return incomingGenerations.map((incomingGeneration) => {
+    const refreshedGenerations = incomingGenerations.map((incomingGeneration) => {
         const previousGeneration = previousById.get(incomingGeneration.id);
         if (!previousGeneration) {
             return incomingGeneration;
@@ -227,6 +259,24 @@ function mergeGenerationRefresh(previousGenerations: Generation[], incomingGener
             output_urls: mergedOutputUrls,
         };
     });
+
+    if (!options.preserveMissing) {
+        return refreshedGenerations;
+    }
+
+    const refreshedIds = new Set(refreshedGenerations.map((generation) => generation.id));
+    return [
+        ...refreshedGenerations,
+        ...previousGenerations.filter((generation) => !refreshedIds.has(generation.id)),
+    ];
+}
+
+function mergeGenerationAppend(previousGenerations: Generation[], incomingGenerations: Generation[]): Generation[] {
+    const previousIds = new Set(previousGenerations.map((generation) => generation.id));
+    return [
+        ...previousGenerations,
+        ...incomingGenerations.filter((generation) => !previousIds.has(generation.id)),
+    ];
 }
 
 export default function CreationsPage() {
@@ -248,6 +298,9 @@ export default function CreationsPage() {
     const [posts, setPosts] = useState<OwnerPost[]>([]);
     const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [generationsNextCursor, setGenerationsNextCursor] = useState<string | null>(null);
+    const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
+    const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
     const generationsRef = useRef<Generation[]>([]);
     const [filter, setFilter] = useState<FilterType>('all');
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
@@ -306,7 +359,7 @@ export default function CreationsPage() {
 
         try {
             const [generationsRes, postsRes, profileRes] = await Promise.all([
-                fetch('/api/generations?includeArchived=true', {
+                fetch(buildGenerationsPageUrl(), {
                     headers: { 'Authorization': `Bearer ${accessToken}` },
                 }),
                 fetch('/api/posts?scope=owner&includeArchived=true', {
@@ -317,13 +370,17 @@ export default function CreationsPage() {
                 }),
             ]);
 
-            const generationsData = await generationsRes.json();
+            const generationsData = await generationsRes.json() as GenerationsApiResponse;
             let nextGenerations: Generation[] | null = null;
             if (generationsRes.ok) {
                 const loadedGenerations = (generationsData.generations || []) as Generation[];
-                nextGenerations = mergeGenerationRefresh(generationsRef.current, loadedGenerations);
+                nextGenerations = mergeGenerationRefresh(generationsRef.current, loadedGenerations, {
+                    preserveMissing: generationsRef.current.length > loadedGenerations.length,
+                });
                 generationsRef.current = nextGenerations;
                 setGenerations(nextGenerations);
+                setGenerationsNextCursor(getNextGenerationCursor(generationsData));
+                setGenerationsLoadMoreError(null);
             }
 
             const postsData = await postsRes.json();
@@ -355,6 +412,47 @@ export default function CreationsPage() {
             setIsLoading(false);
         }
     }, [accessToken, router, userId]);
+
+    const loadMoreGenerations = useCallback(async () => {
+        if (!accessToken || !userId) {
+            router.push('/login');
+            return;
+        }
+
+        if (!generationsNextCursor || isLoadingMoreGenerations) {
+            return;
+        }
+
+        setIsLoadingMoreGenerations(true);
+        setGenerationsLoadMoreError(null);
+
+        try {
+            const response = await fetch(buildGenerationsPageUrl(generationsNextCursor), {
+                headers: { 'Authorization': `Bearer ${accessToken}` },
+            });
+            const data = await response.json() as GenerationsApiResponse;
+
+            if (!response.ok) {
+                throw new Error('Failed to load more creations.');
+            }
+
+            const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
+            const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
+            generationsRef.current = nextGenerations;
+            setGenerations(nextGenerations);
+            setGenerationsNextCursor(getNextGenerationCursor(data));
+            writeCreationsWorkspaceCache(userId, {
+                generations: nextGenerations,
+                posts,
+                profile,
+            });
+        } catch (error) {
+            console.error('Failed to load more creations:', error);
+            setGenerationsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more creations.');
+        } finally {
+            setIsLoadingMoreGenerations(false);
+        }
+    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, router, userId]);
 
     useEffect(() => {
         void fetchCreations();
@@ -1767,6 +1865,27 @@ export default function CreationsPage() {
                         </div>
                     </div>
                 )}
+
+                {activeView === 'creations' && !isLoading && generationsNextCursor ? (
+                    <div className="mb-10 flex flex-col items-center gap-3">
+                        {generationsLoadMoreError ? (
+                            <p className="text-sm text-rose-300">{generationsLoadMoreError}</p>
+                        ) : null}
+                        <button
+                            type="button"
+                            onClick={() => void loadMoreGenerations()}
+                            disabled={isLoadingMoreGenerations}
+                            className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {isLoadingMoreGenerations ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                                <RotateCcw className="h-4 w-4" />
+                            )}
+                            {isLoadingMoreGenerations ? 'Loading more...' : 'Load more creations'}
+                        </button>
+                    </div>
+                ) : null}
 
                 {activeView === 'posts' && !isLoading && visiblePosts.length === 0 && (
                     <div className="flex flex-col items-center justify-center gap-6 py-24">

@@ -33,6 +33,9 @@ type LinkedPostRow = {
     archived_at: string | null;
 };
 
+const DEFAULT_GENERATIONS_PAGE_LIMIT = 80;
+const MAX_GENERATIONS_PAGE_LIMIT = 100;
+
 function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(value: T): Omit<T, 'workflow_settings'> {
     const nextValue = { ...value };
     delete nextValue.workflow_settings;
@@ -135,6 +138,19 @@ function isMissingGenerationPreviewColumnError(error: unknown) {
     );
 }
 
+function parsePositiveInteger(value: string | null, fallback: number): number {
+    if (!value) {
+        return fallback;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        return fallback;
+    }
+
+    return parsed;
+}
+
 export async function GET(request: NextRequest) {
     try {
         const supabase = createClient(
@@ -154,8 +170,12 @@ export async function GET(request: NextRequest) {
         }
 
         const includeArchived = request.nextUrl.searchParams.get('includeArchived') === 'true';
+        const requestedGenerationId = request.nextUrl.searchParams.get('id')?.trim() || null;
+        const requestedLimit = parsePositiveInteger(request.nextUrl.searchParams.get('limit'), DEFAULT_GENERATIONS_PAGE_LIMIT);
+        const pageLimit = Math.min(requestedLimit, MAX_GENERATIONS_PAGE_LIMIT);
+        const cursorOffset = Math.max(0, parsePositiveInteger(request.nextUrl.searchParams.get('cursor'), 0));
 
-        const fetchGenerations = async (): Promise<GenerationRow[]> => {
+        const fetchGenerations = async (): Promise<{ rows: GenerationRow[]; hasMore: boolean }> => {
             const baseColumns = 'id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at';
             const selectCandidates = [
                 `${baseColumns}, preview_url, thumbnail_url, preview_thumbhash, preview_status, creation_mode`,
@@ -177,6 +197,12 @@ export async function GET(request: NextRequest) {
                     query = query.is('archived_at', null);
                 }
 
+                if (requestedGenerationId) {
+                    query = query.eq('id', requestedGenerationId).range(0, 0);
+                } else {
+                    query = query.range(cursorOffset, cursorOffset + pageLimit);
+                }
+
                 const result = await query;
 
                 if (result.error) {
@@ -188,13 +214,18 @@ export async function GET(request: NextRequest) {
                     throw result.error;
                 }
 
-                return (result.data || []) as unknown as GenerationRow[];
+                const rows = (result.data || []) as unknown as GenerationRow[];
+                const hasMore = requestedGenerationId ? false : rows.length > pageLimit;
+                return {
+                    rows: hasMore ? rows.slice(0, pageLimit) : rows,
+                    hasMore,
+                };
             }
 
             throw lastPreviewColumnError ?? new Error('Failed to fetch generations');
         };
 
-        const generations = await fetchGenerations();
+        const { rows: generations, hasMore } = await fetchGenerations();
 
         const generationIds = generations.map((generation) => generation.id).filter(Boolean);
         const linkedPostMap = new Map<string, LinkedPostRow>();
@@ -317,7 +348,14 @@ export async function GET(request: NextRequest) {
             };
         }));
 
-        return NextResponse.json({ generations: generationsWithUrls });
+        return NextResponse.json({
+            generations: generationsWithUrls,
+            pagination: {
+                limit: pageLimit,
+                hasMore,
+                nextCursor: hasMore ? String(cursorOffset + pageLimit) : null,
+            },
+        });
     } catch (error) {
         console.error('Error fetching generations:', error);
         return NextResponse.json(

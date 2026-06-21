@@ -62,6 +62,8 @@ function createSupabaseClientMock() {
         return {
           select(columns?: string) {
             const filters: Record<string, unknown> = {};
+            let rangeStart = 0;
+            let rangeEnd: number | null = null;
             const query = {
               eq(column: string, value: unknown) {
                 filters[column] = value;
@@ -72,6 +74,11 @@ function createSupabaseClientMock() {
               },
               is(column: string, value: unknown) {
                 filters[column] = value;
+                return query;
+              },
+              range(start: number, end: number) {
+                rangeStart = start;
+                rangeEnd = end;
                 return query;
               },
               then(resolve: (value: { data: GenerationRow[]; error: null } | { data: null; error: { code: string; message: string } }) => void) {
@@ -96,12 +103,18 @@ function createSupabaseClientMock() {
                   if (filters.user_id && generation.user_id !== filters.user_id) {
                     return false;
                   }
+                  if (filters.id && generation.id !== filters.id) {
+                    return false;
+                  }
                   if (filters.archived_at === null && generation.archived_at) {
                     return false;
                   }
                   return true;
                 });
-                resolve({ data, error: null });
+                resolve({
+                  data: rangeEnd === null ? data : data.slice(rangeStart, rangeEnd + 1),
+                  error: null,
+                });
               },
             };
 
@@ -342,6 +355,96 @@ describe('/api/generations route', () => {
       referenceCount: 1,
     });
     expect(String(data.generations[0].paywallPrefill.notesMarkdown)).toContain('Model: Nano Banana 2.0');
+  });
+
+  it('returns a bounded page with pagination metadata', async () => {
+    generationsState = [
+      {
+        ...generationsState[0],
+        id: 'gen-page-1',
+        output_url: 'generated_images/user-1/page-1.jpg',
+        created_at: '2026-03-24T13:00:00.000Z',
+      },
+      {
+        ...generationsState[0],
+        id: 'gen-page-2',
+        output_url: 'generated_images/user-1/page-2.jpg',
+        created_at: '2026-03-24T12:00:00.000Z',
+      },
+      {
+        ...generationsState[0],
+        id: 'gen-page-3',
+        output_url: 'generated_images/user-1/page-3.jpg',
+        created_at: '2026-03-24T11:00:00.000Z',
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations?limit=2'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations).toHaveLength(2);
+    expect(data.generations.map((generation: { id: string }) => generation.id)).toEqual([
+      'gen-page-1',
+      'gen-page-2',
+    ]);
+    expect(data.pagination).toEqual({
+      limit: 2,
+      hasMore: true,
+      nextCursor: '2',
+    });
+  });
+
+  it('supports owner-scoped exact generation lookup without loading the whole history', async () => {
+    generationsState = [
+      {
+        ...generationsState[0],
+        id: 'gen-lookup-newest',
+        output_url: 'generated_images/user-1/lookup-newest.jpg',
+        created_at: '2026-03-24T13:00:00.000Z',
+      },
+      {
+        ...generationsState[0],
+        id: 'gen-lookup-middle',
+        output_url: 'generated_images/user-1/lookup-middle.jpg',
+        created_at: '2026-03-24T12:00:00.000Z',
+      },
+      {
+        ...generationsState[0],
+        id: 'gen-lookup-target',
+        output_url: 'generated_images/user-1/lookup-target.jpg',
+        created_at: '2026-03-24T11:00:00.000Z',
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations?id=gen-lookup-target&limit=1'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations).toHaveLength(1);
+    expect(data.generations[0].id).toBe('gen-lookup-target');
+    expect(data.generations[0].output_url).toBe('https://signed.example.com/generated_images/user-1/lookup-target.jpg');
+    expect(data.pagination).toEqual({
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
   });
 
   it('projects Grok multi-output image URLs without exposing workflow settings', async () => {

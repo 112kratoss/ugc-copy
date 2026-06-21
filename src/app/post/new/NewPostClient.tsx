@@ -1161,7 +1161,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       setGenerationError(null);
 
       try {
-        const response = await fetch('/api/generations', {
+        const generationParams = new URLSearchParams({
+          includeArchived: 'true',
+          id: generationId,
+          limit: '1',
+        });
+        const response = await fetch(`/api/generations?${generationParams.toString()}`, {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
           },
