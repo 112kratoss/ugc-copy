@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
+  BackendRateLimitError,
+  MOBILE_COMMERCE_SYNC_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
+import {
   MobileCommerceError,
   completeMobileCreditPurchase,
   completeMobileMarketplaceUnlock,
@@ -25,6 +31,20 @@ export async function POST(request: NextRequest) {
     }
 
     const adminSupabase = createServiceClient();
+    try {
+      await enforceBackendRateLimit(adminSupabase, {
+        ...MOBILE_COMMERCE_SYNC_RATE_LIMIT,
+        key: user.id,
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      console.error('Mobile commerce sync rate limit check failed:', error);
+      return NextResponse.json({ error: 'Failed to check commerce sync limits.' }, { status: 500 });
+    }
+
     const payload = normalizeMobileCommercePayload(await request.json());
     const verified = await verifyMobilePurchase({
       userId: user.id,

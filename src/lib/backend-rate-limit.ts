@@ -78,6 +78,18 @@ export const CREDIT_UNLOCK_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const MOBILE_COMMERCE_SYNC_RATE_LIMIT = {
+  scope: 'mobile-commerce:sync',
+  limit: 12,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MOBILE_COMMERCE_RESTORE_RATE_LIMIT = {
+  scope: 'mobile-commerce:restore',
+  limit: 6,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,
