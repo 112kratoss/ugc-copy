@@ -177,7 +177,7 @@ describe('/api/cron/generation-completions route', () => {
     });
   });
 
-  it('skips lock and job-run writes when no completion jobs are due', async () => {
+  it('records a skipped job-run without taking the lock when no completion jobs are due', async () => {
     mocks.hasDueGenerationCompletionJobs.mockResolvedValueOnce(false);
 
     const { GET } = await import('@/app/api/cron/generation-completions/route');
@@ -190,10 +190,24 @@ describe('/api/cron/generation-completions route', () => {
       { service: 'supabase' },
       expect.objectContaining({ nowMs: expect.any(Number) }),
     );
-    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({
+        name: 'generation-completions',
+        route: '/api/cron/generation-completions',
+      }),
+    );
     expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
     expect(mocks.processGenerationCompletionJobs).not.toHaveBeenCalled();
-    expect(mocks.finishBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({
+        status: 'skipped',
+        skipReason: 'no_due_jobs',
+        summary: { pruned: 3 },
+      }),
+    );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       skipped: true,

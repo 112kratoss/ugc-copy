@@ -65,6 +65,13 @@ export async function GET(request: Request) {
 
     const currentServiceClient = createServiceClient();
     serviceClient = currentServiceClient;
+    jobRun = await startBackendJobRun(currentServiceClient, {
+      name: JOB_NAME,
+      route: ROUTE,
+      requestId,
+      lockOwner,
+      startedAtMs: startedAt,
+    });
 
     const hasDueJobs = await hasDueGenerationCompletionJobs(currentServiceClient, {
       nowMs: startedAt,
@@ -73,6 +80,12 @@ export async function GET(request: Request) {
     if (!hasDueJobs) {
       const finishedAt = Date.now();
       const pruned = await maybePruneGenerationCompletionJobs(currentServiceClient, { nowMs: startedAt });
+      await finishBackendJobRun(currentServiceClient, jobRun, {
+        status: 'skipped',
+        finishedAtMs: finishedAt,
+        skipReason: 'no_due_jobs',
+        summary: { pruned },
+      });
       const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
       logCron('info', 'generation_completions_skipped_no_due_jobs', {
         requestId,
@@ -87,14 +100,6 @@ export async function GET(request: Request) {
         pruned,
       }, { status: 202 });
     }
-
-    jobRun = await startBackendJobRun(currentServiceClient, {
-      name: JOB_NAME,
-      route: ROUTE,
-      requestId,
-      lockOwner,
-      startedAtMs: startedAt,
-    });
 
     const lockResult = await withBackendJobLock(currentServiceClient, {
       name: JOB_NAME,

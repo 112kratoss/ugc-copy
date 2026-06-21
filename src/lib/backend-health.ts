@@ -140,6 +140,12 @@ const JOB_THRESHOLDS: Array<{ name: string; expectedMaxAgeMinutes: number }> = [
   { name: 'generation-completions', expectedMaxAgeMinutes: 30 },
 ];
 
+const EXPECTED_NO_WORK_SKIP_REASONS: Record<string, string> = {
+  'generation-completions': 'no_due_jobs',
+  'media-preview-repair': 'no_repairable_media',
+  'mobile-push-receipts': 'no_pending_receipts',
+};
+
 const JOB_LOOKBACK_HOURS = 48;
 const GENERATION_RECENT_WINDOW_MINUTES = 60;
 const GENERATION_STALLED_AFTER_MINUTES = 60;
@@ -177,6 +183,11 @@ function buildJobHealth(
   const jobRows = rows.filter((row) => row.job_name === job.name);
   const latest = jobRows[0] ?? null;
   const lastSuccess = jobRows.find((row) => row.status === 'succeeded') ?? null;
+  const expectedNoWorkSkipReason = EXPECTED_NO_WORK_SKIP_REASONS[job.name];
+  const lastHealthyRun = jobRows.find((row) => (
+    row.status === 'succeeded'
+    || (row.status === 'skipped' && row.skip_reason === expectedNoWorkSkipReason)
+  )) ?? null;
   const recentFailures = jobRows.filter((row) => row.status === 'failed').length;
   const recentSkips = jobRows.filter((row) => row.status === 'skipped').length;
   const issues: BackendHealthIssue[] = [];
@@ -196,19 +207,19 @@ function buildJobHealth(
       code: 'JOB_LATEST_RUN_FAILED',
       message: `${job.name} latest run failed.`,
     });
-  } else if (!lastSuccess) {
+  } else if (!lastHealthyRun) {
     status = 'warning';
     issues.push({
       severity: 'warning',
       code: 'JOB_NO_RECENT_SUCCESS',
-      message: `${job.name} has no successful run in the last ${JOB_LOOKBACK_HOURS} hours.`,
+      message: `${job.name} has no successful or healthy no-work run in the last ${JOB_LOOKBACK_HOURS} hours.`,
     });
-  } else if (minutesSince(lastSuccess.started_at, now) > job.expectedMaxAgeMinutes) {
+  } else if (minutesSince(lastHealthyRun.started_at, now) > job.expectedMaxAgeMinutes) {
     status = 'degraded';
     issues.push({
       severity: 'degraded',
       code: 'JOB_STALE_SUCCESS',
-      message: `${job.name} has not succeeded within ${job.expectedMaxAgeMinutes} minutes.`,
+      message: `${job.name} has not succeeded or reported healthy no-work within ${job.expectedMaxAgeMinutes} minutes.`,
     });
   }
 

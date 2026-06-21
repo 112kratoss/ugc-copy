@@ -279,6 +279,61 @@ describe('collectBackendHealth', () => {
     ]));
   });
 
+  it('treats recent no-work skipped cron runs as healthy liveness', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'skipped',
+            started_at: '2026-06-21T09:55:00.000Z',
+            finished_at: '2026-06-21T09:55:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_repairable_media',
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'skipped',
+            started_at: '2026-06-21T00:15:00.000Z',
+            finished_at: '2026-06-21T00:15:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_pending_receipts',
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'skipped',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_due_jobs',
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.status).toBe('ok');
+    expect(health.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'media-preview-repair', status: 'ok', recentSkips: 1 }),
+      expect.objectContaining({ name: 'mobile-push-receipts', status: 'ok', recentSkips: 1 }),
+      expect.objectContaining({ name: 'generation-completions', status: 'ok', recentSkips: 1 }),
+    ]));
+    expect(health.issues).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'JOB_NO_RECENT_SUCCESS' }),
+      expect.objectContaining({ code: 'JOB_STALE_SUCCESS' }),
+    ]));
+  });
+
   it('degrades when the latest run failed or active generations are stalled', async () => {
     const db = createClient({
       backend_job_runs: {

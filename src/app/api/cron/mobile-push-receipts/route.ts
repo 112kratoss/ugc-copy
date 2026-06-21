@@ -54,10 +54,23 @@ export async function GET(request: Request) {
 
     const currentServiceClient = createServiceClient();
     serviceClient = currentServiceClient;
+    jobRun = await startBackendJobRun(currentServiceClient, {
+      name: JOB_NAME,
+      route: ROUTE,
+      requestId,
+      lockOwner,
+      startedAtMs: startedAt,
+    });
+
     const hasPendingReceipts = await hasPendingMobilePushReceipts(currentServiceClient);
 
     if (!hasPendingReceipts) {
       const finishedAt = Date.now();
+      await finishBackendJobRun(currentServiceClient, jobRun, {
+        status: 'skipped',
+        finishedAtMs: finishedAt,
+        skipReason: 'no_pending_receipts',
+      });
       const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
       logCron('info', 'mobile_push_receipts_skipped_no_pending_receipts', {
         requestId,
@@ -70,14 +83,6 @@ export async function GET(request: Request) {
         reason: 'no_pending_receipts',
       }, { status: 202 });
     }
-
-    jobRun = await startBackendJobRun(currentServiceClient, {
-      name: JOB_NAME,
-      route: ROUTE,
-      requestId,
-      lockOwner,
-      startedAtMs: startedAt,
-    });
 
     const lockResult = await withBackendJobLock(currentServiceClient, {
       name: JOB_NAME,

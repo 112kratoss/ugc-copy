@@ -55,10 +55,23 @@ export async function GET(request: Request) {
 
     const currentServiceClient = createServiceClient();
     serviceClient = currentServiceClient;
+    jobRun = await startBackendJobRun(currentServiceClient, {
+      name: JOB_NAME,
+      route: ROUTE,
+      requestId,
+      lockOwner,
+      startedAtMs: startedAt,
+    });
+
     const hasRepairable = await hasRepairableMediaPreviews(currentServiceClient);
 
     if (!hasRepairable) {
       const finishedAt = Date.now();
+      await finishBackendJobRun(currentServiceClient, jobRun, {
+        status: 'skipped',
+        finishedAtMs: finishedAt,
+        skipReason: 'no_repairable_media',
+      });
       const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
       logCron('info', 'media_preview_repair_skipped_no_repairable_media', {
         requestId,
@@ -71,14 +84,6 @@ export async function GET(request: Request) {
         reason: 'no_repairable_media',
       }, { status: 202 });
     }
-
-    jobRun = await startBackendJobRun(currentServiceClient, {
-      name: JOB_NAME,
-      route: ROUTE,
-      requestId,
-      lockOwner,
-      startedAtMs: startedAt,
-    });
 
     const lockResult = await withBackendJobLock(currentServiceClient, {
       name: JOB_NAME,

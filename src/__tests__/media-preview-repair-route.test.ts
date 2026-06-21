@@ -127,7 +127,7 @@ describe('media preview repair cron', () => {
     );
   });
 
-  it('skips lock and job-run writes when no media previews need repair', async () => {
+  it('records a skipped job-run without taking the lock when no media previews need repair', async () => {
     vi.stubEnv('CRON_SECRET', 'secret');
     repairState.hasRepairable.mockResolvedValueOnce(false);
 
@@ -138,10 +138,23 @@ describe('media preview repair cron', () => {
 
     expect(response.status).toBe(202);
     expect(repairState.hasRepairable).toHaveBeenCalledWith({ service: true });
-    expect(jobRunState.start).not.toHaveBeenCalled();
+    expect(jobRunState.start).toHaveBeenCalledWith(
+      { service: true },
+      expect.objectContaining({
+        name: 'media-preview-repair',
+        route: '/api/cron/media-preview-repair',
+      }),
+    );
     expect(lockState.withLock).not.toHaveBeenCalled();
     expect(repairState.repair).not.toHaveBeenCalled();
-    expect(jobRunState.finish).not.toHaveBeenCalled();
+    expect(jobRunState.finish).toHaveBeenCalledWith(
+      { service: true },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({
+        status: 'skipped',
+        skipReason: 'no_repairable_media',
+      }),
+    );
     expect(jobRunState.prune).toHaveBeenCalledWith(
       { service: true },
       expect.objectContaining({ nowMs: expect.any(Number) }),

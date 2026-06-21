@@ -176,7 +176,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
     });
   });
 
-  it('skips lock and job-run writes when no push receipts are pending', async () => {
+  it('records a skipped job-run without taking the lock when no push receipts are pending', async () => {
     mocks.hasPendingMobilePushReceipts.mockResolvedValueOnce(false);
 
     const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
@@ -188,10 +188,23 @@ describe('/api/cron/mobile-push-receipts route', () => {
 
     expect(response.status).toBe(202);
     expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith({ service: 'supabase' });
-    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({
+        name: 'mobile-push-receipts',
+        route: '/api/cron/mobile-push-receipts',
+      }),
+    );
     expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
     expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
-    expect(mocks.finishBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({
+        status: 'skipped',
+        skipReason: 'no_pending_receipts',
+      }),
+    );
     expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({ nowMs: expect.any(Number) }),
