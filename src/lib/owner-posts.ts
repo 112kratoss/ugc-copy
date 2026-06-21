@@ -132,6 +132,7 @@ export interface OwnerPostDetail extends OwnerPostListItem {
 }
 
 export type OwnerPostVisibilityFilter = ShowcaseVisibility | 'archived' | 'all';
+type ServiceClient = ReturnType<typeof createServiceClient>;
 
 function getSourceLabel(sourceKind: ShowcaseSourceKind): string {
   if (sourceKind === 'magicbooklet') {
@@ -169,8 +170,11 @@ function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleReso
   };
 }
 
-async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Promise<OwnerPostRow[]> {
-  const adminSupabase = createServiceClient();
+async function fetchOwnerPostRows(
+  adminSupabase: ServiceClient,
+  userId: string,
+  includeArchived: boolean
+): Promise<OwnerPostRow[]> {
   let query = adminSupabase
     .from('posts')
     .select(
@@ -240,8 +244,11 @@ async function fetchOwnerPostRows(userId: string, includeArchived: boolean): Pro
   return (result.data ?? []) as OwnerPostRow[];
 }
 
-async function fetchOwnerPostRow(postId: string, userId: string): Promise<OwnerPostRow | null> {
-  const adminSupabase = createServiceClient();
+async function fetchOwnerPostRow(
+  adminSupabase: ServiceClient,
+  postId: string,
+  userId: string
+): Promise<OwnerPostRow | null> {
   const result = await adminSupabase
     .from('posts')
     .select(
@@ -310,12 +317,11 @@ async function fetchOwnerPostRow(postId: string, userId: string): Promise<OwnerP
   return (result.data as OwnerPostRow | null) ?? null;
 }
 
-async function loadBundleMap(postIds: string[]) {
+async function loadBundleMap(adminSupabase: ServiceClient, postIds: string[]) {
   if (postIds.length === 0) {
     return new Map<string, BundleSummaryRow>();
   }
 
-  const adminSupabase = createServiceClient();
   const selectWithItems =
     'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, resource_sections, resource_items, allow_remix';
   const selectLegacy =
@@ -357,12 +363,11 @@ function isMissingPostSourceToolsTableError(error: unknown): boolean {
   );
 }
 
-async function loadSourceToolsMap(postIds: string[]) {
+async function loadSourceToolsMap(adminSupabase: ServiceClient, postIds: string[]) {
   if (postIds.length === 0) {
     return new Map<string, SourceToolSelection[]>();
   }
 
-  const adminSupabase = createServiceClient();
   const { data, error } = await adminSupabase
     .from('post_source_tools')
     .select('post_id, tool_label, tool_slug, model_label, model_slug, sort_order')
@@ -393,12 +398,12 @@ async function loadSourceToolsMap(postIds: string[]) {
 }
 
 async function toOwnerPostListItem(
+  adminSupabase: ServiceClient,
   row: OwnerPostRow,
   bundleMap: Map<string, BundleSummaryRow>,
   sourceToolsMap: Map<string, SourceToolSelection[]>,
   mediaItemsMap: Map<string, PostMediaSummary[]>
 ) {
-  const adminSupabase = createServiceClient();
   const mediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
     supabase: adminSupabase,
     postId: row.id,
@@ -463,12 +468,13 @@ export async function getOwnerPostList(
 ): Promise<OwnerPostListItem[]> {
   const includeArchived = options?.includeArchived ?? false;
   const visibility = options?.visibility ?? 'all';
-  const rows = await fetchOwnerPostRows(userId, includeArchived);
+  const adminSupabase = createServiceClient();
+  const rows = await fetchOwnerPostRows(adminSupabase, userId, includeArchived);
   const postIds = rows.map((row) => row.id);
   const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
-    loadBundleMap(postIds),
-    loadSourceToolsMap(postIds),
-    loadPostMediaItemsMap(createServiceClient(), postIds),
+    loadBundleMap(adminSupabase, postIds),
+    loadSourceToolsMap(adminSupabase, postIds),
+    loadPostMediaItemsMap(adminSupabase, postIds),
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -483,7 +489,7 @@ export async function getOwnerPostList(
   });
 
   return Promise.all(filteredRows.map((row) =>
-    toOwnerPostListItem(row, bundleMap, sourceToolsMap, mediaItemsMap)
+    toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap)
   ));
 }
 
@@ -494,17 +500,18 @@ export async function getOwnerPostDetail(
     countryCode?: string | null;
   }
 ): Promise<OwnerPostDetail | null> {
-  const row = await fetchOwnerPostRow(postId, userId);
+  const adminSupabase = createServiceClient();
+  const row = await fetchOwnerPostRow(adminSupabase, postId, userId);
   if (!row) {
     return null;
   }
 
   const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
-    loadBundleMap([row.id]),
-    loadSourceToolsMap([row.id]),
-    loadPostMediaItemsMap(createServiceClient(), [row.id]),
+    loadBundleMap(adminSupabase, [row.id]),
+    loadSourceToolsMap(adminSupabase, [row.id]),
+    loadPostMediaItemsMap(adminSupabase, [row.id]),
   ]);
-  const listItem = await toOwnerPostListItem(row, bundleMap, sourceToolsMap, mediaItemsMap);
+  const listItem = await toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap);
   const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
     viewerUserId: userId,
     countryCode: options?.countryCode ?? null,

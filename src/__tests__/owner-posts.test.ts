@@ -46,6 +46,7 @@ const sourceToolRows = vi.hoisted(() => ({
     },
   ],
 }));
+const createServiceClientMock = vi.hoisted(() => vi.fn());
 
 function createQuery(table: string) {
   const filters = new Map<string, unknown>();
@@ -101,9 +102,20 @@ function createQuery(table: string) {
 }
 
 vi.mock('@/lib/server-helpers', () => ({
-  createServiceClient: () => ({
-    from: (table: string) => createQuery(table),
-  }),
+  createServiceClient: () => {
+    createServiceClientMock();
+
+    return {
+      from: (table: string) => createQuery(table),
+      storage: {
+        from: () => ({
+          getPublicUrl: (path: string) => ({
+            data: { publicUrl: `https://cdn.example.test/${path}` },
+          }),
+        }),
+      },
+    };
+  },
 }));
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
@@ -113,6 +125,7 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
 describe('owner posts', () => {
   beforeEach(() => {
     vi.resetModules();
+    createServiceClientMock.mockReset();
   });
 
   it('loads structured source tools for edit prefill', async () => {
@@ -134,5 +147,14 @@ describe('owner posts', () => {
         modelSlug: 'gen-4',
       },
     ]);
+  });
+
+  it('reuses one admin client while loading owner post detail', async () => {
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(post?.id).toBe('post-1');
+    expect(createServiceClientMock).toHaveBeenCalledTimes(1);
   });
 });
