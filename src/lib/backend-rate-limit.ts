@@ -42,6 +42,12 @@ export const CONTACT_SUBMISSION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const POST_REPORT_RATE_LIMIT = {
+  scope: 'post-report:submit',
+  limit: 10,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,

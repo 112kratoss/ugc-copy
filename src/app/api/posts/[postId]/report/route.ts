@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  BackendRateLimitError,
+  POST_REPORT_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 const REPORT_REASONS = new Set([
@@ -27,7 +33,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const adminSupabase = createServiceClient();
   const body = (await request.json()) as {
     reason?: unknown;
     details?: unknown;
@@ -40,6 +45,21 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const details = typeof body.details === 'string' && body.details.trim() ? body.details.trim().slice(0, 1000) : null;
   const bundleId = typeof body.bundleId === 'string' && body.bundleId.trim() ? body.bundleId.trim() : null;
+  const adminSupabase = createServiceClient();
+
+  try {
+    await enforceBackendRateLimit(adminSupabase, {
+      ...POST_REPORT_RATE_LIMIT,
+      key: user.id,
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    console.error('Post report rate limit check failed:', error);
+    return NextResponse.json({ error: 'Failed to check report submission limits.' }, { status: 500 });
+  }
 
   const { data: post, error: postError } = await adminSupabase
     .from('posts')
