@@ -65,7 +65,7 @@ let assistantProposals: AssistantProposalRow[] = [];
 let simulateMissingAssistantSchema = false;
 let remainingCredits = 94;
 let usageEventUpdates: Array<Record<string, unknown>> = [];
-let usageEventInsertError: Error | null = null;
+let usageEventStartError: Error | null = null;
 let existingUsageEvent: {
   id: string;
   user_id: string;
@@ -298,10 +298,47 @@ function createWorkflowSupabaseMock() {
 
 function createAdminSupabaseMock() {
   return {
-    rpc(fn: string) {
+    rpc(fn: string, args?: Record<string, unknown>) {
       adminRpcCalls.push(fn);
-      if (fn === 'deduct_credits') {
-        return Promise.resolve({ data: remainingCredits, error: null });
+      if (fn === 'start_ai_usage_event') {
+        if (usageEventStartError) {
+          return Promise.resolve({ data: null, error: usageEventStartError });
+        }
+
+        if (existingUsageEvent?.status === 'succeeded') {
+          return Promise.resolve({
+            data: {
+              status: 'succeeded_replay',
+              event_id: existingUsageEvent.id,
+              remaining_credits: remainingCredits,
+              cost: existingUsageEvent.cost,
+              response_payload: existingUsageEvent.response_payload,
+            },
+            error: null,
+          });
+        }
+
+        if (existingUsageEvent?.status === 'pending') {
+          return Promise.resolve({
+            data: {
+              status: 'in_progress',
+              event_id: existingUsageEvent.id,
+              remaining_credits: remainingCredits,
+              cost: existingUsageEvent.cost,
+            },
+            error: null,
+          });
+        }
+
+        return Promise.resolve({
+          data: {
+            status: 'started',
+            event_id: 'usage-1',
+            remaining_credits: remainingCredits,
+            cost: args?.p_cost,
+          },
+          error: null,
+        });
       }
 
       if (fn === 'refund_ai_usage_event' || fn === 'refund_credits') {
@@ -341,12 +378,10 @@ function createAdminSupabaseMock() {
             select() {
               return {
                 async single() {
-                  return usageEventInsertError
-                    ? { data: null, error: usageEventInsertError }
-                    : {
-                        data: { id: 'usage-1' },
-                        error: null,
-                      };
+                  return {
+                    data: { id: 'usage-1' },
+                    error: null,
+                  };
                 },
               };
             },
@@ -415,7 +450,7 @@ beforeEach(() => {
   simulateMissingAssistantSchema = false;
   remainingCredits = 94;
   usageEventUpdates = [];
-  usageEventInsertError = null;
+  usageEventStartError = null;
   existingUsageEvent = null;
   adminRpcCalls = [];
   assistantRateLimitAllowed = true;
@@ -493,7 +528,7 @@ describe('workflow assistant routes', () => {
     expect(response.status).toBe(503);
     expect(data.code).toBe('assistant_schema_missing');
     expect(data.error).toBe('Workflow assistant database tables are missing. Run migration 20260416120000_workflow_canvas_assistant.sql.');
-    expect(adminRpcCalls).not.toContain('deduct_credits');
+    expect(adminRpcCalls).not.toContain('start_ai_usage_event');
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
@@ -515,7 +550,7 @@ describe('workflow assistant routes', () => {
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(adminRpcCalls).toContain('check_backend_rate_limit');
-    expect(adminRpcCalls).not.toContain('deduct_credits');
+    expect(adminRpcCalls).not.toContain('start_ai_usage_event');
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(usageEventUpdates).toHaveLength(0);
   });
@@ -610,14 +645,15 @@ describe('workflow assistant routes', () => {
     });
     expect(data.messages).toHaveLength(1);
     expect(adminRpcCalls).toContain('check_backend_rate_limit');
+    expect(adminRpcCalls).toContain('start_ai_usage_event');
     expect(adminRpcCalls).not.toContain('deduct_credits');
     expect(assistantMessages).toHaveLength(0);
     expect(assistantProposals).toHaveLength(1);
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
-  it('refunds and skips the provider when usage event creation fails after deduction', async () => {
-    usageEventInsertError = new Error('usage table unavailable');
+  it('skips the provider when the atomic usage start fails', async () => {
+    usageEventStartError = new Error('usage table unavailable');
 
     const { POST } = await import('@/app/api/workflow-canvases/[id]/assistant/messages/route');
     const response = await POST(
@@ -633,9 +669,9 @@ describe('workflow assistant routes', () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
-      error: 'Failed to record AI usage.',
+      error: 'usage table unavailable',
     });
-    expect(adminRpcCalls).toEqual(expect.arrayContaining(['deduct_credits', 'refund_credits']));
+    expect(adminRpcCalls).toEqual(['check_backend_rate_limit', 'start_ai_usage_event']);
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 

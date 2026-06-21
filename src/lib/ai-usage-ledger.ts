@@ -5,9 +5,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export class AiUsageLedgerError extends Error {
   status: number;
   code:
-    | 'CREDIT_DEDUCTION_FAILED'
     | 'INSUFFICIENT_CREDITS'
     | 'USAGE_EVENT_FAILED'
+    | 'INVALID_AI_USAGE_REQUEST'
+    | 'AI_USAGE_PROFILE_NOT_FOUND'
     | 'INVALID_IDEMPOTENCY_KEY'
     | 'IDEMPOTENCY_KEY_MISMATCH'
     | 'AI_USAGE_IN_PROGRESS'
@@ -51,18 +52,6 @@ export type AiUsageLedger = {
 
 const HEADER_NAME = 'idempotency-key';
 const MAX_KEY_LENGTH = 256;
-const ACTIVE_USAGE_STATUSES = new Set(['pending']);
-
-type ExistingUsageEventRow = {
-  id: string;
-  status: string | null;
-  cost: number | null;
-  response_payload: unknown;
-};
-
-type ProfileCreditsRow = {
-  credits: number | null;
-};
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -104,88 +93,6 @@ function normalizeKey(value: string, source: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-
-  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
-  if (code === '23505') return true;
-
-  const message = 'message' in error ? (error as { message?: unknown }).message : undefined;
-  return typeof message === 'string' && message.toLowerCase().includes('duplicate key');
-}
-
-async function refundCreditsQuietly(client: SupabaseClient, userId: string, amount: number) {
-  try {
-    await client.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
-  } catch (error) {
-    console.error('Failed to refund AI usage credits after ledger error:', error);
-  }
-}
-
-async function loadCurrentCredits(client: SupabaseClient, userId: string): Promise<number> {
-  const { data, error } = await client
-    .from('profiles')
-    .select('credits')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (error) throw error;
-  const row = data as ProfileCreditsRow | null;
-  return typeof row?.credits === 'number' ? row.credits : 0;
-}
-
-async function loadExistingUsageEvent(params: {
-  client: SupabaseClient;
-  input: AiUsageLedgerStartInput;
-  keyHash: string;
-}): Promise<AiUsageLedger | null> {
-  const { data, error } = await params.client
-    .from('ai_usage_events')
-    .select('id,status,cost,response_payload')
-    .eq('user_id', params.input.userId)
-    .eq('feature', params.input.feature)
-    .eq('client_request_key_hash', params.keyHash)
-    .maybeSingle();
-
-  if (error) throw error;
-
-  const row = data as ExistingUsageEventRow | null;
-  if (!row) return null;
-
-  if (ACTIVE_USAGE_STATUSES.has(row.status ?? '')) {
-    throw new AiUsageLedgerError(
-      'A paid AI request with this idempotency key is already running. Retry shortly.',
-      409,
-      'AI_USAGE_IN_PROGRESS',
-    );
-  }
-
-  if (row.status === 'succeeded') {
-    if (!isRecord(row.response_payload)) {
-      throw new AiUsageLedgerError(
-        'This paid AI request already completed, but its replay response is unavailable.',
-        409,
-        'AI_USAGE_REPLAY_UNAVAILABLE',
-      );
-    }
-
-    return {
-      eventId: row.id,
-      remainingCredits: await loadCurrentCredits(params.client, params.input.userId),
-      cost: typeof row.cost === 'number' ? row.cost : params.input.cost,
-      userId: params.input.userId,
-      idempotentReplay: true,
-      responsePayload: row.response_payload,
-    };
-  }
-
-  throw new AiUsageLedgerError(
-    'This idempotency key was already used by a failed or refunded paid AI request. Retry with a new key.',
-    409,
-    'AI_USAGE_KEY_ALREADY_USED',
-  );
 }
 
 export function getAiUsageLedgerIdempotencyKey(
@@ -235,66 +142,101 @@ export async function startAiUsageLedger(
     ? hashAiUsageLedgerIdempotencyKey(input.userId, input.feature, input.idempotencyKey)
     : null;
 
-  if (clientRequestKeyHash) {
-    const existing = await loadExistingUsageEvent({
-      client,
-      input,
-      keyHash: clientRequestKeyHash,
-    });
-    if (existing) return existing;
-  }
-
-  const { data: remainingCredits, error: deductError } = await client.rpc('deduct_credits', {
+  const { data, error } = await client.rpc('start_ai_usage_event', {
     p_user_id: input.userId,
     p_cost: input.cost,
+    p_feature: input.feature,
+    p_provider: input.provider,
+    p_model: input.model,
+    p_medium: input.medium,
+    p_input_prompt: input.inputPrompt,
+    p_client_request_key_hash: clientRequestKeyHash,
   });
 
-  if (deductError) {
+  if (error || !isRecord(data)) {
     throw new AiUsageLedgerError(
-      errorMessage(deductError, 'Failed to deduct credits.'),
+      errorMessage(error, 'Failed to start AI usage.'),
       500,
-      'CREDIT_DEDUCTION_FAILED',
+      'USAGE_EVENT_FAILED',
     );
   }
 
-  if (remainingCredits === -1) {
+  const status = typeof data.status === 'string' ? data.status : null;
+  const eventId = typeof data.event_id === 'string' ? data.event_id : null;
+  const remainingCredits = typeof data.remaining_credits === 'number' ? data.remaining_credits : null;
+  const cost = typeof data.cost === 'number' ? data.cost : input.cost;
+
+  if (status === 'invalid_cost' || status === 'invalid_request') {
+    throw new AiUsageLedgerError(
+      'AI usage request is invalid.',
+      400,
+      'INVALID_AI_USAGE_REQUEST',
+    );
+  }
+
+  if (status === 'profile_not_found') {
+    throw new AiUsageLedgerError(
+      'Could not find a credit profile for this account.',
+      401,
+      'AI_USAGE_PROFILE_NOT_FOUND',
+    );
+  }
+
+  if (status === 'insufficient_credits') {
     throw new AiUsageLedgerError(
       `Insufficient credits. This action costs ${input.cost} credits.`,
       402,
       'INSUFFICIENT_CREDITS',
-      input.cost,
+      typeof data.required_credits === 'number' ? data.required_credits : input.cost,
     );
   }
 
-  const { data: usageEvent, error: insertError } = await client
-    .from('ai_usage_events')
-    .insert({
-      user_id: input.userId,
-      feature: input.feature,
-      provider: input.provider,
-      model: input.model,
-      medium: input.medium,
-      cost: input.cost,
-      status: 'pending',
-      input_prompt: input.inputPrompt.slice(0, 5000),
-      client_request_key_hash: clientRequestKeyHash,
-    })
-    .select('id')
-    .single();
+  if (status === 'in_progress') {
+    throw new AiUsageLedgerError(
+      'A paid AI request with this idempotency key is already running. Retry shortly.',
+      409,
+      'AI_USAGE_IN_PROGRESS',
+    );
+  }
 
-  const eventId = typeof usageEvent?.id === 'string' ? usageEvent.id : null;
-  if (insertError || !eventId) {
-    await refundCreditsQuietly(client, input.userId, input.cost);
-    if (isUniqueViolation(insertError)) {
+  if (status === 'succeeded_replay') {
+    if (!isRecord(data.response_payload)) {
       throw new AiUsageLedgerError(
-        'A paid AI request with this idempotency key is already running. Retry shortly.',
+        'This paid AI request already completed, but its replay response is unavailable.',
         409,
-        'AI_USAGE_IN_PROGRESS',
+        'AI_USAGE_REPLAY_UNAVAILABLE',
       );
     }
 
+    return {
+      eventId: eventId ?? '',
+      remainingCredits: remainingCredits ?? 0,
+      cost,
+      userId: input.userId,
+      idempotentReplay: true,
+      responsePayload: data.response_payload,
+    };
+  }
+
+  if (status === 'key_already_used') {
     throw new AiUsageLedgerError(
-      'Failed to record AI usage.',
+      'This idempotency key was already used by a failed or refunded paid AI request. Retry with a new key.',
+      409,
+      'AI_USAGE_KEY_ALREADY_USED',
+    );
+  }
+
+  if (status === 'invalid_idempotency_key') {
+    throw new AiUsageLedgerError(
+      'AI usage idempotency key is invalid.',
+      400,
+      'INVALID_IDEMPOTENCY_KEY',
+    );
+  }
+
+  if (status !== 'started' || !eventId || typeof remainingCredits !== 'number') {
+    throw new AiUsageLedgerError(
+      'Failed to start AI usage.',
       500,
       'USAGE_EVENT_FAILED',
     );
@@ -302,8 +244,8 @@ export async function startAiUsageLedger(
 
   return {
     eventId,
-    remainingCredits: Number(remainingCredits),
-    cost: input.cost,
+    remainingCredits,
+    cost,
     userId: input.userId,
   };
 }

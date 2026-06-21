@@ -21,7 +21,7 @@ function createAuthClient() {
 function createAdminClient(options?: {
   remainingCredits?: number;
   rateLimitAllowed?: boolean;
-  usageInsertError?: Error | null;
+  usageStartError?: Error | null;
   existingUsageEvent?: {
     id: string;
     user_id: string;
@@ -34,7 +34,7 @@ function createAdminClient(options?: {
 }) {
   const remainingCredits = options?.remainingCredits ?? 94;
   const rateLimitAllowed = options?.rateLimitAllowed ?? true;
-  const usageInsertError = options?.usageInsertError ?? null;
+  const usageStartError = options?.usageStartError ?? null;
   const existingUsageEvent = options?.existingUsageEvent ?? null;
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const inserts: Record<string, unknown>[] = [];
@@ -60,8 +60,45 @@ function createAdminClient(options?: {
         };
       }
 
-      if (fn === 'deduct_credits') {
-        return { data: remainingCredits, error: null };
+      if (fn === 'start_ai_usage_event') {
+        if (usageStartError) {
+          return { data: null, error: usageStartError };
+        }
+
+        if (existingUsageEvent?.status === 'succeeded') {
+          return {
+            data: {
+              status: 'succeeded_replay',
+              event_id: existingUsageEvent.id,
+              remaining_credits: remainingCredits,
+              cost: existingUsageEvent.cost,
+              response_payload: existingUsageEvent.response_payload,
+            },
+            error: null,
+          };
+        }
+
+        if (existingUsageEvent?.status === 'pending') {
+          return {
+            data: {
+              status: 'in_progress',
+              event_id: existingUsageEvent.id,
+              remaining_credits: remainingCredits,
+              cost: existingUsageEvent.cost,
+            },
+            error: null,
+          };
+        }
+
+        return {
+          data: {
+            status: 'started',
+            event_id: 'event-1',
+            remaining_credits: remainingCredits,
+            cost: args.p_cost,
+          },
+          error: null,
+        };
       }
 
       if (fn === 'refund_ai_usage_event' || fn === 'refund_credits') {
@@ -89,9 +126,7 @@ function createAdminClient(options?: {
             select() {
               return {
                 async single() {
-                  return usageInsertError
-                    ? { data: null, error: usageInsertError }
-                    : { data: { id: 'event-1' }, error: null };
+                    return { data: { id: 'event-1' }, error: null };
                 },
               };
             },
@@ -239,7 +274,7 @@ describe('/api/workflow-blueprint route', () => {
       p_scope: 'workflow-blueprint',
       p_subject_key: 'user-1',
     }));
-    expect(currentAdminClient.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(currentAdminClient.rpc).not.toHaveBeenCalledWith('start_ai_usage_event', expect.anything());
     expect(currentAdminClient.inserts).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -259,10 +294,10 @@ describe('/api/workflow-blueprint route', () => {
       p_scope: 'workflow-blueprint',
       p_subject_key: 'user-1',
     }));
-    expect(currentAdminClient.rpc).toHaveBeenCalledWith('deduct_credits', expect.objectContaining({
+    expect(currentAdminClient.rpc).toHaveBeenCalledWith('start_ai_usage_event', expect.objectContaining({
       p_user_id: 'user-1',
     }));
-    expect(currentAdminClient.inserts).toHaveLength(1);
+    expect(currentAdminClient.inserts).toHaveLength(0);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
@@ -316,15 +351,16 @@ describe('/api/workflow-blueprint route', () => {
       },
     });
     expect(currentAdminClient.rpcCalls.map((call) => call.fn)).toContain('check_backend_rate_limit');
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).toContain('start_ai_usage_event');
     expect(currentAdminClient.rpcCalls.map((call) => call.fn)).not.toContain('deduct_credits');
     expect(currentAdminClient.inserts).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('refunds and skips the provider when usage event creation fails after deduction', async () => {
+  it('skips the provider when the atomic usage start fails', async () => {
     currentAdminClient = createAdminClient({
       remainingCredits: 94,
-      usageInsertError: new Error('usage table unavailable'),
+      usageStartError: new Error('usage table unavailable'),
     });
 
     const { POST } = await import('@/app/api/workflow-blueprint/route');
@@ -332,11 +368,12 @@ describe('/api/workflow-blueprint route', () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
-      error: 'Failed to record AI usage.',
+      error: 'usage table unavailable',
     });
-    expect(currentAdminClient.rpcCalls).toEqual(expect.arrayContaining([
-      { fn: 'refund_credits', args: { p_user_id: 'user-1', p_amount: 6 } },
-    ]));
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).toEqual([
+      'check_backend_rate_limit',
+      'start_ai_usage_event',
+    ]);
     expect(fetch).not.toHaveBeenCalled();
   });
 });
