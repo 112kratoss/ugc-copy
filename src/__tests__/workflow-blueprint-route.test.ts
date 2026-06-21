@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const rawCreateClientMock = vi.hoisted(() => vi.fn());
+const createUserClientMock = vi.hoisted(() => vi.fn());
+
 let currentAuthClient: ReturnType<typeof createAuthClient>;
 let currentAdminClient: ReturnType<typeof createAdminClient>;
 
@@ -111,12 +114,13 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
 
   return {
     ...actual,
-    createClient: vi.fn(() => currentAuthClient),
+    createClient: (...args: unknown[]) => rawCreateClientMock(...args),
   };
 });
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: vi.fn(() => currentAdminClient),
+  createUserClient: (request: Request) => createUserClientMock(request),
 }));
 
 describe('/api/workflow-blueprint route', () => {
@@ -125,6 +129,10 @@ describe('/api/workflow-blueprint route', () => {
     vi.stubEnv('KIE_AI_API_KEY', 'test-key');
     currentAuthClient = createAuthClient();
     currentAdminClient = createAdminClient();
+    rawCreateClientMock.mockReset();
+    rawCreateClientMock.mockImplementation(() => currentAuthClient);
+    createUserClientMock.mockReset();
+    createUserClientMock.mockImplementation(() => currentAuthClient);
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -204,5 +212,7 @@ describe('/api/workflow-blueprint route', () => {
     }));
     expect(currentAdminClient.inserts).toHaveLength(1);
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(createUserClientMock).toHaveBeenCalledTimes(1);
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
   });
 });
