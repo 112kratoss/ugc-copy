@@ -109,6 +109,9 @@ function createSupabaseMock(
                 eqs.push({ column, value });
                 return query;
               },
+              or() {
+                return query;
+              },
               async maybeSingle() {
                 if (filters.id && sourceGeneration && sourceGeneration.id === filters.id) {
                   return { data: sourceGeneration, error: null };

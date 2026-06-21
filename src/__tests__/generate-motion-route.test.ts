@@ -97,6 +97,9 @@ function createSupabaseMock(
                 eqs.push({ column, value });
                 return query;
               },
+              or() {
+                return query;
+              },
               async maybeSingle() {
                 return { data: null, error: null };
               },

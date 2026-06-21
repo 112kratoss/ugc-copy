@@ -24,6 +24,7 @@ export async function resolveSourceGenerationId(
     .from('generations')
     .select('id, user_id, is_public')
     .eq('id', sourceGenerationId)
+    .or(`user_id.eq.${userId},is_public.eq.true`)
     .maybeSingle();
 
   if (error) {
