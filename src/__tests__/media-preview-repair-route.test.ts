@@ -17,6 +17,7 @@ const lockState = vi.hoisted(() => ({
 
 const jobRunState = vi.hoisted(() => ({
   finish: vi.fn(async () => undefined),
+  prune: vi.fn(async () => 0),
   start: vi.fn(async (_client, options: {
     name: string;
     route: string;
@@ -39,6 +40,7 @@ vi.mock('@/lib/backend-job-lock', () => ({
 
 vi.mock('@/lib/backend-job-runs', () => ({
   finishBackendJobRun: jobRunState.finish,
+  pruneBackendJobRuns: jobRunState.prune,
   startBackendJobRun: jobRunState.start,
 }));
 
@@ -50,6 +52,7 @@ describe('media preview repair cron', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     jobRunState.finish.mockClear();
+    jobRunState.prune.mockClear();
     jobRunState.start.mockClear();
     repairState.repair.mockClear();
     lockState.withLock.mockClear();
@@ -114,6 +117,7 @@ describe('media preview repair cron', () => {
         summary: { attempted: 2, completed: 2, failed: 0 },
       }),
     );
+    expect(jobRunState.prune).toHaveBeenCalledWith({ service: true });
   });
 
   it('skips repair when another cron invocation already owns the lock', async () => {
@@ -134,6 +138,7 @@ describe('media preview repair cron', () => {
         skipReason: 'already_running',
       }),
     );
+    expect(jobRunState.prune).toHaveBeenCalledWith({ service: true });
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       skipped: true,
@@ -160,5 +165,6 @@ describe('media preview repair cron', () => {
         errorMessage: 'repair failed',
       }),
     );
+    expect(jobRunState.prune).toHaveBeenCalledWith({ service: true });
   });
 });

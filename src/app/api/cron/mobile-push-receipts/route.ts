@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { withBackendJobLock } from '@/lib/backend-job-lock';
-import { finishBackendJobRun, startBackendJobRun, type BackendJobRunHandle } from '@/lib/backend-job-runs';
+import {
+  finishBackendJobRun,
+  pruneBackendJobRuns,
+  startBackendJobRun,
+  type BackendJobRunHandle,
+} from '@/lib/backend-job-runs';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
 import { processPendingMobilePushReceipts } from '@/lib/mobile-notifications';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -70,10 +75,12 @@ export async function GET(request: Request) {
         finishedAtMs: finishedAt,
         skipReason: lockResult.reason,
       });
+      const prunedJobRuns = await pruneBackendJobRuns(currentServiceClient);
       logCron('info', 'mobile_push_receipts_skipped', {
         requestId,
         reason: lockResult.reason,
         ms: finishedAt - startedAt,
+        prunedJobRuns,
       });
       return NextResponse.json({
         success: true,
@@ -88,10 +95,12 @@ export async function GET(request: Request) {
       finishedAtMs: finishedAt,
       summary: lockResult.value,
     });
+    const prunedJobRuns = await pruneBackendJobRuns(currentServiceClient);
     logCron('info', 'mobile_push_receipts_completed', {
       requestId,
       ms: finishedAt - startedAt,
       summary: lockResult.value,
+      prunedJobRuns,
     });
     return NextResponse.json({ success: true, summary: lockResult.value });
   } catch (error) {
@@ -102,6 +111,7 @@ export async function GET(request: Request) {
         finishedAtMs: finishedAt,
         errorMessage: errorMessage(error),
       });
+      await pruneBackendJobRuns(serviceClient);
     }
     logCron('error', 'mobile_push_receipts_failed', {
       requestId,

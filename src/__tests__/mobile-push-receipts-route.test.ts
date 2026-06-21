@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
     void _run;
     void _options;
   }),
+  pruneBackendJobRuns: vi.fn(async (_client: unknown) => {
+    void _client;
+    return 0;
+  }),
   processPendingMobilePushReceipts: vi.fn(),
   startBackendJobRun: vi.fn(async (_client, options: {
     name: string;
@@ -51,6 +55,7 @@ vi.mock('@/lib/backend-job-runs', () => ({
   finishBackendJobRun: (client: unknown, run: unknown, options: unknown) => (
     mocks.finishBackendJobRun(client, run, options)
   ),
+  pruneBackendJobRuns: (client: unknown) => mocks.pruneBackendJobRuns(client),
   startBackendJobRun: (client: unknown, options: unknown) => mocks.startBackendJobRun(
     client,
     options as {
@@ -68,6 +73,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
     vi.resetModules();
     mocks.createServiceClient.mockReset();
     mocks.finishBackendJobRun.mockClear();
+    mocks.pruneBackendJobRuns.mockClear();
     mocks.processPendingMobilePushReceipts.mockReset();
     mocks.startBackendJobRun.mockClear();
     mocks.withBackendJobLock.mockReset();
@@ -149,6 +155,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
         },
       }),
     );
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith({ service: 'supabase' });
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       summary: {
@@ -177,6 +184,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
         skipReason: 'already_running',
       }),
     );
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith({ service: 'supabase' });
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       skipped: true,
@@ -204,5 +212,6 @@ describe('/api/cron/mobile-push-receipts route', () => {
         errorMessage: 'receipt processor failed',
       }),
     );
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith({ service: 'supabase' });
   });
 });

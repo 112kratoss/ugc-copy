@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+const DEFAULT_RETENTION_DAYS = 45;
+const DEFAULT_PRUNE_LIMIT = 500;
+
 export type BackendJobRunHandle = {
   id: string;
   name: string;
@@ -36,6 +39,11 @@ export type BackendJobRunFinishOptions =
       errorMessage: string;
       summary?: unknown;
     };
+
+export type BackendJobRunPruneOptions = {
+  retentionDays?: number;
+  limit?: number;
+};
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -129,4 +137,36 @@ export async function finishBackendJobRun(
       error: errorMessage(error),
     });
   }
+}
+
+export async function pruneBackendJobRuns(
+  client: SupabaseClient,
+  options: BackendJobRunPruneOptions = {},
+): Promise<number | null> {
+  const retentionDays = options.retentionDays ?? DEFAULT_RETENTION_DAYS;
+  const limit = options.limit ?? DEFAULT_PRUNE_LIMIT;
+
+  if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
+    throw new Error('Backend job run retention days must be between 1 and 3650');
+  }
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10000) {
+    throw new Error('Backend job run prune limit must be between 1 and 10000');
+  }
+
+  const { data, error } = await client.rpc('prune_backend_job_runs', {
+    p_retention_days: retentionDays,
+    p_limit: limit,
+  });
+
+  if (error) {
+    logBackendJobRunError('backend_job_run_prune_failed', {
+      retentionDays,
+      limit,
+      error: errorMessage(error),
+    });
+    return null;
+  }
+
+  return typeof data === 'number' ? data : null;
 }

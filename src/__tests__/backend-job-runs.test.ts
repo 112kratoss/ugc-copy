@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { finishBackendJobRun, startBackendJobRun } from '@/lib/backend-job-runs';
+import { finishBackendJobRun, pruneBackendJobRuns, startBackendJobRun } from '@/lib/backend-job-runs';
 
 function createStartClient(result: { data: { id: string } | null; error: Error | null }) {
   const single = vi.fn(async () => result);
@@ -28,6 +28,15 @@ function createFinishClient(result: { error: Error | null }) {
     from,
     update,
     eq,
+  };
+}
+
+function createRpcClient(result: { data: unknown; error: Error | null }) {
+  const rpc = vi.fn(async () => result);
+
+  return {
+    client: { rpc } as unknown as SupabaseClient,
+    rpc,
   };
 }
 
@@ -170,5 +179,51 @@ describe('backend job run recording', () => {
     })).resolves.toBeUndefined();
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('backend_job_run_finish_failed'));
+  });
+
+  it('prunes old job runs through the bounded retention RPC', async () => {
+    const db = createRpcClient({ data: 12, error: null });
+
+    await expect(pruneBackendJobRuns(db.client)).resolves.toBe(12);
+
+    expect(db.rpc).toHaveBeenCalledWith('prune_backend_job_runs', {
+      p_retention_days: 45,
+      p_limit: 500,
+    });
+  });
+
+  it('accepts explicit retention bounds for pruning', async () => {
+    const db = createRpcClient({ data: 3, error: null });
+
+    await expect(pruneBackendJobRuns(db.client, {
+      retentionDays: 90,
+      limit: 1000,
+    })).resolves.toBe(3);
+
+    expect(db.rpc).toHaveBeenCalledWith('prune_backend_job_runs', {
+      p_retention_days: 90,
+      p_limit: 1000,
+    });
+  });
+
+  it('logs prune failures but does not throw', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const db = createRpcClient({ data: null, error: new Error('prune failed') });
+
+    await expect(pruneBackendJobRuns(db.client)).resolves.toBeNull();
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('backend_job_run_prune_failed'));
+  });
+
+  it('rejects unsafe prune bounds before hitting the database', async () => {
+    const db = createRpcClient({ data: 0, error: null });
+
+    await expect(pruneBackendJobRuns(db.client, { retentionDays: 0 })).rejects.toThrow(
+      'Backend job run retention days must be between 1 and 3650',
+    );
+    await expect(pruneBackendJobRuns(db.client, { limit: 0 })).rejects.toThrow(
+      'Backend job run prune limit must be between 1 and 10000',
+    );
+    expect(db.rpc).not.toHaveBeenCalled();
   });
 });
