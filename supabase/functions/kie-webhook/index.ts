@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
