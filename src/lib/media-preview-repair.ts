@@ -28,8 +28,38 @@ type PostMediaRepairRow = {
   preview_attempt_count: number | null;
 };
 
+function hasRows(data: unknown): boolean {
+  return Array.isArray(data) && data.length > 0;
+}
+
 export function canRepairPreview(attemptCount: number | null | undefined): boolean {
   return (attemptCount ?? 0) < MAX_PREVIEW_ATTEMPTS;
+}
+
+export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Promise<boolean> {
+  const generationsResult = await supabase
+    .from('generations')
+    .select('id')
+    .eq('status', 'succeeded')
+    .in('category', ['image', 'video'])
+    .in('preview_status', ['pending', 'failed', 'processing'])
+    .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
+    .not('output_url', 'is', null)
+    .limit(1);
+
+  if (generationsResult.error) throw generationsResult.error;
+  if (hasRows(generationsResult.data)) return true;
+
+  const postMediaResult = await supabase
+    .from('post_media')
+    .select('id')
+    .in('preview_status', ['pending', 'failed', 'processing'])
+    .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
+    .not('storage_path', 'is', null)
+    .limit(1);
+
+  if (postMediaResult.error) throw postMediaResult.error;
+  return hasRows(postMediaResult.data);
 }
 
 function previewFailure(error: unknown, attemptCount: number) {

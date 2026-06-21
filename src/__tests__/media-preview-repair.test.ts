@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { canRepairPreview } from '@/lib/media-preview-repair';
+import { canRepairPreview, hasRepairableMediaPreviews } from '@/lib/media-preview-repair';
 
 const previewMocks = vi.hoisted(() => ({
   createPostMediaPreview: vi.fn(async () => ({
@@ -32,6 +32,30 @@ function createSelectChain(result: unknown) {
   return chain;
 }
 
+function createRepairableProbeClient(results: Array<{ data: unknown[] | null; error: Error | null }>) {
+  const limit = vi.fn(async () => {
+    const result = results.shift();
+    if (!result) throw new Error('Unexpected repairable probe query');
+    return result;
+  });
+  const not = vi.fn(() => ({ limit }));
+  const lt = vi.fn(() => ({ not }));
+  const inFilter = vi.fn(() => ({ in: inFilter, lt }));
+  const eq = vi.fn(() => ({ in: inFilter }));
+  const select = vi.fn(() => ({ eq, in: inFilter }));
+  const from = vi.fn(() => ({ select }));
+
+  return {
+    from,
+    select,
+    eq,
+    in: inFilter,
+    lt,
+    not,
+    limit,
+  };
+}
+
 describe('media preview repair retries', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -43,6 +67,25 @@ describe('media preview repair retries', () => {
     expect(canRepairPreview(0)).toBe(true);
     expect(canRepairPreview(2)).toBe(true);
     expect(canRepairPreview(3)).toBe(false);
+  });
+
+  it('checks repairable preview work with one-row probes', async () => {
+    const supabase = createRepairableProbeClient([
+      { data: [], error: null },
+      { data: [{ id: 'media-1' }], error: null },
+    ]);
+
+    await expect(hasRepairableMediaPreviews(supabase as never)).resolves.toBe(true);
+
+    expect(supabase.from).toHaveBeenNthCalledWith(1, 'generations');
+    expect(supabase.eq).toHaveBeenCalledWith('status', 'succeeded');
+    expect(supabase.in).toHaveBeenCalledWith('category', ['image', 'video']);
+    expect(supabase.in).toHaveBeenCalledWith('preview_status', ['pending', 'failed', 'processing']);
+    expect(supabase.lt).toHaveBeenCalledWith('preview_attempt_count', 3);
+    expect(supabase.not).toHaveBeenCalledWith('output_url', 'is', null);
+    expect(supabase.from).toHaveBeenNthCalledWith(2, 'post_media');
+    expect(supabase.not).toHaveBeenCalledWith('storage_path', 'is', null);
+    expect(supabase.limit).toHaveBeenCalledWith(1);
   });
 
   it('downloads post media from the showcase media bucket by storage path', async () => {

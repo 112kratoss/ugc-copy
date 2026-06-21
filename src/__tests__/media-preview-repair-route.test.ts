@@ -5,6 +5,7 @@ type LockMockResult =
   | { acquired: false; reason: 'already_running' };
 
 const repairState = vi.hoisted(() => ({
+  hasRepairable: vi.fn(async () => true),
   repair: vi.fn(async () => ({ attempted: 2, completed: 2, failed: 0 })),
 }));
 
@@ -31,6 +32,7 @@ const jobRunState = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/media-preview-repair', () => ({
+  hasRepairableMediaPreviews: repairState.hasRepairable,
   repairMediaPreviews: repairState.repair,
 }));
 
@@ -54,6 +56,8 @@ describe('media preview repair cron', () => {
     jobRunState.finish.mockClear();
     jobRunState.prune.mockClear();
     jobRunState.start.mockClear();
+    repairState.hasRepairable.mockReset();
+    repairState.hasRepairable.mockResolvedValue(true);
     repairState.repair.mockClear();
     lockState.withLock.mockClear();
     lockState.withLock.mockImplementation(async (_client, _options, task: () => Promise<unknown>): Promise<LockMockResult> => ({
@@ -121,6 +125,32 @@ describe('media preview repair cron', () => {
       { service: true },
       expect.objectContaining({ nowMs: expect.any(Number) }),
     );
+  });
+
+  it('skips lock and job-run writes when no media previews need repair', async () => {
+    vi.stubEnv('CRON_SECRET', 'secret');
+    repairState.hasRepairable.mockResolvedValueOnce(false);
+
+    const { GET } = await import('@/app/api/cron/media-preview-repair/route');
+    const response = await GET(new Request('http://localhost/api/cron/media-preview-repair', {
+      headers: { authorization: 'Bearer secret' },
+    }));
+
+    expect(response.status).toBe(202);
+    expect(repairState.hasRepairable).toHaveBeenCalledWith({ service: true });
+    expect(jobRunState.start).not.toHaveBeenCalled();
+    expect(lockState.withLock).not.toHaveBeenCalled();
+    expect(repairState.repair).not.toHaveBeenCalled();
+    expect(jobRunState.finish).not.toHaveBeenCalled();
+    expect(jobRunState.prune).toHaveBeenCalledWith(
+      { service: true },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      skipped: true,
+      reason: 'no_repairable_media',
+    });
   });
 
   it('skips repair when another cron invocation already owns the lock', async () => {

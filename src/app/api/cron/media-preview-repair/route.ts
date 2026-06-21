@@ -9,7 +9,7 @@ import {
   type BackendJobRunHandle,
 } from '@/lib/backend-job-runs';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
-import { repairMediaPreviews } from '@/lib/media-preview-repair';
+import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import { createServiceClient } from '@/lib/server-helpers';
 
 export const runtime = 'nodejs';
@@ -55,6 +55,23 @@ export async function GET(request: Request) {
 
     const currentServiceClient = createServiceClient();
     serviceClient = currentServiceClient;
+    const hasRepairable = await hasRepairableMediaPreviews(currentServiceClient);
+
+    if (!hasRepairable) {
+      const finishedAt = Date.now();
+      const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
+      logCron('info', 'media_preview_repair_skipped_no_repairable_media', {
+        requestId,
+        ms: finishedAt - startedAt,
+        prunedJobRuns,
+      });
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: 'no_repairable_media',
+      }, { status: 202 });
+    }
+
     jobRun = await startBackendJobRun(currentServiceClient, {
       name: JOB_NAME,
       route: ROUTE,
