@@ -1,3 +1,4 @@
+import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type QueryResult = {
@@ -82,6 +83,78 @@ describe('/api/source-tools route', () => {
         models: [{ slug: 'soul', label: 'Soul' }],
       },
     ]);
+  });
+
+  it('returns a cacheable catalog response with an ETag', async () => {
+    tableResults.set('source_tools', {
+      data: [
+        {
+          id: 'tool-1',
+          slug: 'higgsfield',
+          label: 'Higgsfield',
+          supported_media_kinds: ['image', 'video'],
+          sort_order: 10,
+        },
+      ],
+      error: null,
+    });
+    tableResults.set('source_tool_models', {
+      data: [
+        {
+          source_tool_id: 'tool-1',
+          slug: 'soul',
+          label: 'Soul',
+          sort_order: 0,
+        },
+      ],
+      error: null,
+    });
+
+    const { GET } = await import('@/app/api/source-tools/route');
+    const response = await GET(new NextRequest('http://localhost/api/source-tools'));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('ETag')).toMatch(/^"[a-f0-9]{16}"$/);
+    expect(payload.tools).toHaveLength(1);
+  });
+
+  it('returns 304 when the source tool catalog ETag matches', async () => {
+    tableResults.set('source_tools', {
+      data: [
+        {
+          id: 'tool-1',
+          slug: 'higgsfield',
+          label: 'Higgsfield',
+          supported_media_kinds: ['image', 'video'],
+          sort_order: 10,
+        },
+      ],
+      error: null,
+    });
+    tableResults.set('source_tool_models', {
+      data: [
+        {
+          source_tool_id: 'tool-1',
+          slug: 'soul',
+          label: 'Soul',
+          sort_order: 0,
+        },
+      ],
+      error: null,
+    });
+
+    const { GET } = await import('@/app/api/source-tools/route');
+    const initial = await GET(new NextRequest('http://localhost/api/source-tools'));
+    const etag = initial.headers.get('ETag')!;
+    const response = await GET(new NextRequest('http://localhost/api/source-tools', {
+      headers: { 'If-None-Match': etag },
+    }));
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get('ETag')).toBe(etag);
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
   });
 
   it('falls back to bundled tools when the catalog tables are missing', async () => {
