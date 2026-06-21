@@ -461,77 +461,59 @@ export async function completeMobileMarketplaceUnlock({
   provider: MobilePurchaseProvider;
   transactionId: string;
 }): Promise<MobileCommerceSyncResult> {
-  const { data: asset, error: assetError } = await adminSupabase
-    .from('marketplace_assets')
-    .select('id, seller_user_id, price_usd_cents, status')
-    .eq('id', assetId)
-    .maybeSingle();
-
-  if (assetError) {
-    throw new MobileCommerceError('Failed to load marketplace unlock.', 500);
-  }
-
-  if (!asset || (asset.status !== 'active' && asset.status !== 'unlisted')) {
-    throw new MobileCommerceError('Marketplace unlock not found.', 404);
-  }
-
-  if (asset.seller_user_id === userId) {
-    throw new MobileCommerceError('You already own this listing.', 400);
-  }
-
-  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
-    .from('marketplace_purchases')
-    .select('asset_id')
-    .eq('asset_id', assetId)
-    .eq('buyer_user_id', userId)
-    .maybeSingle();
-
-  if (existingPurchaseError) {
-    throw new MobileCommerceError('Failed to check marketplace purchase history.', 500);
-  }
-
-  if (existingPurchase) {
-    return { success: true, entitlement: 'marketplace_unlock', assetId, alreadyProcessed: true };
-  }
-
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
-  const { error: orderError } = await adminSupabase
-    .from('marketplace_orders')
-    .insert({
-      asset_id: assetId,
-      buyer_user_id: userId,
-      razorpay_order_id: externalOrderId,
-      razorpay_payment_id: `mobile_${provider}_${transactionId}`,
-      amount_subunits: asset.price_usd_cents,
-      currency: 'USD',
-      status: 'created',
-    });
-
-  if (orderError) {
-    throw new MobileCommerceError('Failed to record marketplace mobile order.', 500);
-  }
-
-  const { data: completed, error: completionError } = await adminSupabase.rpc('complete_marketplace_purchase', {
-    p_razorpay_order_id: externalOrderId,
-    p_razorpay_payment_id: `mobile_${provider}_${transactionId}`,
+  const { data, error } = await adminSupabase.rpc('complete_mobile_marketplace_purchase', {
+    p_user_id: userId,
+    p_asset_id: assetId,
+    p_external_order_id: externalOrderId,
+    p_payment_id: `mobile_${provider}_${transactionId}`,
   });
 
-  if (completionError) {
+  if (error || !isRecord(data)) {
     throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
   }
 
-  await notifyMarketplaceUnlockCompleted(adminSupabase, {
-    buyerUserId: userId,
-    sellerUserId: asset.seller_user_id,
-    assetId,
-    alreadyProcessed: !completed,
-  });
+  const status = normalizeOptionalString(data.status);
+  const sellerUserId = normalizeOptionalString(data.seller_user_id);
+
+  if (status === 'not_found') {
+    throw new MobileCommerceError('Marketplace unlock not found.', 404);
+  }
+
+  if (status === 'owned_by_user') {
+    throw new MobileCommerceError('You already own this listing.', 400);
+  }
+
+  if (status === 'not_paid') {
+    throw new MobileCommerceError('This listing does not require a mobile purchase.', 400);
+  }
+
+  if (status === 'invalid_order' || status === 'order_conflict') {
+    throw new MobileCommerceError('Mobile purchase is already linked to another unlock.', 409);
+  }
+
+  const alreadyProcessed = status === 'already_owned';
+  if (status !== 'completed' && !alreadyProcessed) {
+    throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
+  }
+
+  if (!alreadyProcessed) {
+    if (!sellerUserId) {
+      throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
+    }
+    await notifyMarketplaceUnlockCompleted(adminSupabase, {
+      buyerUserId: userId,
+      sellerUserId,
+      assetId,
+      alreadyProcessed: false,
+    });
+  }
 
   return {
     success: true,
     entitlement: 'marketplace_unlock',
     assetId,
-    alreadyProcessed: !completed,
+    alreadyProcessed,
   };
 }
 
@@ -613,82 +595,61 @@ export async function completeMobilePostResourceUnlock({
   provider: MobilePurchaseProvider;
   transactionId: string;
 }): Promise<MobileCommerceSyncResult> {
-  const { data: bundle, error: bundleError } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('id, owner_user_id, access_mode, status, price_usd_cents')
-    .eq('post_id', postId)
-    .maybeSingle();
-
-  if (bundleError) {
-    throw new MobileCommerceError('Failed to load post unlock.', 500);
-  }
-
-  if (!bundle || bundle.status !== 'published') {
-    throw new MobileCommerceError('Post unlock not found.', 404);
-  }
-
-  if (bundle.owner_user_id === userId) {
-    throw new MobileCommerceError('You already own this unlock.', 400);
-  }
-
-  if (bundle.access_mode !== 'paid' || bundle.price_usd_cents <= 0) {
-    throw new MobileCommerceError('This post unlock does not require a mobile purchase.', 400);
-  }
-
-  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
-    .from('post_resource_bundle_purchases')
-    .select('bundle_id')
-    .eq('bundle_id', bundle.id)
-    .eq('buyer_user_id', userId)
-    .maybeSingle();
-
-  if (existingPurchaseError) {
-    throw new MobileCommerceError('Failed to check post unlock purchase history.', 500);
-  }
-
-  if (existingPurchase) {
-    return { success: true, entitlement: 'post_resource_unlock', postId, alreadyProcessed: true };
-  }
-
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
-  const { error: orderError } = await adminSupabase
-    .from('post_resource_bundle_orders')
-    .insert({
-      bundle_id: bundle.id,
-      buyer_user_id: userId,
-      razorpay_order_id: externalOrderId,
-      razorpay_payment_id: `mobile_${provider}_${transactionId}`,
-      amount_subunits: bundle.price_usd_cents,
-      currency: 'USD',
-      status: 'created',
-    });
-
-  if (orderError) {
-    throw new MobileCommerceError('Failed to record post unlock mobile order.', 500);
-  }
-
-  const { data: completed, error: completionError } = await adminSupabase.rpc('complete_post_resource_bundle_purchase', {
-    p_razorpay_order_id: externalOrderId,
-    p_razorpay_payment_id: `mobile_${provider}_${transactionId}`,
+  const { data, error } = await adminSupabase.rpc('complete_mobile_post_resource_purchase', {
+    p_user_id: userId,
+    p_post_id: postId,
+    p_external_order_id: externalOrderId,
+    p_payment_id: `mobile_${provider}_${transactionId}`,
   });
 
-  if (completionError) {
+  if (error || !isRecord(data)) {
     throw new MobileCommerceError('Failed to unlock post resources.', 500);
   }
 
-  await notifyPostResourceUnlockCompleted(adminSupabase, {
-    buyerUserId: userId,
-    ownerUserId: bundle.owner_user_id,
-    postId,
-    bundleId: bundle.id,
-    alreadyProcessed: !completed,
-  });
+  const status = normalizeOptionalString(data.status);
+  const bundleId = normalizeOptionalString(data.bundle_id);
+  const ownerUserId = normalizeOptionalString(data.owner_user_id);
+
+  if (status === 'not_found') {
+    throw new MobileCommerceError('Post unlock not found.', 404);
+  }
+
+  if (status === 'owned_by_user') {
+    throw new MobileCommerceError('You already own this unlock.', 400);
+  }
+
+  if (status === 'not_paid') {
+    throw new MobileCommerceError('This post unlock does not require a mobile purchase.', 400);
+  }
+
+  if (status === 'invalid_order' || status === 'order_conflict') {
+    throw new MobileCommerceError('Mobile purchase is already linked to another unlock.', 409);
+  }
+
+  const alreadyProcessed = status === 'already_owned';
+  if (status !== 'completed' && !alreadyProcessed) {
+    throw new MobileCommerceError('Failed to unlock post resources.', 500);
+  }
+
+  if (!alreadyProcessed) {
+    if (!ownerUserId || !bundleId) {
+      throw new MobileCommerceError('Failed to unlock post resources.', 500);
+    }
+    await notifyPostResourceUnlockCompleted(adminSupabase, {
+      buyerUserId: userId,
+      ownerUserId,
+      postId,
+      bundleId,
+      alreadyProcessed: false,
+    });
+  }
 
   return {
     success: true,
     entitlement: 'post_resource_unlock',
     postId,
-    alreadyProcessed: !completed,
+    alreadyProcessed,
   };
 }
 

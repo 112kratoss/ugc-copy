@@ -5,6 +5,8 @@ import {
   MobileCommerceError,
   buildMobileExternalOrderId,
   completeMobileCreditPurchase,
+  completeMobileMarketplaceUnlock,
+  completeMobilePostResourceUnlock,
   normalizeMobileCommercePayload,
   restoreMobileEntitlements,
   verifyMobilePurchase,
@@ -150,6 +152,76 @@ function createCreditSupabase(options: {
     transactions,
     rpcCalls,
   };
+}
+
+function createNotificationOnlyFromMock(disallowedTables: string[]) {
+  let notificationId = 0;
+
+  return vi.fn((table: string) => {
+    if (table === 'mobile_notifications') {
+      return {
+        select() {
+          return {
+            eq() {
+              return this;
+            },
+            async maybeSingle() {
+              return { data: null, error: null };
+            },
+          };
+        },
+        insert(values: Record<string, unknown>) {
+          notificationId += 1;
+          return {
+            select() {
+              return {
+                async single() {
+                  return {
+                    data: {
+                      id: `notification-${notificationId}`,
+                      ...values,
+                      event_count: 1,
+                      is_read: false,
+                      created_at: '2026-06-21T00:00:00.000Z',
+                      updated_at: '2026-06-21T00:00:00.000Z',
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
+    if (table === 'mobile_notification_preferences') {
+      return {
+        select() {
+          return {
+            eq() {
+              return {
+                async maybeSingle() {
+                  return {
+                    data: {
+                      push_enabled: false,
+                      generation_enabled: true,
+                      commerce_enabled: true,
+                      social_enabled: true,
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
+    disallowedTables.push(table);
+    throw new Error(`Unexpected client-side mobile cash unlock table step: ${table}`);
+  });
 }
 
 describe('mobile commerce helpers', () => {
@@ -326,6 +398,128 @@ describe('mobile commerce helpers', () => {
     });
     expect(fakeSupabase.transactions).toHaveLength(1);
     expect(fakeSupabase.rpcCalls).toHaveLength(1);
+  });
+
+  it('uses one atomic database call for mobile marketplace cash unlocks', async () => {
+    const disallowedTables: string[] = [];
+    const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      expect(name).toBe('complete_mobile_marketplace_purchase');
+      expect(args).toEqual({
+        p_user_id: userId,
+        p_asset_id: 'asset-1',
+        p_external_order_id: buildMobileExternalOrderId('app_store', '1000000123456800'),
+        p_payment_id: 'mobile_app_store_1000000123456800',
+      });
+      return {
+        data: {
+          status: 'completed',
+          asset_id: 'asset-1',
+          seller_user_id: 'seller-1',
+        },
+        error: null,
+      };
+    });
+    const from = createNotificationOnlyFromMock(disallowedTables);
+
+    await expect(completeMobileMarketplaceUnlock({
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
+      userId,
+      assetId: 'asset-1',
+      provider: 'app_store',
+      transactionId: '1000000123456800',
+    })).resolves.toMatchObject({
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId: 'asset-1',
+      alreadyProcessed: false,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(disallowedTables).toEqual([]);
+  });
+
+  it('treats replayed mobile marketplace cash unlocks as already processed', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'already_owned',
+        asset_id: 'asset-1',
+        seller_user_id: 'seller-1',
+      },
+      error: null,
+    }));
+
+    await expect(completeMobileMarketplaceUnlock({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      assetId: 'asset-1',
+      provider: 'app_store',
+      transactionId: '1000000123456800',
+    })).resolves.toMatchObject({
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId: 'asset-1',
+      alreadyProcessed: true,
+    });
+  });
+
+  it('uses one atomic database call for mobile post-resource cash unlocks', async () => {
+    const disallowedTables: string[] = [];
+    const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      expect(name).toBe('complete_mobile_post_resource_purchase');
+      expect(args).toEqual({
+        p_user_id: userId,
+        p_post_id: 'post-1',
+        p_external_order_id: buildMobileExternalOrderId('play_store', 'GPA.1000-2000-3000'),
+        p_payment_id: 'mobile_play_store_GPA.1000-2000-3000',
+      });
+      return {
+        data: {
+          status: 'completed',
+          post_id: 'post-1',
+          bundle_id: 'bundle-1',
+          owner_user_id: 'owner-1',
+        },
+        error: null,
+      };
+    });
+    const from = createNotificationOnlyFromMock(disallowedTables);
+
+    await expect(completeMobilePostResourceUnlock({
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
+      userId,
+      postId: 'post-1',
+      provider: 'play_store',
+      transactionId: 'GPA.1000-2000-3000',
+    })).resolves.toMatchObject({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId: 'post-1',
+      alreadyProcessed: false,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(disallowedTables).toEqual([]);
+  });
+
+  it('maps mobile post-resource cash unlock database statuses to user errors', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'not_paid',
+        post_id: 'post-1',
+      },
+      error: null,
+    }));
+
+    await expect(completeMobilePostResourceUnlock({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      postId: 'post-1',
+      provider: 'play_store',
+      transactionId: 'GPA.1000-2000-3000',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'This post unlock does not require a mobile purchase.',
+    });
   });
 
   it('restores unprocessed RevenueCat credit purchases and reports already processed purchases', async () => {
