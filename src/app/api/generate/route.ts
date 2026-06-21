@@ -177,6 +177,7 @@ export async function POST(request: NextRequest) {
                 sourceGenerationId: validatedSourceGenerationId,
                 characterImage: normalizedCharacterImage,
                 referenceVideo: normalizedReferenceVideo,
+                quotedCostCredits: quote.costCredits,
             }),
         });
 

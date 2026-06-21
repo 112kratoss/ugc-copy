@@ -710,6 +710,34 @@ describe('generation services', () => {
     });
   });
 
+  it('uses a provided catalog quote cost for image charging and persistence', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-quote-cost-1' } }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    const result = await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A quoted-cost image generation.',
+      model: 'nano-banana-2',
+      quotedCostCredits: 123,
+    });
+
+    expect(result.cost).toBe(123);
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 123 },
+    });
+    expect(generations[0]).toMatchObject({
+      cost: 123,
+    });
+  });
+
   it('uses Grok image-to-image provider payload and fixed edit pricing with one reference', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -905,6 +933,37 @@ describe('generation services', () => {
     });
   });
 
+  it('uses a provided catalog quote cost for video charging and persistence', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-video-quote-cost-1' } }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    const result = await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A quoted-cost video generation.',
+      model: 'kling-3.0-video',
+      duration: 5,
+      mode: 'std',
+      aspectRatio: '16:9',
+      quotedCostCredits: 234,
+    });
+
+    expect(result.cost).toBe(234);
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 234 },
+    });
+    expect(generations[0]).toMatchObject({
+      cost: 234,
+    });
+  });
+
   it('uses Grok image-to-video payload and coerces spicy external images to normal', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -1037,6 +1096,39 @@ describe('generation services', () => {
       status: 'processing',
       prediction_id: 'task-motion-durable-1',
       client_request_key_hash: 'e'.repeat(64),
+    });
+  });
+
+  it('uses a provided catalog quote cost for motion charging and persistence', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-motion-quote-cost-1' } }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    const result = await startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Match the reference motion.',
+      model: 'kling-3.0',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 6,
+      characterOrientation: 'image',
+      mode: '1080p',
+      quotedCostCredits: 345,
+    });
+
+    expect(result.cost).toBe(345);
+    expect(rpcCalls[0]).toMatchObject({
+      fn: 'deduct_credits',
+      args: { p_cost: 345 },
+    });
+    expect(generations[0]).toMatchObject({
+      cost: 345,
     });
   });
 

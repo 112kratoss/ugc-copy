@@ -160,6 +160,18 @@ async function deductCreditsOrThrow(creditSupabase: SupabaseClient, userId: stri
   return remainingCredits;
 }
 
+function resolveQuotedGenerationCost(computedCost: number, quotedCostCredits?: number): number {
+  if (quotedCostCredits === undefined) {
+    return computedCost;
+  }
+
+  if (!Number.isInteger(quotedCostCredits) || quotedCostCredits < 0) {
+    throw new GenerationServiceError('Invalid quoted generation cost.', 500);
+  }
+
+  return quotedCostCredits;
+}
+
 async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: string, amount: number) {
   try {
     await creditSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
@@ -1102,6 +1114,7 @@ export async function startImageGeneration(params: {
   qualityMode?: ImageQualityMode;
   outputFormat?: ImageOutputFormat;
   googleSearch?: boolean;
+  quotedCostCredits?: number;
   sourceGenerationId?: string | null;
 }): Promise<GenerationStartResult> {
   requireApiKey();
@@ -1120,6 +1133,7 @@ export async function startImageGeneration(params: {
     qualityMode = 'standard',
     outputFormat = 'jpg',
     googleSearch = false,
+    quotedCostCredits,
     sourceGenerationId = null,
   } = params;
 
@@ -1198,10 +1212,11 @@ export async function startImageGeneration(params: {
     ? compileImagePromptWithElements(trimmedPrompt, normalizedElements)
     : trimmedPrompt;
 
-  const cost = getImageCost(model, resolution, {
+  const computedCost = getImageCost(model, resolution, {
     qualityMode,
     referenceCount: resolvedImageUrls.length,
   });
+  const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
 
@@ -1331,6 +1346,7 @@ export async function startVideoGeneration(params: {
   startFrame?: RemixMediaAssetDescriptor | null;
   endFrame?: RemixMediaAssetDescriptor | null;
   seedanceAssets?: SeedanceAssetCollections | null;
+  quotedCostCredits?: number;
   sourceGenerationId?: string | null;
 }): Promise<GenerationStartResult> {
   requireApiKey();
@@ -1362,6 +1378,7 @@ export async function startVideoGeneration(params: {
     startFrame = null,
     endFrame = null,
     seedanceAssets = null,
+    quotedCostCredits,
     sourceGenerationId = null,
   } = params;
 
@@ -1597,13 +1614,14 @@ export async function startVideoGeneration(params: {
   const totalDuration = isMultiShot
     ? normalizedMultiPrompts.reduce((total, shot) => total + (shot.duration || 0), 0)
     : (selectedModel.provider === 'veo' ? selectedModel.durations[0] : duration);
-  const cost = getVideoCost(model, {
+  const computedCost = getVideoCost(model, {
     mode,
     sound: soundEnabled,
     durationSeconds: totalDuration,
     resolution,
     hasReferenceVideo: resolvedReferenceVideoUrls.length > 0,
   });
+  const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   let generationId: string | null = null;
@@ -1926,6 +1944,7 @@ export async function startMotionGeneration(params: {
   sourceGenerationId?: string | null;
   characterImage?: RemixMediaAssetDescriptor | null;
   referenceVideo?: RemixMediaAssetDescriptor | null;
+  quotedCostCredits?: number;
 }): Promise<GenerationStartResult> {
   requireApiKey();
   const {
@@ -1943,6 +1962,7 @@ export async function startMotionGeneration(params: {
     sourceGenerationId = null,
     characterImage = null,
     referenceVideo = null,
+    quotedCostCredits,
   } = params;
 
   if (!referenceVideoUrl || !characterImageUrl) {
@@ -1954,7 +1974,8 @@ export async function startMotionGeneration(params: {
     throw new Error(`Unsupported motion model: ${model}`);
   }
 
-  const cost = getMotionCost(model, mode, duration);
+  const computedCost = getMotionCost(model, mode, duration);
+  const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
   try {
     buildKieWebhookCallbackUrl();
   } catch (error) {

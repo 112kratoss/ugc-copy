@@ -336,6 +336,7 @@ export async function POST(request: NextRequest) {
                 startFrame: startFrame && typeof startFrame === 'object' ? startFrame as never : null,
                 endFrame: endFrame && typeof endFrame === 'object' ? endFrame as never : null,
                 seedanceAssets: seedanceAssets && typeof seedanceAssets === 'object' ? seedanceAssets as never : null,
+                quotedCostCredits: quote.costCredits,
                 sourceGenerationId: validatedSourceGenerationId,
             }),
         });

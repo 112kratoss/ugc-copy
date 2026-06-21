@@ -184,6 +184,7 @@ export async function POST(request: NextRequest) {
                 qualityMode: normalizedSettings.qualityMode as ImageQualityMode | undefined,
                 outputFormat: normalizedSettings.outputFormat as ImageOutputFormat,
                 googleSearch: Boolean(normalizedSettings.googleSearch),
+                quotedCostCredits: quote.costCredits,
                 sourceGenerationId: validatedSourceGenerationId,
             }),
         });
