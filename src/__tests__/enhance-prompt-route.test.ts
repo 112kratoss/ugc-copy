@@ -21,9 +21,14 @@ function createAuthClient() {
   };
 }
 
-function createAdminClient(options?: { remainingCredits?: number; rateLimitAllowed?: boolean }) {
+function createAdminClient(options?: {
+  remainingCredits?: number;
+  rateLimitAllowed?: boolean;
+  usageInsertError?: Error | null;
+}) {
   const remainingCredits = options?.remainingCredits ?? 98;
   const rateLimitAllowed = options?.rateLimitAllowed ?? true;
+  const usageInsertError = options?.usageInsertError ?? null;
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -70,7 +75,9 @@ function createAdminClient(options?: { remainingCredits?: number; rateLimitAllow
             select() {
               return {
                 async single() {
-                  return { data: { id: 'event-1' }, error: null };
+                  return usageInsertError
+                    ? { data: null, error: usageInsertError }
+                    : { data: { id: 'event-1' }, error: null };
                 },
               };
             },
@@ -284,6 +291,38 @@ describe('/api/enhance-prompt route', () => {
     expect(currentAdminClient.updates.at(-1)).toMatchObject({
       error_message: 'provider failure',
     });
+  });
+
+  it('refunds and skips the provider when usage event creation fails after deduction', async () => {
+    currentAdminClient = createAdminClient({
+      remainingCredits: 41,
+      usageInsertError: new Error('usage table unavailable'),
+    });
+
+    const { POST } = await import('@/app/api/enhance-prompt/route');
+    const response = await POST(
+      new Request('http://localhost/api/enhance-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          medium: 'image',
+          selectedModel: 'nano-banana-pro',
+          prompt: 'Create a product poster',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Failed to record AI usage.',
+    });
+    expect(currentAdminClient.rpcCalls).toEqual(expect.arrayContaining([
+      { fn: 'refund_credits', args: { p_user_id: 'user-1', p_amount: 2 } },
+    ]));
+    expect(callPromptEnhancerMock).not.toHaveBeenCalled();
   });
 
   it('keeps append-only element prompts untouched when the compiled enhancement breaks the locked opening', async () => {

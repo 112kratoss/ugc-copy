@@ -18,6 +18,12 @@ import {
     EnhancerContext,
 } from '@/lib/prompt-enhancer';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
+import {
+    AiUsageLedgerError,
+    markAiUsageSucceeded,
+    refundAiUsageLedger,
+    startAiUsageLedger,
+} from '@/lib/ai-usage-ledger';
 
 export async function POST(request: NextRequest) {
     try {
@@ -64,48 +70,32 @@ export async function POST(request: NextRequest) {
             key: user.id,
         });
 
-        // 3. Deduct credits
-        const { data: remainingCredits, error: deductError } = await adminSupabase.rpc(
-            'deduct_credits',
-            { p_user_id: user.id, p_cost: cost }
-        );
-
-        if (deductError) {
-            console.error('[EnhancePrompt] Credit deduction error:', deductError);
-            return NextResponse.json({ error: 'Failed to deduct credits' }, { status: 500 });
-        }
-
-        if (remainingCredits === -1) {
-            return NextResponse.json(
-                { error: 'Insufficient credits', required: cost },
-                { status: 402 }
-            );
-        }
-
-        // 4. Insert usage event (pending)
-        const { data: usageEvent, error: insertError } = await adminSupabase
-            .from('ai_usage_events')
-            .insert({
-                user_id: user.id,
+        let ledger;
+        try {
+            ledger = await startAiUsageLedger(adminSupabase, {
+                userId: user.id,
                 feature: 'prompt_enhancement',
                 provider: 'kie',
                 model: PROMPT_ENHANCER_PROVIDER_MODEL,
                 medium,
                 cost,
-                status: 'pending',
-                input_prompt: prompt.substring(0, 5000),
-            })
-            .select('id')
-            .single();
+                inputPrompt: prompt,
+            });
+        } catch (ledgerError) {
+            if (ledgerError instanceof AiUsageLedgerError) {
+                if (ledgerError.code === 'INSUFFICIENT_CREDITS') {
+                    return NextResponse.json(
+                        { error: 'Insufficient credits', required: cost },
+                        { status: 402 }
+                    );
+                }
 
-        if (insertError) {
-            console.error('[EnhancePrompt] Usage event insert error:', insertError);
-            // Non-fatal — continue with the enhancement
+                return NextResponse.json({ error: ledgerError.message }, { status: ledgerError.status });
+            }
+
+            throw ledgerError;
         }
 
-        const eventId = usageEvent?.id;
-
-        // 5. Build system prompt and call enhancer
         try {
             const systemPrompt = buildEnhancerSystemPrompt(
                 medium as Medium,
@@ -135,20 +125,11 @@ export async function POST(request: NextRequest) {
                 context,
             });
 
-            // 6. Update usage event to succeeded
-            if (eventId) {
-                await adminSupabase
-                    .from('ai_usage_events')
-                    .update({
-                        status: 'succeeded',
-                        output_text: enhancedPrompt.substring(0, 5000),
-                    })
-                    .eq('id', eventId);
-            }
+            await markAiUsageSucceeded(adminSupabase, ledger, enhancedPrompt);
 
             return NextResponse.json({
                 enhancedPrompt,
-                remainingCredits,
+                remainingCredits: ledger.remainingCredits,
                 agentId: artifacts.agentId,
                 qualityScore: finalInspection.qualityScore,
                 warnings: finalInspection.warnings,
@@ -160,34 +141,12 @@ export async function POST(request: NextRequest) {
         } catch (enhanceError) {
             console.error('[EnhancePrompt] Enhancement failed:', enhanceError);
 
-            // 7. Refund credits on failure
-            if (eventId) {
-                await adminSupabase.rpc('refund_ai_usage_event', { p_event_id: eventId });
-            } else {
-                // If we couldn't create an event, refund directly
-                await adminSupabase.rpc('refund_credits', {
-                    p_user_id: user.id,
-                    p_amount: cost,
-                });
-            }
-
-            // Update usage event with error
-            if (eventId) {
-                await adminSupabase
-                    .from('ai_usage_events')
-                    .update({
-                        error_message:
-                            enhanceError instanceof Error
-                                ? enhanceError.message.substring(0, 1000)
-                                : 'Unknown error',
-                    })
-                    .eq('id', eventId);
-            }
+            await refundAiUsageLedger(adminSupabase, ledger, enhanceError);
 
             return NextResponse.json(
                 {
                     error: 'Prompt enhancement failed. Your credits have been refunded.',
-                    remainingCredits: remainingCredits + cost, // refunded
+                    remainingCredits: ledger.remainingCredits + cost,
                 },
                 { status: 502 }
             );

@@ -14,6 +14,12 @@ import {
   WORKFLOW_BLUEPRINT_COST,
   WorkflowPlannerInput,
 } from '@/lib/workflow-blueprint';
+import {
+  AiUsageLedgerError,
+  markAiUsageSucceeded,
+  refundAiUsageLedger,
+  startAiUsageLedger,
+} from '@/lib/ai-usage-ledger';
 
 export async function POST(request: NextRequest) {
   try {
@@ -48,35 +54,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to check workflow planning limits.' }, { status: 500 });
     }
 
-    const { data: remainingCredits, error: creditError } = await adminSupabase.rpc('deduct_credits', {
-      p_user_id: user.id,
-      p_cost: WORKFLOW_BLUEPRINT_COST,
-    });
-
-    if (creditError) {
-      return NextResponse.json({ error: 'Failed to deduct credits' }, { status: 500 });
-    }
-
-    if (remainingCredits === -1) {
-      return NextResponse.json({ error: `Insufficient credits. Workflow generation costs ${WORKFLOW_BLUEPRINT_COST} credits.` }, { status: 402 });
-    }
-
-    const { data: usageEvent } = await adminSupabase
-      .from('ai_usage_events')
-      .insert({
-        user_id: user.id,
+    let ledger;
+    try {
+      ledger = await startAiUsageLedger(adminSupabase, {
+        userId: user.id,
         feature: 'workflow_blueprint',
         provider: 'kie',
         model: 'gemini-3-flash',
         medium: 'video',
         cost: WORKFLOW_BLUEPRINT_COST,
-        status: 'pending',
-        input_prompt: JSON.stringify(input).slice(0, 5000),
-      })
-      .select('id')
-      .single();
+        inputPrompt: JSON.stringify(input),
+      });
+    } catch (ledgerError) {
+      if (ledgerError instanceof AiUsageLedgerError) {
+        if (ledgerError.code === 'INSUFFICIENT_CREDITS') {
+          return NextResponse.json({ error: `Insufficient credits. Workflow generation costs ${WORKFLOW_BLUEPRINT_COST} credits.` }, { status: 402 });
+        }
 
-    const eventId = usageEvent?.id;
+        return NextResponse.json({ error: ledgerError.message }, { status: ledgerError.status });
+      }
+
+      throw ledgerError;
+    }
 
     try {
       const response = await fetch('https://api.kie.ai/gemini-3-flash/v1/chat/completions', {
@@ -108,23 +107,11 @@ export async function POST(request: NextRequest) {
 
       const blueprint = sanitizeBlueprint(extractBlueprintFromResponse(content));
 
-      if (eventId) {
-        await adminSupabase.from('ai_usage_events').update({
-          status: 'succeeded',
-          output_text: JSON.stringify(blueprint).slice(0, 5000),
-        }).eq('id', eventId);
-      }
+      await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify(blueprint));
 
-      return NextResponse.json({ blueprint, remainingCredits });
+      return NextResponse.json({ blueprint, remainingCredits: ledger.remainingCredits });
     } catch (error) {
-      if (eventId) {
-        await adminSupabase.rpc('refund_ai_usage_event', { p_event_id: eventId });
-        await adminSupabase.from('ai_usage_events').update({
-          error_message: error instanceof Error ? error.message.slice(0, 1000) : 'Unknown error',
-        }).eq('id', eventId);
-      } else {
-        await adminSupabase.rpc('refund_credits', { p_user_id: user.id, p_amount: WORKFLOW_BLUEPRINT_COST });
-      }
+      await refundAiUsageLedger(adminSupabase, ledger, error);
 
       return NextResponse.json({ error: 'Workflow planning failed. Credits refunded.' }, { status: 502 });
     }

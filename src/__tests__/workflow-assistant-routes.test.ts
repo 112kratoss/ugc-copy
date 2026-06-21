@@ -64,6 +64,7 @@ let assistantProposals: AssistantProposalRow[] = [];
 let simulateMissingAssistantSchema = false;
 let remainingCredits = 94;
 let usageEventUpdates: Array<Record<string, unknown>> = [];
+let usageEventInsertError: Error | null = null;
 let adminRpcCalls: string[] = [];
 let assistantRateLimitAllowed = true;
 
@@ -323,10 +324,12 @@ function createAdminSupabaseMock() {
             select() {
               return {
                 async single() {
-                  return {
-                    data: { id: 'usage-1' },
-                    error: null,
-                  };
+                  return usageEventInsertError
+                    ? { data: null, error: usageEventInsertError }
+                    : {
+                        data: { id: 'usage-1' },
+                        error: null,
+                      };
                 },
               };
             },
@@ -368,6 +371,7 @@ beforeEach(() => {
   simulateMissingAssistantSchema = false;
   remainingCredits = 94;
   usageEventUpdates = [];
+  usageEventInsertError = null;
   adminRpcCalls = [];
   assistantRateLimitAllowed = true;
   mocks.authenticateRequest.mockResolvedValue({
@@ -382,6 +386,7 @@ beforeEach(() => {
       revision: canvasRow.revision + 1,
     },
   }));
+  mocks.fetch.mockReset();
   mocks.fetch.mockResolvedValue({
     ok: true,
     json: async () => ({
@@ -493,6 +498,29 @@ describe('workflow assistant routes', () => {
     expect(data.proposal.proposed_graph.nodes.some((node: { data: { managed?: boolean } }) => node.data.managed)).toBe(true);
     expect(assistantProposals[0].status).toBe('ready');
     expect(usageEventUpdates.some((update) => update.status === 'succeeded')).toBe(true);
+  });
+
+  it('refunds and skips the provider when usage event creation fails after deduction', async () => {
+    usageEventInsertError = new Error('usage table unavailable');
+
+    const { POST } = await import('@/app/api/workflow-canvases/[id]/assistant/messages/route');
+    const response = await POST(
+      new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: 'Create a before and after lightning transformation workflow.',
+        }),
+      }) as never,
+      { params: Promise.resolve({ id: canvasRow.id }) }
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Failed to record AI usage.',
+    });
+    expect(adminRpcCalls).toEqual(expect.arrayContaining(['deduct_credits', 'refund_credits']));
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it('marks a proposal discarded when apply hits a stale canvas revision', async () => {

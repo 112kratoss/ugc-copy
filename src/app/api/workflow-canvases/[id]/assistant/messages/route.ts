@@ -18,6 +18,12 @@ import {
 } from '@/lib/workflow-assistant';
 import { authenticateRequest } from '@/lib/server-helpers';
 import {
+  AiUsageLedgerError,
+  markAiUsageSucceeded,
+  refundAiUsageLedger,
+  startAiUsageLedger,
+} from '@/lib/ai-usage-ledger';
+import {
   isMissingWorkflowCanvasAssistantSchemaError,
 } from '../../../workflowCanvasRouteCompat';
 import {
@@ -103,35 +109,28 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'Failed to check workflow assistant limits.' }, { status: 500 });
   }
 
-  const { data: remainingCredits, error: creditError } = await adminSupabase.rpc('deduct_credits', {
-    p_user_id: userId,
-    p_cost: WORKFLOW_ASSISTANT_COST,
-  });
-
-  if (creditError) {
-    return NextResponse.json({ error: 'Failed to deduct credits.' }, { status: 500 });
-  }
-
-  if (remainingCredits === -1) {
-    return NextResponse.json({ error: `Insufficient credits. Workflow generation costs ${WORKFLOW_ASSISTANT_COST} credits.` }, { status: 402 });
-  }
-
-  const { data: usageEvent } = await adminSupabase
-    .from('ai_usage_events')
-    .insert({
-      user_id: userId,
+  let ledger;
+  try {
+    ledger = await startAiUsageLedger(adminSupabase, {
+      userId,
       feature: 'workflow_assistant',
       provider: 'kie',
       model: 'gemini-3-flash',
       medium: 'video',
       cost: WORKFLOW_ASSISTANT_COST,
-      status: 'pending',
-      input_prompt: content.slice(0, 5000),
-    })
-    .select('id')
-    .single();
+      inputPrompt: content,
+    });
+  } catch (ledgerError) {
+    if (ledgerError instanceof AiUsageLedgerError) {
+      if (ledgerError.code === 'INSUFFICIENT_CREDITS') {
+        return NextResponse.json({ error: `Insufficient credits. Workflow generation costs ${WORKFLOW_ASSISTANT_COST} credits.` }, { status: 402 });
+      }
 
-  const eventId = usageEvent?.id;
+      return NextResponse.json({ error: ledgerError.message }, { status: ledgerError.status });
+    }
+
+    throw ledgerError;
+  }
 
   try {
     const response = await fetch('https://api.kie.ai/gemini-3-flash/v1/chat/completions', {
@@ -250,45 +249,25 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       throw messageInsert.error;
     }
 
-    if (eventId) {
-      await adminSupabase
-        .from('ai_usage_events')
-        .update({
-          status: 'succeeded',
-          output_text: JSON.stringify({
-            proposalId: proposal.id,
-            summary: blueprint.changeSummary,
-            reply: blueprint.assistantReply,
-          }).slice(0, 5000),
-        })
-        .eq('id', eventId);
-    }
+    await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify({
+      proposalId: proposal.id,
+      summary: blueprint.changeSummary,
+      reply: blueprint.assistantReply,
+    }));
 
     return NextResponse.json({
       messages: normalizeAssistantMessages(messageInsert.data ?? []),
       proposal,
-      remainingCredits,
+      remainingCredits: ledger.remainingCredits,
     });
   } catch (error) {
     if (isMissingWorkflowCanvasAssistantSchemaError(error)) {
-      if (eventId) {
-        await adminSupabase.rpc('refund_ai_usage_event', { p_event_id: eventId });
-      }
+      await refundAiUsageLedger(adminSupabase, ledger, error);
       console.error('Workflow assistant persistence is unavailable:', error);
       return createWorkflowAssistantSetupRequiredResponse();
     }
 
-    if (eventId) {
-      await adminSupabase.rpc('refund_ai_usage_event', { p_event_id: eventId });
-      await adminSupabase
-        .from('ai_usage_events')
-        .update({
-          error_message: error instanceof Error ? error.message.slice(0, 1000) : 'Unknown error',
-        })
-        .eq('id', eventId);
-    } else {
-      await adminSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: WORKFLOW_ASSISTANT_COST });
-    }
+    await refundAiUsageLedger(adminSupabase, ledger, error);
 
     console.error('Workflow assistant generation failed:', error);
     return NextResponse.json({ error: 'Workflow assistant failed. Credits refunded.' }, { status: 502 });

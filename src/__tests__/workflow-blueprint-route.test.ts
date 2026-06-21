@@ -17,9 +17,14 @@ function createAuthClient() {
   };
 }
 
-function createAdminClient(options?: { remainingCredits?: number; rateLimitAllowed?: boolean }) {
+function createAdminClient(options?: {
+  remainingCredits?: number;
+  rateLimitAllowed?: boolean;
+  usageInsertError?: Error | null;
+}) {
   const remainingCredits = options?.remainingCredits ?? 94;
   const rateLimitAllowed = options?.rateLimitAllowed ?? true;
+  const usageInsertError = options?.usageInsertError ?? null;
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -66,7 +71,9 @@ function createAdminClient(options?: { remainingCredits?: number; rateLimitAllow
             select() {
               return {
                 async single() {
-                  return { data: { id: 'event-1' }, error: null };
+                  return usageInsertError
+                    ? { data: null, error: usageInsertError }
+                    : { data: { id: 'event-1' }, error: null };
                 },
               };
             },
@@ -214,5 +221,24 @@ describe('/api/workflow-blueprint route', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
+  });
+
+  it('refunds and skips the provider when usage event creation fails after deduction', async () => {
+    currentAdminClient = createAdminClient({
+      remainingCredits: 94,
+      usageInsertError: new Error('usage table unavailable'),
+    });
+
+    const { POST } = await import('@/app/api/workflow-blueprint/route');
+    const response = await POST(createBlueprintRequest());
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Failed to record AI usage.',
+    });
+    expect(currentAdminClient.rpcCalls).toEqual(expect.arrayContaining([
+      { fn: 'refund_credits', args: { p_user_id: 'user-1', p_amount: 6 } },
+    ]));
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
