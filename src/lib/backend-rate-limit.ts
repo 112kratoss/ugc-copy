@@ -90,6 +90,12 @@ export const MOBILE_COMMERCE_RESTORE_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const SHOWCASE_PUBLISH_RATE_LIMIT = {
+  scope: 'showcase:publish',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,

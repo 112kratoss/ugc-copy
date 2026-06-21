@@ -40,6 +40,7 @@ const bundleUpdateCalls: Array<{
   filters: Record<string, unknown>;
 }> = [];
 const publishRpcCalls: Array<Record<string, unknown>> = [];
+const rateLimitRpcCalls: Array<Record<string, unknown>> = [];
 const removeMock = vi.fn(async () => ({ data: null, error: null }));
 const downloadMock = vi.fn(async () => ({
   data: new Blob(['reference-image'], { type: 'image/png' }),
@@ -51,6 +52,13 @@ const createUserClientMock = vi.fn();
 const createServiceClientMock = vi.fn();
 const ensureDurableGenerationMediaMock = vi.fn();
 let publishRpcError: { message: string } | null = null;
+let rateLimitResult = {
+  allowed: true,
+  limit: 20,
+  remaining: 19,
+  retryAfterSeconds: 0,
+  resetAt: '2026-06-21T06:30:00.000Z',
+};
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
 ]);
@@ -108,6 +116,14 @@ function createServiceClientTestDouble() {
       throw new Error(`Unexpected service table access: ${table}`);
     },
     rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'check_backend_rate_limit') {
+        rateLimitRpcCalls.push(args);
+        return {
+          data: rateLimitResult,
+          error: null,
+        };
+      }
+
       if (name !== 'publish_generation_post_with_resource_bundle') {
         throw new Error(`Unexpected rpc call: ${name}`);
       }
@@ -184,7 +200,15 @@ describe('/api/showcase/publish route', () => {
     listingUpdateCalls.length = 0;
     bundleUpdateCalls.length = 0;
     publishRpcCalls.length = 0;
+    rateLimitRpcCalls.length = 0;
     publishRpcError = null;
+    rateLimitResult = {
+      allowed: true,
+      limit: 20,
+      remaining: 19,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-21T06:30:00.000Z',
+    };
     removeMock.mockClear();
     downloadMock.mockClear();
     uploadMock.mockClear();
@@ -377,6 +401,69 @@ describe('/api/showcase/publish route', () => {
     expect(response.status).toBe(401);
     expect(createServiceClientMock).not.toHaveBeenCalled();
     expect(ensureDurableGenerationMediaMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limits showcase publishing before generation or publish work', async () => {
+    rateLimitResult = {
+      allowed: false,
+      limit: 20,
+      remaining: 0,
+      retryAfterSeconds: 51,
+      resetAt: '2026-06-21T06:30:00.000Z',
+    };
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'public',
+      }),
+    }) as NextRequest);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('51');
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(rateLimitRpcCalls).toContainEqual({
+      p_scope: 'showcase:publish',
+      p_subject_key: 'user-1',
+      p_limit: 20,
+      p_window_seconds: 600,
+    });
+    expect(publishRpcCalls).toHaveLength(0);
+    expect(ensureDurableGenerationMediaMock).not.toHaveBeenCalled();
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes showcase posts after passing the backend rate limit', async () => {
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'private',
+      }),
+    }) as NextRequest);
+
+    const data = await response.json();
+
+    expect(response.status, JSON.stringify(data)).toBe(200);
+    expect(rateLimitRpcCalls).toContainEqual({
+      p_scope: 'showcase:publish',
+      p_subject_key: 'user-1',
+      p_limit: 20,
+      p_window_seconds: 600,
+    });
+    expect(publishRpcCalls).toHaveLength(1);
   });
 
   it('downgrades attached active listings to unlisted when a generation-backed post is unpublished', async () => {

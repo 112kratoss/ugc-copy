@@ -4,6 +4,12 @@ import {
     ensureDurableGenerationMedia,
     type CreatedGenerationMediaLocation,
 } from '@/lib/durable-generation-media';
+import {
+    BackendRateLimitError,
+    SHOWCASE_PUBLISH_RATE_LIMIT,
+    createBackendRateLimitResponse,
+    enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { isAudioModel } from '@/lib/models';
 import {
     buildFreeGenerationReferenceBundle,
@@ -132,6 +138,19 @@ export async function POST(request: NextRequest) {
         }
 
         const adminSupabase = createServiceClient();
+        try {
+            await enforceBackendRateLimit(adminSupabase, {
+                ...SHOWCASE_PUBLISH_RATE_LIMIT,
+                key: user.id,
+            });
+        } catch (error) {
+            if (error instanceof BackendRateLimitError) {
+                return createBackendRateLimitResponse(error);
+            }
+
+            console.error('Showcase publish rate limit check failed:', error);
+            return NextResponse.json({ error: 'Failed to check showcase publish limits.' }, { status: 500 });
+        }
 
         const requestBody = await request.json() as {
             generationId?: string;
