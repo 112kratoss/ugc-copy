@@ -27,6 +27,8 @@ let marketplaceOrderState: MarketplaceOrderRow = null;
 let bundleOrderState: BundleOrderRow = null;
 let bundleRpcMode: 'success' | 'fail-return' | 'error' = 'success';
 const rpcMock = vi.fn(async (name: string, payload: Record<string, unknown>) => {
+  void payload;
+
   if (name === 'complete_post_resource_bundle_purchase') {
     if (bundleRpcMode === 'error') {
       return {
@@ -81,6 +83,9 @@ function createSupabaseAdminMock() {
         select() {
           return {
             eq(_column: string, _value: unknown) {
+              void _column;
+              void _value;
+
               return {
                 async maybeSingle() {
                   if (table === 'transactions') {
@@ -114,8 +119,17 @@ const createClientMock = vi.fn((..._args: unknown[]) => {
   return createSupabaseAdminMock();
 });
 
+const createServiceClientMock = vi.fn((..._args: unknown[]) => {
+  void _args;
+  return createSupabaseAdminMock();
+});
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (...args: unknown[]) => createClientMock(...args),
+}));
+
+vi.mock('@/lib/server-helpers', () => ({
+  createServiceClient: (...args: unknown[]) => createServiceClientMock(...args),
 }));
 
 function buildSignedWebhookRequest(body: Record<string, unknown>) {
@@ -144,6 +158,7 @@ describe('/api/razorpay/webhook route', () => {
     bundleRpcMode = 'success';
     rpcMock.mockClear();
     createClientMock.mockClear();
+    createServiceClientMock.mockClear();
     process.env.RAZORPAY_WEBHOOK_SECRET = 'webhook-secret';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
@@ -251,5 +266,34 @@ describe('/api/razorpay/webhook route', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('OK');
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid signatures before creating a privileged Supabase client', async () => {
+    const { POST } = await import('@/app/api/razorpay/webhook/route');
+    const response = await POST(
+      new Request('http://localhost/api/razorpay/webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-razorpay-signature': 'invalid-signature',
+        },
+        body: JSON.stringify({
+          event: 'payment.captured',
+          payload: {
+            payment: {
+              entity: {
+                id: 'pay_123',
+                order_id: 'order_123',
+              },
+            },
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid signature');
+    expect(createClientMock).not.toHaveBeenCalled();
+    expect(createServiceClientMock).not.toHaveBeenCalled();
   });
 });

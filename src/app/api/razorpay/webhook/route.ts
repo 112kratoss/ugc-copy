@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/server-helpers';
 
 export async function POST(req: Request) {
     try {
@@ -11,12 +11,6 @@ export async function POST(req: Request) {
 
         const body = await req.text();
         const signature = req.headers.get('x-razorpay-signature');
-
-        // Create admin client inside handler to avoid build-time crashes
-        const supabaseAdmin = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-        );
 
         if (!signature) {
             return new Response('Missing signature', { status: 400 });
@@ -34,9 +28,15 @@ export async function POST(req: Request) {
         }
 
         const event = JSON.parse(body);
+        let supabaseAdmin: ReturnType<typeof createServiceClient> | null = null;
+
+        function getSupabaseAdmin() {
+            supabaseAdmin ??= createServiceClient();
+            return supabaseAdmin;
+        }
 
         async function handleCreditTransaction(orderId: string, paymentId: string) {
-            const { data: txn, error: txnError } = await supabaseAdmin
+            const { data: txn, error: txnError } = await getSupabaseAdmin()
                 .from('transactions')
                 .select('id, user_id, credits, status')
                 .eq('razorpay_order_id', orderId)
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
                 return { handled: true, shouldRetry: false };
             }
 
-            const { error: rpcError } = await supabaseAdmin.rpc('add_credits', {
+            const { error: rpcError } = await getSupabaseAdmin().rpc('add_credits', {
                 p_user_id: txn.user_id,
                 p_credits: txn.credits,
                 p_transaction_id: txn.id,
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
         }
 
         async function handleMarketplaceOrder(orderId: string, paymentId: string) {
-            const { data: marketplaceOrder, error: marketplaceOrderError } = await supabaseAdmin
+            const { data: marketplaceOrder, error: marketplaceOrderError } = await getSupabaseAdmin()
                 .from('marketplace_orders')
                 .select('id, status, buyer_user_id')
                 .eq('razorpay_order_id', orderId)
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
                 return { handled: true, shouldRetry: false };
             }
 
-            const { error: rpcError } = await supabaseAdmin.rpc('complete_marketplace_purchase', {
+            const { error: rpcError } = await getSupabaseAdmin().rpc('complete_marketplace_purchase', {
                 p_razorpay_order_id: orderId,
                 p_razorpay_payment_id: paymentId,
             });
@@ -110,7 +110,7 @@ export async function POST(req: Request) {
         }
 
         async function handlePostResourceBundleOrder(orderId: string, paymentId: string) {
-            const { data: bundleOrder, error: bundleOrderError } = await supabaseAdmin
+            const { data: bundleOrder, error: bundleOrderError } = await getSupabaseAdmin()
                 .from('post_resource_bundle_orders')
                 .select('id, status, buyer_user_id')
                 .eq('razorpay_order_id', orderId)
@@ -130,7 +130,7 @@ export async function POST(req: Request) {
                 return { handled: true, shouldRetry: false };
             }
 
-            const { data: completionResult, error: rpcError } = await supabaseAdmin.rpc('complete_post_resource_bundle_purchase', {
+            const { data: completionResult, error: rpcError } = await getSupabaseAdmin().rpc('complete_post_resource_bundle_purchase', {
                 p_razorpay_order_id: orderId,
                 p_razorpay_payment_id: paymentId,
             });
@@ -141,7 +141,7 @@ export async function POST(req: Request) {
             }
 
             if (!completionResult) {
-                const { data: refreshedOrder, error: refreshedOrderError } = await supabaseAdmin
+                const { data: refreshedOrder, error: refreshedOrderError } = await getSupabaseAdmin()
                     .from('post_resource_bundle_orders')
                     .select('status')
                     .eq('razorpay_order_id', orderId)
