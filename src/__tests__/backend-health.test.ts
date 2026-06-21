@@ -29,6 +29,10 @@ class FakeQueryBuilder {
 
 function createClient(results: Record<string, QueryResult | QueryResult[]>) {
   const tableResultsByName: Record<string, QueryResult | QueryResult[]> = {
+    ai_usage_events: [
+      { error: null, data: [] },
+      { error: null, data: [] },
+    ],
     generation_completion_jobs: { error: null, data: [] },
     ...results,
   };
@@ -135,6 +139,126 @@ describe('collectBackendHealth', () => {
     expect(db.builders.generations[2].select).toHaveBeenCalledWith('created_at,cost');
     expect(db.builders.generations[2].eq).toHaveBeenCalledWith('status', 'pending');
     expect(db.builders.generations[2].is).toHaveBeenCalledWith('prediction_id', null);
+  });
+
+  it('reports non-generation AI usage spend, refunds, and stale pending charges', async () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T00:15:00.000Z',
+            finished_at: '2026-06-21T00:15:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+      ai_usage_events: [
+        {
+          error: null,
+          data: [
+            {
+              feature: 'prompt_enhancement',
+              status: 'succeeded',
+              medium: 'image',
+              cost: 2,
+              created_at: '2026-06-21T09:55:00.000Z',
+            },
+            {
+              feature: 'workflow_assistant',
+              status: 'refunded',
+              medium: 'video',
+              cost: '5',
+              created_at: '2026-06-21T09:50:00.000Z',
+            },
+            {
+              feature: 'workflow_blueprint',
+              status: 'pending',
+              medium: 'video',
+              cost: 8,
+              created_at: '2026-06-21T09:40:00.000Z',
+            },
+          ],
+        },
+        {
+          error: null,
+          data: [
+            {
+              feature: 'workflow_blueprint',
+              status: 'pending',
+              medium: 'video',
+              cost: 8,
+              created_at: '2026-06-21T09:40:00.000Z',
+            },
+          ],
+        },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, now);
+
+    expect(health.status).toBe('degraded');
+    expect(health.aiUsage).toMatchObject({
+      status: 'degraded',
+      recentCounts: { succeeded: 1, refunded: 1, pending: 1 },
+      recentCreditCostTotal: 15,
+      recentCreditCostByStatus: { succeeded: 2, refunded: 5, pending: 8 },
+      recentCreditCostByFeature: {
+        prompt_enhancement: 2,
+        workflow_assistant: 5,
+        workflow_blueprint: 8,
+      },
+      refundedCount: 1,
+      refundedCreditCost: 5,
+      stalePendingCount: 1,
+      stalePendingCreditCost: 8,
+      oldestStalePendingCreatedAt: '2026-06-21T09:40:00.000Z',
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AI_USAGE_STALE_PENDING',
+        severity: 'degraded',
+      }),
+    ]));
+    expect(db.from).toHaveBeenCalledWith('ai_usage_events');
+    expect(db.builders.ai_usage_events[0].select).toHaveBeenCalledWith('feature,status,medium,cost,created_at');
+    expect(db.builders.ai_usage_events[0].gte).toHaveBeenCalledWith(
+      'created_at',
+      '2026-06-21T09:00:00.000Z',
+    );
+    expect(db.builders.ai_usage_events[1].eq).toHaveBeenCalledWith('status', 'pending');
+    expect(db.builders.ai_usage_events[1].lt).toHaveBeenCalledWith(
+      'created_at',
+      '2026-06-21T09:45:00.000Z',
+    );
   });
 
   it('warns when a scheduled job has no recent run records', async () => {

@@ -40,6 +40,14 @@ type GenerationCompletionQueueRow = {
   locked_at: string | null;
 };
 
+type AiUsageEventRow = {
+  feature: string | null;
+  status: string | null;
+  medium: string | null;
+  cost: number | string | null;
+  created_at: string | null;
+};
+
 export type BackendHealthIssue = {
   severity: Exclude<BackendHealthStatus, 'ok'>;
   code: string;
@@ -93,6 +101,23 @@ export type BackendCompletionQueueHealth = {
   oldestProcessingLockedAt: string | null;
 };
 
+export type BackendAiUsageHealth = {
+  status: BackendHealthStatus;
+  recentWindowMinutes: number;
+  stalePendingAfterMinutes: number;
+  recentCounts: Record<string, number>;
+  recentCreditCostTotal: number;
+  recentCreditCostByStatus: Record<string, number>;
+  recentCreditCostByFeature: Record<string, number>;
+  pendingCount: number;
+  failedCount: number;
+  refundedCount: number;
+  refundedCreditCost: number;
+  stalePendingCount: number;
+  stalePendingCreditCost: number;
+  oldestStalePendingCreatedAt: string | null;
+};
+
 export type BackendHealth = {
   status: BackendHealthStatus;
   checkedAt: string;
@@ -105,6 +130,7 @@ export type BackendHealth = {
   jobs: BackendJobHealth[];
   generations: BackendGenerationHealth;
   completionQueue: BackendCompletionQueueHealth;
+  aiUsage: BackendAiUsageHealth;
   issues: BackendHealthIssue[];
 };
 
@@ -120,6 +146,8 @@ const GENERATION_STALLED_AFTER_MINUTES = 60;
 const GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES = 5;
 const COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES = 15;
 const COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES = 10;
+const AI_USAGE_RECENT_WINDOW_MINUTES = 60;
+const AI_USAGE_STALE_PENDING_AFTER_MINUTES = 15;
 
 function minutesSince(timestamp: string, now: Date): number {
   const ms = now.getTime() - new Date(timestamp).getTime();
@@ -367,6 +395,77 @@ function buildCompletionQueueHealth(
   };
 }
 
+function buildAiUsageHealth(
+  recentRows: AiUsageEventRow[],
+  stalePendingRows: AiUsageEventRow[],
+): { health: BackendAiUsageHealth; issues: BackendHealthIssue[] } {
+  const recentCounts = recentRows.reduce<Record<string, number>>((counts, row) => {
+    const status = row.status ?? 'unknown';
+    counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const recentCreditCostByStatus = recentRows.reduce<Record<string, number>>((costs, row) => {
+    const status = row.status ?? 'unknown';
+    costs[status] = roundCredits((costs[status] ?? 0) + getCreditCost(row.cost));
+    return costs;
+  }, {});
+  const recentCreditCostByFeature = recentRows.reduce<Record<string, number>>((costs, row) => {
+    const feature = row.feature ?? 'unknown';
+    costs[feature] = roundCredits((costs[feature] ?? 0) + getCreditCost(row.cost));
+    return costs;
+  }, {});
+  const recentCreditCostTotal = roundCredits(
+    recentRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
+  );
+  const refundedRows = recentRows.filter((row) => row.status === 'refunded');
+  const refundedCreditCost = roundCredits(
+    refundedRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
+  );
+  const stalePendingCreditCost = roundCredits(
+    stalePendingRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
+  );
+  const pendingCount = recentRows.filter((row) => row.status === 'pending').length;
+  const failedCount = recentRows.filter((row) => row.status === 'failed').length;
+  const stalePendingCount = stalePendingRows.length;
+  const issues: BackendHealthIssue[] = [];
+
+  if (failedCount > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'AI_USAGE_FAILED',
+      message: `${failedCount} non-generation AI usage event(s) failed in the last ${AI_USAGE_RECENT_WINDOW_MINUTES} minutes.`,
+    });
+  }
+
+  if (stalePendingCount > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'AI_USAGE_STALE_PENDING',
+      message: `${stalePendingCount} non-generation AI usage charge(s) are still pending after ${AI_USAGE_STALE_PENDING_AFTER_MINUTES} minutes.`,
+    });
+  }
+
+  return {
+    health: {
+      status: issues.length > 0 ? 'degraded' : 'ok',
+      recentWindowMinutes: AI_USAGE_RECENT_WINDOW_MINUTES,
+      stalePendingAfterMinutes: AI_USAGE_STALE_PENDING_AFTER_MINUTES,
+      recentCounts,
+      recentCreditCostTotal,
+      recentCreditCostByStatus,
+      recentCreditCostByFeature,
+      pendingCount,
+      failedCount,
+      refundedCount: refundedRows.length,
+      refundedCreditCost,
+      stalePendingCount,
+      stalePendingCreditCost,
+      oldestStalePendingCreatedAt: stalePendingRows[0]?.created_at ?? null,
+    },
+    issues,
+  };
+}
+
 export async function collectBackendHealth(
   client: SupabaseClient,
   now = new Date(),
@@ -381,6 +480,12 @@ export async function collectBackendHealth(
   const pendingWithoutProviderTaskBefore = new Date(
     now.getTime() - GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES * 60 * 1000,
   ).toISOString();
+  const recentAiUsageSince = new Date(
+    now.getTime() - AI_USAGE_RECENT_WINDOW_MINUTES * 60 * 1000,
+  ).toISOString();
+  const staleAiUsagePendingBefore = new Date(
+    now.getTime() - AI_USAGE_STALE_PENDING_AFTER_MINUTES * 60 * 1000,
+  ).toISOString();
 
   const [
     jobRunsResult,
@@ -388,6 +493,8 @@ export async function collectBackendHealth(
     stalledGenerationsResult,
     pendingWithoutProviderTaskResult,
     completionQueueResult,
+    recentAiUsageResult,
+    stalePendingAiUsageResult,
   ] = await Promise.all([
     client
       .from('backend_job_runs')
@@ -421,6 +528,18 @@ export async function collectBackendHealth(
       .in('status', ['pending', 'processing', 'failed'])
       .order('created_at', { ascending: true })
       .limit(200),
+    client
+      .from('ai_usage_events')
+      .select('feature,status,medium,cost,created_at')
+      .gte('created_at', recentAiUsageSince)
+      .limit(1000),
+    client
+      .from('ai_usage_events')
+      .select('feature,status,medium,cost,created_at')
+      .eq('status', 'pending')
+      .lt('created_at', staleAiUsagePendingBefore)
+      .order('created_at', { ascending: true })
+      .limit(50),
   ]);
 
   if (jobRunsResult.error) throw jobRunsResult.error;
@@ -428,6 +547,8 @@ export async function collectBackendHealth(
   if (stalledGenerationsResult.error) throw stalledGenerationsResult.error;
   if (pendingWithoutProviderTaskResult.error) throw pendingWithoutProviderTaskResult.error;
   if (completionQueueResult.error) throw completionQueueResult.error;
+  if (recentAiUsageResult.error) throw recentAiUsageResult.error;
+  if (stalePendingAiUsageResult.error) throw stalePendingAiUsageResult.error;
 
   const jobRows = (jobRunsResult.data ?? []) as BackendJobRunRow[];
   const jobResults = JOB_THRESHOLDS.map((job) => buildJobHealth(job, jobRows, now));
@@ -440,6 +561,10 @@ export async function collectBackendHealth(
     (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[],
     now,
   );
+  const aiUsageResult = buildAiUsageHealth(
+    (recentAiUsageResult.data ?? []) as AiUsageEventRow[],
+    (stalePendingAiUsageResult.data ?? []) as AiUsageEventRow[],
+  );
   const catalog = buildGenerationModelCatalog({
     platform: 'web',
     schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
@@ -448,11 +573,13 @@ export async function collectBackendHealth(
     ...jobResults.flatMap((result) => result.issues),
     ...generationResult.issues,
     ...completionQueueResultHealth.issues,
+    ...aiUsageResult.issues,
   ];
   const componentStatuses = [
     ...jobResults.map((result) => result.health.status),
     generationResult.health.status,
     completionQueueResultHealth.health.status,
+    aiUsageResult.health.status,
   ];
 
   return {
@@ -467,6 +594,7 @@ export async function collectBackendHealth(
     jobs: jobResults.map((result) => result.health),
     generations: generationResult.health,
     completionQueue: completionQueueResultHealth.health,
+    aiUsage: aiUsageResult.health,
     issues,
   };
 }
