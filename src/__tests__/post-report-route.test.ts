@@ -75,9 +75,11 @@ function createServiceClientMock() {
   };
 }
 
+const createServiceClientFactory = vi.fn(() => createServiceClientMock());
+
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
-  createServiceClient: () => createServiceClientMock(),
+  createServiceClient: () => createServiceClientFactory(),
 }));
 
 describe('/api/posts/[postId]/report route', () => {
@@ -87,6 +89,8 @@ describe('/api/posts/[postId]/report route', () => {
     postRows = [{ id: 'post-1', archived_at: null }];
     bundleRows = [{ id: 'bundle-1', post_id: 'post-1' }];
     createUserClientMock.mockReset();
+    createServiceClientFactory.mockClear();
+    createServiceClientFactory.mockImplementation(() => createServiceClientMock());
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -95,6 +99,31 @@ describe('/api/posts/[postId]/report route', () => {
         })),
       },
     });
+  });
+
+  it('does not create an admin client for unauthenticated reports', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: new Error('missing session'),
+        })),
+      },
+    });
+
+    const { POST } = await import('@/app/api/posts/[postId]/report/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'spam' }),
+      }) as never,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientFactory).not.toHaveBeenCalled();
+    expect(insertedReports).toEqual([]);
   });
 
   it('records post reports without an unlock bundle', async () => {

@@ -50,7 +50,6 @@ function buildStarterProfileApiResponse(user: {
 export async function GET(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -60,6 +59,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const { data: profile, error } = await adminSupabase
       .from('profiles')
       .select(PROFILE_SELECT_FIELDS)
@@ -85,7 +85,6 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -95,6 +94,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const validation = await validateProfileSubmission(
       adminSupabase,
       user.id,

@@ -12,7 +12,6 @@ interface MarketplaceOrderRow {
 export async function POST(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -22,6 +21,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const body = await request.json();
     const razorpayOrderId = typeof body.razorpay_order_id === 'string' ? body.razorpay_order_id.trim() : '';
     const razorpayPaymentId = typeof body.razorpay_payment_id === 'string' ? body.razorpay_payment_id.trim() : '';

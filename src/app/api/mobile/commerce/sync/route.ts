@@ -15,7 +15,6 @@ export const runtime = 'nodejs';
 export async function POST(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -25,6 +24,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const payload = normalizeMobileCommercePayload(await request.json());
     const verified = await verifyMobilePurchase({
       userId: user.id,

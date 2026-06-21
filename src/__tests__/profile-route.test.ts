@@ -125,7 +125,7 @@ function createAdminClient() {
   };
 }
 
-const createUserClientMock = vi.fn(() => ({
+const createUserClientMock = vi.fn((): unknown => ({
   auth: {
     getUser: vi.fn(async () => ({
       data: {
@@ -135,10 +135,11 @@ const createUserClientMock = vi.fn(() => ({
     })),
   },
 }));
+const createServiceClientMock = vi.fn(() => createAdminClient());
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: () => createUserClientMock(),
-  createServiceClient: () => createAdminClient(),
+  createServiceClient: () => createServiceClientMock(),
 }));
 
 describe('/api/profile route', () => {
@@ -174,6 +175,9 @@ describe('/api/profile route', () => {
         credits: 10,
       },
     ];
+    createUserClientMock.mockClear();
+    createServiceClientMock.mockClear();
+    createServiceClientMock.mockImplementation(() => createAdminClient());
   });
 
   afterEach(() => {
@@ -190,6 +194,46 @@ describe('/api/profile route', () => {
     expect(data.suggestedUsername).toBe('creator-11111111');
     expect(data.displayName).toBe('Existing Creator');
     expect(data.credits).toBe(25);
+  });
+
+  it('does not create an admin client for unauthenticated profile reads', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: new Error('missing session'),
+        })),
+      },
+    });
+
+    const { GET } = await import('@/app/api/profile/route');
+    const response = await GET(new Request('http://localhost/api/profile') as never);
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientMock).not.toHaveBeenCalled();
+  });
+
+  it('does not create an admin client for unauthenticated profile updates', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: new Error('missing session'),
+        })),
+      },
+    });
+
+    const { PATCH } = await import('@/app/api/profile/route');
+    const response = await PATCH(
+      new Request('http://localhost/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: 'Blocked' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientMock).not.toHaveBeenCalled();
   });
 
   it('returns a starter profile payload when the profile row is missing', async () => {

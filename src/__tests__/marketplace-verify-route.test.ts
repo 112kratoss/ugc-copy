@@ -62,9 +62,11 @@ function createServiceClientMock() {
   };
 }
 
+const createServiceClientFactory = vi.fn(() => createServiceClientMock());
+
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
-  createServiceClient: () => createServiceClientMock(),
+  createServiceClient: () => createServiceClientFactory(),
 }));
 
 describe('/api/marketplace/verify route', () => {
@@ -73,6 +75,8 @@ describe('/api/marketplace/verify route', () => {
     orderStatus = 'created';
     rpcMock.mockClear();
     createUserClientMock.mockReset();
+    createServiceClientFactory.mockClear();
+    createServiceClientFactory.mockImplementation(() => createServiceClientMock());
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -81,6 +85,30 @@ describe('/api/marketplace/verify route', () => {
       },
     });
     process.env.RAZORPAY_KEY_SECRET = 'test-secret';
+  });
+
+  it('does not create an admin client before authentication succeeds', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: new Error('missing session'),
+        })),
+      },
+    });
+
+    const { POST } = await import('@/app/api/marketplace/verify/route');
+    const response = await POST(
+      new Request('http://localhost/api/marketplace/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }) as never
+    );
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientFactory).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   afterEach(() => {
