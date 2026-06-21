@@ -102,7 +102,7 @@ export class GenerationServiceError extends Error {
   }
 }
 
-interface SyncableGenerationRecord {
+export interface SyncableGenerationRecord {
   id: string;
   user_id: string;
   prediction_id: string | null;
@@ -114,6 +114,12 @@ interface SyncableGenerationRecord {
   created_at: string;
   completed_at: string | null;
 }
+
+export type GenerationSyncStatus = 'missing' | 'skipped' | 'waiting' | 'processing' | 'succeeded' | 'failed';
+
+export type GenerationStatusSyncResult =
+  | { found: false; status: 'missing'; generation: null }
+  | { found: true; status: Exclude<GenerationSyncStatus, 'missing'>; generation: SyncableGenerationRecord };
 
 export interface PersistedGenerationOutput {
   index: number;
@@ -154,6 +160,9 @@ async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: stri
 
 async function createKieTask(body: Record<string, unknown>, endpoint = 'https://api.kie.ai/api/v1/jobs/createTask') {
   requireApiKey();
+  const callbackUrl = typeof body.callBackUrl === 'string' && body.callBackUrl.trim()
+    ? body.callBackUrl
+    : buildKieWebhookCallbackUrl();
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -161,7 +170,7 @@ async function createKieTask(body: Record<string, unknown>, endpoint = 'https://
       Authorization: `Bearer ${KIE_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, callBackUrl: callbackUrl }),
   });
 
   const data = await response.json();
@@ -658,9 +667,12 @@ async function syncSingleGenerationStatus(
   supabase: SupabaseClient,
   creditSupabase: SupabaseClient,
   generation: SyncableGenerationRecord
-) {
+): Promise<Exclude<GenerationSyncStatus, 'missing'>> {
   if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
-    return;
+    if (generation.status === 'succeeded' || generation.status === 'failed') {
+      return generation.status;
+    }
+    return 'skipped';
   }
 
   const kind = getGenerationKind({
@@ -702,12 +714,12 @@ async function syncSingleGenerationStatus(
           })
           .eq('id', generation.id);
       }
-      return;
+      return 'succeeded';
     }
 
     if (successFlag === 2 || successFlag === 3) {
       await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-      return;
+      return 'failed';
     }
 
     const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
@@ -715,7 +727,7 @@ async function syncSingleGenerationStatus(
       await supabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
     }
 
-    return;
+    return nextStatus;
   }
 
   const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
@@ -767,18 +779,60 @@ async function syncSingleGenerationStatus(
         })
         .eq('id', generation.id);
     }
-    return;
+    return 'succeeded';
   }
 
   if (state === 'fail') {
     await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-    return;
+    return 'failed';
   }
 
   const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
   if (generation.status !== nextStatus) {
     await supabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
   }
+  return nextStatus;
+}
+
+async function loadGenerationByPredictionId(
+  supabase: SupabaseClient,
+  predictionId: string,
+): Promise<SyncableGenerationRecord | null> {
+  const { data, error } = await supabase
+    .from('generations')
+    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
+    .eq('prediction_id', predictionId)
+    .single();
+
+  if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === 'PGRST116') return null;
+    throw error;
+  }
+
+  return (data ?? null) as SyncableGenerationRecord | null;
+}
+
+export async function syncGenerationStatusByPredictionId(params: {
+  supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
+  predictionId: string;
+}): Promise<GenerationStatusSyncResult> {
+  requireApiKey();
+
+  const generation = await loadGenerationByPredictionId(params.supabase, params.predictionId);
+  if (!generation) {
+    return { found: false, status: 'missing', generation: null };
+  }
+
+  const status = await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
+  const updatedGeneration = await loadGenerationByPredictionId(params.supabase, params.predictionId);
+
+  return {
+    found: true,
+    status,
+    generation: updatedGeneration ?? { ...generation, status },
+  };
 }
 
 export async function syncGenerationStatuses(params: {

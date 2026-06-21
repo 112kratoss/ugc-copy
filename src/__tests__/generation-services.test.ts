@@ -154,6 +154,7 @@ describe('generation services', () => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
     process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     vi.stubGlobal('fetch', vi.fn());
   });
@@ -185,6 +186,33 @@ describe('generation services', () => {
     expect(generations[0].category).toBe('audio');
     expect(generations[0].model).toBe('elevenlabs/text-to-speech-turbo-2-5');
     expect(generations[0].workflow_settings?.model).toBe('text-to-speech-turbo-2-5');
+  });
+
+  it('attaches the durable completion webhook to every provider task', async () => {
+    const { startVoiceoverGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-callback-1' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVoiceoverGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      model: 'text-to-speech-turbo-2-5',
+      text: 'Notify the backend when this is ready.',
+      voice: 'Rachel',
+    });
+
+    expect(providerBody).toMatchObject({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
+    });
   });
 
   it('stores sound-effect generations as audio records', async () => {
@@ -371,6 +399,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
       model: 'gpt-image-2-text-to-image',
       input: {
         prompt: 'A premium skincare product hero image.',
@@ -509,6 +538,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
       model: 'grok-imagine/text-to-image',
       input: {
         prompt: 'A surreal product launch poster.',
@@ -659,6 +689,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
       model: 'grok-imagine/text-to-video',
       input: {
         prompt: 'A playful product reveal with quick camera energy.',
@@ -712,6 +743,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
       model: 'grok-imagine/image-to-video',
       input: {
         prompt: 'Animate the still with a slow push-in.',
@@ -1046,5 +1078,51 @@ describe('generation services', () => {
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:01:00.000Z');
     expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-audio-2')).toBe(true);
+  });
+
+  it('syncs one generation by provider task id for webhook completion jobs', async () => {
+    const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: {
+          state: 'fail',
+          completeTime: '2026-04-15T10:02:00.000Z',
+          failMsg: 'provider failure',
+        },
+      }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock([{
+      id: 'gen-audio-3',
+      user_id: 'user-1',
+      prediction_id: 'task-audio-3',
+      status: 'processing',
+      output_url: null,
+      model: 'elevenlabs/sound-effect-v2',
+      category: 'audio',
+      workflow_settings: { model: 'sound-effect-v2' },
+      created_at: '2026-04-15T10:00:00.000Z',
+    }]);
+
+    await expect(syncGenerationStatusByPredictionId({
+      supabase,
+      creditSupabase: supabase,
+      predictionId: 'task-audio-3',
+    })).resolves.toMatchObject({
+      found: true,
+      status: 'failed',
+      generation: {
+        id: 'gen-audio-3',
+        prediction_id: 'task-audio-3',
+        status: 'failed',
+      },
+    });
+
+    expect(generations[0].status).toBe('failed');
+    expect(generations[0].completed_at).toBe('2026-04-15T10:02:00.000Z');
+    expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-audio-3')).toBe(true);
   });
 });

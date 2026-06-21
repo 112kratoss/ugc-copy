@@ -71,6 +71,15 @@ describe('collectBackendHealth', () => {
             skip_reason: null,
             error_message: null,
           },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
         ],
       },
       generations: [
@@ -89,7 +98,11 @@ describe('collectBackendHealth', () => {
 
     expect(health.status).toBe('ok');
     expect(health.catalog.activeModels).toBeGreaterThan(0);
-    expect(health.jobs).toHaveLength(2);
+    expect(health.jobs).toHaveLength(3);
+    expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
+      status: 'ok',
+      expectedMaxAgeMinutes: 15,
+    });
     expect(health.generations).toMatchObject({
       status: 'ok',
       recentCounts: { succeeded: 1, failed: 1 },

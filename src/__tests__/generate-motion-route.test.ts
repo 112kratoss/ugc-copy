@@ -145,7 +145,9 @@ describe('/api/generate route', () => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
     process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
+    delete process.env.KIE_WEBHOOK_HMAC_KEY;
     currentSupabaseMock = createSupabaseMock();
     vi.stubGlobal(
       'fetch',
