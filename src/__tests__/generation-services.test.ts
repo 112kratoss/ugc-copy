@@ -18,11 +18,16 @@ type GenerationRow = {
   completed_at?: string | null;
 };
 
-function createSupabaseMock(initialRows: GenerationRow[] = []) {
+type SupabaseMockOptions = {
+  generationUpdateErrors?: Error[];
+};
+
+function createSupabaseMock(initialRows: GenerationRow[] = [], options: SupabaseMockOptions = {}) {
   const generations = [...initialRows];
   const uploads: Array<{ bucket: string; filePath: string }> = [];
   const inputMediaRows: Record<string, unknown>[] = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  const generationUpdateErrors = [...(options.generationUpdateErrors ?? [])];
 
   const supabase = {
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
@@ -87,6 +92,11 @@ function createSupabaseMock(initialRows: GenerationRow[] = []) {
         update(values: Record<string, unknown>) {
           return {
             async eq(column: string, value: unknown) {
+              const updateError = generationUpdateErrors.shift();
+              if (updateError) {
+                return { data: null, error: updateError };
+              }
+
               for (let index = 0; index < generations.length; index += 1) {
                 if ((generations[index] as Record<string, unknown>)[column] === value) {
                   generations[index] = {
@@ -506,6 +516,74 @@ describe('generation services', () => {
       client_request_key_hash: null,
     });
     expect(generations[0].completed_at).toEqual(expect.any(String));
+  });
+
+  it('retries attaching a provider task before refunding after provider work starts', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-attach-retry-1' } }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+      generationUpdateErrors: [new Error('transient attach failure')],
+    });
+    const result = await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'f'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2',
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-image-attach-retry-1',
+      generationId: 'gen-1',
+    });
+    expect(rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
+    expect(generations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-image-attach-retry-1',
+      client_request_key_hash: 'f'.repeat(64),
+    });
+  });
+
+  it('keeps provider-started generations charged and pending when provider task attach cannot be saved', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-attach-down-1' } }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+      generationUpdateErrors: [
+        new Error('attach unavailable 1'),
+        new Error('attach unavailable 2'),
+        new Error('attach unavailable 3'),
+      ],
+    });
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'g'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('Failed to attach provider task to generation.');
+
+    expect(rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
+    expect(generations[0]).toMatchObject({
+      status: 'pending',
+      prediction_id: null,
+      client_request_key_hash: 'g'.repeat(64),
+    });
+    expect(generations[0].completed_at).toBeNull();
+    expect(JSON.stringify(consoleError.mock.calls)).toContain('task-image-attach-down-1');
+    expect(JSON.stringify(consoleError.mock.calls)).toContain('gen-1');
   });
 
   it('uses GPT Image 2 image-to-image provider payload when references are attached', async () => {

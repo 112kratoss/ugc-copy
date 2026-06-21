@@ -63,6 +63,7 @@ import { buildKieWebhookCallbackUrl, extractKieWebhookTaskId } from '@/lib/kie-w
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
 
 interface DialogueTurnInput {
   text: string;
@@ -224,20 +225,30 @@ async function markGenerationProviderStarted(
   generationId: string,
   predictionId: string,
 ) {
-  const { error } = await supabase
-    .from('generations')
-    .update({
-      prediction_id: predictionId,
-      status: 'processing',
-    })
-    .eq('id', generationId);
+  let lastError: unknown = null;
 
-  if (error) {
-    throw new GenerationServiceError(
-      supabaseErrorMessage(error, 'Failed to attach provider task to generation.'),
-      500,
-    );
+  for (let attempt = 1; attempt <= PROVIDER_TASK_ATTACH_ATTEMPTS; attempt += 1) {
+    const { error } = await supabase
+      .from('generations')
+      .update({
+        prediction_id: predictionId,
+        status: 'processing',
+      })
+      .eq('id', generationId);
+
+    if (!error) return;
+    lastError = error;
   }
+
+  console.error(JSON.stringify({
+    level: 'error',
+    msg: 'generation_provider_task_attach_failed',
+    generationId,
+    predictionId,
+    attempts: PROVIDER_TASK_ATTACH_ATTEMPTS,
+    error: supabaseErrorMessage(lastError, 'Failed to attach provider task to generation.'),
+  }));
+  throw new GenerationServiceError('Failed to attach provider task to generation.', 500);
 }
 
 async function markGenerationStartFailedQuietly(
@@ -1191,6 +1202,7 @@ export async function startImageGeneration(params: {
   const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
 
   let generationId: string | null = null;
+  let predictionId: string | null = null;
   try {
     let input: Record<string, unknown>;
 
@@ -1259,7 +1271,7 @@ export async function startImageGeneration(params: {
       },
     });
 
-    const predictionId = await createKieTask({ model: providerModel, input });
+    predictionId = await createKieTask({ model: providerModel, input });
     await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
@@ -1279,8 +1291,10 @@ export async function startImageGeneration(params: {
       generationId,
     };
   } catch (error) {
-    await refundCreditsQuietly(creditSupabase, userId, cost);
-    await markGenerationStartFailedQuietly(supabase, generationId);
+    if (!predictionId) {
+      await refundCreditsQuietly(creditSupabase, userId, cost);
+      await markGenerationStartFailedQuietly(supabase, generationId);
+    }
     throw error;
   }
 }
@@ -1589,6 +1603,7 @@ export async function startVideoGeneration(params: {
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   let generationId: string | null = null;
+  let predictionId: string | null = null;
   try {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
@@ -1796,7 +1811,7 @@ export async function startVideoGeneration(params: {
       },
     });
 
-    const predictionId = await createKieTask(body, endpoint);
+    predictionId = await createKieTask(body, endpoint);
     await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     const videoInputCandidates: PersistGenerationInputCandidate[] = [];
@@ -1884,8 +1899,10 @@ export async function startVideoGeneration(params: {
       generationId,
     };
   } catch (error) {
-    await refundCreditsQuietly(creditSupabase, userId, cost);
-    await markGenerationStartFailedQuietly(supabase, generationId);
+    if (!predictionId) {
+      await refundCreditsQuietly(creditSupabase, userId, cost);
+      await markGenerationStartFailedQuietly(supabase, generationId);
+    }
     throw error;
   }
 }
@@ -1944,6 +1961,7 @@ export async function startMotionGeneration(params: {
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
   let generationId: string | null = null;
+  let predictionId: string | null = null;
   try {
     generationId = await reserveGenerationRecord(supabase, {
       user_id: userId,
@@ -1966,7 +1984,7 @@ export async function startMotionGeneration(params: {
       },
     });
 
-    const predictionId = await createKieTask({
+    predictionId = await createKieTask({
       model: selectedModel.apiModelId,
       callBackUrl: callbackUrl,
       input: {
@@ -2012,8 +2030,10 @@ export async function startMotionGeneration(params: {
       generationId,
     };
   } catch (error) {
-    await refundCreditsQuietly(creditSupabase, userId, cost);
-    await markGenerationStartFailedQuietly(supabase, generationId);
+    if (!predictionId) {
+      await refundCreditsQuietly(creditSupabase, userId, cost);
+      await markGenerationStartFailedQuietly(supabase, generationId);
+    }
     throw error;
   }
 }
