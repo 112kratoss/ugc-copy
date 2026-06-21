@@ -46,6 +46,7 @@ describe('credit mutation security boundary', () => {
     const signatures = [
       'start_ai_usage_event(uuid, integer, text, text, text, text, text, text)',
       'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
+      'settle_generation_failed(text, timestamp with time zone)',
     ];
 
     for (const signature of signatures) {
@@ -83,12 +84,12 @@ describe('credit mutation security boundary', () => {
     expect(razorpayVerify).toContain("adminSupabase.rpc('add_credits'");
     expect(generate).toContain('startMotionGeneration');
     expect(generate).toContain('creditSupabase: adminSupabase');
-    expect(generate).toContain("adminSupabase.rpc('refund_generation'");
-    expect(generateImage).toContain("adminSupabase.rpc('refund_generation'");
-    expect(generateVideo).toContain("adminSupabase.rpc('refund_generation'");
+    expect(generate).toContain('settleGenerationFailed');
+    expect(generateImage).toContain('settleGenerationFailed');
+    expect(generateVideo).toContain('settleGenerationFailed');
     expect(generationServices).toContain("supabase.rpc('start_generation'");
     expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
-    expect(generationServices).toContain("creditSupabase.rpc('refund_generation'");
+    expect(generationServices).toContain("creditSupabase.rpc('settle_generation_failed'");
   });
 });

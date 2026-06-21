@@ -4,6 +4,7 @@ import {
     GenerationServiceError,
     getGenerationResultUrls,
     persistGeneratedOutputList,
+    settleGenerationFailed,
     startImageGeneration,
 } from '@/lib/generation-services';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
@@ -332,7 +333,7 @@ export async function GET(request: NextRequest) {
                 fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
             });
             const timingWithEstimate = withGenerationTimingEstimate(timing, estimatedTotalMs);
-            const status = timing.appStatus;
+            let status = timing.appStatus;
             let output = null;
             let error = null;
 
@@ -386,16 +387,11 @@ export async function GET(request: NextRequest) {
                 }
             } else if (status === 'failed') {
                 error = data.data.failMsg || 'Unknown error';
-                await supabase
-                    .from('generations')
-                    .update({
-                        status: 'failed',
-                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                    })
-                    .eq('prediction_id', predictionId);
-
-                // Refund credits for async failure (idempotent)
-                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                status = await settleGenerationFailed(
+                    adminSupabase,
+                    predictionId,
+                    toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString()
+                );
                 if (localGeneration?.id && localGeneration?.user_id) {
                     await notifyGenerationStatus(adminSupabase, {
                         id: localGeneration.id,

@@ -77,6 +77,22 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
         return { data: 100, error: null };
       }
 
+      if (fn === 'settle_generation_failed') {
+        const row = generations.find((generation) => generation.prediction_id === args.p_prediction_id);
+        if (row) {
+          row.status = 'failed';
+          row.completed_at = typeof args.p_completed_at === 'string' ? args.p_completed_at : new Date().toISOString();
+        }
+        return {
+          data: {
+            status: row ? 'failed' : 'missing',
+            generation_id: row?.id ?? null,
+            refunded: Boolean(row?.cost),
+          },
+          error: null,
+        };
+      }
+
       if (fn === 'refund_generation' || fn === 'refund_credits') {
         return { data: true, error: null };
       }
@@ -1955,7 +1971,7 @@ describe('generation services', () => {
     });
   });
 
-  it('refunds failed async generations once', async () => {
+  it('settles failed async generations with one atomic backend RPC', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({
@@ -1990,7 +2006,14 @@ describe('generation services', () => {
 
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:01:00.000Z');
-    expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-audio-2')).toBe(true);
+    expect(rpcCalls).toContainEqual({
+      fn: 'settle_generation_failed',
+      args: {
+        p_prediction_id: 'task-audio-2',
+        p_completed_at: '2026-04-15T10:01:00.000Z',
+      },
+    });
+    expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
   });
 
   it('syncs one generation by provider task id for webhook completion jobs', async () => {
@@ -2036,7 +2059,14 @@ describe('generation services', () => {
 
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:02:00.000Z');
-    expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-audio-3')).toBe(true);
+    expect(rpcCalls).toContainEqual({
+      fn: 'settle_generation_failed',
+      args: {
+        p_prediction_id: 'task-audio-3',
+        p_completed_at: '2026-04-15T10:02:00.000Z',
+      },
+    });
+    expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
   });
 
   it('applies terminal webhook failure payloads without polling provider status', async () => {
@@ -2076,6 +2106,13 @@ describe('generation services', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:03:00.000Z');
-    expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-webhook-fail-1')).toBe(true);
+    expect(rpcCalls).toContainEqual({
+      fn: 'settle_generation_failed',
+      args: {
+        p_prediction_id: 'task-webhook-fail-1',
+        p_completed_at: '2026-04-15T10:03:00.000Z',
+      },
+    });
+    expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
   });
 });

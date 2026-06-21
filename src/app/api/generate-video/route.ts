@@ -28,7 +28,7 @@ import {
 } from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
-import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
+import { GenerationServiceError, settleGenerationFailed, startVideoGeneration } from '@/lib/generation-services';
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
@@ -527,14 +527,11 @@ export async function GET(request: NextRequest) {
                     }
                 } else if (successFlag === 2 || successFlag === 3) {
                     error = data.data?.errorMessage || data.msg || 'Unknown error';
-                    await supabase
-                        .from('generations')
-                        .update({
-                            status: 'failed',
-                            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                        })
-                        .eq('prediction_id', predictionId);
-                    await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                    status = await settleGenerationFailed(
+                        adminSupabase,
+                        predictionId,
+                        toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString()
+                    );
                 }
             } else {
                 const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
@@ -573,14 +570,11 @@ export async function GET(request: NextRequest) {
                     }
                 } else if (status === 'failed') {
                     error = data.data.failMsg || 'Unknown error';
-                    await supabase
-                        .from('generations')
-                        .update({
-                            status: 'failed',
-                            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                        })
-                        .eq('prediction_id', predictionId);
-                    await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                    status = await settleGenerationFailed(
+                        adminSupabase,
+                        predictionId,
+                        toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString()
+                    );
                 }
             }
 

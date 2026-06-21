@@ -30,7 +30,7 @@ import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
-import { GenerationServiceError, startMotionGeneration } from '@/lib/generation-services';
+import { GenerationServiceError, settleGenerationFailed, startMotionGeneration } from '@/lib/generation-services';
 import {
     GenerationStartIdempotencyError,
     getGenerationStartIdempotencyKey,
@@ -331,7 +331,7 @@ export async function GET(request: NextRequest) {
                 task: data.data,
                 fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
             });
-            const status = timing.appStatus;
+            let status = timing.appStatus;
             let output = null;
             let error = null;
 
@@ -420,17 +420,11 @@ export async function GET(request: NextRequest) {
                 }
             } else if (status === 'failed') {
                 error = data.data.failMsg || 'Unknown error';
-
-                await supabase
-                    .from('generations')
-                    .update({
-                        status: 'failed',
-                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                    })
-                    .eq('prediction_id', predictionId);
-
-                // Refund credits for async failure (idempotent)
-                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                status = await settleGenerationFailed(
+                    adminSupabase,
+                    predictionId,
+                    toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString()
+                );
             }
 
             if (localGeneration?.id && localGeneration?.user_id) {

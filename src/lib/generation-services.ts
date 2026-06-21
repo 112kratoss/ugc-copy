@@ -180,6 +180,42 @@ async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: stri
   }
 }
 
+export async function settleGenerationFailed(
+  creditSupabase: SupabaseClient,
+  predictionId: string,
+  completedAt?: string | null,
+): Promise<'failed' | 'succeeded'> {
+  const { data, error } = await creditSupabase.rpc('settle_generation_failed', {
+    p_prediction_id: predictionId,
+    p_completed_at: completedAt ?? null,
+  });
+
+  if (error || !isRecord(data)) {
+    throw new GenerationServiceError(
+      supabaseErrorMessage(error, 'Failed to settle failed generation.'),
+      500,
+    );
+  }
+
+  const status = typeof data.status === 'string' ? data.status : null;
+  if (status === 'failed') return 'failed';
+  if (status === 'already_succeeded') return 'succeeded';
+
+  if (status === 'missing') {
+    throw new GenerationServiceError('Generation not found for failure settlement.', 404);
+  }
+
+  if (status === 'invalid_request') {
+    throw new GenerationServiceError('Invalid generation failure settlement request.', 400);
+  }
+
+  if (status === 'profile_not_found') {
+    throw new GenerationServiceError('Could not find a credit profile for this account.', 500);
+  }
+
+  throw new GenerationServiceError('Failed to settle failed generation.', 500);
+}
+
 async function createKieTask(
   body: Record<string, unknown>,
   endpoint = 'https://api.kie.ai/api/v1/jobs/createTask',
@@ -851,16 +887,19 @@ export async function persistGeneratedOutputList(
 }
 
 async function markGenerationFailed(
-  supabase: SupabaseClient,
   creditSupabase: SupabaseClient,
   generation: SyncableGenerationRecord,
   completedAt?: string | null
-) {
-  await supabase
-    .from('generations')
-    .update({ status: 'failed', completed_at: completedAt ?? new Date().toISOString() })
-    .eq('id', generation.id);
-  await creditSupabase.rpc('refund_generation', { p_prediction_id: generation.prediction_id });
+): Promise<'failed' | 'succeeded'> {
+  if (!generation.prediction_id) {
+    throw new GenerationServiceError('Generation does not have a provider task id.', 500);
+  }
+
+  return settleGenerationFailed(
+    creditSupabase,
+    generation.prediction_id,
+    completedAt ?? new Date().toISOString(),
+  );
 }
 
 function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
@@ -928,8 +967,7 @@ async function syncSingleGenerationStatusFromProviderPayload(
     }
 
     if (successFlag === 2 || successFlag === 3) {
-      await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-      return 'failed';
+      return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
     }
 
     return null;
@@ -979,8 +1017,7 @@ async function syncSingleGenerationStatusFromProviderPayload(
   }
 
   if (state === 'fail') {
-    await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-    return 'failed';
+    return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
   }
 
   return null;
@@ -1041,8 +1078,7 @@ async function syncSingleGenerationStatus(
     }
 
     if (successFlag === 2 || successFlag === 3) {
-      await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-      return 'failed';
+      return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
     }
 
     const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
@@ -1106,8 +1142,7 @@ async function syncSingleGenerationStatus(
   }
 
   if (state === 'fail') {
-    await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-    return 'failed';
+    return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
   }
 
   const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';

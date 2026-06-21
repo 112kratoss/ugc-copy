@@ -71,6 +71,23 @@ function createSupabaseMock(
       return { data: true, error: null };
     }
 
+    if (fn === 'settle_generation_failed') {
+      if (localGeneration) {
+        localGeneration.status = 'failed';
+        localGeneration.completed_at = typeof args.p_completed_at === 'string'
+          ? args.p_completed_at
+          : '2026-04-15T10:01:00.000Z';
+      }
+      return {
+        data: {
+          status: localGeneration ? 'failed' : 'missing',
+          generation_id: localGeneration?.id ?? null,
+          refunded: true,
+        },
+        error: null,
+      };
+    }
+
     if (fn === 'refund_generation') {
       return { data: true, error: null };
     }
@@ -793,6 +810,53 @@ describe('/api/generate-video route', () => {
       'try_acquire_backend_job_lock',
       expect.objectContaining({ p_name: 'generation-status:task-video-failed-1' })
     );
+  });
+
+  it('settles live provider video failures with the atomic backend RPC', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-live-failed-1',
+      prediction_id: 'task-video-live-failed-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0-video',
+      category: 'video',
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: {
+          state: 'fail',
+          completeTime: '2026-04-15T10:01:00.000Z',
+          failMsg: 'provider failure',
+        },
+      }),
+    } as Response)));
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-live-failed-1', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'failed',
+      error: 'provider failure',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
+      p_prediction_id: 'task-video-live-failed-1',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+    });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
+      'refund_generation',
+      expect.anything()
+    );
+    expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
   it('throttles provider status checks while returning cached active video state', async () => {
