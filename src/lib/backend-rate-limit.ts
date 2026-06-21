@@ -60,6 +60,12 @@ export const CREDIT_ORDER_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const MARKETPLACE_ORDER_RATE_LIMIT = {
+  scope: 'marketplace-order:create',
+  limit: 10,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,

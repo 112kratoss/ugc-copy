@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
 
+import {
+  BackendRateLimitError,
+  MARKETPLACE_ORDER_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { getMarketplacePriceQuote } from '@/lib/marketplace-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -43,13 +49,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const adminSupabase = createServiceClient();
     const body = await request.json();
     const assetId = typeof body.assetId === 'string' ? body.assetId.trim() : '';
     const clientLocale = typeof body.locale === 'string' ? body.locale.trim() : null;
 
     if (!assetId) {
       return NextResponse.json({ error: 'Missing asset ID.' }, { status: 400 });
+    }
+
+    const adminSupabase = createServiceClient();
+    try {
+      await enforceBackendRateLimit(adminSupabase, {
+        ...MARKETPLACE_ORDER_RATE_LIMIT,
+        key: user.id,
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      console.error('Marketplace order rate limit check failed:', error);
+      return NextResponse.json({ error: 'Failed to check marketplace order limits.' }, { status: 500 });
     }
 
     const { data: assetData, error: assetError } = await adminSupabase
