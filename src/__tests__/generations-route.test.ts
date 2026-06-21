@@ -453,6 +453,59 @@ describe('/api/generations route', () => {
     expect(serviceTableCalls).not.toContain('generation_input_media');
   });
 
+  it('returns status-only pages without media signing or service-role expansion', async () => {
+    generationsState = [
+      {
+        ...generationsState[0],
+        id: 'gen-status-1',
+        status: 'succeeded',
+        output_url: 'generated_images/user-1/status-1.jpg',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        workflow_settings: {
+          outputs: [
+            { index: 0, storagePath: 'generated_images/user-1/status-1.jpg' },
+          ],
+          elements: [
+            {
+              id: 'element-status',
+              displayName: 'Hero product',
+              storagePath: 'uploads/user-1/product.png',
+            },
+          ],
+        },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations?detail=status&limit=1'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations).toEqual([
+      {
+        id: 'gen-status-1',
+        status: 'succeeded',
+        created_at: '2026-03-24T11:00:00.000Z',
+        completed_at: '2026-03-24T11:01:00.000Z',
+        category: 'image',
+        model: 'nano-banana-2',
+      },
+    ]);
+    expect(data.pagination).toEqual({
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(serviceTableCalls).toEqual([]);
+  });
+
   it('supports owner-scoped exact generation lookup without loading the whole history', async () => {
     generationsState = [
       {

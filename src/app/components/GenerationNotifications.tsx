@@ -18,6 +18,7 @@ const LEGACY_STATUS_CACHE_STORAGE_KEYS = [
   'emptybooklet:generation-status-cache:v1',
   'ugc:generation-status-cache:v1',
 ];
+const GENERATION_STATUS_POLL_URL = '/api/generations?detail=status&limit=80';
 const TOAST_LIFETIME_MS = 8000;
 const POLL_INTERVAL_MS = 30000;
 
@@ -194,7 +195,7 @@ export default function GenerationNotifications() {
       }
 
       try {
-        const response = await fetch('/api/generations', {
+        const response = await fetch(GENERATION_STATUS_POLL_URL, {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
           },

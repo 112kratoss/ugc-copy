@@ -19,6 +19,8 @@ type GenerationRow = {
     creation_mode?: 'motion' | null;
     showcase_asset_path?: string | null;
     status: string;
+    created_at: string;
+    completed_at?: string | null;
     workflow_settings?: unknown;
     model: string;
     category?: string | null;
@@ -176,14 +178,17 @@ export async function GET(request: NextRequest) {
 
         const includeArchived = request.nextUrl.searchParams.get('includeArchived') === 'true';
         const requestedGenerationId = request.nextUrl.searchParams.get('id')?.trim() || null;
-        const summaryOnly = request.nextUrl.searchParams.get('detail') === 'summary';
+        const detailMode = request.nextUrl.searchParams.get('detail');
+        const summaryOnly = detailMode === 'summary';
+        const statusOnly = detailMode === 'status';
         const requestedLimit = parsePositiveInteger(request.nextUrl.searchParams.get('limit'), DEFAULT_GENERATIONS_PAGE_LIMIT);
         const pageLimit = Math.min(requestedLimit, MAX_GENERATIONS_PAGE_LIMIT);
         const cursorOffset = Math.max(0, parsePositiveInteger(request.nextUrl.searchParams.get('cursor'), 0));
 
         const fetchGenerations = async (): Promise<{ rows: GenerationRow[]; hasMore: boolean }> => {
+            const statusColumns = 'id, status, created_at, completed_at, model, category, archived_at';
             const baseColumns = 'id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at';
-            const selectCandidates = [
+            const selectCandidates = statusOnly ? [statusColumns] : [
                 `${baseColumns}, preview_url, thumbnail_url, preview_thumbhash, preview_status, creation_mode`,
                 `${baseColumns}, preview_url, thumbnail_url`,
                 `${baseColumns}, preview_url`,
@@ -232,6 +237,24 @@ export async function GET(request: NextRequest) {
         };
 
         const { rows: generations, hasMore } = await fetchGenerations();
+
+        if (statusOnly) {
+            return NextResponse.json({
+                generations: generations.map((generation) => ({
+                    id: generation.id,
+                    status: generation.status,
+                    created_at: generation.created_at,
+                    completed_at: generation.completed_at ?? null,
+                    category: generation.category ?? null,
+                    model: generation.model,
+                })),
+                pagination: {
+                    limit: pageLimit,
+                    hasMore,
+                    nextCursor: hasMore ? String(cursorOffset + pageLimit) : null,
+                },
+            });
+        }
 
         const generationIds = generations.map((generation) => generation.id).filter(Boolean);
         const linkedPostMap = new Map<string, LinkedPostRow>();
