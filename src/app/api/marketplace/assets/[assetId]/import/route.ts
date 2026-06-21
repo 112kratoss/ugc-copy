@@ -22,7 +22,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const { assetId } = await params;
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -32,6 +31,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const { data: asset, error: assetError } = await adminSupabase
       .from('marketplace_assets')
       .select('id, seller_user_id, type, title')

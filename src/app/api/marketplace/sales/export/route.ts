@@ -13,7 +13,6 @@ function escapeCsvValue(value: string | number): string {
 
 export async function GET(request: NextRequest) {
   const supabase = createUserClient(request);
-  const adminSupabase = createServiceClient();
   const {
     data: { user },
     error: authError,
@@ -23,6 +22,7 @@ export async function GET(request: NextRequest) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  const adminSupabase = createServiceClient();
   const { data: assets, error: assetsError } = await adminSupabase
     .from('marketplace_assets')
     .select('id, title')
