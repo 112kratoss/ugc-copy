@@ -6,6 +6,12 @@ import {
   getPostResourceBundlePriceQuote,
 } from '@/lib/post-resource-bundles-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import {
+  BackendRateLimitError,
+  POST_RESOURCE_ORDER_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 
 type RouteContext = {
   params: Promise<{ postId: string }>;
@@ -42,6 +48,20 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 
   const adminSupabase = createServiceClient();
+  try {
+    await enforceBackendRateLimit(adminSupabase, {
+      ...POST_RESOURCE_ORDER_RATE_LIMIT,
+      key: user.id,
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    console.error('Post resource order rate limit check failed:', error);
+    return NextResponse.json({ error: 'Failed to check resource order limits.' }, { status: 500 });
+  }
+
   const body = await request.json() as {
     locale?: string | null;
   };
