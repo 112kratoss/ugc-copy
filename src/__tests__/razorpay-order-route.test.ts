@@ -49,7 +49,17 @@ const mocks = vi.hoisted(() => {
   const select = vi.fn(() => ({ single }));
   const insert = vi.fn(() => ({ select }));
   const from = vi.fn(() => ({ insert }));
-  const createServiceClient = vi.fn(() => ({ from }));
+  const rpc = vi.fn(async () => ({
+    data: {
+      allowed: true,
+      limit: 10,
+      remaining: 9,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-21T06:30:00.000Z',
+    },
+    error: null,
+  }));
+  const createServiceClient = vi.fn(() => ({ from, rpc }));
 
   return {
     createClient,
@@ -59,6 +69,7 @@ const mocks = vi.hoisted(() => {
     insert,
     ordersCreate,
     rawGetUser,
+    rpc,
     Razorpay,
     select,
     single,
@@ -100,6 +111,17 @@ describe('/api/razorpay/order route', () => {
     mocks.insert.mockClear();
     mocks.ordersCreate.mockClear();
     mocks.rawGetUser.mockClear();
+    mocks.rpc.mockClear();
+    mocks.rpc.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 10,
+        remaining: 9,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-21T06:30:00.000Z',
+      },
+      error: null,
+    });
     mocks.Razorpay.mockClear();
     mocks.select.mockClear();
     mocks.single.mockClear();
@@ -155,6 +177,12 @@ describe('/api/razorpay/order route', () => {
     });
     expect(mocks.createUserClient).toHaveBeenCalledTimes(1);
     expect(mocks.createClient).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'credit-order:create',
+      p_subject_key: 'user_123456789',
+      p_limit: 10,
+      p_window_seconds: 600,
+    });
     expect(mocks.Razorpay).toHaveBeenCalledTimes(1);
     expect(mocks.ordersCreate).toHaveBeenCalledWith({
       amount: 41500,
@@ -170,5 +198,39 @@ describe('/api/razorpay/order route', () => {
       status: 'created',
       user_id: 'user_123456789',
     });
+  });
+
+  it('rate limits authenticated credit order creation before Razorpay or transaction work', async () => {
+    mocks.userGetUser.mockResolvedValue({
+      data: { user: { id: 'user_123456789' } },
+      error: null,
+    });
+    mocks.rpc.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 10,
+        remaining: 0,
+        retryAfterSeconds: 48,
+        resetAt: '2026-06-21T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/razorpay/order/route');
+    const response = await POST(buildOrderRequest({ planId: 'starter' }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('48');
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(mocks.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'credit-order:create',
+      p_subject_key: 'user_123456789',
+      p_limit: 10,
+      p_window_seconds: 600,
+    });
+    expect(mocks.Razorpay).not.toHaveBeenCalled();
+    expect(mocks.ordersCreate).not.toHaveBeenCalled();
+    expect(mocks.from).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 });

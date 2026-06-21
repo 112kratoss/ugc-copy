@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
 
+import {
+    BackendRateLimitError,
+    CREDIT_ORDER_RATE_LIMIT,
+    createBackendRateLimitResponse,
+    enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { PRICING_PLAN_MAP } from '@/lib/pricing';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -29,6 +35,24 @@ export async function POST(req: Request) {
             );
         }
 
+        const adminSupabase = createServiceClient();
+        try {
+            await enforceBackendRateLimit(adminSupabase, {
+                ...CREDIT_ORDER_RATE_LIMIT,
+                key: user.id,
+            });
+        } catch (error) {
+            if (error instanceof BackendRateLimitError) {
+                return createBackendRateLimitResponse(error);
+            }
+
+            console.error('Credit order rate limit check failed:', error);
+            return NextResponse.json(
+                { error: 'Failed to check credit order limits.' },
+                { status: 500 }
+            );
+        }
+
         const amountInSubunits = plan.priceInr * 100;
         // Initialize Razorpay only after validation/authentication to keep rejected requests cheap.
         const razorpay = new Razorpay({
@@ -46,7 +70,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Failed to create Razorpay Order' }, { status: 500 });
         }
 
-        const { data: txnData, error: txnError } = await createServiceClient()
+        const { data: txnData, error: txnError } = await adminSupabase
             .from('transactions')
             .insert({
                 user_id: user.id,

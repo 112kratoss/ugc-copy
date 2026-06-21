@@ -55,7 +55,8 @@ describe('credit mutation security boundary', () => {
     const generateVideo = readFileSync(join(projectRoot, 'src/app/api/generate-video/route.ts'), 'utf8');
     const generationServices = readFileSync(join(projectRoot, 'src/lib/generation-services.ts'), 'utf8');
 
-    expect(razorpayOrder).toMatch(/createServiceClient\(\)\s*\.from\('transactions'\)/);
+    expect(razorpayOrder).toMatch(/adminSupabase\s*=\s*createServiceClient\(\)/);
+    expect(razorpayOrder).toMatch(/adminSupabase\s*\.from\('transactions'\)/);
     expect(razorpayVerify).toContain("adminSupabase.rpc('add_credits'");
     expect(generate).toContain('startMotionGeneration');
     expect(generate).toContain('creditSupabase: adminSupabase');
