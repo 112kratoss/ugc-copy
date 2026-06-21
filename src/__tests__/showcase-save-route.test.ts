@@ -14,7 +14,6 @@ vi.mock('@supabase/supabase-js', () => ({
     auth: {
       getUser: getUserMock,
     },
-    rpc: rpcMock,
   })),
 }));
 
@@ -138,7 +137,7 @@ describe('/api/showcase/save route', () => {
       }
       return { insert: eventInsertMock };
     });
-    createServiceClientMock.mockReturnValue({ from: serviceFromMock });
+    createServiceClientMock.mockReturnValue({ from: serviceFromMock, rpc: rpcMock });
     eventInsertMock.mockResolvedValue({ data: null, error: null });
     findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue(publicPost());
   });
@@ -169,6 +168,7 @@ describe('/api/showcase/save route', () => {
       p_user_id: 'user-1',
       p_should_save: true,
     });
+    expect(createServiceClientMock).toHaveBeenCalledTimes(1);
     expect(eventInsertMock).toHaveBeenCalledWith({
       user_id: 'user-1',
       post_id: 'post-1',

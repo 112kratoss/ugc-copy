@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
         if (authError || !user) {
             return NextResponse.json({ error: 'Unauthorized: Please log in to remix creations' }, { status: 401 });
         }
+        const adminSupabase = createServiceClient();
 
         const { generationId, postId } = await request.json();
         const referenceId = typeof postId === 'string' ? postId : generationId;
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Only generation-backed posts can be remixed' }, { status: 400 });
         }
 
-        const { error: rpcError } = await supabase.rpc('increment_post_remix_count', {
+        const { error: rpcError } = await adminSupabase.rpc('increment_post_remix_count', {
             p_post_id: post.id
         });
 
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Linked generation not found' }, { status: 404 });
         }
 
-        await notifyPostSocialActivity(createServiceClient(), {
+        await notifyPostSocialActivity(adminSupabase, {
             type: 'post_remixed',
             recipientUserId: post.user_id,
             actorUserId: user.id,

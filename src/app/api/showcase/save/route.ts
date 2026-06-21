@@ -94,13 +94,11 @@ async function resolveLegacyIdempotentSaveState({
     post,
     requestedSaveState,
     serviceClient,
-    supabase,
     userId,
 }: {
     post: { id: string };
     requestedSaveState: boolean;
     serviceClient: SupabaseClient;
-    supabase: SupabaseClient;
     userId: string;
 }): Promise<PostSaveFallbackResult> {
     const { data: existingSave, error: saveLookupError } = await serviceClient
@@ -124,7 +122,7 @@ async function resolveLegacyIdempotentSaveState({
         };
     }
 
-    const legacySaveResult = await supabase.rpc('toggle_post_save', {
+    const legacySaveResult = await serviceClient.rpc('toggle_post_save', {
         p_post_id: post.id,
         p_user_id: userId,
     });
@@ -150,6 +148,7 @@ async function recordPostSaveEvent({
     isSaved,
     postId,
     requestedState,
+    serviceClient,
     sourceSurface,
 }: {
     actorUserId: string;
@@ -157,10 +156,11 @@ async function recordPostSaveEvent({
     isSaved: boolean;
     postId: string;
     requestedState: boolean;
+    serviceClient: SupabaseClient;
     sourceSurface: string | null;
 }) {
     try {
-        const { error } = await createServiceClient()
+        const { error } = await serviceClient
             .from('post_save_events')
             .insert({
                 user_id: actorUserId,
@@ -191,6 +191,7 @@ export async function POST(request: NextRequest) {
         if (authError || !user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
+        const serviceClient = createServiceClient();
 
         const { generationId, postId, shouldSave, sourceSurface } = await request.json();
         const referenceId = typeof postId === 'string' ? postId : generationId;
@@ -216,7 +217,7 @@ export async function POST(request: NextRequest) {
         let rpcError: unknown = null;
 
         if (hasTargetSaveState) {
-            const postSaveResult = await supabase.rpc('set_post_save_state', {
+            const postSaveResult = await serviceClient.rpc('set_post_save_state', {
                 p_post_id: post.id,
                 p_user_id: user.id,
                 p_should_save: requestedSaveState,
@@ -228,7 +229,7 @@ export async function POST(request: NextRequest) {
             changed = normalizedResult?.changed ?? false;
             rpcError = postSaveResult.error;
         } else {
-            const postSaveResult = await supabase.rpc('toggle_post_save', {
+            const postSaveResult = await serviceClient.rpc('toggle_post_save', {
                 p_post_id: post.id,
                 p_user_id: user.id
             });
@@ -245,8 +246,7 @@ export async function POST(request: NextRequest) {
             const legacyState = await resolveLegacyIdempotentSaveState({
                 post,
                 requestedSaveState,
-                serviceClient: createServiceClient(),
-                supabase,
+                serviceClient,
                 userId: user.id,
             });
 
@@ -255,7 +255,7 @@ export async function POST(request: NextRequest) {
             changed = legacyState.changed;
             rpcError = null;
         } else if (rpcError && isMissingPostsSchemaError(rpcError)) {
-            const legacySaveResult = await supabase.rpc('toggle_showcase_save', {
+            const legacySaveResult = await serviceClient.rpc('toggle_showcase_save', {
                 p_generation_id: post.generation_id ?? post.id,
                 p_user_id: user.id
             });
@@ -282,12 +282,13 @@ export async function POST(request: NextRequest) {
                 isSaved,
                 postId: post.id,
                 requestedState: requestedSaveState,
+                serviceClient,
                 sourceSurface: normalizeSaveSourceSurface(sourceSurface),
             });
         }
 
         if (isSaved && (!hasTargetSaveState || changed)) {
-            await notifyPostSocialActivity(createServiceClient(), {
+            await notifyPostSocialActivity(serviceClient, {
                 type: 'post_saved',
                 recipientUserId: post.user_id,
                 actorUserId: user.id,
