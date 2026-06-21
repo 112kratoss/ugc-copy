@@ -144,6 +144,8 @@ describe('/api/generate route', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
+    process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     currentSupabaseMock = createSupabaseMock();
     vi.stubGlobal(
       'fetch',
@@ -263,6 +265,40 @@ describe('/api/generate route', () => {
       p_scope: 'media-generation:start',
       p_subject_key: 'user-1',
     }));
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.inserts).toHaveLength(0);
+  });
+
+  it('fails closed before deducting credits when the webhook secret is missing', async () => {
+    delete process.env.WEBHOOK_SECRET;
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await import('@/app/api/generate/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0',
+          characterImageUrl: 'https://signed.example.com/character.png',
+          referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+          duration: 6,
+          characterOrientation: 'image',
+          mode: '1080p',
+          prompt: 'Transfer the performance naturally.',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Server configuration error: webhook secret missing',
+    });
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
     expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.inserts).toHaveLength(0);

@@ -59,6 +59,7 @@ import {
   isImageGenerationPreview,
 } from '@/lib/generation-media-preview';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -1664,9 +1665,8 @@ export async function startMotionGeneration(params: {
   }
 
   const cost = getMotionCost(model, mode, duration);
+  const callbackUrl = buildKieWebhookCallbackUrl();
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
-  const webhookSecret = process.env.WEBHOOK_SECRET ?? 'kd92mxp4n7qbt1ej';
-  const callbackUrl = `https://ildfmhozpibwiopeavfg.supabase.co/functions/v1/kie-webhook?secret=${webhookSecret}`;
 
   try {
     const predictionId = await createKieTask({

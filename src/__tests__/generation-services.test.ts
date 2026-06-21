@@ -149,6 +149,8 @@ describe('generation services', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
+    process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -718,6 +720,28 @@ describe('generation services', () => {
       startImageUrl: 'https://cdn.example.com/start.jpg',
       endImageUrl: 'https://cdn.example.com/end.jpg',
     })).rejects.toThrow('Grok Imagine Video supports up to 1 image reference per run.');
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects motion generation before charging when webhook secret is missing', async () => {
+    delete process.env.WEBHOOK_SECRET;
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Match the reference motion.',
+      model: 'kling-3.0',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 6,
+      characterOrientation: 'image',
+      mode: '1080p',
+    })).rejects.toThrow('WEBHOOK_SECRET is not configured');
 
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();

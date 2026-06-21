@@ -29,6 +29,7 @@ import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
+import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
@@ -156,6 +157,17 @@ export async function POST(request: NextRequest) {
         const normalizedCharacterImage = normalizeRemixMediaAssetDescriptor(characterImage, 'image');
         const normalizedReferenceVideo = normalizeRemixMediaAssetDescriptor(referenceVideo, 'video');
 
+        let callBackUrl: string;
+        try {
+            callBackUrl = buildKieWebhookCallbackUrl();
+        } catch (error) {
+            console.error('Kie webhook callback is not configured:', error);
+            return NextResponse.json(
+                { error: 'Server configuration error: webhook secret missing' },
+                { status: 500 }
+            );
+        }
+
         const adminSupabase = createServiceClient();
         await enforceBackendRateLimit(adminSupabase, {
             ...MEDIA_GENERATION_RATE_LIMIT,
@@ -191,10 +203,6 @@ export async function POST(request: NextRequest) {
             amount: COST,
             shouldRefund: true,
         };
-
-        // Build webhook callback URL
-        const webhookSecret = process.env.WEBHOOK_SECRET ?? 'kd92mxp4n7qbt1ej';
-        const callBackUrl = `https://ildfmhozpibwiopeavfg.supabase.co/functions/v1/kie-webhook?secret=${webhookSecret}`;
 
         const response = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
             method: 'POST',
