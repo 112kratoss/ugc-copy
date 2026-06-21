@@ -33,6 +33,7 @@ function createSupabaseMock(
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const selects: string[] = [];
+  const eqs: Array<{ column: string; value: unknown }> = [];
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
     if (fn === 'deduct_credits') {
       return { data: 92, error: null };
@@ -77,6 +78,7 @@ function createSupabaseMock(
     inserts,
     updates,
     selects,
+    eqs,
     client: {
       auth: {
         getUser: vi.fn(async () => ({
@@ -100,30 +102,39 @@ function createSupabaseMock(
         return {
           select(columns = '') {
             selects.push(columns);
-            return {
+            const filters: Record<string, unknown> = {};
+            const query = {
               eq(column: string, value: unknown) {
-                return {
-                  async maybeSingle() {
-                    if (column === 'id' && sourceGeneration && sourceGeneration.id === value) {
-                      return { data: sourceGeneration, error: null };
-                    }
+                filters[column] = value;
+                eqs.push({ column, value });
+                return query;
+              },
+              async maybeSingle() {
+                if (filters.id && sourceGeneration && sourceGeneration.id === filters.id) {
+                  return { data: sourceGeneration, error: null };
+                }
 
-                    return { data: null, error: null };
-                  },
-                  async single() {
-                    if (column === 'prediction_id' && localGeneration && localGeneration.prediction_id === value) {
-                      return { data: localGeneration, error: null };
-                    }
+                return { data: null, error: null };
+              },
+              async single() {
+                if (
+                  filters.prediction_id
+                  && localGeneration
+                  && localGeneration.prediction_id === filters.prediction_id
+                  && (!filters.user_id || localGeneration.user_id === filters.user_id)
+                ) {
+                  return { data: localGeneration, error: null };
+                }
 
-                    if (column === 'id' && sourceGeneration && sourceGeneration.id === value) {
-                      return { data: sourceGeneration, error: null };
-                    }
+                if (filters.id && sourceGeneration && sourceGeneration.id === filters.id) {
+                  return { data: sourceGeneration, error: null };
+                }
 
-                    return { data: null, error: null };
-                  },
-                };
+                return { data: null, error: null };
               },
             };
+
+            return query;
           },
           update(record: Record<string, unknown>) {
             updates.push(record);
@@ -455,6 +466,10 @@ describe('/api/generate-image route', () => {
     });
     expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings');
     expect(currentSupabaseMock.selects).not.toContain('*');
+    expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
+      { column: 'prediction_id', value: 'task-image-status-1' },
+      { column: 'user_id', value: 'user-1' },
+    ]));
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

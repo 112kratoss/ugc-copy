@@ -26,6 +26,7 @@ function createSupabaseMock(
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const selects: string[] = [];
+  const eqs: Array<{ column: string; value: unknown }> = [];
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
     if (fn === 'deduct_credits') {
       return { data: 88, error: null };
@@ -70,6 +71,7 @@ function createSupabaseMock(
     inserts,
     updates,
     selects,
+    eqs,
     client: {
       auth: {
         getUser: vi.fn(async () => ({
@@ -88,24 +90,31 @@ function createSupabaseMock(
         return {
           select(columns = '') {
             selects.push(columns);
-            return {
+            const filters: Record<string, unknown> = {};
+            const query = {
               eq(column: string, value: unknown) {
-                return {
-                  async maybeSingle() {
-                    void column;
-                    void value;
-                    return { data: null, error: null };
-                  },
-                  async single() {
-                    if (column === 'prediction_id' && localGeneration && localGeneration.prediction_id === value) {
-                      return { data: localGeneration, error: null };
-                    }
+                filters[column] = value;
+                eqs.push({ column, value });
+                return query;
+              },
+              async maybeSingle() {
+                return { data: null, error: null };
+              },
+              async single() {
+                if (
+                  filters.prediction_id
+                  && localGeneration
+                  && localGeneration.prediction_id === filters.prediction_id
+                  && (!filters.user_id || localGeneration.user_id === filters.user_id)
+                ) {
+                  return { data: localGeneration, error: null };
+                }
 
-                    return { data: null, error: null };
-                  },
-                };
+                return { data: null, error: null };
               },
             };
+
+            return query;
           },
           update(record: Record<string, unknown>) {
             updates.push(record);
@@ -392,6 +401,10 @@ describe('/api/generate route', () => {
     });
     expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration');
     expect(currentSupabaseMock.selects).not.toContain('*');
+    expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
+      { column: 'prediction_id', value: 'task-motion-status-1' },
+      { column: 'user_id', value: 'user-1' },
+    ]));
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

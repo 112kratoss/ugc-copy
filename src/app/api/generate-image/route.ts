@@ -260,6 +260,7 @@ export async function GET(request: NextRequest) {
             .from('generations')
             .select(IMAGE_STATUS_GENERATION_SELECT)
             .eq('prediction_id', predictionId)
+            .eq('user_id', user.id)
             .single();
 
         if (!localGeneration || localGeneration.user_id !== user.id) {
