@@ -19,6 +19,13 @@ type SourceToolModelRow = {
   sort_order: number | null;
 };
 
+const SOURCE_TOOLS_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedCatalog: {
+  expiresAt: number;
+  tools: SourceToolOption[];
+} | null = null;
+let pendingCatalogLoad: Promise<SourceToolOption[]> | null = null;
+
 function isMissingCatalogSchemaError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false;
@@ -47,7 +54,15 @@ function withGenerationCatalogModels(tools: SourceToolOption[]): SourceToolOptio
     : tool);
 }
 
-export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
+function cloneCatalog(tools: SourceToolOption[]): SourceToolOption[] {
+  return tools.map((tool) => ({
+    ...tool,
+    supportedMediaKinds: normalizeSupportedMediaKinds(tool.supportedMediaKinds),
+    models: tool.models.map((model) => ({ ...model })),
+  }));
+}
+
+async function loadSourceToolsCatalog(): Promise<SourceToolOption[]> {
   const supabase = createServiceClient();
 
   const { data: tools, error: toolsError } = await supabase
@@ -101,4 +116,27 @@ export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
       label: model.label,
     })),
   })));
+}
+
+export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
+  const now = Date.now();
+  if (cachedCatalog && cachedCatalog.expiresAt > now) {
+    return cloneCatalog(cachedCatalog.tools);
+  }
+
+  if (!pendingCatalogLoad) {
+    pendingCatalogLoad = loadSourceToolsCatalog()
+      .then((tools) => {
+        cachedCatalog = {
+          expiresAt: Date.now() + SOURCE_TOOLS_CATALOG_CACHE_TTL_MS,
+          tools: cloneCatalog(tools),
+        };
+        return tools;
+      })
+      .finally(() => {
+        pendingCatalogLoad = null;
+      });
+  }
+
+  return cloneCatalog(await pendingCatalogLoad);
 }
