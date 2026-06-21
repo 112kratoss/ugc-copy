@@ -10,6 +10,7 @@ type GenerationRow = {
   id: string;
   user_id: string;
   prediction_id: string | null;
+  status?: string | null;
   cost: number | null;
   client_request_key_hash: string | null;
 };
@@ -122,6 +123,40 @@ describe('generation start idempotency', () => {
       status: 409,
       code: 'GENERATION_START_IN_PROGRESS',
     });
+  });
+
+  it('returns a conflict when a local generation row is already starting without a provider id', async () => {
+    const keyHash = hashGenerationStartIdempotencyKey('user-1', 'start-pending');
+    const { client, rpc } = createClient({
+      generations: [{
+        id: 'gen-pending-1',
+        user_id: 'user-1',
+        prediction_id: null,
+        status: 'pending',
+        cost: 8,
+        client_request_key_hash: keyHash,
+      }],
+    });
+    const start = vi.fn(async () => ({
+      predictionId: 'task-duplicate',
+      generationId: 'gen-duplicate',
+      remainingCredits: 34,
+      cost: 8,
+    }));
+
+    await expect(withGenerationStartIdempotency({
+      client: client as never,
+      userId: 'user-1',
+      idempotencyKey: 'start-pending',
+      owner: 'request-1',
+      start,
+    })).rejects.toMatchObject({
+      status: 409,
+      code: 'GENERATION_START_IN_PROGRESS',
+    });
+
+    expect(start).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalledWith('try_acquire_backend_job_lock', expect.anything());
   });
 
   it('passes a stable hash into the start function when no previous generation exists', async () => {

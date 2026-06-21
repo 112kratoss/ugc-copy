@@ -7,6 +7,7 @@ import { withBackendJobLock } from '@/lib/backend-job-lock';
 const HEADER_NAME = 'idempotency-key';
 const MAX_KEY_LENGTH = 256;
 const LOCK_TTL_SECONDS = 120;
+const ACTIVE_START_STATUSES = new Set(['pending', 'waiting', 'processing']);
 
 export type GenerationStartResult = {
   predictionId: string;
@@ -19,6 +20,7 @@ export type GenerationStartResult = {
 type ExistingGenerationRow = {
   id: string;
   prediction_id: string | null;
+  status: string | null;
   cost: number | null;
 };
 
@@ -119,7 +121,7 @@ async function loadExistingGeneration(
 ): Promise<GenerationStartResult | null> {
   const { data, error } = await client
     .from('generations')
-    .select('id,prediction_id,cost')
+    .select('id,prediction_id,status,cost')
     .eq('user_id', userId)
     .eq('client_request_key_hash', keyHash)
     .maybeSingle();
@@ -127,7 +129,18 @@ async function loadExistingGeneration(
   if (error) throw error;
 
   const row = data as ExistingGenerationRow | null;
-  if (!row?.prediction_id) return null;
+  if (!row) return null;
+
+  if (!row.prediction_id) {
+    if (ACTIVE_START_STATUSES.has(row.status ?? '')) {
+      throw new GenerationStartIdempotencyError(
+        'A generation with this idempotency key is already starting. Retry shortly.',
+        409,
+        'GENERATION_START_IN_PROGRESS',
+      );
+    }
+    return null;
+  }
 
   return {
     predictionId: row.prediction_id,
