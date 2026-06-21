@@ -120,6 +120,7 @@ type SubmittedEditMediaItem =
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
+type ServiceClient = ReturnType<typeof createServiceClient>;
 
 function sanitizeFileStem(fileName: string): string {
   const stem = path.basename(fileName, path.extname(fileName)).toLowerCase();
@@ -191,8 +192,11 @@ function parseBundleInput(value: unknown, ownerUserId: string): { bundle: PostRe
   };
 }
 
-async function loadOwnedPost(postId: string, userId: string): Promise<MutablePostRow | null> {
-  const adminSupabase = createServiceClient();
+async function loadOwnedPost(
+  adminSupabase: ServiceClient,
+  postId: string,
+  userId: string
+): Promise<MutablePostRow | null> {
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
@@ -209,8 +213,11 @@ async function loadOwnedPost(postId: string, userId: string): Promise<MutablePos
   return (data as MutablePostRow | null) ?? null;
 }
 
-async function loadOwnedBundleStatus(postId: string, userId: string): Promise<BundleStatusRow | null> {
-  const adminSupabase = createServiceClient();
+async function loadOwnedBundleStatus(
+  adminSupabase: ServiceClient,
+  postId: string,
+  userId: string
+): Promise<BundleStatusRow | null> {
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
     .select('access_mode, status')
@@ -225,8 +232,10 @@ async function loadOwnedBundleStatus(postId: string, userId: string): Promise<Bu
   return (data as BundleStatusRow | null) ?? null;
 }
 
-async function loadOwnedPostMedia(postId: string): Promise<ExistingPostMediaRow[]> {
-  const adminSupabase = createServiceClient();
+async function loadOwnedPostMedia(
+  adminSupabase: ServiceClient,
+  postId: string
+): Promise<ExistingPostMediaRow[]> {
   const previewResult = await adminSupabase
     .from('post_media')
     .select('id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
@@ -257,6 +266,7 @@ async function loadOwnedPostMedia(postId: string): Promise<ExistingPostMediaRow[
 }
 
 async function parseSubmittedEditMediaItems(params: {
+  adminSupabase: ServiceClient;
   value: unknown;
   postId: string;
   userId: string;
@@ -277,7 +287,7 @@ async function parseSubmittedEditMediaItems(params: {
     return { items: null, error: `Add up to ${MAX_POST_MEDIA_ITEMS} media items per post.` };
   }
 
-  const existingRows = await loadOwnedPostMedia(params.postId);
+  const existingRows = await loadOwnedPostMedia(params.adminSupabase, params.postId);
   const existingRowsMap = new Map(existingRows.map((row) => [row.id, row]));
   const submitted: SubmittedEditMediaItem[] = [];
 
@@ -375,11 +385,12 @@ export async function PUT(request: NextRequest, context: RouteContext) {
   }
 
   try {
-    const post = await loadOwnedPost(postId, user.id);
+    const adminSupabase = createServiceClient();
+    const post = await loadOwnedPost(adminSupabase, postId, user.id);
     if (!post) {
       return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
     }
-    const existingBundle = await loadOwnedBundleStatus(postId, user.id);
+    const existingBundle = await loadOwnedBundleStatus(adminSupabase, postId, user.id);
 
     const body = (await request.json()) as {
       title?: unknown;
@@ -412,6 +423,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     }
 
     const { items: submittedMediaItems, error: submittedMediaItemsError } = await parseSubmittedEditMediaItems({
+      adminSupabase,
       value: body.mediaItems,
       postId,
       userId: user.id,
@@ -525,7 +537,6 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       updatePayload.source_tool_slug = normalizedSourceTool.slug;
     }
 
-    const adminSupabase = createServiceClient();
     const marketplaceQualityError = nextVisibility === 'public'
       ? await getMarketplaceQualityErrorForPostBundle({
           supabase: adminSupabase,
@@ -557,7 +568,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     });
 
     if (submittedMediaItems) {
-      const existingMediaRows = await loadOwnedPostMedia(postId);
+      const existingMediaRows = await loadOwnedPostMedia(adminSupabase, postId);
       const persistedMediaItems: PostMediaPersistInput[] = [];
       const newStoragePaths: string[] = [];
       const temporaryStoragePaths: string[] = [];
@@ -744,7 +755,8 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   }
 
   try {
-    const post = await loadOwnedPost(postId, user.id);
+    const adminSupabase = createServiceClient();
+    const post = await loadOwnedPost(adminSupabase, postId, user.id);
     if (!post) {
       return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
     }
@@ -754,7 +766,6 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       : { force: false };
     const forceDelete = Boolean(body.force);
 
-    const adminSupabase = createServiceClient();
     const selectBundle = (selectColumns: string) =>
       adminSupabase
         .from('post_resource_bundles')

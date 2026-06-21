@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 
 const getMarketplaceQualityErrorForPostBundleMock = vi.hoisted(() => vi.fn());
 const updatePostWithResourceBundleAtomicallyMock = vi.hoisted(() => vi.fn());
+const createServiceClientMock = vi.hoisted(() => vi.fn());
 const sourceToolTableCalls = vi.hoisted(() => ({
   rpcCalls: [] as Array<Record<string, unknown>>,
   rpcError: null as { message?: string } | null,
@@ -93,7 +94,10 @@ vi.mock('@/lib/server-helpers', () => ({
       })),
     },
   }),
-  createServiceClient: () => ({
+  createServiceClient: () => {
+    createServiceClientMock();
+
+    return {
     from(table: string) {
       if (table === 'posts') {
         const query = {
@@ -161,7 +165,8 @@ vi.mock('@/lib/server-helpers', () => ({
       sourceToolTableCalls.rpcCalls.push(args);
       return Promise.resolve({ data: null, error: sourceToolTableCalls.rpcError });
     },
-  }),
+    };
+  },
 }));
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
@@ -200,6 +205,7 @@ describe('/api/posts/[postId] route', () => {
     };
     getMarketplaceQualityErrorForPostBundleMock.mockReset();
     getMarketplaceQualityErrorForPostBundleMock.mockResolvedValue('Quality should not run for private draft unlocks.');
+    createServiceClientMock.mockReset();
     updatePostWithResourceBundleAtomicallyMock.mockReset();
     updatePostWithResourceBundleAtomicallyMock.mockImplementation(async ({ patch }) => ({
       postId: 'post-1',
@@ -278,6 +284,27 @@ describe('/api/posts/[postId] route', () => {
     expect(data.visibility).toBe('private');
     expect(data.resourceBundleStatus).toBe('draft');
     expect(data.resourceBundlePath).toBe('/post/post-1/edit#resources');
+  });
+
+  it('reuses a single admin client while updating an owner post', async () => {
+    const { PUT } = await import('@/app/api/posts/[postId]/route');
+    const response = await PUT(new Request('http://localhost/api/posts/post-1', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        title: 'Helpful launch proof',
+        visibility: 'private',
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest, {
+      params: Promise.resolve({ postId: 'post-1' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(createServiceClientMock).toHaveBeenCalledTimes(1);
   });
 
   it('publishes draft unlocks when the request includes the bundle payload', async () => {
