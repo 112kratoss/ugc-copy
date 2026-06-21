@@ -126,6 +126,15 @@ export interface PersistedGenerationOutput {
   storagePath: string;
 }
 
+function supabaseErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+}
+
 function requireApiKey(): string {
   if (!KIE_API_KEY) {
     throw new Error('Server configuration error: API key missing');
@@ -179,6 +188,80 @@ async function createKieTask(body: Record<string, unknown>, endpoint = 'https://
   }
 
   return data.data.taskId as string;
+}
+
+async function reserveGenerationRecord(
+  supabase: SupabaseClient,
+  record: Record<string, unknown>,
+): Promise<string> {
+  const { data, error } = await supabase
+    .from('generations')
+    .insert({
+      ...record,
+      prediction_id: null,
+      status: 'pending',
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    throw new GenerationServiceError(
+      supabaseErrorMessage(error, 'Failed to create generation record.'),
+      500,
+    );
+  }
+
+  const generationId = data?.id;
+  if (typeof generationId !== 'string' || !generationId) {
+    throw new GenerationServiceError('Failed to create generation record.', 500);
+  }
+
+  return generationId;
+}
+
+async function markGenerationProviderStarted(
+  supabase: SupabaseClient,
+  generationId: string,
+  predictionId: string,
+) {
+  const { error } = await supabase
+    .from('generations')
+    .update({
+      prediction_id: predictionId,
+      status: 'processing',
+    })
+    .eq('id', generationId);
+
+  if (error) {
+    throw new GenerationServiceError(
+      supabaseErrorMessage(error, 'Failed to attach provider task to generation.'),
+      500,
+    );
+  }
+}
+
+async function markGenerationStartFailedQuietly(
+  supabase: SupabaseClient,
+  generationId: string | null,
+) {
+  if (!generationId) return;
+
+  try {
+    const { error } = await supabase
+      .from('generations')
+      .update({
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        client_request_key_hash: null,
+      })
+      .eq('id', generationId);
+
+    if (error) {
+      console.error('Failed to mark generation start failed:', error);
+    }
+  } catch (error) {
+    console.error('Failed to mark generation start failed:', error);
+  }
 }
 
 function trimPrompt(prompt: string, errorMessage: string): string {
@@ -1107,6 +1190,7 @@ export async function startImageGeneration(params: {
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
 
+  let generationId: string | null = null;
   try {
     let input: Record<string, unknown>;
 
@@ -1149,42 +1233,38 @@ export async function startImageGeneration(params: {
       }
     }
 
-    const predictionId = await createKieTask({ model: providerModel, input });
-    const insert = await supabase
-      .from('generations')
-      .insert({
-        user_id: userId,
+    generationId = await reserveGenerationRecord(supabase, {
+      user_id: userId,
+      model,
+      cost,
+      client_request_key_hash: clientRequestKeyHash,
+      prompt: trimmedPrompt,
+      category: 'image',
+      source_generation_id: sourceGenerationId,
+      workflow_settings: {
         model,
-        cost,
-        prediction_id: predictionId,
-        client_request_key_hash: clientRequestKeyHash,
-        status: 'processing',
-        prompt: trimmedPrompt,
-        category: 'image',
-        source_generation_id: sourceGenerationId,
-        workflow_settings: {
-          model,
-          providerModel,
-          aspectRatio,
-          resolution,
-          ...(model === 'grok-imagine-image' ? { qualityMode } : {}),
-          outputFormat,
-          googleSearch,
-          ...(normalizedElements.length > 0
-            ? {
-                elements: normalizedElements,
-                promptMode: 'element-mentions-v1' as const,
-                compiledPrompt,
-              }
-            : {}),
-        },
-      })
-      .select('id')
-      .single();
+        providerModel,
+        aspectRatio,
+        resolution,
+        ...(model === 'grok-imagine-image' ? { qualityMode } : {}),
+        outputFormat,
+        googleSearch,
+        ...(normalizedElements.length > 0
+          ? {
+              elements: normalizedElements,
+              promptMode: 'element-mentions-v1' as const,
+              compiledPrompt,
+            }
+          : {}),
+      },
+    });
+
+    const predictionId = await createKieTask({ model: providerModel, input });
+    await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
       supabase,
-      generationId: insert.data?.id,
+      generationId,
       userId,
       candidates: collectImageInputCandidates({
         resolvedImageUrls,
@@ -1196,10 +1276,11 @@ export async function startImageGeneration(params: {
       predictionId,
       remainingCredits,
       cost,
-      generationId: insert.data?.id,
+      generationId,
     };
   } catch (error) {
     await refundCreditsQuietly(creditSupabase, userId, cost);
+    await markGenerationStartFailedQuietly(supabase, generationId);
     throw error;
   }
 }
@@ -1507,6 +1588,7 @@ export async function startVideoGeneration(params: {
   });
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
+  let generationId: string | null = null;
   try {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
@@ -1642,84 +1724,80 @@ export async function startVideoGeneration(params: {
       };
     }
 
-    const predictionId = await createKieTask(body, endpoint);
-    const insert = await supabase
-      .from('generations')
-      .insert({
-        user_id: userId,
-        model: providerModelId,
-        cost,
+    generationId = await reserveGenerationRecord(supabase, {
+      user_id: userId,
+      model: providerModelId,
+      cost,
+      duration: totalDuration,
+      client_request_key_hash: clientRequestKeyHash,
+      prompt: isMultiShot ? normalizedMultiPrompts[0]?.prompt || '' : trimmedPrompt,
+      category: 'video',
+      source_generation_id: sourceGenerationId,
+      workflow_settings: {
+        model,
+        mode,
+        ...(model === 'grok-imagine-video'
+          ? {
+              providerModel: providerModelId,
+              requestedMode,
+              providerMode,
+            }
+          : {}),
+        aspectRatio,
+        sound: soundEnabled,
         duration: totalDuration,
-        prediction_id: predictionId,
-        client_request_key_hash: clientRequestKeyHash,
-        status: 'processing',
-        prompt: isMultiShot ? normalizedMultiPrompts[0]?.prompt || '' : trimmedPrompt,
-        category: 'video',
-        source_generation_id: sourceGenerationId,
-        workflow_settings: {
-          model,
-          mode,
-          ...(model === 'grok-imagine-video'
-            ? {
-                providerModel: providerModelId,
-                requestedMode,
-                providerMode,
-              }
-            : {}),
-          aspectRatio,
-          sound: soundEnabled,
-          duration: totalDuration,
-          multiPrompts: isMultiShot
-            ? normalizedMultiPrompts.map((shot) => ({
-                id: shot.id || null,
-                prompt: shot.prompt,
-                duration: shot.duration,
-              }))
-            : undefined,
-          resolution,
-          fixedLens,
-          referenceMode: effectiveReferenceMode,
-          ...(seedanceReferenceImageUrls.length > 0
-            ? { referenceImageUrls: seedanceReferenceImageUrls }
-            : {}),
-          ...(resolvedReferenceVideoUrls.length > 0
-            ? { referenceVideoUrls: resolvedReferenceVideoUrls }
-            : {}),
-          ...(resolvedReferenceAudioUrls.length > 0
-            ? { referenceAudioUrls: resolvedReferenceAudioUrls }
-            : {}),
-          ...(resolvedKlingVideoElements.length > 0
-            ? {
-                klingVideoElements: resolvedKlingVideoElements.map((element) => ({
-                  id: element.id,
-                  url: element.url,
-                  handle: element.handle,
-                  displayName: element.displayName,
-                  storagePath: element.storagePath,
-                  sourceGenerationId: element.sourceGenerationId,
-                })),
-              }
-            : {}),
-          ...(hasSeedanceAssetCollections(seedanceAssets)
-            ? { seedanceAssets }
-            : {}),
-          ...(normalizedElements.length > 0
-            ? {
-                elements: normalizedElements,
-                promptMode: 'element-mentions-v1' as const,
-                compiledPrompt,
-              }
-            : {}),
-          ...(effectiveReferenceMode === 'frames' && normalizedStartFrame
-            ? { startFrame: normalizedStartFrame }
-            : {}),
-          ...(effectiveReferenceMode === 'frames' && normalizedEndFrame
-            ? { endFrame: normalizedEndFrame }
-            : {}),
-        },
-      })
-      .select('id')
-      .single();
+        multiPrompts: isMultiShot
+          ? normalizedMultiPrompts.map((shot) => ({
+              id: shot.id || null,
+              prompt: shot.prompt,
+              duration: shot.duration,
+            }))
+          : undefined,
+        resolution,
+        fixedLens,
+        referenceMode: effectiveReferenceMode,
+        ...(seedanceReferenceImageUrls.length > 0
+          ? { referenceImageUrls: seedanceReferenceImageUrls }
+          : {}),
+        ...(resolvedReferenceVideoUrls.length > 0
+          ? { referenceVideoUrls: resolvedReferenceVideoUrls }
+          : {}),
+        ...(resolvedReferenceAudioUrls.length > 0
+          ? { referenceAudioUrls: resolvedReferenceAudioUrls }
+          : {}),
+        ...(resolvedKlingVideoElements.length > 0
+          ? {
+              klingVideoElements: resolvedKlingVideoElements.map((element) => ({
+                id: element.id,
+                url: element.url,
+                handle: element.handle,
+                displayName: element.displayName,
+                storagePath: element.storagePath,
+                sourceGenerationId: element.sourceGenerationId,
+              })),
+            }
+          : {}),
+        ...(hasSeedanceAssetCollections(seedanceAssets)
+          ? { seedanceAssets }
+          : {}),
+        ...(normalizedElements.length > 0
+          ? {
+              elements: normalizedElements,
+              promptMode: 'element-mentions-v1' as const,
+              compiledPrompt,
+            }
+          : {}),
+        ...(effectiveReferenceMode === 'frames' && normalizedStartFrame
+          ? { startFrame: normalizedStartFrame }
+          : {}),
+        ...(effectiveReferenceMode === 'frames' && normalizedEndFrame
+          ? { endFrame: normalizedEndFrame }
+          : {}),
+      },
+    });
+
+    const predictionId = await createKieTask(body, endpoint);
+    await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     const videoInputCandidates: PersistGenerationInputCandidate[] = [];
     let inputSortOrder = 0;
@@ -1794,7 +1872,7 @@ export async function startVideoGeneration(params: {
 
     await persistGenerationInputMedia({
       supabase,
-      generationId: insert.data?.id,
+      generationId,
       userId,
       candidates: videoInputCandidates,
     });
@@ -1803,10 +1881,11 @@ export async function startVideoGeneration(params: {
       predictionId,
       remainingCredits,
       cost,
-      generationId: insert.data?.id,
+      generationId,
     };
   } catch (error) {
     await refundCreditsQuietly(creditSupabase, userId, cost);
+    await markGenerationStartFailedQuietly(supabase, generationId);
     throw error;
   }
 }
@@ -1864,7 +1943,29 @@ export async function startMotionGeneration(params: {
   }
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
 
+  let generationId: string | null = null;
   try {
+    generationId = await reserveGenerationRecord(supabase, {
+      user_id: userId,
+      model: selectedModel.apiModelId,
+      duration,
+      cost,
+      client_request_key_hash: clientRequestKeyHash,
+      prompt: prompt.trim(),
+      category: 'video',
+      creation_mode: 'motion',
+      source_generation_id: sourceGenerationId,
+      workflow_settings: {
+        creationMode: 'motion',
+        model,
+        characterOrientation,
+        mode,
+        duration,
+        ...(characterImage ? { characterImage } : {}),
+        ...(referenceVideo ? { referenceVideo } : {}),
+      },
+    });
+
     const predictionId = await createKieTask({
       model: selectedModel.apiModelId,
       callBackUrl: callbackUrl,
@@ -1876,37 +1977,11 @@ export async function startMotionGeneration(params: {
         mode,
       },
     });
-
-    const insert = await supabase
-      .from('generations')
-      .insert({
-        user_id: userId,
-        model: selectedModel.apiModelId,
-        duration,
-        cost,
-        prediction_id: predictionId,
-        client_request_key_hash: clientRequestKeyHash,
-        status: 'processing',
-        prompt: prompt.trim(),
-        category: 'video',
-        creation_mode: 'motion',
-        source_generation_id: sourceGenerationId,
-        workflow_settings: {
-          creationMode: 'motion',
-          model,
-          characterOrientation,
-          mode,
-          duration,
-          ...(characterImage ? { characterImage } : {}),
-          ...(referenceVideo ? { referenceVideo } : {}),
-        },
-      })
-      .select('id')
-      .single();
+    await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
       supabase,
-      generationId: insert.data?.id,
+      generationId,
       userId,
       candidates: [
         {
@@ -1934,10 +2009,11 @@ export async function startMotionGeneration(params: {
       predictionId,
       remainingCredits,
       cost,
-      generationId: insert.data?.id,
+      generationId,
     };
   } catch (error) {
     await refundCreditsQuietly(creditSupabase, userId, cost);
+    await markGenerationStartFailedQuietly(supabase, generationId);
     throw error;
   }
 }

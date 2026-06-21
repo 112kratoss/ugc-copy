@@ -442,6 +442,72 @@ describe('generation services', () => {
     expect(generations[0].client_request_key_hash).toBe('a'.repeat(64));
   });
 
+  it('reserves a pending image generation before submitting provider work', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    const { supabase, generations } = createSupabaseMock();
+    fetchMock.mockImplementation(async () => {
+      expect(generations).toHaveLength(1);
+      expect(generations[0]).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        client_request_key_hash: 'b'.repeat(64),
+      });
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-durable-1' } }),
+      } as Response;
+    });
+
+    const result = await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'b'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2',
+    });
+
+    expect(result.generationId).toBe('gen-1');
+    expect(generations).toHaveLength(1);
+    expect(generations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-image-durable-1',
+      client_request_key_hash: 'b'.repeat(64),
+    });
+  });
+
+  it('marks a reserved image generation failed and retryable when provider submission fails', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => ({ code: 500, msg: 'Provider unavailable' }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'c'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('Provider unavailable');
+
+    expect(rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fn: 'deduct_credits' }),
+      expect.objectContaining({ fn: 'refund_credits' }),
+    ]));
+    expect(generations).toHaveLength(1);
+    expect(generations[0]).toMatchObject({
+      status: 'failed',
+      prediction_id: null,
+      client_request_key_hash: null,
+    });
+    expect(generations[0].completed_at).toEqual(expect.any(String));
+  });
+
   it('uses GPT Image 2 image-to-image provider payload when references are attached', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -663,6 +729,46 @@ describe('generation services', () => {
     expect(generations[0].workflow_settings?.referenceMode).toBe('frames');
   });
 
+  it('reserves a pending video generation before submitting provider work', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    const { supabase, generations } = createSupabaseMock();
+    fetchMock.mockImplementation(async () => {
+      expect(generations).toHaveLength(1);
+      expect(generations[0]).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        client_request_key_hash: 'd'.repeat(64),
+        category: 'video',
+      });
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-video-durable-1' } }),
+      } as Response;
+    });
+
+    const result = await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'd'.repeat(64),
+      prompt: 'A product spins on a marble pedestal.',
+      model: 'kling-3.0-video',
+      duration: 7,
+      mode: 'std',
+      aspectRatio: '16:9',
+      sound: true,
+    });
+
+    expect(result.generationId).toBe('gen-1');
+    expect(generations).toHaveLength(1);
+    expect(generations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-video-durable-1',
+      client_request_key_hash: 'd'.repeat(64),
+    });
+  });
+
   it('uses Grok text-to-video provider payload without references', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -802,6 +908,47 @@ describe('generation services', () => {
 
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reserves a pending motion generation before submitting provider work', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    const { supabase, generations } = createSupabaseMock();
+    fetchMock.mockImplementation(async () => {
+      expect(generations).toHaveLength(1);
+      expect(generations[0]).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        client_request_key_hash: 'e'.repeat(64),
+        category: 'video',
+      });
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-motion-durable-1' } }),
+      } as Response;
+    });
+
+    const result = await startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'e'.repeat(64),
+      prompt: 'Match the reference motion.',
+      model: 'kling-3.0',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 6,
+      characterOrientation: 'image',
+      mode: '1080p',
+    });
+
+    expect(result.generationId).toBe('gen-1');
+    expect(generations).toHaveLength(1);
+    expect(generations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-motion-durable-1',
+      client_request_key_hash: 'e'.repeat(64),
+    });
   });
 
   it('sends Kling single-shot generations with named video elements', async () => {
