@@ -125,12 +125,13 @@ async function createShowcaseDerivative(
 export async function POST(request: NextRequest) {
     try {
         const supabase = createUserClient(request);
-        const adminSupabase = createServiceClient();
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
+
+        const adminSupabase = createServiceClient();
 
         const requestBody = await request.json() as {
             generationId?: string;

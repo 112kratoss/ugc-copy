@@ -48,26 +48,15 @@ const downloadMock = vi.fn(async () => ({
 const uploadMock = vi.fn(async () => ({ data: null, error: null }));
 const getStoredMediaLocationMock = vi.fn();
 const createUserClientMock = vi.fn();
+const createServiceClientMock = vi.fn();
 const ensureDurableGenerationMediaMock = vi.fn();
 let publishRpcError: { message: string } | null = null;
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
 ]);
 
-vi.mock('@/lib/durable-generation-media', () => ({
-  ensureDurableGenerationMedia: (...args: unknown[]) => ensureDurableGenerationMediaMock(...args),
-}));
-
-vi.mock('@/lib/posts-server', () => ({
-  deriveTitleFromBody: vi.fn((value: string | null | undefined) => value?.split('\n')[0] ?? null),
-  isMissingPostsSchemaError: vi.fn(() => false),
-  isMissingMarketplaceSchemaError: vi.fn(() => false),
-  isMissingPostResourceBundlesSchemaError: vi.fn(() => false),
-}));
-
-vi.mock('@/lib/server-helpers', () => ({
-  createUserClient: (request: NextRequest) => createUserClientMock(request),
-  createServiceClient: () => ({
+function createServiceClientTestDouble() {
+  return {
     from(table: string) {
       if (table === 'profiles') {
         const query = {
@@ -150,7 +139,23 @@ vi.mock('@/lib/server-helpers', () => ({
         upload: bucket === 'post_resource_files' ? uploadMock : vi.fn(async () => ({ data: null, error: null })),
       })),
     },
-  }),
+  };
+}
+
+vi.mock('@/lib/durable-generation-media', () => ({
+  ensureDurableGenerationMedia: (...args: unknown[]) => ensureDurableGenerationMediaMock(...args),
+}));
+
+vi.mock('@/lib/posts-server', () => ({
+  deriveTitleFromBody: vi.fn((value: string | null | undefined) => value?.split('\n')[0] ?? null),
+  isMissingPostsSchemaError: vi.fn(() => false),
+  isMissingMarketplaceSchemaError: vi.fn(() => false),
+  isMissingPostResourceBundlesSchemaError: vi.fn(() => false),
+}));
+
+vi.mock('@/lib/server-helpers', () => ({
+  createUserClient: (request: NextRequest) => createUserClientMock(request),
+  createServiceClient: () => createServiceClientMock(),
   getStoredMediaLocation: (value: string) => getStoredMediaLocationMock(value),
 }));
 
@@ -184,6 +189,8 @@ describe('/api/showcase/publish route', () => {
     downloadMock.mockClear();
     uploadMock.mockClear();
     getStoredMediaLocationMock.mockReset();
+    createServiceClientMock.mockReset();
+    createServiceClientMock.mockImplementation(createServiceClientTestDouble);
     getStoredMediaLocationMock.mockImplementation((value: string) => {
       if (value.startsWith('generated_images/')) {
         return {
@@ -343,6 +350,33 @@ describe('/api/showcase/publish route', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('does not create an admin client before authentication succeeds', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: new Error('missing session'),
+        })),
+      },
+    });
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'public',
+      }),
+    }) as NextRequest);
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientMock).not.toHaveBeenCalled();
+    expect(ensureDurableGenerationMediaMock).not.toHaveBeenCalled();
   });
 
   it('downgrades attached active listings to unlisted when a generation-backed post is unpublished', async () => {
