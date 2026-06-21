@@ -152,6 +152,7 @@ export async function processGenerationCompletionJobs(params: {
         supabase: params.supabase,
         creditSupabase: params.creditSupabase,
         predictionId: job.prediction_id,
+        providerPayload: job.payload,
       });
 
       if (isTerminalGenerationSync(result)) {

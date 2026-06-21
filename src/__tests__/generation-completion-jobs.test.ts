@@ -92,12 +92,13 @@ describe('generation completion jobs', () => {
   });
 
   it('marks claimed jobs complete after a terminal generation sync', async () => {
+    const webhookPayload = { data: { taskId: 'task-1', state: 'success' } };
     const client = createRpcClient([
       {
         data: [{
           id: 'job-1',
           prediction_id: 'task-1',
-          payload: {},
+          payload: webhookPayload,
           status: 'processing',
           attempt_count: 1,
           locked_by: 'worker-1',
@@ -139,6 +140,7 @@ describe('generation completion jobs', () => {
       supabase: client,
       creditSupabase: client,
       predictionId: 'task-1',
+      providerPayload: webhookPayload,
     });
     expect(client.rpc).toHaveBeenNthCalledWith(1, 'claim_generation_completion_jobs', {
       p_limit: 5,

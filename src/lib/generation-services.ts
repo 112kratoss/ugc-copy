@@ -59,7 +59,7 @@ import {
   isImageGenerationPreview,
 } from '@/lib/generation-media-preview';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
-import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
+import { buildKieWebhookCallbackUrl, extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -194,6 +194,10 @@ function assertGenerationRequest(condition: unknown, message: string, status = 4
   if (!condition) {
     throw new GenerationServiceError(message, status);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function normalizeMediaUrlList(value: unknown): string[] {
@@ -663,6 +667,124 @@ function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
   return workflowModel === 'veo-3.1' || generation.model === 'veo3' || generation.model === 'veo3_fast';
 }
 
+function getProviderPayloadTaskData(
+  providerPayload: Record<string, unknown> | null | undefined,
+  predictionId: string,
+): Record<string, unknown> | null {
+  if (!providerPayload) return null;
+
+  const taskId = extractKieWebhookTaskId(providerPayload);
+  if (taskId && taskId !== predictionId) return null;
+
+  const data = isRecord(providerPayload.data) ? providerPayload.data : providerPayload;
+  return isRecord(data) ? data : null;
+}
+
+async function syncSingleGenerationStatusFromProviderPayload(
+  supabase: SupabaseClient,
+  creditSupabase: SupabaseClient,
+  generation: SyncableGenerationRecord,
+  providerPayload: Record<string, unknown> | null | undefined,
+): Promise<Exclude<GenerationSyncStatus, 'missing'> | null> {
+  if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
+    return null;
+  }
+
+  const taskData = getProviderPayloadTaskData(providerPayload, generation.prediction_id);
+  if (!taskData) return null;
+
+  const kind = getGenerationKind({
+    category: generation.category,
+    model: generation.model,
+  });
+  const fallbackStartedAtMs = Number.isNaN(Date.parse(generation.created_at))
+    ? null
+    : Date.parse(generation.created_at);
+
+  if (isVeoGeneration(generation)) {
+    const successFlag = taskData.successFlag;
+    const responseData = isRecord(taskData.response) ? taskData.response : null;
+    const timing = normalizeVeoGenerationTiming({
+      kind,
+      task: taskData,
+      fallbackStartedAtMs,
+    });
+
+    if (successFlag === 1) {
+      const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
+      if (tempUrl) {
+        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+      } else {
+        await supabase
+          .from('generations')
+          .update({
+            status: 'succeeded',
+            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+          })
+          .eq('id', generation.id);
+      }
+      return 'succeeded';
+    }
+
+    if (successFlag === 2 || successFlag === 3) {
+      await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
+      return 'failed';
+    }
+
+    return null;
+  }
+
+  const state = taskData.state;
+  const timing = normalizeMarketGenerationTiming({
+    kind,
+    task: taskData,
+    fallbackStartedAtMs,
+  });
+
+  if (state === 'success') {
+    let tempUrl: string | null = null;
+    let result: unknown = null;
+
+    try {
+      result = typeof taskData.resultJson === 'string'
+        ? JSON.parse(taskData.resultJson)
+        : taskData.resultJson;
+      tempUrl = getFirstResultUrl(result);
+    } catch (error) {
+      console.error('Error parsing generation result JSON:', error);
+    }
+
+    if (tempUrl) {
+      if (generation.model === 'grok-imagine-image') {
+        await persistGeneratedOutputList(
+          supabase,
+          generation,
+          getGenerationResultUrls(result),
+          toIsoTimestamp(timing.completedAtMs)
+        );
+      } else {
+        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+      }
+    } else {
+      await supabase
+        .from('generations')
+        .update({
+          status: 'succeeded',
+          completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        })
+        .eq('id', generation.id);
+    }
+    return 'succeeded';
+  }
+
+  if (state === 'fail') {
+    await markGenerationFailed(supabase, creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
+    return 'failed';
+  }
+
+  return null;
+}
+
 async function syncSingleGenerationStatus(
   supabase: SupabaseClient,
   creditSupabase: SupabaseClient,
@@ -817,6 +939,7 @@ export async function syncGenerationStatusByPredictionId(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   predictionId: string;
+  providerPayload?: Record<string, unknown> | null;
 }): Promise<GenerationStatusSyncResult> {
   requireApiKey();
 
@@ -825,7 +948,12 @@ export async function syncGenerationStatusByPredictionId(params: {
     return { found: false, status: 'missing', generation: null };
   }
 
-  const status = await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
+  const status = await syncSingleGenerationStatusFromProviderPayload(
+    params.supabase,
+    params.creditSupabase,
+    generation,
+    params.providerPayload,
+  ) ?? await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
   const updatedGeneration = await loadGenerationByPredictionId(params.supabase, params.predictionId);
 
   return {

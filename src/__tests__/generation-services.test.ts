@@ -1125,4 +1125,44 @@ describe('generation services', () => {
     expect(generations[0].completed_at).toBe('2026-04-15T10:02:00.000Z');
     expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-audio-3')).toBe(true);
   });
+
+  it('applies terminal webhook failure payloads without polling provider status', async () => {
+    const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValue(new Error('provider status should not be polled'));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock([{
+      id: 'gen-webhook-fail-1',
+      user_id: 'user-1',
+      prediction_id: 'task-webhook-fail-1',
+      status: 'processing',
+      output_url: null,
+      model: 'elevenlabs/sound-effect-v2',
+      category: 'audio',
+      workflow_settings: { model: 'sound-effect-v2' },
+      created_at: '2026-04-15T10:00:00.000Z',
+    }]);
+
+    await expect(syncGenerationStatusByPredictionId({
+      supabase,
+      creditSupabase: supabase,
+      predictionId: 'task-webhook-fail-1',
+      providerPayload: {
+        data: {
+          taskId: 'task-webhook-fail-1',
+          state: 'fail',
+          completeTime: '2026-04-15T10:03:00.000Z',
+          failMsg: 'provider rejected the request',
+        },
+      },
+    })).resolves.toMatchObject({
+      found: true,
+      status: 'failed',
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(generations[0].status).toBe('failed');
+    expect(generations[0].completed_at).toBe('2026-04-15T10:03:00.000Z');
+    expect(rpcCalls.some((call) => call.fn === 'refund_generation' && call.args.p_prediction_id === 'task-webhook-fail-1')).toBe(true);
+  });
 });
