@@ -163,20 +163,38 @@ describe('mobile media uploads', () => {
   });
 
   it('sanitizes profile image file names before public profile uploads', async () => {
+    const createProfileMediaUpload = vi.fn(async () => ({
+      success: true,
+      bucket: 'profiles' as const,
+      path: 'user-1/avatar-server-issued-avatar-image-.png',
+      token: 'profile-upload-token',
+      signedUploadUrl: 'https://storage.example.com/profile-upload-token',
+      publicUrl: 'https://storage.example.com/profiles/user-1/avatar.png',
+      expiresInSeconds: 7200,
+    }));
     const { uploadProfileImage } = await import('../lib/media');
 
     await expect(uploadProfileImage('file:///avatar.png', {
+      api: { createProfileMediaUpload },
       role: 'avatar',
       fileName: '../avatar image?.png',
       mimeType: 'image/png',
       sizeBytes: 3,
-    })).resolves.toBe('https://storage.example.com/profiles/user-1/avatar.png');
+    } as never)).resolves.toBe('https://storage.example.com/profiles/user-1/avatar.png');
 
-    expect(uploadState.upload).toHaveBeenCalledWith(
+    expect(createProfileMediaUpload).toHaveBeenCalledWith({
+      role: 'avatar',
+      fileName: 'avatar-image-.png',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    });
+    expect(uploadState.uploadToSignedUrl).toHaveBeenCalledWith(
       'profiles',
-      expect.stringMatching(/^user-1\/avatar-[0-9]+-avatar-image-\.png$/),
+      'user-1/avatar-server-issued-avatar-image-.png',
+      'profile-upload-token',
       expect.any(ArrayBuffer),
-      { contentType: 'image/png', upsert: true },
+      { contentType: 'image/png' },
     );
+    expect(uploadState.upload).not.toHaveBeenCalled();
   });
 });

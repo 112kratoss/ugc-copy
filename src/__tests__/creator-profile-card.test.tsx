@@ -8,6 +8,7 @@ const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   from: vi.fn(),
   upload: vi.fn(),
+  uploadToSignedUrl: vi.fn(),
   remove: vi.fn(),
   getPublicUrl: vi.fn(),
 }));
@@ -49,12 +50,14 @@ describe('CreatorProfileCard', () => {
       },
     });
     supabaseMocks.upload.mockResolvedValue({ error: null });
+    supabaseMocks.uploadToSignedUrl.mockResolvedValue({ error: null });
     supabaseMocks.remove.mockResolvedValue({ error: null });
     supabaseMocks.getPublicUrl.mockImplementation((path: string) => ({
       data: { publicUrl: `https://cdn.example.com/${path}` },
     }));
     supabaseMocks.from.mockReturnValue({
       upload: supabaseMocks.upload,
+      uploadToSignedUrl: supabaseMocks.uploadToSignedUrl,
       remove: supabaseMocks.remove,
       getPublicUrl: supabaseMocks.getPublicUrl,
     });
@@ -313,6 +316,21 @@ describe('CreatorProfileCard', () => {
         } as Response;
       }
 
+      if (url.endsWith('/api/profile/media/sign')) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            bucket: 'profiles',
+            path: 'test-user-id/avatar-server-issued.png',
+            token: 'profile-upload-token',
+            signedUploadUrl: 'https://storage.example.test/profile-upload-token',
+            publicUrl: 'https://cdn.example.com/test-user-id/avatar-server-issued.png',
+            expiresInSeconds: 7200,
+          }),
+        } as Response;
+      }
+
       if (url.endsWith('/api/profile')) {
         return {
           ok: false,
@@ -349,13 +367,22 @@ describe('CreatorProfileCard', () => {
       expect(screen.getAllByText(/already taken/i).length).toBeGreaterThan(0);
     });
 
-    expect(supabaseMocks.upload).toHaveBeenCalledWith(
-      'test-user-id/avatar-1712345678901.png',
-      file,
-      { upsert: true }
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/profile/media/sign',
+      expect.objectContaining({
+        method: 'POST',
+      })
     );
+    expect(supabaseMocks.uploadToSignedUrl).toHaveBeenCalledWith(
+      'test-user-id/avatar-server-issued.png',
+      'profile-upload-token',
+      file,
+      { contentType: 'image/png' }
+    );
+    expect(supabaseMocks.upload).not.toHaveBeenCalled();
     expect(supabaseMocks.remove).toHaveBeenCalledWith([
-      'test-user-id/avatar-1712345678901.png',
+      'test-user-id/avatar-server-issued.png',
     ]);
   });
 });

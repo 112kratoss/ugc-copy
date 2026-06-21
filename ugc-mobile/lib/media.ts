@@ -168,6 +168,7 @@ export async function uploadPickedMedia(
 export async function uploadProfileImage(
   uri: string,
   options: {
+    api?: Pick<MagicbookletApiClient, 'createProfileMediaUpload'>;
     role: 'avatar' | 'cover';
     fileName?: string | null;
     mimeType?: string | null;
@@ -177,14 +178,6 @@ export async function uploadProfileImage(
   const missingEnvKeys = getMissingMobileEnvKeys();
   if (missingEnvKeys.length > 0) {
     throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
-  }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    throw new Error('Please sign in before uploading profile media.');
   }
 
   const uploadBody = await readUriUploadBody(uri, {
@@ -205,25 +198,33 @@ export async function uploadProfileImage(
 
   const extension = getUploadExtension(mimeType, options.fileName);
   const originalName = sanitizeUploadFileName(options.fileName, `${options.role}.${extension || 'jpg'}`);
-  const storageKey = `${user.id}/${options.role}-${Date.now()}-${originalName}`;
-  const bucket = 'profiles';
 
-  const { error: uploadError } = await supabase.storage.from(bucket).upload(storageKey, uploadBody.body, {
+  if (!options.api) {
+    throw new Error('Profile media uploads must be authorized by the app API.');
+  }
+
+  const uploadIntent = await options.api.createProfileMediaUpload({
+    role: options.role,
+    fileName: originalName,
+    mimeType,
+    sizeBytes,
+  });
+
+  if (uploadIntent.bucket !== 'profiles') {
+    throw new Error('Unsupported profile upload bucket.');
+  }
+
+  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(uploadIntent.path, uploadIntent.token, uploadBody.body, {
     contentType: mimeType,
-    upsert: true,
   });
 
   if (uploadError) {
     throw new Error(uploadError.message);
   }
 
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(bucket).getPublicUrl(storageKey);
-
-  if (!publicUrl) {
+  if (!uploadIntent.publicUrl) {
     throw new Error('Could not create profile image URL.');
   }
 
-  return publicUrl;
+  return uploadIntent.publicUrl;
 }

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus } from 'lucide-react';
 
 import type { EditableCreatorProfile, ProfileFieldErrors, ProfileUpdatePayload } from '@/lib/profile';
+import { uploadProfileMediaWithSignedIntent } from '@/lib/profile-media-upload';
 import { supabase } from '@/lib/supabase';
 
 interface CreatorProfileCardProps {
@@ -68,18 +69,6 @@ function buildProfilePayload(
     instagramHandle: form.instagramHandle,
     tiktokHandle: form.tiktokHandle,
   };
-}
-
-function getImageExtension(file: File) {
-  if (file.type === 'image/png') {
-    return 'png';
-  }
-
-  if (file.type === 'image/webp') {
-    return 'webp';
-  }
-
-  return file.name.split('.').pop() || 'jpg';
 }
 
 function getMediaObjectStyle(crop: MediaCrop): CSSProperties {
@@ -542,7 +531,6 @@ export default function CreatorProfileCard({
 
       let finalAvatarUrl = form.avatarUrl;
       let finalCoverUrl = form.coverUrl;
-      const profilesStorage = supabase.storage.from('profiles');
 
       if (avatarFile || coverFile) {
         setSuccessMessage('Uploading new media...');
@@ -550,24 +538,24 @@ export default function CreatorProfileCard({
 
       if (avatarFile) {
         const uploadFile = await buildCroppedAvatarFile(avatarFile, avatarCrop).catch(() => avatarFile);
-        const fileExt = getImageExtension(uploadFile);
-        const fileName = `${session.user.id}/avatar-${Date.now()}.${fileExt}`;
-        const { error: uploadError } = await profilesStorage.upload(fileName, uploadFile, { upsert: true });
-        if (uploadError) throw new Error(`Avatar upload failed: ${uploadError.message}`);
-        uploadedStoragePaths.push(fileName);
-        const { data: { publicUrl } } = profilesStorage.getPublicUrl(fileName);
-        finalAvatarUrl = publicUrl;
+        const upload = await uploadProfileMediaWithSignedIntent({
+          accessToken: session.access_token,
+          file: uploadFile,
+          role: 'avatar',
+        });
+        uploadedStoragePaths.push(upload.storagePath);
+        finalAvatarUrl = upload.publicUrl;
       }
 
       if (coverFile) {
         const uploadFile = await buildCroppedCoverFile(coverFile, coverCrop).catch(() => coverFile);
-        const fileExt = getImageExtension(uploadFile);
-        const fileName = `${session.user.id}/cover-${Date.now()}.${fileExt}`;
-        const { error: uploadError } = await profilesStorage.upload(fileName, uploadFile, { upsert: true });
-        if (uploadError) throw new Error(`Cover upload failed: ${uploadError.message}`);
-        uploadedStoragePaths.push(fileName);
-        const { data: { publicUrl } } = profilesStorage.getPublicUrl(fileName);
-        finalCoverUrl = publicUrl;
+        const upload = await uploadProfileMediaWithSignedIntent({
+          accessToken: session.access_token,
+          file: uploadFile,
+          role: 'cover',
+        });
+        uploadedStoragePaths.push(upload.storagePath);
+        finalCoverUrl = upload.publicUrl;
       }
 
       if (avatarFile || coverFile) {

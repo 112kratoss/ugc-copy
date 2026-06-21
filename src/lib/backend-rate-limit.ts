@@ -108,6 +108,12 @@ export const TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const PROFILE_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
+  scope: 'profile-media-upload:sign',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,

@@ -16,6 +16,8 @@ import type {
   OwnerPostListItem,
   OwnerPostsResponse,
   ProfileResponse,
+  ProfileMediaUploadIntentRequest,
+  ProfileMediaUploadIntentResponse,
   PromptEnhancementRequest,
   PromptEnhancementResponse,
   PostResourceAttachment,
@@ -365,6 +367,11 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       }),
     createMediaUpload: (body: MediaUploadIntentRequest) =>
       request<MediaUploadIntentResponse>('/api/uploads/media/sign', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    createProfileMediaUpload: (body: ProfileMediaUploadIntentRequest) =>
+      request<ProfileMediaUploadIntentResponse>('/api/profile/media/sign', {
         method: 'POST',
         body: JSON.stringify(body),
       }),

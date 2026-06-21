@@ -202,6 +202,42 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  it('requests server-issued profile media upload intents with JSON metadata', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      bucket: 'profiles',
+      path: 'user-1/avatar.png',
+      token: 'profile-upload-token',
+      signedUploadUrl: 'https://storage.magicbooklet.test/profile-upload-token',
+      publicUrl: 'https://storage.magicbooklet.test/profiles/user-1/avatar.png',
+      expiresInSeconds: 7200,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.createProfileMediaUpload({
+      role: 'avatar',
+      fileName: 'avatar.png',
+      mimeType: 'image/png',
+      sizeBytes: 1234,
+    });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/profile/media/sign');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      role: 'avatar',
+      fileName: 'avatar.png',
+      mimeType: 'image/png',
+      sizeBytes: 1234,
+    });
+    expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
   it('lists source tools for the mobile Made With picker', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       tools: [{

@@ -87,6 +87,25 @@ export interface MediaUploadIntentResponse {
   expiresInSeconds: number;
 }
 
+export type ProfileMediaUploadRole = 'avatar' | 'cover';
+
+export interface ProfileMediaUploadIntentRequest {
+  role: ProfileMediaUploadRole;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+export interface ProfileMediaUploadIntentResponse {
+  success: boolean;
+  bucket: 'profiles';
+  path: string;
+  token: string;
+  signedUploadUrl: string | null;
+  publicUrl: string;
+  expiresInSeconds: number;
+}
+
 export interface GenerationStatusResponse {
   status: 'waiting' | 'processing' | 'succeeded' | 'failed' | string;
   output?: string | null;

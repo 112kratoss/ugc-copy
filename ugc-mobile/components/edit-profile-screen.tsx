@@ -197,6 +197,7 @@ export function EditProfileScreen() {
     if (avatarAsset) {
       setMessage('Uploading display photo...');
       avatarUrl = await uploadProfileImage(avatarAsset.uri, {
+        api,
         role: 'avatar',
         fileName: avatarAsset.fileName,
         mimeType: avatarAsset.mimeType,
@@ -207,6 +208,7 @@ export function EditProfileScreen() {
     if (coverAsset) {
       setMessage('Uploading background picture...');
       coverUrl = await uploadProfileImage(coverAsset.uri, {
+        api,
         role: 'cover',
         fileName: coverAsset.fileName,
         mimeType: coverAsset.mimeType,
