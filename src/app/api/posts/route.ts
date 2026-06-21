@@ -349,7 +349,6 @@ function parseResourceBundle(
 export async function POST(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -358,6 +357,8 @@ export async function POST(request: NextRequest) {
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    const adminSupabase = createServiceClient();
 
     const formData = await request.formData();
     const rawMediaFiles = formData

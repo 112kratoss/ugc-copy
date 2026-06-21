@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
 const getUserMock = vi.fn();
+const createServiceClientMock = vi.fn();
 const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const downloadMock = vi.fn();
@@ -18,79 +19,8 @@ const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'higgsfield', label: 'Higgsfield', models: [{ slug: 'soul', label: 'Soul' }], supportedMediaKinds: ['image', 'video'] },
 ]);
 
-function createRouteRequest(formData: FormData) {
+function createServiceClientTestDouble() {
   return {
-    headers: new Headers({
-      Authorization: 'Bearer test-token',
-    }),
-    formData: async () => formData,
-  } as unknown as NextRequest;
-}
-
-vi.mock('@/lib/server-helpers', () => ({
-  createUserClient: () => ({
-    auth: {
-      getUser: () => getUserMock(),
-    },
-    from: (table: string) => {
-      if (table === 'posts') {
-        return {
-          insert(payload: Record<string, unknown>) {
-            insertPayloads.push(payload);
-            return {
-              select() {
-                return {
-                  async single() {
-                    return {
-                      data: {
-                        id: payload.id,
-                        visibility: payload.visibility,
-                      },
-                      error: null,
-                    };
-                  },
-                };
-              },
-            };
-          },
-        };
-      }
-
-      if (table === 'post_resource_bundles') {
-        const query = {
-          eq() {
-            return query;
-          },
-          then(resolve: (value: { error: null }) => void) {
-            resolve({ error: null });
-          },
-        };
-
-        return {
-          delete() {
-            return query;
-          },
-          upsert() {
-            return {
-              select() {
-                return {
-                  async single() {
-                    return {
-                      data: bundleUpsertError ? null : { id: 'bundle-1', post_id: 'post-1', status: 'published' },
-                      error: bundleUpsertError,
-                    };
-                  },
-                };
-              },
-            };
-          },
-        };
-      }
-
-      throw new Error(`Unexpected table access: ${table}`);
-    },
-  }),
-  createServiceClient: () => ({
     from(table: string) {
       if (table === 'profiles') {
         const profile = {
@@ -196,7 +126,82 @@ vi.mock('@/lib/server-helpers', () => ({
         download: downloadMock,
       }),
     },
+  };
+}
+
+function createRouteRequest(formData: FormData) {
+  return {
+    headers: new Headers({
+      Authorization: 'Bearer test-token',
+    }),
+    formData: async () => formData,
+  } as unknown as NextRequest;
+}
+
+vi.mock('@/lib/server-helpers', () => ({
+  createUserClient: () => ({
+    auth: {
+      getUser: () => getUserMock(),
+    },
+    from: (table: string) => {
+      if (table === 'posts') {
+        return {
+          insert(payload: Record<string, unknown>) {
+            insertPayloads.push(payload);
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: {
+                        id: payload.id,
+                        visibility: payload.visibility,
+                      },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'post_resource_bundles') {
+        const query = {
+          eq() {
+            return query;
+          },
+          then(resolve: (value: { error: null }) => void) {
+            resolve({ error: null });
+          },
+        };
+
+        return {
+          delete() {
+            return query;
+          },
+          upsert() {
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: bundleUpsertError ? null : { id: 'bundle-1', post_id: 'post-1', status: 'published' },
+                      error: bundleUpsertError,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      throw new Error(`Unexpected table access: ${table}`);
+    },
   }),
+  createServiceClient: () => createServiceClientMock(),
 }));
 
 vi.mock('@/lib/source-tools-server', () => ({
@@ -212,6 +217,8 @@ describe('/api/posts route', () => {
       },
       error: null,
     });
+    createServiceClientMock.mockReset();
+    createServiceClientMock.mockImplementation(createServiceClientTestDouble);
     uploadMock.mockReset();
     uploadMock.mockResolvedValue({ error: null });
     removeMock.mockReset();
@@ -228,6 +235,19 @@ describe('/api/posts route', () => {
     bundleUpsertError = null;
     postMediaInsertError = null;
     sourceToolInsertError = null;
+  });
+
+  it('does not create an admin client before authentication succeeds', async () => {
+    getUserMock.mockResolvedValueOnce({
+      data: { user: null },
+      error: new Error('missing session'),
+    });
+
+    const { POST } = await import('@/app/api/posts/route');
+    const response = await POST(createRouteRequest(new FormData()));
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientMock).not.toHaveBeenCalled();
   });
 
   it('creates text-only posts without uploading media', async () => {
