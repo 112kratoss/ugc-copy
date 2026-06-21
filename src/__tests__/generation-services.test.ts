@@ -206,11 +206,18 @@ describe('generation services', () => {
     expect(generations[0].workflow_settings?.model).toBe('text-to-speech-turbo-2-5');
   });
 
-  it('attaches the durable completion webhook to every provider task', async () => {
+  it('reserves voiceover generations before provider submission and attaches the durable callback', async () => {
     const { startVoiceoverGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
+    const { supabase, generations } = createSupabaseMock();
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(generations).toHaveLength(1);
+      expect(generations[0]).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        category: 'audio',
+      });
       providerBody = JSON.parse(String(init?.body));
       return {
         ok: true,
@@ -218,8 +225,7 @@ describe('generation services', () => {
       } as Response;
     });
 
-    const { supabase } = createSupabaseMock();
-    await startVoiceoverGeneration({
+    const result = await startVoiceoverGeneration({
       supabase,
       creditSupabase: supabase,
       userId: 'user-1',
@@ -228,9 +234,79 @@ describe('generation services', () => {
       voice: 'Rachel',
     });
 
-    expect(providerBody).toMatchObject({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
+    expect(result.generationId).toBe('gen-1');
+    expect(generations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-callback-1',
     });
+    expect(providerBody).toMatchObject({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+    });
+  });
+
+  it('uses the backend client to reserve voiceover generation rows after auth', async () => {
+    const { startVoiceoverGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-voice-backend-reserve-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationInsertErrors: [new Error('user client cannot reserve voiceover generation rows')],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startVoiceoverGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      model: 'text-to-speech-turbo-2-5',
+      text: 'Reserve this voiceover with the backend client.',
+      voice: 'Rachel',
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-voice-backend-reserve-1',
+      generationId: 'gen-1',
+    });
+    expect(sharedGenerations[0]).toMatchObject({
+      user_id: 'user-1',
+      status: 'processing',
+      prediction_id: 'task-voice-backend-reserve-1',
+      category: 'audio',
+    });
+  });
+
+  it('refunds and fails a reserved voiceover when provider submission is rejected', async () => {
+    const { startVoiceoverGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => ({ code: 500, msg: 'Voice provider unavailable' }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startVoiceoverGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      model: 'text-to-speech-turbo-2-5',
+      text: 'This start should be refunded.',
+      voice: 'Rachel',
+    })).rejects.toThrow('Voice provider unavailable');
+
+    expect(rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fn: 'deduct_credits' }),
+      expect.objectContaining({ fn: 'refund_credits' }),
+    ]));
+    expect(generations[0]).toMatchObject({
+      status: 'failed',
+      prediction_id: null,
+    });
+    expect(generations[0].completed_at).toEqual(expect.any(String));
   });
 
   it('stores sound-effect generations as audio records', async () => {
@@ -254,6 +330,106 @@ describe('generation services', () => {
     expect(generations[0].category).toBe('audio');
     expect(generations[0].model).toBe('elevenlabs/sound-effect-v2');
     expect(generations[0].duration).toBe(6);
+  });
+
+  it('reserves sound-effect generations before provider submission and attaches the durable callback', async () => {
+    const { startSoundEffectGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    const { supabase, generations } = createSupabaseMock();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(generations).toHaveLength(1);
+      expect(generations[0]).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        category: 'audio',
+      });
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-sfx-durable-1' } }),
+      } as Response;
+    });
+
+    const result = await startSoundEffectGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A durable cinematic whoosh.',
+      duration: 6,
+    });
+
+    expect(result.generationId).toBe('gen-1');
+    expect(generations[0]).toMatchObject({
+      status: 'processing',
+      prediction_id: 'task-sfx-durable-1',
+    });
+    expect(providerBody).toMatchObject({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+    });
+  });
+
+  it('uses the backend client to reserve sound-effect generation rows after auth', async () => {
+    const { startSoundEffectGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-sfx-backend-reserve-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationInsertErrors: [new Error('user client cannot reserve sound-effect generation rows')],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startSoundEffectGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      prompt: 'Reserve this sound effect with the backend client.',
+      duration: 6,
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-sfx-backend-reserve-1',
+      generationId: 'gen-1',
+    });
+    expect(sharedGenerations[0]).toMatchObject({
+      user_id: 'user-1',
+      status: 'processing',
+      prediction_id: 'task-sfx-backend-reserve-1',
+      category: 'audio',
+    });
+  });
+
+  it('refunds and fails a reserved sound effect when provider submission is rejected', async () => {
+    const { startSoundEffectGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => ({ code: 500, msg: 'Sound provider unavailable' }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startSoundEffectGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'This sound should be refunded.',
+      duration: 6,
+    })).rejects.toThrow('Sound provider unavailable');
+
+    expect(rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fn: 'deduct_credits' }),
+      expect.objectContaining({ fn: 'refund_credits' }),
+    ]));
+    expect(generations[0]).toMatchObject({
+      status: 'failed',
+      prediction_id: null,
+    });
+    expect(generations[0].completed_at).toEqual(expect.any(String));
   });
 
   it('sends Kling video generations with variable single-shot duration', async () => {

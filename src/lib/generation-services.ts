@@ -2078,7 +2078,6 @@ export async function startVoiceoverGeneration(params: {
 }): Promise<GenerationStartResult> {
   requireApiKey();
   const {
-    supabase,
     creditSupabase,
     userId,
     model,
@@ -2113,6 +2112,8 @@ export async function startVoiceoverGeneration(params: {
     dialogueTurns: normalizedDialogueTurns,
   });
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
+  let generationId: string | null = null;
+  let predictionId: string | null = null;
 
   try {
     let input: Record<string, unknown>;
@@ -2141,44 +2142,42 @@ export async function startVoiceoverGeneration(params: {
       }
     }
 
-    const predictionId = await createKieTask({
+    generationId = await reserveGenerationRecord(creditSupabase, {
+      user_id: userId,
       model: selectedModel.apiModelId,
-      input,
+      cost,
+      prompt: buildVoicePromptPreview(model, trimmedText, normalizedDialogueTurns),
+      category: 'audio',
+      workflow_settings: {
+        model,
+        voice,
+        languageCode,
+        stability,
+        similarityBoost,
+        style,
+        speed,
+        timestamps,
+        dialogueTurns: normalizedDialogueTurns,
+      },
     });
 
-    const insert = await supabase
-      .from('generations')
-      .insert({
-        user_id: userId,
-        model: selectedModel.apiModelId,
-        cost,
-        prediction_id: predictionId,
-        status: 'processing',
-        prompt: buildVoicePromptPreview(model, trimmedText, normalizedDialogueTurns),
-        category: 'audio',
-        workflow_settings: {
-          model,
-          voice,
-          languageCode,
-          stability,
-          similarityBoost,
-          style,
-          speed,
-          timestamps,
-          dialogueTurns: normalizedDialogueTurns,
-        },
-      })
-      .select('id')
-      .single();
+    predictionId = await createKieTask({
+      model: selectedModel.apiModelId,
+      input,
+    }, undefined, { generationId });
+    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     return {
       predictionId,
       remainingCredits,
       cost,
-      generationId: insert.data?.id,
+      generationId,
     };
   } catch (error) {
-    await refundCreditsQuietly(creditSupabase, userId, cost);
+    if (!predictionId) {
+      await refundCreditsQuietly(creditSupabase, userId, cost);
+      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    }
     throw error;
   }
 }
@@ -2196,7 +2195,6 @@ export async function startSoundEffectGeneration(params: {
 }): Promise<GenerationStartResult> {
   requireApiKey();
   const {
-    supabase,
     creditSupabase,
     userId,
     prompt,
@@ -2215,9 +2213,27 @@ export async function startSoundEffectGeneration(params: {
 
   const cost = getSoundEffectCost(model, duration);
   const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
+  let generationId: string | null = null;
+  let predictionId: string | null = null;
 
   try {
-    const predictionId = await createKieTask({
+    generationId = await reserveGenerationRecord(creditSupabase, {
+      user_id: userId,
+      model: selectedModel.apiModelId,
+      cost,
+      duration,
+      prompt: trimmedPrompt,
+      category: 'audio',
+      workflow_settings: {
+        model,
+        duration,
+        loop,
+        promptInfluence,
+        outputFormat,
+      },
+    });
+
+    predictionId = await createKieTask({
       model: selectedModel.apiModelId,
       input: {
         text: trimmedPrompt,
@@ -2226,38 +2242,20 @@ export async function startSoundEffectGeneration(params: {
         prompt_influence: promptInfluence,
         output_format: outputFormat,
       },
-    });
-
-    const insert = await supabase
-      .from('generations')
-      .insert({
-        user_id: userId,
-        model: selectedModel.apiModelId,
-        cost,
-        duration,
-        prediction_id: predictionId,
-        status: 'processing',
-        prompt: trimmedPrompt,
-        category: 'audio',
-        workflow_settings: {
-          model,
-          duration,
-          loop,
-          promptInfluence,
-          outputFormat,
-        },
-      })
-      .select('id')
-      .single();
+    }, undefined, { generationId });
+    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     return {
       predictionId,
       remainingCredits,
       cost,
-      generationId: insert.data?.id,
+      generationId,
     };
   } catch (error) {
-    await refundCreditsQuietly(creditSupabase, userId, cost);
+    if (!predictionId) {
+      await refundCreditsQuietly(creditSupabase, userId, cost);
+      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    }
     throw error;
   }
 }
