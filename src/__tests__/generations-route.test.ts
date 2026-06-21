@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const rawCreateClientMock = vi.hoisted(() => vi.fn());
+const createUserClientMock = vi.hoisted(() => vi.fn());
+
 type GenerationRow = {
   id: string;
   user_id: string;
@@ -172,7 +175,7 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@supabase/supabase-js')>();
   return {
     ...actual,
-    createClient: vi.fn(() => createSupabaseClientMock()),
+    createClient: (...args: unknown[]) => rawCreateClientMock(...args),
   };
 });
 
@@ -181,6 +184,7 @@ vi.mock('@/lib/generation-services', () => ({
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
+  createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: () => ({
     from(table: string) {
       serviceTableCalls.push(table);
@@ -274,6 +278,10 @@ describe('/api/generations route', () => {
     vi.resetModules();
     syncGenerationStatusesMock.mockReset();
     syncGenerationStatusesMock.mockResolvedValue(undefined);
+    rawCreateClientMock.mockReset();
+    rawCreateClientMock.mockImplementation(() => createSupabaseClientMock());
+    createUserClientMock.mockReset();
+    createUserClientMock.mockImplementation(() => createSupabaseClientMock());
     generationPreviewColumnsAvailable = true;
     serviceTableCalls = [];
     generationsState = [
@@ -336,6 +344,8 @@ describe('/api/generations route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expect(createUserClientMock).toHaveBeenCalledTimes(1);
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
     expect(data.generations[0].status).toBe('processing');
     expect(data.generations[0].output_url).toBe('https://signed.example.com/generated_images/user-1/output.jpg');

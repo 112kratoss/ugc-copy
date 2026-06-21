@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const rawCreateClientMock = vi.hoisted(() => vi.fn());
+const createUserClientMock = vi.hoisted(() => vi.fn());
+
 type LocalGenerationRow = {
   id: string;
   prediction_id: string;
@@ -152,11 +155,12 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@supabase/supabase-js')>();
   return {
     ...actual,
-    createClient: vi.fn(() => currentSupabaseMock.client),
+    createClient: (...args: unknown[]) => rawCreateClientMock(...args),
   };
 });
 
 vi.mock('@/lib/server-helpers', () => ({
+  createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(),
 }));
@@ -170,6 +174,10 @@ describe('/api/generate route', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     delete process.env.KIE_WEBHOOK_HMAC_KEY;
     currentSupabaseMock = createSupabaseMock();
+    rawCreateClientMock.mockReset();
+    rawCreateClientMock.mockImplementation(() => currentSupabaseMock.client);
+    createUserClientMock.mockReset();
+    createUserClientMock.mockImplementation(() => currentSupabaseMock.client);
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -208,6 +216,8 @@ describe('/api/generate route', () => {
       error: 'Unauthorized: Please log in to generate videos',
     });
     expect(currentSupabaseMock.client.auth.getUser).toHaveBeenCalledTimes(1);
+    expect(createUserClientMock).toHaveBeenCalledTimes(1);
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -396,6 +406,8 @@ describe('/api/generate route', () => {
     const data = await response.json();
     expect(response.status).toBe(200);
     expect(data.status).toBe('processing');
+    expect(createUserClientMock).toHaveBeenCalledTimes(1);
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(data.timing).toMatchObject({
       appStatus: 'processing',
       providerState: 'generating',

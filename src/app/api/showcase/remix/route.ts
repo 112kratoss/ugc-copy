@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
-import { createServiceClient } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 function getRedirectPathForCategory(category: string | null | undefined): string {
     switch (category) {
@@ -21,11 +20,7 @@ function getRedirectPathForCategory(category: string | null | undefined): string
 
 export async function POST(request: NextRequest) {
     try {
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            { global: { headers: { Authorization: request.headers.get('Authorization')! } } }
-        );
+        const supabase = createUserClient(request);
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {

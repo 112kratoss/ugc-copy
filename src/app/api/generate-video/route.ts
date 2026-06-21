@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient, createUserClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
     estimateGenerationDurationMs,
     getGenerationKind,
@@ -220,13 +220,7 @@ export async function POST(request: NextRequest) {
         const selectedSourceGenerationId = typeof sourceGenerationId === 'string' ? sourceGenerationId : null;
         const selectedCatalogRevision = typeof catalogRevision === 'string' ? catalogRevision : null;
 
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                global: { headers: { Authorization: request.headers.get('Authorization')! } },
-            }
-        );
+        const supabase = createUserClient(request);
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
@@ -387,13 +381,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                global: { headers: { Authorization: request.headers.get('Authorization')! } },
-            }
-        );
+        const supabase = createUserClient(request);
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import {
     buildLegacyGenerationInputMedia,
     loadGenerationInputMediaMap,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { createServiceClient, getStoredMediaLocation, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient, getStoredMediaLocation, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
 
@@ -160,13 +159,7 @@ function parsePositiveInteger(value: string | null, fallback: number): number {
 
 export async function GET(request: NextRequest) {
     try {
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                global: { headers: { Authorization: request.headers.get('Authorization')! } },
-            }
-        );
+        const supabase = createUserClient(request);
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const rawCreateClientMock = vi.hoisted(() => vi.fn());
+const createUserClientMock = vi.hoisted(() => vi.fn());
 const getUserMock = vi.fn();
 const rpcMock = vi.fn();
 const serviceFromMock = vi.fn();
@@ -10,11 +12,7 @@ const isMissingPostsSchemaErrorMock = vi.fn<(error: unknown) => boolean>(() => f
 const createServiceClientMock = vi.fn();
 
 vi.mock('@supabase/supabase-js', () => ({
-  createClient: vi.fn(() => ({
-    auth: {
-      getUser: getUserMock,
-    },
-  })),
+  createClient: (...args: unknown[]) => rawCreateClientMock(...args),
 }));
 
 vi.mock('@/lib/posts-server', () => ({
@@ -29,6 +27,7 @@ vi.mock('@/lib/mobile-notifications', () => ({
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
+  createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: () => createServiceClientMock(),
 }));
 
@@ -124,6 +123,15 @@ describe('/api/showcase/save route', () => {
       data: { user: { id: 'user-1' } },
       error: null,
     });
+    const userClient = {
+      auth: {
+        getUser: getUserMock,
+      },
+    };
+    rawCreateClientMock.mockReset();
+    rawCreateClientMock.mockReturnValue(userClient);
+    createUserClientMock.mockReset();
+    createUserClientMock.mockReturnValue(userClient);
     rpcMock.mockReset();
     eventInsertMock.mockReset();
     notifyPostSocialActivityMock.mockReset();
@@ -163,6 +171,8 @@ describe('/api/showcase/save route', () => {
       message: 'Saved to bookmarks',
     });
     expect(response.status).toBe(200);
+    expect(createUserClientMock).toHaveBeenCalledTimes(1);
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(rpcMock).toHaveBeenCalledWith('set_post_save_state', {
       p_post_id: 'post-1',
       p_user_id: 'user-1',

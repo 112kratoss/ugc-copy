@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
     findPublicPostReferenceByIdOrGenerationId,
     isMissingPostsSchemaError,
 } from '@/lib/posts-server';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
-import { createServiceClient } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 type SetPostSaveStateRow = {
     is_saved?: boolean | null;
@@ -181,11 +181,7 @@ async function recordPostSaveEvent({
 
 export async function POST(request: NextRequest) {
     try {
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            { global: { headers: { Authorization: request.headers.get('Authorization')! } } }
-        );
+        const supabase = createUserClient(request);
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
