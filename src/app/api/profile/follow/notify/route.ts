@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  BackendRateLimitError,
+  CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -25,10 +31,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const adminSupabase = createServiceClient();
     const followingId = readFollowingId(await request.json().catch(() => null));
     if (!followingId || followingId === user.id) {
       return NextResponse.json({ error: 'Missing creator profile.' }, { status: 400 });
+    }
+
+    const adminSupabase = createServiceClient();
+    try {
+      await enforceBackendRateLimit(adminSupabase, {
+        ...CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT,
+        key: user.id,
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      console.error('Creator follow notification rate limit check failed:', error);
+      return NextResponse.json({ error: 'Failed to check follow notification limits.' }, { status: 500 });
     }
 
     const { data: followRecord, error: followError } = await adminSupabase
