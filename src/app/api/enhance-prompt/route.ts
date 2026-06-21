@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { createServiceClient } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
     BackendRateLimitError,
     createBackendRateLimitResponse,
@@ -22,14 +21,8 @@ import { inspectPromptQuality } from '@/lib/prompt-quality';
 
 export async function POST(request: NextRequest) {
     try {
-        // 1. Authenticate (same pattern as other API routes)
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                global: { headers: { Authorization: request.headers.get('Authorization')! } },
-            }
-        );
+        // 1. Authenticate with the shared user-scoped Supabase helper.
+        const supabase = createUserClient(request);
 
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const buildEnhancerSystemPromptMock = vi.fn();
 const callPromptEnhancerMock = vi.fn();
+const rawCreateClientMock = vi.hoisted(() => vi.fn());
+const createUserClientMock = vi.hoisted(() => vi.fn());
 
 let currentAuthClient: ReturnType<typeof createAuthClient>;
 let currentAdminClient: ReturnType<typeof createAdminClient>;
@@ -92,12 +94,13 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
 
   return {
     ...actual,
-    createClient: vi.fn(() => currentAuthClient),
+    createClient: (...args: unknown[]) => rawCreateClientMock(...args),
   };
 });
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: vi.fn(() => currentAdminClient),
+  createUserClient: (request: Request) => createUserClientMock(request),
 }));
 
 vi.mock('@/lib/prompt-enhancer', async (importOriginal) => {
@@ -115,6 +118,10 @@ describe('/api/enhance-prompt route', () => {
     vi.resetModules();
     currentAuthClient = createAuthClient();
     currentAdminClient = createAdminClient();
+    rawCreateClientMock.mockReset();
+    rawCreateClientMock.mockImplementation(() => currentAuthClient);
+    createUserClientMock.mockReset();
+    createUserClientMock.mockImplementation(() => currentAuthClient);
     buildEnhancerSystemPromptMock.mockReset();
     callPromptEnhancerMock.mockReset();
     buildEnhancerSystemPromptMock.mockReturnValue('system prompt');
@@ -173,6 +180,8 @@ describe('/api/enhance-prompt route', () => {
       'Create a product poster and the text reads SALE'
     );
     expect(callPromptEnhancerMock).toHaveBeenCalledWith('system prompt', 'Create a product poster and the text reads SALE');
+    expect(createUserClientMock).toHaveBeenCalledTimes(1);
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
 
     const data = await response.json();
     expect(data.remainingCredits).toBe(98);
