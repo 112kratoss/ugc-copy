@@ -1,7 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { finishBackendJobRun, pruneBackendJobRuns, startBackendJobRun } from '@/lib/backend-job-runs';
+import {
+  finishBackendJobRun,
+  maybePruneBackendJobRuns,
+  pruneBackendJobRuns,
+  shouldPruneBackendJobRuns,
+  startBackendJobRun,
+} from '@/lib/backend-job-runs';
 
 function createStartClient(result: { data: { id: string } | null; error: Error | null }) {
   const single = vi.fn(async () => result);
@@ -203,6 +209,38 @@ describe('backend job run recording', () => {
     expect(db.rpc).toHaveBeenCalledWith('prune_backend_job_runs', {
       p_retention_days: 90,
       p_limit: 1000,
+    });
+  });
+
+  it('limits automatic pruning to the top of each hour', () => {
+    expect(shouldPruneBackendJobRuns(Date.UTC(2026, 5, 21, 10, 0))).toBe(true);
+    expect(shouldPruneBackendJobRuns(Date.UTC(2026, 5, 21, 10, 4))).toBe(true);
+    expect(shouldPruneBackendJobRuns(Date.UTC(2026, 5, 21, 10, 5))).toBe(false);
+    expect(shouldPruneBackendJobRuns(Date.UTC(2026, 5, 21, 10, 59))).toBe(false);
+  });
+
+  it('skips automatic pruning outside the cleanup window', async () => {
+    const db = createRpcClient({ data: 12, error: null });
+
+    await expect(maybePruneBackendJobRuns(db.client, {
+      nowMs: Date.UTC(2026, 5, 21, 10, 30),
+    })).resolves.toBeNull();
+
+    expect(db.rpc).not.toHaveBeenCalled();
+  });
+
+  it('runs automatic pruning during the cleanup window', async () => {
+    const db = createRpcClient({ data: 8, error: null });
+
+    await expect(maybePruneBackendJobRuns(db.client, {
+      nowMs: Date.UTC(2026, 5, 21, 10, 2),
+      retentionDays: 60,
+      limit: 750,
+    })).resolves.toBe(8);
+
+    expect(db.rpc).toHaveBeenCalledWith('prune_backend_job_runs', {
+      p_retention_days: 60,
+      p_limit: 750,
     });
   });
 

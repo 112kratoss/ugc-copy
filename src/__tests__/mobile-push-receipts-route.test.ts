@@ -12,8 +12,9 @@ const mocks = vi.hoisted(() => ({
     void _run;
     void _options;
   }),
-  pruneBackendJobRuns: vi.fn(async (_client: unknown) => {
+  pruneBackendJobRuns: vi.fn(async (_client: unknown, _options?: unknown) => {
     void _client;
+    void _options;
     return 0;
   }),
   processPendingMobilePushReceipts: vi.fn(),
@@ -55,7 +56,7 @@ vi.mock('@/lib/backend-job-runs', () => ({
   finishBackendJobRun: (client: unknown, run: unknown, options: unknown) => (
     mocks.finishBackendJobRun(client, run, options)
   ),
-  pruneBackendJobRuns: (client: unknown) => mocks.pruneBackendJobRuns(client),
+  maybePruneBackendJobRuns: (client: unknown, options: unknown) => mocks.pruneBackendJobRuns(client, options),
   startBackendJobRun: (client: unknown, options: unknown) => mocks.startBackendJobRun(
     client,
     options as {
@@ -155,7 +156,10 @@ describe('/api/cron/mobile-push-receipts route', () => {
         },
       }),
     );
-    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       summary: {
@@ -184,7 +188,10 @@ describe('/api/cron/mobile-push-receipts route', () => {
         skipReason: 'already_running',
       }),
     );
-    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       skipped: true,
@@ -212,6 +219,9 @@ describe('/api/cron/mobile-push-receipts route', () => {
         errorMessage: 'receipt processor failed',
       }),
     );
-    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
   });
 });

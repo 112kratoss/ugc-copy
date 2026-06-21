@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { withBackendJobLock } from '@/lib/backend-job-lock';
 import {
   finishBackendJobRun,
-  pruneBackendJobRuns,
+  maybePruneBackendJobRuns,
   startBackendJobRun,
   type BackendJobRunHandle,
 } from '@/lib/backend-job-runs';
@@ -75,7 +75,7 @@ export async function GET(request: Request) {
         finishedAtMs: finishedAt,
         skipReason: lockResult.reason,
       });
-      const prunedJobRuns = await pruneBackendJobRuns(currentServiceClient);
+      const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
       logCron('info', 'mobile_push_receipts_skipped', {
         requestId,
         reason: lockResult.reason,
@@ -95,7 +95,7 @@ export async function GET(request: Request) {
       finishedAtMs: finishedAt,
       summary: lockResult.value,
     });
-    const prunedJobRuns = await pruneBackendJobRuns(currentServiceClient);
+    const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
     logCron('info', 'mobile_push_receipts_completed', {
       requestId,
       ms: finishedAt - startedAt,
@@ -111,7 +111,7 @@ export async function GET(request: Request) {
         finishedAtMs: finishedAt,
         errorMessage: errorMessage(error),
       });
-      await pruneBackendJobRuns(serviceClient);
+      await maybePruneBackendJobRuns(serviceClient, { nowMs: startedAt });
     }
     logCron('error', 'mobile_push_receipts_failed', {
       requestId,

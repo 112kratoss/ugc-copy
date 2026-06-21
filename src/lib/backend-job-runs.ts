@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 const DEFAULT_RETENTION_DAYS = 45;
 const DEFAULT_PRUNE_LIMIT = 500;
+const DEFAULT_PRUNE_WINDOW_MINUTES = 5;
 
 export type BackendJobRunHandle = {
   id: string;
@@ -43,6 +44,11 @@ export type BackendJobRunFinishOptions =
 export type BackendJobRunPruneOptions = {
   retentionDays?: number;
   limit?: number;
+};
+
+export type BackendJobRunAutomaticPruneOptions = BackendJobRunPruneOptions & {
+  nowMs?: number;
+  windowMinutes?: number;
 };
 
 function errorMessage(error: unknown): string {
@@ -169,4 +175,38 @@ export async function pruneBackendJobRuns(
   }
 
   return typeof data === 'number' ? data : null;
+}
+
+export function shouldPruneBackendJobRuns(
+  nowMs: number,
+  options: { windowMinutes?: number } = {},
+): boolean {
+  const windowMinutes = options.windowMinutes ?? DEFAULT_PRUNE_WINDOW_MINUTES;
+
+  if (!Number.isFinite(nowMs) || nowMs < 0) {
+    throw new Error('Backend job run prune time must be a valid timestamp');
+  }
+
+  if (!Number.isInteger(windowMinutes) || windowMinutes < 1 || windowMinutes > 60) {
+    throw new Error('Backend job run prune window minutes must be between 1 and 60');
+  }
+
+  return new Date(nowMs).getUTCMinutes() < windowMinutes;
+}
+
+export async function maybePruneBackendJobRuns(
+  client: SupabaseClient,
+  options: BackendJobRunAutomaticPruneOptions = {},
+): Promise<number | null> {
+  const {
+    nowMs = Date.now(),
+    windowMinutes,
+    ...pruneOptions
+  } = options;
+
+  if (!shouldPruneBackendJobRuns(nowMs, { windowMinutes })) {
+    return null;
+  }
+
+  return pruneBackendJobRuns(client, pruneOptions);
 }

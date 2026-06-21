@@ -40,7 +40,7 @@ vi.mock('@/lib/backend-job-lock', () => ({
 
 vi.mock('@/lib/backend-job-runs', () => ({
   finishBackendJobRun: jobRunState.finish,
-  pruneBackendJobRuns: jobRunState.prune,
+  maybePruneBackendJobRuns: jobRunState.prune,
   startBackendJobRun: jobRunState.start,
 }));
 
@@ -117,7 +117,10 @@ describe('media preview repair cron', () => {
         summary: { attempted: 2, completed: 2, failed: 0 },
       }),
     );
-    expect(jobRunState.prune).toHaveBeenCalledWith({ service: true });
+    expect(jobRunState.prune).toHaveBeenCalledWith(
+      { service: true },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
   });
 
   it('skips repair when another cron invocation already owns the lock', async () => {
@@ -138,7 +141,10 @@ describe('media preview repair cron', () => {
         skipReason: 'already_running',
       }),
     );
-    expect(jobRunState.prune).toHaveBeenCalledWith({ service: true });
+    expect(jobRunState.prune).toHaveBeenCalledWith(
+      { service: true },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       skipped: true,
@@ -165,6 +171,9 @@ describe('media preview repair cron', () => {
         errorMessage: 'repair failed',
       }),
     );
-    expect(jobRunState.prune).toHaveBeenCalledWith({ service: true });
+    expect(jobRunState.prune).toHaveBeenCalledWith(
+      { service: true },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
   });
 });
