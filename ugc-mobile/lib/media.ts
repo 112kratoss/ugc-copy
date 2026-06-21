@@ -15,6 +15,24 @@ export interface UploadedMedia {
   sizeBytes?: number | null;
 }
 
+const CLIENT_UPLOAD_BUCKETS = new Set(['uploads']);
+
+function assertClientUploadBucket(bucket: string) {
+  if (!CLIENT_UPLOAD_BUCKETS.has(bucket)) {
+    throw new Error('Unsupported mobile upload bucket.');
+  }
+}
+
+function sanitizeUploadFileName(fileName: string | null | undefined, fallback: string) {
+  const rawName = fileName?.split(/[\\/]/).filter(Boolean).pop() ?? fallback;
+  const sanitized = rawName
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/^\.+/, '')
+    .trim();
+
+  return sanitized || fallback;
+}
+
 export async function pickMediaList(
   mediaType: 'image' | 'video' | 'mixed',
   options: {
@@ -91,6 +109,9 @@ export async function uploadPickedMedia(
     sizeBytes?: number | null;
   } = {}
 ): Promise<UploadedMedia> {
+  const bucket = options.bucket ?? 'uploads';
+  assertClientUploadBucket(bucket);
+
   const missingEnvKeys = getMissingMobileEnvKeys();
   if (missingEnvKeys.length > 0) {
     throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
@@ -110,9 +131,8 @@ export async function uploadPickedMedia(
   });
   const mimeType = uploadBody.mimeType;
   const extension = getUploadExtension(mimeType, options.fileName);
-  const fileName = options.fileName ?? `${Date.now()}.${extension || 'bin'}`;
+  const fileName = sanitizeUploadFileName(options.fileName, `${Date.now()}.${extension || 'bin'}`);
   const storageKey = `${user.id}/${Math.random().toString(36).slice(2)}-${fileName}`;
-  const bucket = options.bucket ?? 'uploads';
 
   const { error: uploadError } = await supabase.storage.from(bucket).upload(storageKey, uploadBody.body, {
     contentType: mimeType,
@@ -177,7 +197,7 @@ export async function uploadProfileImage(
   }
 
   const extension = getUploadExtension(mimeType, options.fileName);
-  const originalName = options.fileName?.replace(/[^\w.-]/g, '-') || `${options.role}.${extension || 'jpg'}`;
+  const originalName = sanitizeUploadFileName(options.fileName, `${options.role}.${extension || 'jpg'}`);
   const storageKey = `${user.id}/${options.role}-${Date.now()}-${originalName}`;
   const bucket = 'profiles';
 
