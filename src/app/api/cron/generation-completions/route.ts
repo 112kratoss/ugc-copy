@@ -10,8 +10,8 @@ import {
 } from '@/lib/backend-job-runs';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
 import {
+  maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
-  pruneGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -83,7 +83,7 @@ export async function GET(request: Request) {
         lockedBy: lockOwner,
         limit: BATCH_LIMIT,
       });
-      const pruned = await pruneGenerationCompletionJobs(currentServiceClient);
+      const pruned = await maybePruneGenerationCompletionJobs(currentServiceClient, { nowMs: startedAt });
       return {
         ...completionSummary,
         pruned,

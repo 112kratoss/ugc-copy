@@ -6,6 +6,7 @@ const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_PRUNE_LIMIT = 500;
+const DEFAULT_PRUNE_WINDOW_MINUTES = 5;
 
 type SupabaseRpcResult = {
   data: unknown;
@@ -14,6 +15,16 @@ type SupabaseRpcResult = {
 
 type RpcClient = {
   rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<SupabaseRpcResult>;
+};
+
+export type GenerationCompletionPruneOptions = {
+  retentionDays?: number;
+  limit?: number;
+};
+
+export type GenerationCompletionAutomaticPruneOptions = GenerationCompletionPruneOptions & {
+  nowMs?: number;
+  windowMinutes?: number;
 };
 
 export type GenerationCompletionJob = {
@@ -97,7 +108,7 @@ export async function finishGenerationCompletionJob(
 
 export async function pruneGenerationCompletionJobs(
   client: RpcClient,
-  params: { retentionDays?: number; limit?: number } = {},
+  params: GenerationCompletionPruneOptions = {},
 ): Promise<number | null> {
   const { data, error } = await client.rpc('prune_generation_completion_jobs', {
     p_retention_days: params.retentionDays ?? DEFAULT_RETENTION_DAYS,
@@ -106,6 +117,40 @@ export async function pruneGenerationCompletionJobs(
 
   if (error) throw error;
   return typeof data === 'number' ? data : null;
+}
+
+export function shouldPruneGenerationCompletionJobs(
+  nowMs: number,
+  options: { windowMinutes?: number } = {},
+): boolean {
+  const windowMinutes = options.windowMinutes ?? DEFAULT_PRUNE_WINDOW_MINUTES;
+
+  if (!Number.isFinite(nowMs) || nowMs < 0) {
+    throw new Error('Generation completion prune time must be a valid timestamp');
+  }
+
+  if (!Number.isInteger(windowMinutes) || windowMinutes < 1 || windowMinutes > 60) {
+    throw new Error('Generation completion prune window minutes must be between 1 and 60');
+  }
+
+  return new Date(nowMs).getUTCMinutes() < windowMinutes;
+}
+
+export async function maybePruneGenerationCompletionJobs(
+  client: RpcClient,
+  options: GenerationCompletionAutomaticPruneOptions = {},
+): Promise<number | null> {
+  const {
+    nowMs = Date.now(),
+    windowMinutes,
+    ...pruneOptions
+  } = options;
+
+  if (!shouldPruneGenerationCompletionJobs(nowMs, { windowMinutes })) {
+    return null;
+  }
+
+  return pruneGenerationCompletionJobs(client, pruneOptions);
 }
 
 function errorMessage(error: unknown): string {

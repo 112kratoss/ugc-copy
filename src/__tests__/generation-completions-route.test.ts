@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
     void _options;
     return 0;
   }),
+  maybePruneGenerationCompletionJobs: vi.fn(async (_client: unknown, _options?: unknown) => {
+    void _client;
+    void _options;
+    return 3;
+  }),
   processGenerationCompletionJobs: vi.fn(),
   pruneGenerationCompletionJobs: vi.fn(),
   startBackendJobRun: vi.fn(async (_client, options: {
@@ -67,6 +72,9 @@ vi.mock('@/lib/generation-completion-jobs', async () => {
   );
   return {
     ...actual,
+    maybePruneGenerationCompletionJobs: (client: unknown, options?: unknown) => (
+      mocks.maybePruneGenerationCompletionJobs(client, options)
+    ),
     processGenerationCompletionJobs: (...args: unknown[]) => mocks.processGenerationCompletionJobs(...args),
     pruneGenerationCompletionJobs: (...args: unknown[]) => mocks.pruneGenerationCompletionJobs(...args),
   };
@@ -78,6 +86,7 @@ describe('/api/cron/generation-completions route', () => {
     mocks.createServiceClient.mockReset();
     mocks.finishBackendJobRun.mockClear();
     mocks.pruneBackendJobRuns.mockClear();
+    mocks.maybePruneGenerationCompletionJobs.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
     mocks.pruneGenerationCompletionJobs.mockReset();
     mocks.startBackendJobRun.mockClear();
@@ -89,6 +98,7 @@ describe('/api/cron/generation-completions route', () => {
       retried: 1,
       failed: 0,
     });
+    mocks.maybePruneGenerationCompletionJobs.mockResolvedValue(3);
     mocks.pruneGenerationCompletionJobs.mockResolvedValue(3);
     mocks.withBackendJobLock.mockImplementation(async (_client, _options, task: () => Promise<unknown>): Promise<LockMockResult> => ({
       acquired: true,
@@ -125,7 +135,11 @@ describe('/api/cron/generation-completions route', () => {
       lockedBy: expect.stringMatching(/^generation-completions:/),
       limit: 25,
     });
-    expect(mocks.pruneGenerationCompletionJobs).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.maybePruneGenerationCompletionJobs).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
+    expect(mocks.pruneGenerationCompletionJobs).not.toHaveBeenCalled();
     expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({ id: 'run-1' }),

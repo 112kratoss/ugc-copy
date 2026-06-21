@@ -5,8 +5,10 @@ import {
   claimGenerationCompletionJobs,
   enqueueGenerationCompletionJob,
   finishGenerationCompletionJob,
+  maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
   pruneGenerationCompletionJobs,
+  shouldPruneGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
 
 vi.mock('@/lib/generation-services', () => ({
@@ -79,6 +81,38 @@ describe('generation completion jobs', () => {
     expect(client.rpc).toHaveBeenNthCalledWith(2, 'prune_generation_completion_jobs', {
       p_retention_days: 30,
       p_limit: 500,
+    });
+  });
+
+  it('limits automatic completion queue pruning to the top of each hour', () => {
+    expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 0))).toBe(true);
+    expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 4))).toBe(true);
+    expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 5))).toBe(false);
+    expect(shouldPruneGenerationCompletionJobs(Date.UTC(2026, 5, 21, 10, 59))).toBe(false);
+  });
+
+  it('skips automatic completion queue pruning outside the cleanup window', async () => {
+    const client = createRpcClient([{ data: 7, error: null }]);
+
+    await expect(maybePruneGenerationCompletionJobs(client, {
+      nowMs: Date.UTC(2026, 5, 21, 10, 30),
+    })).resolves.toBeNull();
+
+    expect(client.rpc).not.toHaveBeenCalled();
+  });
+
+  it('runs automatic completion queue pruning during the cleanup window', async () => {
+    const client = createRpcClient([{ data: 4, error: null }]);
+
+    await expect(maybePruneGenerationCompletionJobs(client, {
+      nowMs: Date.UTC(2026, 5, 21, 10, 2),
+      retentionDays: 45,
+      limit: 750,
+    })).resolves.toBe(4);
+
+    expect(client.rpc).toHaveBeenCalledWith('prune_generation_completion_jobs', {
+      p_retention_days: 45,
+      p_limit: 750,
     });
   });
 
