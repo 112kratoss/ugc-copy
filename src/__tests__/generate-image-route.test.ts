@@ -21,12 +21,14 @@ type LocalGenerationRow = {
 
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 type LockDecision = boolean | ((args: Record<string, unknown>) => boolean);
+type AuthUser = { id: string } | null;
 
 function createSupabaseMock(
   sourceGeneration: SourceGenerationRow | null,
   localGeneration: LocalGenerationRow | null = null,
   lockAcquired: LockDecision = true,
-  rateLimitAllowed = true
+  rateLimitAllowed = true,
+  authUser: AuthUser = { id: 'user-1' }
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -77,9 +79,9 @@ function createSupabaseMock(
       auth: {
         getUser: vi.fn(async () => ({
           data: {
-            user: { id: 'user-1' },
+            user: authUser,
           },
-          error: null,
+          error: authUser ? null : new Error('missing session'),
         })),
       },
       rpc,
@@ -422,6 +424,46 @@ describe('/api/generate-image route', () => {
       estimatedTotalMs: 145_000,
     });
     expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('rejects unauthenticated image status checks before locks or provider calls', async () => {
+    currentSupabaseMock = createSupabaseMock(null, null, true, true, null);
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=task-image-unauth-1') as never
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining('Unauthorized'),
+    });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('try_acquire_backend_job_lock', expect.anything());
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown image prediction ids before locks or provider calls', async () => {
+    currentSupabaseMock = createSupabaseMock(null, null);
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=missing-image-task', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining('not found'),
+    });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('try_acquire_backend_job_lock', expect.anything());
+    expect(providerFetch).not.toHaveBeenCalled();
   });
 
   it('returns cached processing state without calling the provider when status refresh is already locked', async () => {

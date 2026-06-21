@@ -236,12 +236,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Missing prediction ID' }, { status: 400 });
     }
 
-    if (!KIE_API_KEY) {
-        return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
-    }
-
     try {
-        const adminSupabase = createServiceClient();
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -250,8 +245,13 @@ export async function GET(request: NextRequest) {
             }
         );
 
-        // Get authenticated user for storage scoping
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) {
+            return NextResponse.json(
+                { error: 'Unauthorized: Please log in to check generation status' },
+                { status: 401 }
+            );
+        }
 
         // Check local DB cache first
         const { data: localGeneration } = await supabase
@@ -259,6 +259,12 @@ export async function GET(request: NextRequest) {
             .select('*')
             .eq('prediction_id', predictionId)
             .single();
+
+        if (!localGeneration || localGeneration.user_id !== user.id) {
+            return NextResponse.json({ error: 'Generation not found' }, { status: 404 });
+        }
+
+        const adminSupabase = createServiceClient();
 
         if (localGeneration?.status === 'succeeded' && localGeneration?.output_url) {
             const workflowSettings = getWorkflowSettings(localGeneration.workflow_settings);
@@ -281,6 +287,10 @@ export async function GET(request: NextRequest) {
                     completedAt: localGeneration.completed_at,
                 }),
             });
+        }
+
+        if (!KIE_API_KEY) {
+            return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
         }
 
         const workflowSettings = getWorkflowSettings(localGeneration?.workflow_settings);
