@@ -523,6 +523,20 @@ async function fetchExpoPushReceipts(
   return payload.data as Record<string, ExpoReceipt>;
 }
 
+export async function hasPendingMobilePushReceipts(adminSupabase: SupabaseClient): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .select('id')
+    .eq('receipt_status', 'pending')
+    .limit(1);
+
+  if (error) {
+    throw new MobileNotificationError('Failed to check pending mobile push receipts.', 500);
+  }
+
+  return Array.isArray(data) && data.length > 0;
+}
+
 export async function processPendingMobilePushReceipts(
   adminSupabase: SupabaseClient,
   {

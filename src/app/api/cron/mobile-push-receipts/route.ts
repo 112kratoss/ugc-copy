@@ -9,7 +9,7 @@ import {
   type BackendJobRunHandle,
 } from '@/lib/backend-job-runs';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
-import { processPendingMobilePushReceipts } from '@/lib/mobile-notifications';
+import { hasPendingMobilePushReceipts, processPendingMobilePushReceipts } from '@/lib/mobile-notifications';
 import { createServiceClient } from '@/lib/server-helpers';
 
 export const runtime = 'nodejs';
@@ -54,6 +54,23 @@ export async function GET(request: Request) {
 
     const currentServiceClient = createServiceClient();
     serviceClient = currentServiceClient;
+    const hasPendingReceipts = await hasPendingMobilePushReceipts(currentServiceClient);
+
+    if (!hasPendingReceipts) {
+      const finishedAt = Date.now();
+      const prunedJobRuns = await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAt });
+      logCron('info', 'mobile_push_receipts_skipped_no_pending_receipts', {
+        requestId,
+        ms: finishedAt - startedAt,
+        prunedJobRuns,
+      });
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: 'no_pending_receipts',
+      }, { status: 202 });
+    }
+
     jobRun = await startBackendJobRun(currentServiceClient, {
       name: JOB_NAME,
       route: ROUTE,

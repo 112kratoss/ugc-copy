@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
     void _options;
     return 0;
   }),
+  hasPendingMobilePushReceipts: vi.fn(async (_client: unknown) => {
+    void _client;
+    return true;
+  }),
   processPendingMobilePushReceipts: vi.fn(),
   startBackendJobRun: vi.fn(async (_client, options: {
     name: string;
@@ -42,6 +46,7 @@ vi.mock('@/lib/mobile-notifications', async () => {
   const actual = await vi.importActual<typeof import('@/lib/mobile-notifications')>('@/lib/mobile-notifications');
   return {
     ...actual,
+    hasPendingMobilePushReceipts: (...args: unknown[]) => mocks.hasPendingMobilePushReceipts(...args),
     processPendingMobilePushReceipts: (...args: unknown[]) => mocks.processPendingMobilePushReceipts(...args),
   };
 });
@@ -74,6 +79,8 @@ describe('/api/cron/mobile-push-receipts route', () => {
     vi.resetModules();
     mocks.createServiceClient.mockReset();
     mocks.finishBackendJobRun.mockClear();
+    mocks.hasPendingMobilePushReceipts.mockReset();
+    mocks.hasPendingMobilePushReceipts.mockResolvedValue(true);
     mocks.pruneBackendJobRuns.mockClear();
     mocks.processPendingMobilePushReceipts.mockReset();
     mocks.startBackendJobRun.mockClear();
@@ -166,6 +173,33 @@ describe('/api/cron/mobile-push-receipts route', () => {
         checkedCount: 1,
         updatedCount: 1,
       },
+    });
+  });
+
+  it('skips lock and job-run writes when no push receipts are pending', async () => {
+    mocks.hasPendingMobilePushReceipts.mockResolvedValueOnce(false);
+
+    const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
+    const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {
+      headers: {
+        authorization: 'Bearer secret-123',
+      },
+    }));
+
+    expect(response.status).toBe(202);
+    expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
+    expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+    expect(mocks.finishBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.pruneBackendJobRuns).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ nowMs: expect.any(Number) }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      skipped: true,
+      reason: 'no_pending_receipts',
     });
   });
 

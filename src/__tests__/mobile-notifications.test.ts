@@ -4,6 +4,7 @@ import {
   MobileNotificationError,
   buildMobileNotificationDeepLink,
   createMobileNotification,
+  hasPendingMobilePushReceipts,
   normalizeMobilePushTokenPayload,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
@@ -36,7 +37,7 @@ describe('mobile notifications', () => {
   });
 
   it('sends push payloads through the Expo push API', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({
         data: {
           status: 'ok',
@@ -87,6 +88,24 @@ describe('mobile notifications', () => {
       .toBe('/viewer?source=showcase-feed&initialId=post-1');
     expect(buildMobileNotificationDeepLink({ kind: 'notifications' }))
       .toBe('/studio');
+  });
+
+  it('checks pending receipt work with a one-row delivery probe', async () => {
+    const limit = vi.fn(async () => ({
+      data: [{ id: 'delivery-1' }],
+      error: null,
+    }));
+    const eq = vi.fn(() => ({ limit }));
+    const select = vi.fn(() => ({ eq }));
+    const from = vi.fn(() => ({ select }));
+    const adminSupabase = { from };
+
+    await expect(hasPendingMobilePushReceipts(adminSupabase as never)).resolves.toBe(true);
+
+    expect(from).toHaveBeenCalledWith('mobile_push_deliveries');
+    expect(select).toHaveBeenCalledWith('id');
+    expect(eq).toHaveBeenCalledWith('receipt_status', 'pending');
+    expect(limit).toHaveBeenCalledWith(1);
   });
 
   it('processes Expo receipts and disables unregistered push tokens', async () => {
@@ -145,7 +164,7 @@ describe('mobile notifications', () => {
       },
     };
 
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({
         data: {
           'ticket-1': {
@@ -407,7 +426,7 @@ describe('mobile notifications', () => {
       },
     };
 
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({ data: {} }), {
         headers: { 'content-type': 'application/json' },
         status: 200,
