@@ -68,6 +68,10 @@ const DEFAULT_PREFERENCES: MobileNotificationPreferences = {
   commerceEnabled: true,
   socialEnabled: true,
 };
+const DEFAULT_RECEIPT_BATCH_SIZE = 1000;
+const MAX_RECEIPT_BATCH_SIZE = 1000;
+const RECEIPT_MIN_AGE_MINUTES = 15;
+const RECEIPT_STALE_AFTER_HOURS = 24;
 
 export class MobileNotificationError extends Error {
   constructor(
@@ -523,11 +527,16 @@ async function fetchExpoPushReceipts(
   return payload.data as Record<string, ExpoReceipt>;
 }
 
-export async function hasPendingMobilePushReceipts(adminSupabase: SupabaseClient): Promise<boolean> {
+export async function hasPendingMobilePushReceipts(
+  adminSupabase: SupabaseClient,
+  { now = new Date() }: { now?: Date } = {}
+): Promise<boolean> {
+  const dueBefore = new Date(now.getTime() - RECEIPT_MIN_AGE_MINUTES * 60 * 1000).toISOString();
   const { data, error } = await adminSupabase
     .from('mobile_push_deliveries')
     .select('id')
     .eq('receipt_status', 'pending')
+    .lte('sent_at', dueBefore)
     .limit(1);
 
   if (error) {
@@ -542,17 +551,26 @@ export async function processPendingMobilePushReceipts(
   {
     fetcher = fetch,
     now = new Date(),
+    batchSize = DEFAULT_RECEIPT_BATCH_SIZE,
   }: {
     fetcher?: typeof fetch;
     now?: Date;
+    batchSize?: number;
   } = {}
 ) {
   const nowIso = now.toISOString();
-  const staleThreshold = now.getTime() - (30 * 60 * 60 * 1000);
+  const dueBefore = new Date(now.getTime() - RECEIPT_MIN_AGE_MINUTES * 60 * 1000).toISOString();
+  const staleThreshold = now.getTime() - (RECEIPT_STALE_AFTER_HOURS * 60 * 60 * 1000);
+  const boundedBatchSize = Number.isFinite(batchSize)
+    ? Math.max(1, Math.min(Math.trunc(batchSize), MAX_RECEIPT_BATCH_SIZE))
+    : DEFAULT_RECEIPT_BATCH_SIZE;
   const { data, error } = await adminSupabase
     .from('mobile_push_deliveries')
     .select('id, token_id, push_ticket_id, receipt_status, sent_at')
-    .eq('receipt_status', 'pending');
+    .eq('receipt_status', 'pending')
+    .lte('sent_at', dueBefore)
+    .order('sent_at', { ascending: true })
+    .limit(boundedBatchSize);
 
   if (error) {
     throw new MobileNotificationError('Failed to load mobile push deliveries.', 500);
@@ -562,7 +580,7 @@ export async function processPendingMobilePushReceipts(
   const staleDeliveries = deliveries.filter((delivery) => {
     const sentAt = rowString(delivery, 'sent_at');
     const timestamp = sentAt ? Date.parse(sentAt) : Number.NaN;
-    return !rowString(delivery, 'push_ticket_id') || !Number.isFinite(timestamp) || timestamp < staleThreshold;
+    return !rowString(delivery, 'push_ticket_id') || !Number.isFinite(timestamp) || timestamp <= staleThreshold;
   });
   const activeDeliveries = deliveries.filter((delivery) => !staleDeliveries.includes(delivery));
 
@@ -579,7 +597,7 @@ export async function processPendingMobilePushReceipts(
       .update({
         receipt_status: 'stale',
         receipt_checked_at: nowIso,
-        receipt_message: 'Receipt unavailable after 30 hours.',
+        receipt_message: 'Receipt unavailable after 24 hours.',
       })
       .eq('id', deliveryId);
   }
@@ -590,7 +608,7 @@ export async function processPendingMobilePushReceipts(
     activeDeliveries
       .map((delivery) => rowString(delivery, 'push_ticket_id'))
       .filter((ticketId): ticketId is string => Boolean(ticketId)),
-    100
+    MAX_RECEIPT_BATCH_SIZE
   );
   const receiptsByTicketId: Record<string, ExpoReceipt> = {};
 

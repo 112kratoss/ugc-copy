@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
@@ -141,7 +144,14 @@ describe('/api/cron/mobile-push-receipts route', () => {
         route: '/api/cron/mobile-push-receipts',
       }),
     );
-    expect(mocks.processPendingMobilePushReceipts).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      { now: expect.any(Date) },
+    );
+    expect(mocks.processPendingMobilePushReceipts).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      { now: expect.any(Date) },
+    );
     expect(mocks.withBackendJobLock).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({
@@ -187,7 +197,10 @@ describe('/api/cron/mobile-push-receipts route', () => {
     }));
 
     expect(response.status).toBe(202);
-    expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      { now: expect.any(Date) },
+    );
     expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({
@@ -270,5 +283,14 @@ describe('/api/cron/mobile-push-receipts route', () => {
       { service: 'supabase' },
       expect.objectContaining({ nowMs: expect.any(Number) }),
     );
+  });
+
+  it('runs every 15 minutes on Vercel Pro so receipts are checked before Expo expires them', () => {
+    const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
+
+    expect(vercel.crons).toContainEqual({
+      path: '/api/cron/mobile-push-receipts',
+      schedule: '*/15 * * * *',
+    });
   });
 });

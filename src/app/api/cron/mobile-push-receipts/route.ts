@@ -13,6 +13,7 @@ import { hasPendingMobilePushReceipts, processPendingMobilePushReceipts } from '
 import { createServiceClient } from '@/lib/server-helpers';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 const JOB_NAME = 'mobile-push-receipts';
 const LOCK_TTL_SECONDS = 14 * 60;
@@ -62,7 +63,8 @@ export async function GET(request: Request) {
       startedAtMs: startedAt,
     });
 
-    const hasPendingReceipts = await hasPendingMobilePushReceipts(currentServiceClient);
+    const workerNow = new Date(startedAt);
+    const hasPendingReceipts = await hasPendingMobilePushReceipts(currentServiceClient, { now: workerNow });
 
     if (!hasPendingReceipts) {
       const finishedAt = Date.now();
@@ -88,7 +90,7 @@ export async function GET(request: Request) {
       name: JOB_NAME,
       ttlSeconds: LOCK_TTL_SECONDS,
       owner: lockOwner,
-    }, () => processPendingMobilePushReceipts(currentServiceClient));
+    }, () => processPendingMobilePushReceipts(currentServiceClient, { now: workerNow }));
 
     if (!lockResult.acquired) {
       const finishedAt = Date.now();

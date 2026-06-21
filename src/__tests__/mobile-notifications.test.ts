@@ -10,6 +10,15 @@ import {
   sendExpoPushNotification,
 } from '@/lib/mobile-notifications';
 
+function createPendingReceiptQuery(deliveryRows: Record<string, unknown>[]) {
+  const limit = vi.fn(async () => ({ data: deliveryRows, error: null }));
+  const order = vi.fn(() => ({ limit }));
+  const lte = vi.fn(() => ({ order }));
+  const eq = vi.fn(() => ({ lte }));
+
+  return { eq, lte, order, limit };
+}
+
 describe('mobile notifications', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -90,21 +99,25 @@ describe('mobile notifications', () => {
       .toBe('/studio');
   });
 
-  it('checks pending receipt work with a one-row delivery probe', async () => {
+  it('checks only receipts that have reached the recommended 15-minute age', async () => {
     const limit = vi.fn(async () => ({
       data: [{ id: 'delivery-1' }],
       error: null,
     }));
-    const eq = vi.fn(() => ({ limit }));
+    const lte = vi.fn(() => ({ limit }));
+    const eq = vi.fn(() => ({ lte }));
     const select = vi.fn(() => ({ eq }));
     const from = vi.fn(() => ({ select }));
     const adminSupabase = { from };
 
-    await expect(hasPendingMobilePushReceipts(adminSupabase as never)).resolves.toBe(true);
+    await expect(hasPendingMobilePushReceipts(adminSupabase as never, {
+      now: new Date('2026-05-26T12:00:00.000Z'),
+    })).resolves.toBe(true);
 
     expect(from).toHaveBeenCalledWith('mobile_push_deliveries');
     expect(select).toHaveBeenCalledWith('id');
     expect(eq).toHaveBeenCalledWith('receipt_status', 'pending');
+    expect(lte).toHaveBeenCalledWith('sent_at', '2026-05-26T11:45:00.000Z');
     expect(limit).toHaveBeenCalledWith(1);
   });
 
@@ -120,19 +133,14 @@ describe('mobile notifications', () => {
     ];
     const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
     const tokenUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+    const pendingQuery = createPendingReceiptQuery(deliveryRows);
 
     const adminSupabase = {
       from(table: string) {
         if (table === 'mobile_push_deliveries') {
           return {
             select() {
-              return {
-                eq(column: string, value: unknown) {
-                  expect(column).toBe('receipt_status');
-                  expect(value).toBe('pending');
-                  return Promise.resolve({ data: deliveryRows, error: null });
-                },
-              };
+              return { eq: pendingQuery.eq };
             },
             update(values: Record<string, unknown>) {
               return {
@@ -197,6 +205,9 @@ describe('mobile notifications', () => {
     expect(fetcher).toHaveBeenCalledWith('https://exp.host/--/api/v2/push/getReceipts', expect.objectContaining({
       method: 'POST',
     }));
+    expect(pendingQuery.lte).toHaveBeenCalledWith('sent_at', '2026-05-26T11:45:00.000Z');
+    expect(pendingQuery.order).toHaveBeenCalledWith('sent_at', { ascending: true });
+    expect(pendingQuery.limit).toHaveBeenCalledWith(1000);
     expect(deliveryUpdates).toEqual([
       expect.objectContaining({
         id: 'delivery-1',
@@ -377,7 +388,7 @@ describe('mobile notifications', () => {
     ]);
   });
 
-  it('keeps pending receipts active until they are older than 30 hours', async () => {
+  it('marks receipts stale once Expo clears them after 24 hours', async () => {
     const deliveryRows = [
       {
         id: 'delivery-1',
@@ -388,19 +399,14 @@ describe('mobile notifications', () => {
       },
     ];
     const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+    const pendingQuery = createPendingReceiptQuery(deliveryRows);
 
     const adminSupabase = {
       from(table: string) {
         if (table === 'mobile_push_deliveries') {
           return {
             select() {
-              return {
-                eq(column: string, value: unknown) {
-                  expect(column).toBe('receipt_status');
-                  expect(value).toBe('pending');
-                  return Promise.resolve({ data: deliveryRows, error: null });
-                },
-              };
+              return { eq: pendingQuery.eq };
             },
             update(values: Record<string, unknown>) {
               return {
@@ -442,11 +448,19 @@ describe('mobile notifications', () => {
     )).resolves.toMatchObject({
       checkedCount: 1,
       updatedCount: 0,
-      staleCount: 0,
+      staleCount: 1,
       disabledTokenCount: 0,
     });
 
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(deliveryUpdates).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(deliveryUpdates).toEqual([
+      expect.objectContaining({
+        id: 'delivery-1',
+        values: expect.objectContaining({
+          receipt_status: 'stale',
+          receipt_message: 'Receipt unavailable after 24 hours.',
+        }),
+      }),
+    ]);
   });
 });
