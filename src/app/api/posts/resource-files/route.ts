@@ -74,7 +74,6 @@ function isAllowedResourceFile(file: File): boolean {
 
 export async function POST(request: NextRequest) {
   const supabase = createUserClient(request);
-  const adminSupabase = createServiceClient();
   const {
     data: { user },
     error: authError,
@@ -84,6 +83,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const adminSupabase = createServiceClient();
   const formData = await request.formData();
   const file = formData.get('file');
 

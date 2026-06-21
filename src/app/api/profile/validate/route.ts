@@ -6,7 +6,6 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 export async function POST(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -16,6 +15,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const validation = await validateProfileSubmission(
       adminSupabase,
       user.id,

@@ -3,13 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
-type RouteContext = {
-  params: Promise<{ postId: string }>;
-};
-
-export async function POST(request: NextRequest, _context: RouteContext) {
+export async function POST(request: NextRequest) {
   const supabase = createUserClient(request);
-  const adminSupabase = createServiceClient();
   const {
     data: { user },
     error: authError,
@@ -19,6 +14,7 @@ export async function POST(request: NextRequest, _context: RouteContext) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const adminSupabase = createServiceClient();
   const body = await request.json() as {
     razorpay_order_id?: string;
     razorpay_payment_id?: string;

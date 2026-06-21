@@ -316,6 +316,29 @@ describe('/api/profile route', () => {
     expect(profilesState[0].username).toBeNull();
   });
 
+  it('does not create an admin client for unauthenticated profile validation', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: new Error('missing session'),
+        })),
+      },
+    });
+
+    const { POST } = await import('@/app/api/profile/validate/route');
+    const response = await POST(
+      new Request('http://localhost/api/profile/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'blocked-name' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(401);
+    expect(createServiceClientMock).not.toHaveBeenCalled();
+  });
+
   it('returns field errors for invalid usernames', async () => {
     const { PATCH } = await import('@/app/api/profile/route');
     const response = await PATCH(

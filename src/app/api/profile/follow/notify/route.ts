@@ -16,7 +16,6 @@ function readFollowingId(value: unknown) {
 export async function POST(request: NextRequest) {
   try {
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -26,6 +25,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     const followingId = readFollowingId(await request.json().catch(() => null));
     if (!followingId || followingId === user.id) {
       return NextResponse.json({ error: 'Missing creator profile.' }, { status: 400 });

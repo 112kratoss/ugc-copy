@@ -32,7 +32,6 @@ function buildReceipt(userId: string) {
 export async function POST(request: NextRequest, context: RouteContext) {
   const { postId } = await context.params;
   const supabase = createUserClient(request);
-  const adminSupabase = createServiceClient();
   const {
     data: { user },
     error: authError,
@@ -42,6 +41,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const adminSupabase = createServiceClient();
   const body = await request.json() as {
     locale?: string | null;
   };

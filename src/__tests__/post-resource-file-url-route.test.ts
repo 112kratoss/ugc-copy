@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 const getPostResourceBundleDetailByPostIdMock = vi.hoisted(() => vi.fn());
 const createSignedUrlMock = vi.hoisted(() => vi.fn());
 const storageFromMock = vi.hoisted(() => vi.fn());
+const createServiceClientMock = vi.hoisted(() => vi.fn());
 const authState = vi.hoisted(() => ({
   user: { id: 'buyer-1' } as { id: string } | null,
 }));
@@ -21,13 +22,7 @@ vi.mock('@/lib/server-helpers', () => ({
       })),
     },
   }),
-  createServiceClient: () => ({
-    storage: {
-      from: storageFromMock.mockImplementation(() => ({
-        createSignedUrl: createSignedUrlMock,
-      })),
-    },
-  }),
+  createServiceClient: () => createServiceClientMock(),
 }));
 
 function buildRequest(storagePath: string) {
@@ -48,12 +43,39 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     getPostResourceBundleDetailByPostIdMock.mockReset();
     createSignedUrlMock.mockReset();
     storageFromMock.mockReset();
+    createServiceClientMock.mockReset();
+    createServiceClientMock.mockReturnValue({
+      storage: {
+        from: storageFromMock.mockImplementation(() => ({
+          createSignedUrl: createSignedUrlMock,
+        })),
+      },
+    });
     createSignedUrlMock.mockResolvedValue({
       data: {
         signedUrl: 'https://signed.example.com/reference.png',
       },
       error: null,
     });
+  });
+
+  it('does not create an admin client when no resource path is provided', async () => {
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/file-url/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/resource-bundle/file-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }) as NextRequest,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe('Missing resource file path.');
+    expect(createServiceClientMock).not.toHaveBeenCalled();
+    expect(getPostResourceBundleDetailByPostIdMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
   });
 
   it('signs copied reference files for anonymous viewers when the recipe is public', async () => {

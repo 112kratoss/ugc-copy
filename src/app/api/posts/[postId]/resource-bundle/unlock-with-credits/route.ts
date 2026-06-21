@@ -11,7 +11,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
   try {
     const { postId } = await context.params;
     const supabase = createUserClient(request);
-    const adminSupabase = createServiceClient();
     const {
       data: { user },
       error: authError,
@@ -21,6 +20,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = createServiceClient();
     return NextResponse.json(await unlockPostResourceBundleWithCredits({
       adminSupabase,
       userId: user.id,

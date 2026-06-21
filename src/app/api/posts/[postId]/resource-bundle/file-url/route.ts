@@ -14,7 +14,6 @@ type RouteContext = {
 export async function POST(request: NextRequest, context: RouteContext) {
   const { postId } = await context.params;
   const supabase = createUserClient(request);
-  const adminSupabase = createServiceClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -46,6 +45,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const filePath = isUploadReference
     ? getUploadsBucketPath(requestedPath)
     : storedLocation?.filePath ?? requestedPath;
+  const adminSupabase = createServiceClient();
   const { data, error } = await adminSupabase.storage
     .from(bucket)
     .createSignedUrl(filePath, 600, {
