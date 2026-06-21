@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/cron/generation-completions",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/10 * * * *"
     }
   ]
 }

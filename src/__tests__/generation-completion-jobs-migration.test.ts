@@ -53,11 +53,11 @@ describe('generation completion jobs migration', () => {
     expect(migration).toContain('make_interval(secs => p_retry_delay_seconds)');
   });
 
-  it('schedules a frequent Vercel cron fallback for missed callbacks', () => {
+  it('schedules a balanced Vercel cron fallback for missed callbacks', () => {
     const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
     expect(vercel.crons).toContainEqual({
       path: '/api/cron/generation-completions',
-      schedule: '*/5 * * * *',
+      schedule: '*/10 * * * *',
     });
   });
 });

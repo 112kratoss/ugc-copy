@@ -105,7 +105,7 @@ describe('collectBackendHealth', () => {
     expect(health.jobs).toHaveLength(3);
     expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
       status: 'ok',
-      expectedMaxAgeMinutes: 15,
+      expectedMaxAgeMinutes: 30,
     });
     expect(health.jobs.find((job) => job.name === 'media-preview-repair')).toMatchObject({
       status: 'ok',
