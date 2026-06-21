@@ -410,7 +410,9 @@ describe('CreationsPage', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-linked&limit=1', {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
-    expect(screen.getByRole('checkbox', { name: /sell the prompt and setup/i })).toBeChecked();
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: /sell the prompt and setup/i })).toBeChecked();
+    });
     expect(navigationState.push).not.toHaveBeenCalled();
   });
 

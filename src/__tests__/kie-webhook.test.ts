@@ -117,4 +117,25 @@ describe('KIE webhook helpers', () => {
       restoreEnv('WEBHOOK_SECRET', previousSecret);
     }
   });
+
+  it('includes a local generation id in callback URLs when provided', async () => {
+    const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+    const previousHmacKey = process.env.KIE_WEBHOOK_HMAC_KEY;
+    const previousSecret = process.env.WEBHOOK_SECRET;
+    process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com/';
+    delete process.env.KIE_WEBHOOK_HMAC_KEY;
+    process.env.WEBHOOK_SECRET = 'webhook-secret';
+
+    try {
+      const { buildKieWebhookCallbackUrl } = await import('@/lib/kie-webhook');
+
+      expect(buildKieWebhookCallbackUrl({ generationId: 'gen-1' })).toBe(
+        'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=webhook-secret',
+      );
+    } finally {
+      restoreEnv('NEXT_PUBLIC_SITE_URL', previousSiteUrl);
+      restoreEnv('KIE_WEBHOOK_HMAC_KEY', previousHmacKey);
+      restoreEnv('WEBHOOK_SECRET', previousSecret);
+    }
+  });
 });

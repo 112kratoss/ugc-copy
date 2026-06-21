@@ -409,7 +409,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
       model: 'gpt-image-2-text-to-image',
       input: {
         prompt: 'A premium skincare product hero image.',
@@ -455,8 +455,10 @@ describe('generation services', () => {
   it('reserves a pending image generation before submitting provider work', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);
+    let providerBody: Record<string, unknown> | null = null;
     const { supabase, generations } = createSupabaseMock();
-    fetchMock.mockImplementation(async () => {
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
       expect(generations).toHaveLength(1);
       expect(generations[0]).toMatchObject({
         status: 'pending',
@@ -484,6 +486,9 @@ describe('generation services', () => {
       status: 'processing',
       prediction_id: 'task-image-durable-1',
       client_request_key_hash: 'b'.repeat(64),
+    });
+    expect(providerBody).toMatchObject({
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
     });
   });
 
@@ -682,7 +687,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
       model: 'grok-imagine/text-to-image',
       input: {
         prompt: 'A surreal product launch poster.',
@@ -873,7 +878,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
       model: 'grok-imagine/text-to-video',
       input: {
         prompt: 'A playful product reveal with quick camera energy.',
@@ -905,7 +910,13 @@ describe('generation services', () => {
     let providerBody: Record<string, unknown> | null = null;
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      providerBody = JSON.parse(String(init?.body));
+      if (!init?.body) {
+        return {
+          ok: true,
+          blob: async () => new Blob(['start-frame'], { type: 'image/jpeg' }),
+        } as Response;
+      }
+      providerBody = JSON.parse(String(init.body));
       return {
         ok: true,
         json: async () => ({ code: 200, data: { taskId: 'task-grok-video-image-1' } }),
@@ -927,7 +938,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?secret=test-webhook-secret',
+      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
       model: 'grok-imagine/image-to-video',
       input: {
         prompt: 'Animate the still with a slow push-in.',

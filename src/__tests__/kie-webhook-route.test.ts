@@ -31,12 +31,25 @@ vi.mock('@/lib/generation-completion-jobs', async () => {
   };
 });
 
-function signedKieRequest(payload: Record<string, unknown>, timestamp = '1782039000') {
+function createServiceClientMock() {
+  const updateEq = vi.fn(() => ({ is: updateIs }));
+  const updateIs = vi.fn(async () => ({ data: null, error: null }));
+  const update = vi.fn(() => ({ eq: updateEq }));
+  const from = vi.fn(() => ({ update }));
+  const client = { service: 'supabase', from };
+  return { client, from, update, updateEq, updateIs };
+}
+
+function signedKieRequest(
+  payload: Record<string, unknown>,
+  timestamp = '1782039000',
+  path = 'http://localhost/api/webhooks/kie',
+) {
   const signature = createHmac('sha256', 'hmac-key')
     .update(`task-1.${timestamp}`)
     .digest('base64');
 
-  return new Request('http://localhost/api/webhooks/kie', {
+  return new Request(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -48,13 +61,16 @@ function signedKieRequest(payload: Record<string, unknown>, timestamp = '1782039
 }
 
 describe('/api/webhooks/kie route', () => {
+  let serviceClientMock: ReturnType<typeof createServiceClientMock>;
+
   beforeEach(() => {
     vi.resetModules();
     mocks.after.mockClear();
     mocks.createServiceClient.mockReset();
     mocks.enqueueGenerationCompletionJob.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
-    mocks.createServiceClient.mockReturnValue({ service: 'supabase' });
+    serviceClientMock = createServiceClientMock();
+    mocks.createServiceClient.mockReturnValue(serviceClientMock.client);
     mocks.enqueueGenerationCompletionJob.mockResolvedValue('job-1');
     mocks.processGenerationCompletionJobs.mockResolvedValue({
       claimed: 1,
@@ -84,7 +100,7 @@ describe('/api/webhooks/kie route', () => {
     });
     expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
     expect(mocks.enqueueGenerationCompletionJob).toHaveBeenCalledWith(
-      { service: 'supabase' },
+      serviceClientMock.client,
       {
         predictionId: 'task-1',
         payload,
@@ -92,11 +108,37 @@ describe('/api/webhooks/kie route', () => {
     );
     expect(mocks.after).toHaveBeenCalledTimes(1);
     expect(mocks.processGenerationCompletionJobs).toHaveBeenCalledWith({
-      supabase: { service: 'supabase' },
-      creditSupabase: { service: 'supabase' },
+      supabase: serviceClientMock.client,
+      creditSupabase: serviceClientMock.client,
       lockedBy: expect.stringMatching(/^kie-webhook:/),
       limit: 5,
       predictionId: 'task-1',
     });
+  });
+
+  it('reattaches provider task ids to callback generation ids before processing completion jobs', async () => {
+    const { POST } = await import('@/app/api/webhooks/kie/route');
+    const payload = { data: { taskId: 'task-1', state: 'success' } };
+    const response = await POST(signedKieRequest(
+      payload,
+      '1782039000',
+      'http://localhost/api/webhooks/kie?generationId=gen-1',
+    ));
+
+    expect(response.status).toBe(200);
+    expect(serviceClientMock.from).toHaveBeenCalledWith('generations');
+    expect(serviceClientMock.update).toHaveBeenCalledWith({
+      prediction_id: 'task-1',
+      status: 'processing',
+    });
+    expect(serviceClientMock.updateEq).toHaveBeenCalledWith('id', 'gen-1');
+    expect(serviceClientMock.updateIs).toHaveBeenCalledWith('prediction_id', null);
+    expect(mocks.enqueueGenerationCompletionJob).toHaveBeenCalledWith(
+      serviceClientMock.client,
+      {
+        predictionId: 'task-1',
+        payload,
+      },
+    );
   });
 });

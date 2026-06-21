@@ -168,11 +168,15 @@ async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: stri
   }
 }
 
-async function createKieTask(body: Record<string, unknown>, endpoint = 'https://api.kie.ai/api/v1/jobs/createTask') {
+async function createKieTask(
+  body: Record<string, unknown>,
+  endpoint = 'https://api.kie.ai/api/v1/jobs/createTask',
+  options: { generationId?: string | null } = {},
+) {
   requireApiKey();
   const callbackUrl = typeof body.callBackUrl === 'string' && body.callBackUrl.trim()
     ? body.callBackUrl
-    : buildKieWebhookCallbackUrl();
+    : buildKieWebhookCallbackUrl({ generationId: options.generationId });
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -1271,7 +1275,7 @@ export async function startImageGeneration(params: {
       },
     });
 
-    predictionId = await createKieTask({ model: providerModel, input });
+    predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId });
     await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
@@ -1811,7 +1815,7 @@ export async function startVideoGeneration(params: {
       },
     });
 
-    predictionId = await createKieTask(body, endpoint);
+    predictionId = await createKieTask(body, endpoint, { generationId });
     await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     const videoInputCandidates: PersistGenerationInputCandidate[] = [];
@@ -1951,9 +1955,8 @@ export async function startMotionGeneration(params: {
   }
 
   const cost = getMotionCost(model, mode, duration);
-  let callbackUrl: string;
   try {
-    callbackUrl = buildKieWebhookCallbackUrl();
+    buildKieWebhookCallbackUrl();
   } catch (error) {
     console.error('Kie webhook callback is not configured:', error);
     throw new GenerationServiceError('Server configuration error: webhook secret missing', 500);
@@ -1986,7 +1989,6 @@ export async function startMotionGeneration(params: {
 
     predictionId = await createKieTask({
       model: selectedModel.apiModelId,
-      callBackUrl: callbackUrl,
       input: {
         prompt: prompt.trim() || 'The character follows the reference performance naturally.',
         input_urls: [characterImageUrl],
@@ -1994,7 +1996,7 @@ export async function startMotionGeneration(params: {
         character_orientation: characterOrientation,
         mode,
       },
-    });
+    }, undefined, { generationId });
     await markGenerationProviderStarted(supabase, generationId, predictionId);
 
     await persistGenerationInputMedia({

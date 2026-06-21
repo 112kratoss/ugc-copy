@@ -30,6 +30,27 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+async function attachCallbackGenerationId(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: { generationId: string | null; predictionId: string },
+) {
+  const generationId = params.generationId?.trim();
+  if (!generationId) return;
+
+  const { error } = await serviceClient
+    .from('generations')
+    .update({
+      prediction_id: params.predictionId,
+      status: 'processing',
+    })
+    .eq('id', generationId)
+    .is('prediction_id', null);
+
+  if (error) {
+    throw error;
+  }
+}
+
 export async function POST(request: Request) {
   let payload: unknown;
   try {
@@ -59,6 +80,10 @@ export async function POST(request: Request) {
   }
 
   const serviceClient = createServiceClient();
+  await attachCallbackGenerationId(serviceClient, {
+    generationId: url.searchParams.get('generationId'),
+    predictionId,
+  });
   await enqueueGenerationCompletionJob(serviceClient, {
     predictionId,
     payload: isRecord(payload) ? payload : { payload },

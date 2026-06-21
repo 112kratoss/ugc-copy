@@ -64,7 +64,7 @@ export function verifyKieWebhookAuthorization(input: {
   return safeEqual(expectedSignature, input.signature);
 }
 
-export function buildKieWebhookCallbackUrl() {
+export function buildKieWebhookCallbackUrl(params: { generationId?: string | null } = {}) {
   const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim()
     || process.env.VERCEL_URL?.trim();
@@ -75,9 +75,14 @@ export function buildKieWebhookCallbackUrl() {
     throw new Error('NEXT_PUBLIC_SITE_URL is not configured');
   }
 
-  const callbackUrl = `${siteUrl.replace(/\/$/, '')}/api/webhooks/kie`;
+  const callbackUrl = new URL(`${siteUrl.replace(/\/$/, '')}/api/webhooks/kie`);
+  const generationId = params.generationId?.trim();
+  if (generationId) {
+    callbackUrl.searchParams.set('generationId', generationId);
+  }
+
   if (process.env.KIE_WEBHOOK_HMAC_KEY?.trim()) {
-    return callbackUrl;
+    return callbackUrl.toString();
   }
 
   const secret = process.env.WEBHOOK_SECRET?.trim();
@@ -85,5 +90,6 @@ export function buildKieWebhookCallbackUrl() {
     throw new Error('WEBHOOK_SECRET is not configured');
   }
 
-  return `${callbackUrl}?secret=${encodeURIComponent(secret)}`;
+  callbackUrl.searchParams.set('secret', secret);
+  return callbackUrl.toString();
 }
