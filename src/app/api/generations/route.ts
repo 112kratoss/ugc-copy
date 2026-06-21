@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { syncGenerationStatuses } from '@/lib/generation-services';
 import {
     buildLegacyGenerationInputMedia,
     loadGenerationInputMediaMap,
@@ -195,23 +194,7 @@ export async function GET(request: NextRequest) {
             throw lastPreviewColumnError ?? new Error('Failed to fetch generations');
         };
 
-        let generations = await fetchGenerations();
-        const processingGenerationIds = generations
-            .filter((generation) => generation.status === 'processing' || generation.status === 'waiting')
-            .map((generation) => generation.id);
-
-        if (processingGenerationIds.length > 0) {
-            try {
-                await syncGenerationStatuses({
-                    supabase,
-                    creditSupabase: createServiceClient(),
-                    generationIds: processingGenerationIds,
-                });
-                generations = await fetchGenerations();
-            } catch (syncError) {
-                console.error('Failed to sync generation statuses before listing creations:', syncError);
-            }
-        }
+        const generations = await fetchGenerations();
 
         const generationIds = generations.map((generation) => generation.id).filter(Boolean);
         const linkedPostMap = new Map<string, LinkedPostRow>();

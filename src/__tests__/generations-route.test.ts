@@ -300,7 +300,7 @@ describe('/api/generations route', () => {
     vi.restoreAllMocks();
   });
 
-  it('syncs processing generations and returns the refreshed rows', async () => {
+  it('does not provider-sync active generations while listing creations', async () => {
     syncGenerationStatusesMock.mockImplementationOnce(async () => {
       generationsState = generationsState.map((generation) => ({
         ...generation,
@@ -320,12 +320,8 @@ describe('/api/generations route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
-    expect(syncGenerationStatusesMock).toHaveBeenCalledWith({
-      supabase: expect.any(Object),
-      creditSupabase: expect.any(Object),
-      generationIds: ['gen-1'],
-    });
-    expect(data.generations[0].status).toBe('succeeded');
+    expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
+    expect(data.generations[0].status).toBe('processing');
     expect(data.generations[0].output_url).toBe('https://signed.example.com/generated_images/user-1/output.jpg');
     expect(data.generations[0].title).toBe('Launch still');
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
@@ -639,9 +635,7 @@ describe('/api/generations route', () => {
     expect(data.generations[0].workflow_settings).toBeUndefined();
   });
 
-  it('returns data even when syncing processing generations fails', async () => {
-    syncGenerationStatusesMock.mockRejectedValueOnce(new Error('provider unavailable'));
-
+  it('returns active generations without provider sync side effects', async () => {
     const { GET } = await import('@/app/api/generations/route');
     const response = await GET(
       {
@@ -654,11 +648,7 @@ describe('/api/generations route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
-    expect(syncGenerationStatusesMock).toHaveBeenCalledWith({
-      supabase: expect.any(Object),
-      creditSupabase: expect.any(Object),
-      generationIds: ['gen-1'],
-    });
+    expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
     expect(data.generations[0].status).toBe('processing');
     expect(data.generations[0].title).toBe('Launch still');
     expect(data.generations[0].description).toBe('A polished creator-style launch image.');
