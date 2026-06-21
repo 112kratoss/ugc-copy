@@ -3,6 +3,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createUserClient, isMediaBucket } from '@/lib/server-helpers';
 
+const MEDIA_SIGNED_URL_TTL_SECONDS = 600;
+
+function getDownloadFilename(filePath: string, requestedFilename: string | null): string {
+    const fallbackFileName = filePath.split('/').pop() || 'download';
+    return (requestedFilename?.trim() || fallbackFileName).replace(/[/\\"]/g, '-');
+}
+
 async function createCookieSupabaseClient() {
     const cookieStore = await cookies();
 
@@ -51,31 +58,21 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const { data, error } = await supabase.storage.from(bucket).download(filePath);
+        const signedUrlOptions = shouldDownload
+            ? { download: getDownloadFilename(filePath, requestedFilename) }
+            : undefined;
+        const { data, error } = await supabase.storage
+            .from(bucket)
+            .createSignedUrl(filePath, MEDIA_SIGNED_URL_TTL_SECONDS, signedUrlOptions);
 
-        if (error || !data) {
-            console.error(`Failed to download media ${bucket}/${filePath}:`, error);
+        if (error || !data?.signedUrl) {
+            console.error(`Failed to sign media ${bucket}/${filePath}:`, error);
             return NextResponse.json({ error: 'Failed to load media' }, { status: 404 });
         }
 
-        const headers = new Headers();
-        headers.set(
-            'Content-Type',
-            data.type || (bucket === 'generated_images' ? 'image/jpeg' : bucket === 'generated_audio' ? 'audio/mpeg' : bucket === 'generation_inputs' ? 'application/octet-stream' : 'video/mp4')
-        );
-        headers.set('Content-Length', String(data.size));
-        headers.set('Cache-Control', 'private, max-age=60');
-
-        if (shouldDownload) {
-            const fallbackFileName = filePath.split('/').pop() || 'download';
-            const fileName = (requestedFilename?.trim() || fallbackFileName).replace(/[/\\"]/g, '-');
-            headers.set('Content-Disposition', `attachment; filename="${fileName}"`);
-        }
-
-        return new NextResponse(data.stream(), {
-            status: 200,
-            headers,
-        });
+        const response = NextResponse.redirect(data.signedUrl, 302);
+        response.headers.set('Cache-Control', 'private, max-age=60');
+        return response;
     } catch (error) {
         console.error('Error serving media:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
