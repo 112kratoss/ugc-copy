@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { withBackendJobLock } from '@/lib/backend-job-lock';
+import { isAuthorizedCronRequest } from '@/lib/cron-auth';
 import { repairMediaPreviews } from '@/lib/media-preview-repair';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -33,7 +34,7 @@ function logCron(level: 'info' | 'error', msg: string, fields: Record<string, un
 }
 
 export async function GET(request: Request) {
-  if (request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

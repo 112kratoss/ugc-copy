@@ -60,6 +60,21 @@ describe('/api/cron/mobile-push-receipts route', () => {
     expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the cron secret is missing', async () => {
+    delete process.env.CRON_SECRET;
+
+    const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
+    const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {
+      headers: {
+        authorization: 'Bearer undefined',
+      },
+    }));
+
+    expect(response.status).toBe(401);
+    expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
+    expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+  });
+
   it('runs the receipt processor for authorized requests', async () => {
     const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
     const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {

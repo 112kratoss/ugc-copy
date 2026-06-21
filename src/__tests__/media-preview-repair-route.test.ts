@@ -46,6 +46,17 @@ describe('media preview repair cron', () => {
     expect(repairState.repair).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the cron secret is missing', async () => {
+    vi.stubEnv('CRON_SECRET', undefined);
+    const { GET } = await import('@/app/api/cron/media-preview-repair/route');
+    const response = await GET(new Request('http://localhost/api/cron/media-preview-repair', {
+      headers: { authorization: 'Bearer undefined' },
+    }));
+    expect(response.status).toBe(401);
+    expect(repairState.repair).not.toHaveBeenCalled();
+    expect(lockState.withLock).not.toHaveBeenCalled();
+  });
+
   it('runs the shared repair service for authorized calls', async () => {
     vi.stubEnv('CRON_SECRET', 'secret');
     const { GET } = await import('@/app/api/cron/media-preview-repair/route');
