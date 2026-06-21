@@ -20,10 +20,12 @@ type BackendJobRunRow = {
 type GenerationStatusRow = {
   status: string | null;
   created_at: string | null;
+  cost: number | string | null;
 };
 
 type StalledGenerationRow = {
   created_at: string | null;
+  cost: number | string | null;
 };
 
 type GenerationCompletionQueueRow = {
@@ -62,7 +64,10 @@ export type BackendGenerationHealth = {
   recentWindowMinutes: number;
   stalledAfterMinutes: number;
   recentCounts: Record<string, number>;
+  recentCreditCostTotal: number;
+  recentCreditCostByStatus: Record<string, number>;
   stalledActiveCount: number;
+  stalledActiveCreditCost: number;
   oldestStalledCreatedAt: string | null;
 };
 
@@ -202,6 +207,17 @@ function buildGenerationHealth(
     counts[status] = (counts[status] ?? 0) + 1;
     return counts;
   }, {});
+  const recentCreditCostByStatus = recentRows.reduce<Record<string, number>>((costs, row) => {
+    const status = row.status ?? 'unknown';
+    costs[status] = roundCredits((costs[status] ?? 0) + getCreditCost(row.cost));
+    return costs;
+  }, {});
+  const recentCreditCostTotal = roundCredits(
+    recentRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
+  );
+  const stalledActiveCreditCost = roundCredits(
+    stalledRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
+  );
   const issues: BackendHealthIssue[] = [];
   const stalledActiveCount = stalledRows.length;
 
@@ -221,11 +237,27 @@ function buildGenerationHealth(
       recentWindowMinutes: GENERATION_RECENT_WINDOW_MINUTES,
       stalledAfterMinutes: GENERATION_STALLED_AFTER_MINUTES,
       recentCounts,
+      recentCreditCostTotal,
+      recentCreditCostByStatus,
       stalledActiveCount,
+      stalledActiveCreditCost,
       oldestStalledCreatedAt: stalledRows[0]?.created_at ?? null,
     },
     issues,
   };
+}
+
+function getCreditCost(value: number | string | null | undefined): number {
+  const numericValue = typeof value === 'number' ? value : Number(value ?? 0);
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
+    return 0;
+  }
+
+  return numericValue;
+}
+
+function roundCredits(value: number): number {
+  return Number(value.toFixed(2));
 }
 
 function isDue(row: GenerationCompletionQueueRow, now: Date): boolean {
@@ -334,12 +366,12 @@ export async function collectBackendHealth(
       .limit(200),
     client
       .from('generations')
-      .select('status,created_at')
+      .select('status,created_at,cost')
       .gte('created_at', recentGenerationSince)
       .limit(1000),
     client
       .from('generations')
-      .select('created_at')
+      .select('created_at,cost')
       .in('status', ['waiting', 'processing'])
       .lt('created_at', stalledBefore)
       .order('created_at', { ascending: true })

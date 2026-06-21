@@ -90,8 +90,8 @@ describe('collectBackendHealth', () => {
         {
           error: null,
           data: [
-            { status: 'succeeded', created_at: '2026-06-21T09:50:00.000Z' },
-            { status: 'failed', created_at: '2026-06-21T09:55:00.000Z' },
+            { status: 'succeeded', created_at: '2026-06-21T09:50:00.000Z', cost: 8 },
+            { status: 'failed', created_at: '2026-06-21T09:55:00.000Z', cost: 12 },
           ],
         },
         { error: null, data: [] },
@@ -110,6 +110,9 @@ describe('collectBackendHealth', () => {
     expect(health.generations).toMatchObject({
       status: 'ok',
       recentCounts: { succeeded: 1, failed: 1 },
+      recentCreditCostTotal: 20,
+      recentCreditCostByStatus: { succeeded: 8, failed: 12 },
+      stalledActiveCreditCost: 0,
       stalledActiveCount: 0,
     });
     expect(db.from).toHaveBeenCalledWith('backend_job_runs');
@@ -119,6 +122,8 @@ describe('collectBackendHealth', () => {
       'started_at',
       '2026-06-19T10:00:00.000Z',
     );
+    expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost');
+    expect(db.builders.generations[1].select).toHaveBeenCalledWith('created_at,cost');
   });
 
   it('warns when a scheduled job has no recent run records', async () => {
@@ -165,7 +170,7 @@ describe('collectBackendHealth', () => {
       },
       generations: [
         { error: null, data: [] },
-        { error: null, data: [{ created_at: '2026-06-21T08:30:00.000Z' }] },
+        { error: null, data: [{ created_at: '2026-06-21T08:30:00.000Z', cost: 16 }] },
       ],
     });
 
@@ -178,6 +183,7 @@ describe('collectBackendHealth', () => {
     expect(health.jobs.find((job) => job.name === 'media-preview-repair')?.latestRun).not.toHaveProperty(
       'errorMessage',
     );
+    expect(health.generations.stalledActiveCreditCost).toBe(16);
     expect(health.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'JOB_LATEST_RUN_FAILED', severity: 'degraded' }),
       expect.objectContaining({ code: 'GENERATION_STALLED_ACTIVE', severity: 'degraded' }),
