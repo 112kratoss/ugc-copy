@@ -14,7 +14,7 @@ import {
   Video,
   Wand2,
 } from 'lucide-react-native';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -42,23 +42,27 @@ import {
 import { useAuth } from '@/lib/auth';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
+  applyCatalogModelDefaults,
+  buildCatalogGenerationPayload,
+  buildCatalogQuoteRequest,
+  getCatalogCreationSectionSummary,
+  validateCatalogCreationDraft,
+} from '@/lib/generation-model-draft';
+import {
+  getCatalogModel,
+  getCatalogModels,
+  type GenerationModelCatalog,
+} from '@/lib/generation-model-catalog';
+import {
   applyModelDefaults,
-  buildGenerationPayload,
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
-  defaultVideoMode,
   getCreationReadiness,
   getCreationSectionOrder,
   getCreationSectionSummary,
-  getDefaultVideoDuration,
-  getImageResolutionOptions,
   getMotionDuration,
   getVisibleGenerationCheckMessages,
-  getVideoElementSupport,
-  IMAGE_MODELS,
-  isSeedance2Family,
-  MOTION_MODELS,
   renameMediaDraft,
   type CreationSectionId,
   type CreationDraft,
@@ -69,7 +73,6 @@ import {
   type MotionModelId,
   type VideoCreationDraft,
   type VideoModelId,
-  VIDEO_MODELS,
   validateCreationDraft,
 } from '@/lib/media-creation-view-model';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
@@ -77,6 +80,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse } from '@/lib/types';
+import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -158,6 +162,9 @@ export function MediaCreationScreen({
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { user, api, credits, updateCredits } = useAuth();
+  const catalogQuery = useGenerationModelCatalog(api);
+  const catalog = catalogQuery.catalog;
+  const refetchCatalog = catalogQuery.refetch;
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => createDefaultCreationDraft('image'));
   const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => createDefaultCreationDraft('video'));
@@ -171,12 +178,115 @@ export function MediaCreationScreen({
   const [message, setMessage] = useState<string | null>(null);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [isPromptFocused, setIsPromptFocused] = useState(false);
+  const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
+  const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
+
+  useEffect(() => {
+    if (!catalog) return;
+    const reconcile = <T extends CreationDraft>(
+      kind: CreatorToolId,
+      defaultId: string | null,
+      setter: (updater: (draft: T) => T) => void
+    ) => {
+      setter((draft) => {
+        const selected = getCatalogModel(catalog, draft.model);
+        const fallback = defaultId ? getCatalogModel(catalog, defaultId) : null;
+        if (!fallback || fallback.kind !== kind) return draft;
+        if (selected) {
+          if (modelSelectionTouched.current[kind] || hasStartedCreationDraft(draft) || selected.id === fallback.id) return draft;
+          return applyCatalogModelDefaults(draft, fallback) as T;
+        }
+        setCatalogNotice(`Your previous ${kind} model is no longer available. Switched to ${fallback.displayName}.`);
+        return applyCatalogModelDefaults(draft, fallback) as T;
+      });
+    };
+    reconcile<ImageCreationDraft>('image', catalog.defaults.image, setImageDraft);
+    reconcile<VideoCreationDraft>('video', catalog.defaults.video, setVideoDraft);
+    reconcile<MotionCreationDraft>('motion', catalog.defaults.motion, setMotionDraft);
+  }, [catalog]);
 
   const currentDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
-  const validation = useMemo(() => validateCreationDraft(currentDraft, { credits }), [currentDraft, credits]);
+  const currentCatalogModel = useMemo(
+    () => catalog ? getCatalogModel(catalog, currentDraft.model) : null,
+    [catalog, currentDraft.model]
+  );
+  const quoteRequest = useMemo(
+    () => currentCatalogModel && catalog
+      ? buildCatalogQuoteRequest(currentDraft, currentCatalogModel, catalog.revision)
+      : null,
+    [catalog, currentCatalogModel, currentDraft]
+  );
+  const quoteKey = quoteRequest ? JSON.stringify(quoteRequest) : null;
+  const [quoteState, setQuoteState] = useState<{
+    key: string | null;
+    status: 'idle' | 'pending' | 'ready' | 'error';
+    cost: number | null;
+    error: string | null;
+  }>({ key: null, status: 'idle', cost: null, error: null });
+
+  useEffect(() => {
+    if (!quoteRequest || !quoteKey) {
+      setQuoteState({ key: null, status: 'idle', cost: null, error: null });
+      return;
+    }
+    const controller = new AbortController();
+    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null });
+    const timer = setTimeout(() => {
+      void api.quoteGenerationModel(quoteRequest, controller.signal)
+        .then((quote) => {
+          if (!controller.signal.aborted) setQuoteState({ key: quoteKey, status: 'ready', cost: quote.costCredits, error: null });
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          const details = error && typeof error === 'object' && 'details' in error
+            ? (error as { details?: { code?: string } }).details
+            : null;
+          if (details?.code === 'CATALOG_CHANGED') {
+            void refetchCatalog();
+            setMessage('Model settings changed. Review the refreshed options before generating.');
+          }
+          setQuoteState({
+            key: quoteKey,
+            status: 'error',
+            cost: null,
+            error: error instanceof Error ? error.message : 'Could not calculate generation cost.',
+          });
+        });
+    }, 200);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [api, quoteKey, quoteRequest, refetchCatalog]);
+
+  const activeQuote = quoteState.key === quoteKey ? quoteState : { status: 'pending' as const, cost: null, error: null };
+  const validation = useMemo(
+    () => currentCatalogModel
+      ? validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost })
+      : catalog
+        ? {
+            errors: ['This model is no longer available. Review the refreshed settings.'],
+            warnings: [],
+            cost: 0,
+            canGenerate: false,
+          }
+        : validateCreationDraft(currentDraft, { credits }),
+    [activeQuote.cost, catalog, currentCatalogModel, currentDraft, credits]
+  );
   const sectionOrder = useMemo(() => getCreationSectionOrder(currentDraft), [currentDraft]);
-  const sectionSummary = useMemo(() => getCreationSectionSummary(currentDraft), [currentDraft]);
-  const readiness = useMemo(() => getCreationReadiness(currentDraft, validation), [currentDraft, validation]);
+  const sectionSummary = useMemo(
+    () => currentCatalogModel
+      ? getCatalogCreationSectionSummary(currentDraft, currentCatalogModel)
+      : catalog
+        ? {
+            essentials: 'Refreshing model settings',
+            references: 'Attached media is preserved',
+            advanced: 'Review the refreshed options',
+          }
+        : getCreationSectionSummary(currentDraft),
+    [catalog, currentCatalogModel, currentDraft]
+  );
+  const readiness = useMemo(() => getCreationReadiness(currentDraft, validation, sectionSummary), [currentDraft, sectionSummary, validation]);
   const outputUrl = useMemo(() => (status ? getGenerationOutput(status) : null), [status]);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -186,7 +296,7 @@ export function MediaCreationScreen({
   const contentBottomReserve = insideTab ? tabBarMetrics.contentBottomPadding : 0;
   const contentBottomPadding = insideTab ? appTheme.spacing.section + FLOATING_REVIEW_BAR_HEIGHT : bottomInset + 36;
   const issueCount = validation.errors.length + validation.warnings.length + (message ? 1 : 0);
-  const generateDisabled = isGenerating || isUploading || validation.errors.length > 0;
+  const generateDisabled = isGenerating || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
   const showFloatingReviewBar = insideTab && hasStartedCreationDraft(currentDraft) && !isPromptFocused;
 
   const changeTool = (tool: CreatorToolId) => {
@@ -198,10 +308,31 @@ export function MediaCreationScreen({
   };
 
   const replaceDraft = (draft: CreationDraft) => {
-    const normalized = applyModelDefaults(draft);
-    if (normalized.tool === 'image') setImageDraft(normalized);
-    if (normalized.tool === 'video') setVideoDraft(normalized);
-    if (normalized.tool === 'motion') setMotionDraft(normalized);
+    const catalogModel = catalog ? getCatalogModel(catalog, draft.model) : null;
+    const normalized = catalogModel ? applyCatalogModelDefaults(draft, catalogModel) : applyModelDefaults(draft);
+    if (normalized.tool === 'image') {
+      setImageDraft((current) => {
+        if (current.model !== normalized.model) modelSelectionTouched.current.image = true;
+        return normalized;
+      });
+    }
+    if (normalized.tool === 'video') {
+      setVideoDraft((current) => {
+        if (current.model !== normalized.model) modelSelectionTouched.current.video = true;
+        return normalized;
+      });
+    }
+    if (normalized.tool === 'motion') {
+      setMotionDraft((current) => {
+        if (current.model !== normalized.model) modelSelectionTouched.current.motion = true;
+        return normalized;
+      });
+    }
+  };
+
+  const normalizeCatalogDraft = <T extends CreationDraft>(draft: T): T => {
+    const model = catalog ? getCatalogModel(catalog, draft.model) : null;
+    return (model ? applyCatalogModelDefaults(draft, model) : applyModelDefaults(draft)) as T;
   };
 
   const updatePrompt = (prompt: string) => {
@@ -229,9 +360,9 @@ export function MediaCreationScreen({
         uploaded.push(createMediaDraftFromUpload(media));
       }
       if (tool === 'image') {
-        setImageDraft((draft) => applyModelDefaults({ ...draft, references: [...draft.references, ...uploaded] }) as ImageCreationDraft);
+        setImageDraft((draft) => normalizeCatalogDraft({ ...draft, references: [...draft.references, ...uploaded] }));
       } else {
-        setVideoDraft((draft) => applyModelDefaults({ ...draft, references: [...draft.references, ...uploaded], referenceMode: 'elements' }) as VideoCreationDraft);
+        setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, references: [...draft.references, ...uploaded], referenceMode: 'elements' }));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -288,7 +419,7 @@ export function MediaCreationScreen({
       if (target === 'motion') {
         setMotionDraft((draft) => ({ ...draft, referenceVideo: media, duration: Math.ceil(media.durationSeconds ?? draft.duration) }));
       } else {
-        setVideoDraft((draft) => applyModelDefaults({ ...draft, referenceVideos: [...draft.referenceVideos, media] }) as VideoCreationDraft);
+        setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, media] }));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -311,7 +442,7 @@ export function MediaCreationScreen({
         sizeBytes: picked.size ?? null,
       });
       const media = createMediaDraftFromUpload(uploaded, { displayName: 'Reference Audio' });
-      setVideoDraft((draft) => applyModelDefaults({ ...draft, referenceAudios: [...draft.referenceAudios, media] }) as VideoCreationDraft);
+      setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceAudios: [...draft.referenceAudios, media] }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
     } finally {
@@ -351,7 +482,11 @@ export function MediaCreationScreen({
       router.push('/auth');
       return;
     }
-    const nextValidation = validateCreationDraft(currentDraft, { credits });
+    if (!currentCatalogModel || activeQuote.status !== 'ready') {
+      setMessage(activeQuote.error ?? 'Wait for the current generation cost before continuing.');
+      return;
+    }
+    const nextValidation = validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost });
     if (nextValidation.errors.length > 0) {
       const promptError = promptValidationMessage(nextValidation.errors[0]);
       if (promptError) {
@@ -371,17 +506,17 @@ export function MediaCreationScreen({
     try {
       let started: GenerationStartResponse;
       if (currentDraft.tool === 'image') {
-        started = await api.startImageGeneration(buildGenerationPayload(currentDraft));
+        started = await api.startImageGeneration(buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''));
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus }));
       } else if (currentDraft.tool === 'video') {
-        started = await api.startVideoGeneration(buildGenerationPayload(currentDraft));
+        started = await api.startVideoGeneration(buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''));
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus }));
       } else {
-        started = await api.startMotionGeneration(buildGenerationPayload(currentDraft));
+        started = await api.startMotionGeneration(buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''));
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
         setStatus(await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus }));
@@ -419,6 +554,10 @@ export function MediaCreationScreen({
           accent={meta.accent}
         >
           <CreationEssentials
+            catalog={catalog}
+            catalogLoading={catalogQuery.isLoading}
+            catalogError={catalogQuery.error}
+            onRetryCatalog={() => void catalogQuery.refetch()}
             activeTool={activeTool}
             imageDraft={imageDraft}
             videoDraft={videoDraft}
@@ -438,6 +577,7 @@ export function MediaCreationScreen({
           accent={activeTool === 'image' ? 'image' : activeTool === 'video' ? 'video' : 'motion'}
         >
           <CreationReferences
+            catalog={catalog}
             activeTool={activeTool}
             imageDraft={imageDraft}
             videoDraft={videoDraft}
@@ -475,6 +615,7 @@ export function MediaCreationScreen({
           onToggle={() => setAdvancedExpanded((expanded) => !expanded)}
         >
           <CreationAdvanced
+            catalog={catalog}
             activeTool={activeTool}
             imageDraft={imageDraft}
             videoDraft={videoDraft}
@@ -513,8 +654,8 @@ export function MediaCreationScreen({
           />
           <MetricCard
             label="Cost"
-            value={String(validation.cost)}
-            body={`${meta.title.toLowerCase()} run`}
+            value={activeQuote.status === 'ready' ? String(activeQuote.cost ?? 0) : '...'}
+            body={activeQuote.status === 'error' ? 'Retry after changing a setting' : activeQuote.status === 'pending' ? 'Calculating...' : `${meta.title.toLowerCase()} run`}
             accent={meta.accent}
             compact
           />
@@ -548,6 +689,12 @@ export function MediaCreationScreen({
         }}
       >
         <CreateHeader meta={meta} activeTool={activeTool} onChange={changeTool} />
+
+        {catalogNotice ? (
+          <SurfaceSection eyebrow="Catalog update" title="Model updated" body={catalogNotice} accent={meta.accent}>
+            <SecondaryButton label="Dismiss" onPress={() => setCatalogNotice(null)} />
+          </SurfaceSection>
+        ) : null}
 
         {sectionOrder.map((section) => (
           <Fragment key={section}>
@@ -812,100 +959,139 @@ function PromptPanel({
 }
 
 function CreationEssentials({
+  catalog,
+  catalogLoading,
+  catalogError,
+  onRetryCatalog,
   activeTool,
   imageDraft,
   videoDraft,
   motionDraft,
   onChange,
 }: {
+  catalog: GenerationModelCatalog | null;
+  catalogLoading: boolean;
+  catalogError: Error | null;
+  onRetryCatalog: () => void;
   activeTool: CreatorToolId;
   imageDraft: ImageCreationDraft;
   videoDraft: VideoCreationDraft;
   motionDraft: MotionCreationDraft;
   onChange: (draft: CreationDraft) => void;
 }) {
+  if (!catalog) {
+    return (
+      <View style={{ gap: 10, alignItems: 'flex-start' }}>
+        {catalogLoading ? <ActivityIndicator color={accentColor(activeTool)} /> : null}
+        <AppText variant="bodySm" color="muted">
+          {catalogError ? 'Model settings are unavailable. Check your connection and try again.' : 'Loading model settings...'}
+        </AppText>
+        {catalogError ? <SecondaryButton label="Retry" onPress={onRetryCatalog} /> : null}
+      </View>
+    );
+  }
+
   if (activeTool === 'image') {
-    const model = IMAGE_MODELS[imageDraft.model];
-    const resolutionOptions = getImageResolutionOptions(imageDraft.model, imageDraft.aspectRatio);
+    const models = getCatalogModels(catalog, 'image');
+    const model = getCatalogModel(catalog, imageDraft.model) ?? models[0];
     return (
       <View style={{ gap: appTheme.spacing.gap }}>
         <SectionLabel title="Model" icon={<ImageIcon size={17} color={accentColor('image')} />} />
         <ModelPicker
-          items={Object.values(IMAGE_MODELS)}
-          value={imageDraft.model}
+          items={models}
+          value={model?.id ?? imageDraft.model}
           accent="image"
           onChange={(modelId) => onChange({ ...imageDraft, model: modelId as ImageModelId })}
         />
-        <OptionRow title="Aspect ratio">
-          {model.aspectRatios.map((ratio) => (
-            <Chip key={ratio} label={ratio} active={imageDraft.aspectRatio === ratio} onPress={() => onChange({ ...imageDraft, aspectRatio: ratio })} />
-          ))}
-        </OptionRow>
-        <OptionRow title="Resolution">
-          {resolutionOptions.map((resolution) => (
-            <Chip key={resolution} label={resolution} active={imageDraft.resolution === resolution} onPress={() => onChange({ ...imageDraft, resolution })} />
-          ))}
-        </OptionRow>
+        {model ? <CatalogEssentialControls model={model} draft={imageDraft} onChange={onChange} /> : null}
       </View>
     );
   }
 
   if (activeTool === 'video') {
-    const model = VIDEO_MODELS[videoDraft.model];
+    const models = getCatalogModels(catalog, 'video');
+    const model = getCatalogModel(catalog, videoDraft.model) ?? models[0];
     return (
       <View style={{ gap: appTheme.spacing.gap }}>
         <SectionLabel title="Model" icon={<Video size={17} color={accentColor('video')} />} />
         <ModelPicker
-          items={Object.values(VIDEO_MODELS)}
-          value={videoDraft.model}
+          items={models}
+          value={model?.id ?? videoDraft.model}
           accent="video"
           onChange={(modelId) => {
-            const nextModel = modelId as VideoModelId;
-            onChange({
-              ...videoDraft,
-              model: nextModel,
-              mode: defaultVideoMode(nextModel),
-              duration: getDefaultVideoDuration(nextModel),
-            });
+            onChange({ ...videoDraft, model: modelId as VideoModelId });
           }}
         />
-        <OptionRow title="Aspect ratio">
-          {model.aspectRatios.map((ratio) => (
-            <Chip key={ratio} label={ratio} active={videoDraft.aspectRatio === ratio} onPress={() => onChange({ ...videoDraft, aspectRatio: ratio })} />
-          ))}
-        </OptionRow>
-        {model.resolutions.length > 0 ? (
-          <OptionRow title="Resolution">
-            {model.resolutions.map((resolution) => (
-              <Chip key={resolution} label={resolution} active={videoDraft.resolution === resolution} onPress={() => onChange({ ...videoDraft, resolution })} />
-            ))}
-          </OptionRow>
-        ) : null}
-        {model.provider !== 'veo' && !videoDraft.isMultiShot ? (
-          <OptionRow title="Duration">
-            {model.durations.map((duration) => (
-              <Chip key={duration} label={`${duration}s`} active={videoDraft.duration === duration} onPress={() => onChange({ ...videoDraft, duration })} />
-            ))}
-          </OptionRow>
-        ) : null}
+        {model ? <CatalogEssentialControls model={model} draft={videoDraft} onChange={onChange} /> : null}
       </View>
     );
   }
+
+  const models = getCatalogModels(catalog, 'motion');
+  const model = getCatalogModel(catalog, motionDraft.model) ?? models[0];
 
   return (
     <View style={{ gap: appTheme.spacing.gap }}>
       <SectionLabel title="Model" icon={<Sparkles size={17} color={accentColor('motion')} />} />
       <ModelPicker
-        items={Object.values(MOTION_MODELS)}
-        value={motionDraft.model}
+        items={models}
+        value={model?.id ?? motionDraft.model}
         accent="motion"
         onChange={(modelId) => onChange({ ...motionDraft, model: modelId as MotionModelId })}
       />
+      {model ? <CatalogEssentialControls model={model} draft={motionDraft} onChange={onChange} /> : null}
     </View>
   );
 }
 
+function CatalogEssentialControls({
+  model,
+  draft,
+  onChange,
+}: {
+  model: ReturnType<typeof getCatalogModels>[number];
+  draft: CreationDraft;
+  onChange: (draft: CreationDraft) => void;
+}) {
+  const controls = model.controls.filter((control) => ['aspectRatio', 'resolution', 'duration'].includes(control.key));
+  return (
+    <>
+      {controls.map((control) => {
+        const draftRecord = draft as unknown as Record<string, unknown>;
+        const draftKey = draft.tool === 'motion' && control.key === 'resolution' ? 'mode' : control.key;
+        if (control.type === 'choice') {
+          const current = String(draftRecord[draftKey] ?? control.defaultValue);
+          return (
+            <OptionRow key={control.key} title={control.label}>
+              {control.options.map((option) => (
+                <Chip
+                  key={option.value}
+                  label={control.key === 'duration' ? `${option.label}s` : option.label}
+                  active={current === option.value}
+                  onPress={() => onChange({ ...draft, [draftKey]: control.key === 'duration' ? Number(option.value) : option.value } as CreationDraft)}
+                />
+              ))}
+            </OptionRow>
+          );
+        }
+        if (control.type === 'integer') {
+          const current = typeof draftRecord[draftKey] === 'number' ? draftRecord[draftKey] as number : control.defaultValue;
+          return (
+            <OptionRow key={control.key} title={control.label}>
+              <Chip label="-" active={false} onPress={() => onChange({ ...draft, [draftKey]: Math.max(control.min, current - control.step) } as CreationDraft)} />
+              <Chip label={`${current}${control.unit === 'seconds' ? 's' : ''}`} active onPress={() => undefined} />
+              <Chip label="+" active={false} onPress={() => onChange({ ...draft, [draftKey]: Math.min(control.max, current + control.step) } as CreationDraft)} />
+            </OptionRow>
+          );
+        }
+        return null;
+      })}
+    </>
+  );
+}
+
 function CreationReferences({
+  catalog,
   activeTool,
   imageDraft,
   videoDraft,
@@ -923,6 +1109,7 @@ function CreationReferences({
   onUseVideoHandle,
   isUploading,
 }: {
+  catalog: GenerationModelCatalog | null;
   activeTool: CreatorToolId;
   imageDraft: ImageCreationDraft;
   videoDraft: VideoCreationDraft;
@@ -941,12 +1128,13 @@ function CreationReferences({
   isUploading: boolean;
 }) {
   if (activeTool === 'image') {
-    const model = IMAGE_MODELS[imageDraft.model];
+    const model = catalog ? getCatalogModel(catalog, imageDraft.model) : null;
+    const maxImages = model?.inputs.imageReferences?.max ?? 0;
     return (
       <View style={{ gap: appTheme.spacing.gap }}>
         <UploadBlock
           title="Reference images"
-          badge={`${imageDraft.references.length} / ${model.maxImages}`}
+          badge={`${imageDraft.references.length} / ${maxImages}`}
           body="Optional: style, pose, product, or face guide."
           actionLabel="Add reference"
           onPress={onUploadImageReferences}
@@ -963,25 +1151,33 @@ function CreationReferences({
   }
 
   if (activeTool === 'video') {
-    const elementSupport = getVideoElementSupport(videoDraft.model, { mode: videoDraft.mode, isMultiShot: videoDraft.isMultiShot });
+    const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
+    const elementLimit = model?.inputs.imageReferences?.max ?? 0;
+    const supportsElements = elementLimit > 0 && !videoDraft.isMultiShot;
+    const supportsFrames = Boolean(model?.inputs.startFrame || model?.inputs.endFrame);
+    const referenceMode = videoDraft.referenceMode === 'elements' && supportsElements
+      ? 'elements'
+      : supportsFrames ? 'frames' : 'elements';
     return (
       <View style={{ gap: appTheme.spacing.gap }}>
-        <OptionRow title="Reference mode">
-          <Chip label="Frames" active={videoDraft.referenceMode === 'frames'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'frames' }))} />
-          <Chip label="Elements" active={videoDraft.referenceMode === 'elements'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'elements' }))} />
-        </OptionRow>
-        {videoDraft.referenceMode === 'frames' ? (
+        {supportsFrames && supportsElements ? (
+          <OptionRow title="Reference mode">
+            <Chip label="Frames" active={referenceMode === 'frames'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'frames' }))} />
+            <Chip label="Elements" active={referenceMode === 'elements'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'elements' }))} />
+          </OptionRow>
+        ) : null}
+        {referenceMode === 'frames' && supportsFrames ? (
           <View style={{ gap: 10 }}>
-            <UploadBlock title="Start frame" actionLabel={videoDraft.startFrame ? 'Replace start' : 'Add start'} onPress={onUploadStart} disabled={isUploading} />
-            {videoDraft.startFrame ? (
+            {model?.inputs.startFrame ? <UploadBlock title="Start frame" actionLabel={videoDraft.startFrame ? 'Replace start' : 'Add start'} onPress={onUploadStart} disabled={isUploading} /> : null}
+            {model?.inputs.startFrame && videoDraft.startFrame ? (
               <MediaList
                 items={[videoDraft.startFrame]}
                 onRemove={() => onVideoChange((draft) => ({ ...draft, startFrame: null }))}
                 onRename={(id, displayName) => onVideoChange((draft) => ({ ...draft, startFrame: renameOptionalMedia(draft.startFrame, id, displayName) }))}
               />
             ) : null}
-            <UploadBlock title="End frame" actionLabel={videoDraft.endFrame ? 'Replace end' : 'Add end'} onPress={onUploadEnd} disabled={isUploading || videoDraft.isMultiShot} />
-            {videoDraft.endFrame ? (
+            {model?.inputs.endFrame ? <UploadBlock title="End frame" actionLabel={videoDraft.endFrame ? 'Replace end' : 'Add end'} onPress={onUploadEnd} disabled={isUploading || videoDraft.isMultiShot} /> : null}
+            {model?.inputs.endFrame && videoDraft.endFrame ? (
               <MediaList
                 items={[videoDraft.endFrame]}
                 onRemove={() => onVideoChange((draft) => ({ ...draft, endFrame: null }))}
@@ -989,17 +1185,16 @@ function CreationReferences({
               />
             ) : null}
           </View>
-        ) : (
+        ) : supportsElements ? (
           <View style={{ gap: 10 }}>
             <UploadBlock
               title="Named image elements"
-              badge={`${videoDraft.references.length} / ${elementSupport.maxElements}`}
+              badge={`${videoDraft.references.length} / ${elementLimit}`}
               body="Attach elements you can mention by name in the prompt."
-              actionLabel={elementSupport.enabled ? 'Add elements' : 'Unavailable'}
+              actionLabel="Add elements"
               onPress={onUploadVideoReferences}
-              disabled={isUploading || !elementSupport.enabled}
+              disabled={isUploading}
             />
-            {elementSupport.reason ? <AppText variant="bodySm" color="muted">{elementSupport.reason}</AppText> : null}
             <MediaList
               items={videoDraft.references}
               onRemove={(id) => onVideoChange((draft) => ({ ...draft, references: draft.references.filter((media) => media.id !== id) }))}
@@ -1007,7 +1202,7 @@ function CreationReferences({
               onUseHandle={onUseVideoHandle}
             />
           </View>
-        )}
+        ) : <AppText variant="bodySm" color="muted">This model does not accept image references.</AppText>}
       </View>
     );
   }
@@ -1036,6 +1231,7 @@ function CreationReferences({
 }
 
 function CreationAdvanced({
+  catalog,
   activeTool,
   imageDraft,
   videoDraft,
@@ -1048,6 +1244,7 @@ function CreationAdvanced({
   onRemoveReferenceAudio,
   isUploading,
 }: {
+  catalog: GenerationModelCatalog | null;
   activeTool: CreatorToolId;
   imageDraft: ImageCreationDraft;
   videoDraft: VideoCreationDraft;
@@ -1060,79 +1257,65 @@ function CreationAdvanced({
   onRemoveReferenceAudio: (id: string) => void;
   isUploading: boolean;
 }) {
-  if (activeTool === 'image') {
-    const model = IMAGE_MODELS[imageDraft.model];
-    return (
-      <View style={{ gap: appTheme.spacing.gap }}>
-        {model.supportsOutputFormat ? (
-          <OptionRow title="Output format">
-            {model.outputFormats.map((format) => (
-              <Chip key={format} label={format.toUpperCase()} active={imageDraft.outputFormat === format} onPress={() => onChange({ ...imageDraft, outputFormat: format })} />
-            ))}
-          </OptionRow>
-        ) : null}
-        {imageDraft.model === 'grok-imagine-image' ? (
-          <OptionRow title="Quality">
-            <Chip label="Standard" active={imageDraft.qualityMode === 'standard'} onPress={() => onChange({ ...imageDraft, qualityMode: 'standard' })} />
-            <Chip label="Quality" active={imageDraft.qualityMode === 'quality'} onPress={() => onChange({ ...imageDraft, qualityMode: 'quality' })} />
-          </OptionRow>
-        ) : null}
-        {model.supportsGoogleSearch ? (
-          <ToggleRow title="Google Search" value={imageDraft.googleSearch} onValueChange={(googleSearch) => onChange({ ...imageDraft, googleSearch })} />
-        ) : null}
-      </View>
-    );
-  }
-
-  if (activeTool === 'video') {
-    const model = VIDEO_MODELS[videoDraft.model];
-    return (
-      <View style={{ gap: appTheme.spacing.gap }}>
-        {model.supportsMultiShot ? (
-          <ToggleRow title="Multi-shot" value={videoDraft.isMultiShot} onValueChange={(isMultiShot) => onChange({ ...videoDraft, isMultiShot })} />
-        ) : null}
-        {videoDraft.isMultiShot ? <ShotEditor draft={videoDraft} onChange={(draft) => onChange(draft)} /> : null}
-        {model.modeOptions.length > 0 ? (
-          <OptionRow title="Mode">
-            {model.modeOptions.map((option) => (
-              <Chip key={option.value} label={option.label} active={videoDraft.mode === option.value} onPress={() => onChange({ ...videoDraft, mode: option.value })} />
-            ))}
-          </OptionRow>
-        ) : null}
-        {model.supportsSound ? <ToggleRow title="Generate sound" value={videoDraft.sound} onValueChange={(sound) => onChange({ ...videoDraft, sound })} /> : null}
-        {model.supportsFixedLens ? <ToggleRow title="Fixed lens" value={videoDraft.fixedLens} onValueChange={(fixedLens) => onChange({ ...videoDraft, fixedLens })} /> : null}
-        {isSeedance2Family(videoDraft.model) ? (
-          <View style={{ gap: 10 }}>
-            <UploadBlock title={`Reference videos (${videoDraft.referenceVideos.length}/3)`} actionLabel="Add video" onPress={onUploadVideo} disabled={isUploading} />
-            <MediaList
-              items={videoDraft.referenceVideos}
-              onRemove={onRemoveReferenceVideo}
-              onRename={(id, displayName) => onVideoChange((draft) => ({ ...draft, referenceVideos: renameMediaInList(draft.referenceVideos, id, displayName) }))}
-            />
-            <UploadBlock title="Reference audio" actionLabel="Add audio" onPress={onUploadAudio} disabled={isUploading} />
-            <MediaList
-              items={videoDraft.referenceAudios}
-              onRemove={onRemoveReferenceAudio}
-              onRename={(id, displayName) => onVideoChange((draft) => ({ ...draft, referenceAudios: renameMediaInList(draft.referenceAudios, id, displayName) }))}
-            />
-          </View>
-        ) : null}
-      </View>
-    );
-  }
+  const draft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
+  const model = catalog ? getCatalogModel(catalog, draft.model) : null;
+  if (!model) return <AppText variant="bodySm" color="muted">Model settings are unavailable.</AppText>;
 
   return (
     <View style={{ gap: appTheme.spacing.gap }}>
-      <OptionRow title="Resolution">
-        {MOTION_MODELS[motionDraft.model].resolutions.map((resolution) => (
-          <Chip key={resolution} label={resolution} active={motionDraft.mode === resolution} onPress={() => onChange({ ...motionDraft, mode: resolution })} />
-        ))}
-      </OptionRow>
-      <OptionRow title="Orientation">
-        <Chip label="Video" active={motionDraft.characterOrientation === 'video'} onPress={() => onChange({ ...motionDraft, characterOrientation: 'video' })} />
-        <Chip label="Image" active={motionDraft.characterOrientation === 'image'} onPress={() => onChange({ ...motionDraft, characterOrientation: 'image' })} />
-      </OptionRow>
+      <CatalogAdvancedControls model={model} draft={draft} onChange={onChange} />
+      {draft.tool === 'video' && draft.isMultiShot ? <ShotEditor draft={draft} onChange={(nextDraft) => onChange(nextDraft)} /> : null}
+      {draft.tool === 'video' && model.inputs.videoReferences ? (
+        <View style={{ gap: 10 }}>
+          <UploadBlock title={`Reference videos (${draft.referenceVideos.length}/${model.inputs.videoReferences.max})`} actionLabel="Add video" onPress={onUploadVideo} disabled={isUploading} />
+          <MediaList
+            items={draft.referenceVideos}
+            onRemove={onRemoveReferenceVideo}
+            onRename={(id, displayName) => onVideoChange((current) => ({ ...current, referenceVideos: renameMediaInList(current.referenceVideos, id, displayName) }))}
+          />
+        </View>
+      ) : null}
+      {draft.tool === 'video' && model.inputs.audioReferences ? (
+        <View style={{ gap: 10 }}>
+          <UploadBlock title={`Reference audio (${draft.referenceAudios.length}/${model.inputs.audioReferences.max})`} actionLabel="Add audio" onPress={onUploadAudio} disabled={isUploading} />
+          <MediaList
+            items={draft.referenceAudios}
+            onRemove={onRemoveReferenceAudio}
+            onRename={(id, displayName) => onVideoChange((current) => ({ ...current, referenceAudios: renameMediaInList(current.referenceAudios, id, displayName) }))}
+          />
+        </View>
+      ) : null}
     </View>
+  );
+}
+
+function CatalogAdvancedControls({ model, draft, onChange }: {
+  model: ReturnType<typeof getCatalogModels>[number];
+  draft: CreationDraft;
+  onChange: (draft: CreationDraft) => void;
+}) {
+  const controls = model.controls.filter((control) => !['aspectRatio', 'resolution', 'duration'].includes(control.key));
+  const draftRecord = draft as unknown as Record<string, unknown>;
+  return (
+    <>
+      {controls.map((control) => {
+        const key = draft.tool === 'motion' && control.key === 'resolution' ? 'mode' : control.key;
+        if (control.type === 'boolean') {
+          return <ToggleRow key={control.key} title={control.label} value={Boolean(draftRecord[key] ?? control.defaultValue)} onValueChange={(value) => onChange({ ...draft, [key]: value } as CreationDraft)} />;
+        }
+        if (control.type === 'choice') {
+          const current = String(draftRecord[key] ?? control.defaultValue);
+          return (
+            <OptionRow key={control.key} title={control.label}>
+              {control.options.map((option) => (
+                <Chip key={option.value} label={option.label} active={current === option.value} onPress={() => onChange({ ...draft, [key]: option.value } as CreationDraft)} />
+              ))}
+            </OptionRow>
+          );
+        }
+        return null;
+      })}
+    </>
   );
 }
 
@@ -1191,7 +1374,7 @@ function ModelPicker({
   accent,
   onChange,
 }: {
-  items: Array<{ id: string; displayName: string; description: string; badge?: string }>;
+  items: Array<{ id: string; displayName: string; description: string; badge?: string | null }>;
   value: string;
   accent: ToolAccent;
   onChange: (id: string) => void;

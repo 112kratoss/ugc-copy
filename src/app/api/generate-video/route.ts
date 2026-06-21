@@ -10,6 +10,7 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
@@ -189,6 +190,7 @@ export async function POST(request: NextRequest) {
             endFrame = null,
             seedanceAssets = null,
             sourceGenerationId = null,
+            catalogRevision = null,
         } = await request.json();
 
         if (!KIE_API_KEY) {
@@ -214,6 +216,52 @@ export async function POST(request: NextRequest) {
                 { status: 401 }
             );
         }
+
+        const quotedDuration = Boolean(isMultiShot) && Array.isArray(multiPrompts)
+            ? multiPrompts.reduce((total: number, shot: unknown) => {
+                if (!shot || typeof shot !== 'object') return total;
+                const value = (shot as { duration?: unknown }).duration;
+                return total + (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+            }, 0)
+            : duration;
+        let quote;
+        try {
+            quote = quoteGenerationModel({
+                kind: 'video',
+                modelId: model,
+                settings: {
+                    mode,
+                    aspectRatio,
+                    sound,
+                    duration: quotedDuration,
+                    resolution,
+                    fixedLens,
+                    isMultiShot: Boolean(isMultiShot),
+                },
+                inputCounts: {
+                    images: Math.max(
+                        Array.isArray(elements) ? elements.length : 0,
+                        Array.isArray(elementImageUrls) ? elementImageUrls.length : 0
+                    ),
+                    videos: Math.max(
+                        Array.isArray(referenceVideoUrls) ? referenceVideoUrls.length : 0,
+                        Array.isArray(klingVideoElements) ? klingVideoElements.length : 0
+                    ),
+                    audios: Array.isArray(referenceAudioUrls) ? referenceAudioUrls.length : 0,
+                },
+                catalogRevision,
+            });
+        } catch (error) {
+            if (error instanceof CatalogError) {
+                return NextResponse.json({
+                    error: error.message,
+                    code: error.code,
+                    fieldErrors: error.fieldErrors,
+                }, { status: error.status });
+            }
+            throw error;
+        }
+        const normalizedSettings = quote.normalizedSettings;
 
         let validatedSourceGenerationId: string | null = null;
         try {
@@ -242,12 +290,12 @@ export async function POST(request: NextRequest) {
             startImageUrl,
             endImageUrl,
             imageUrls: buildImageUrls(startImageUrl, endImageUrl),
-            mode,
-            aspectRatio,
-            sound,
-            duration,
-            resolution,
-            fixedLens,
+            mode: String(normalizedSettings.mode),
+            aspectRatio: String(normalizedSettings.aspectRatio),
+            sound: Boolean(normalizedSettings.sound),
+            duration: Number(normalizedSettings.duration),
+            resolution: String(normalizedSettings.resolution),
+            fixedLens: Boolean(normalizedSettings.fixedLens),
             referenceMode,
             startFrame,
             endFrame,

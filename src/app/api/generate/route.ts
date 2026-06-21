@@ -9,19 +9,15 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { persistGenerationInputMedia } from '@/lib/generation-input-media';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
+import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
-
-// ─── Model Config Registry ───────────────────────────────────────────────────
-const MOTION_MODEL_CONFIG: Record<string, { modelId: string; maxDuration: number }> = {
-    'kling-2.6': { modelId: 'kling-2.6/motion-control', maxDuration: 30 },
-    'kling-3.0': { modelId: 'kling-3.0/motion-control', maxDuration: 30 },
-};
 
 export async function POST(request: NextRequest) {
     let refundState: {
@@ -46,13 +42,14 @@ export async function POST(request: NextRequest) {
             model = 'kling-2.6',
             referenceVideoUrl,
             characterImageUrl,
-            duration = 10,
-            characterOrientation = 'video',
-            mode = '720p',
+            duration: requestedDuration = 10,
+            characterOrientation: requestedCharacterOrientation = 'video',
+            mode: requestedMode = '720p',
             prompt = '',
             characterImage = null,
             referenceVideo = null,
             sourceGenerationId = null,
+            catalogRevision = null,
         } = await request.json();
 
         if (!referenceVideoUrl || !characterImageUrl) {
@@ -62,7 +59,7 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const modelConfig = MOTION_MODEL_CONFIG[model];
+        const modelConfig = MOTION_MODELS[model as MotionModelId];
         if (!modelConfig) {
             return NextResponse.json(
                 { error: `Unsupported model: ${model}` },
@@ -71,7 +68,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Validate Duration
-        if (duration <= 0 || duration > modelConfig.maxDuration) {
+        if (requestedDuration <= 0 || requestedDuration > modelConfig.maxDuration) {
             return NextResponse.json(
                 { error: `Invalid duration. Must be between 1 and ${modelConfig.maxDuration} seconds.` },
                 { status: 400 }
@@ -104,6 +101,33 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        let quote;
+        try {
+            quote = quoteGenerationModel({
+                kind: 'motion',
+                modelId: model,
+                settings: {
+                    resolution: requestedMode,
+                    characterOrientation: requestedCharacterOrientation,
+                    duration: requestedDuration,
+                },
+                inputCounts: { images: 1, videos: 1, audios: 0 },
+                catalogRevision,
+            });
+        } catch (error) {
+            if (error instanceof CatalogError) {
+                return NextResponse.json({
+                    error: error.message,
+                    code: error.code,
+                    fieldErrors: error.fieldErrors,
+                }, { status: error.status });
+            }
+            throw error;
+        }
+        const duration = Number(quote.normalizedSettings.duration);
+        const characterOrientation = String(quote.normalizedSettings.characterOrientation);
+        const mode = String(quote.normalizedSettings.resolution);
+
         let validatedSourceGenerationId: string | null = null;
         try {
             validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
@@ -115,16 +139,7 @@ export async function POST(request: NextRequest) {
             throw error;
         }
 
-        // Calculate Cost Dynamically
-        let creditsPerSecond = 0;
-        if (model === 'kling-3.0') {
-            creditsPerSecond = mode === '1080p' ? 20 : 12;
-        } else {
-            // kling-2.6
-            creditsPerSecond = mode === '1080p' ? 9 : 6;
-        }
-        
-        const COST = Math.ceil(duration * creditsPerSecond);
+        const COST = quote.costCredits;
         const normalizedCharacterImage = normalizeRemixMediaAssetDescriptor(characterImage, 'image');
         const normalizedReferenceVideo = normalizeRemixMediaAssetDescriptor(referenceVideo, 'video');
 
@@ -170,7 +185,7 @@ export async function POST(request: NextRequest) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: modelConfig.modelId,
+                model: modelConfig.apiModelId,
                 callBackUrl,
                 input: {
                     prompt: prompt.trim() || "The cartoon character is dancing.",
@@ -208,7 +223,7 @@ export async function POST(request: NextRequest) {
             .from('generations')
             .insert({
                 user_id: user.id,
-                model: modelConfig.modelId,
+                model: modelConfig.apiModelId,
                 duration: duration,
                 cost: COST,
                 prediction_id: taskId,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
@@ -21,6 +21,12 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import {
+    getActiveRegistryModels,
+    resolveCatalogModelId,
+    useWebGenerationModelCatalog,
+    useWebGenerationModelQuote,
+} from '@/lib/generation-model-client';
 import { useAuth } from '@/app/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
 import {
@@ -392,6 +398,7 @@ export interface CreateVideoPrefill {
 export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
+    const modelCatalog = useWebGenerationModelCatalog();
     const remixId = prefill.remixId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
@@ -434,10 +441,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
     const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [promptQualityWarnings, setPromptQualityWarnings] = useState<PromptEnhancementWarning[]>([]);
     const [multiPromptQualityWarnings, setMultiPromptQualityWarnings] = useState<Record<string, PromptEnhancementWarning[]>>({});
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
+    const hasResolvedInitialCatalogModel = useRef(false);
     const startImageInputRef = useRef<HTMLInputElement>(null);
     const endImageInputRef = useRef<HTMLInputElement>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
@@ -477,15 +486,32 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     useEffect(() => {
         if (remixId) return;
         if (prefillPrompt) setPrompt(prefillPrompt);
-        if (prefillModel && prefillModel in VIDEO_MODELS) setSelectedModel(prefillModel as VideoModelId);
+        const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'video' && candidate.id === prefillModel));
+        if (prefillModel && (prefillModel in VIDEO_MODELS || isCatalogModel)) setSelectedModel(prefillModel as VideoModelId);
         if (prefillAspectRatio) setAspectRatio(prefillAspectRatio);
         if (prefillDuration) {
             const nextDuration = Number(prefillDuration);
             if (!Number.isNaN(nextDuration)) setSingleDuration(nextDuration);
         }
-    }, [prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
+    }, [modelCatalog.catalog, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
 
     const videoModel = VIDEO_MODELS[selectedModel];
+    const videoModelOptions = getActiveRegistryModels(
+        VIDEO_MODELS as unknown as Record<string, typeof VIDEO_MODELS[VideoModelId]>
+    );
+    useEffect(() => {
+        if (!modelCatalog.catalog) return;
+        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
+        const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'video', selectedModel, { preferDefault });
+        hasResolvedInitialCatalogModel.current = true;
+        if (nextModelId && nextModelId !== selectedModel) {
+            const nextModel = (VIDEO_MODELS as unknown as Record<string, typeof videoModel>)[nextModelId];
+            setSelectedModel(nextModelId as VideoModelId);
+            if (!preferDefault) {
+                setCatalogNotice(`Your previous video model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
+            }
+        }
+    }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
     const revokeObjectUrl = (url: string | null) => {
@@ -634,7 +660,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (videoModel.provider === 'veo' ? videoModel.durations[0] : currentDuration);
     const hasReferenceVideoForRun = referenceVideos.length > 0 || (isKlingVideoModel && klingVideoElements.length > 0);
-    const estimatedCost = getVideoCost(selectedModel, {
+    const fallbackEstimatedCost = getVideoCost(selectedModel, {
         mode: currentMode,
         sound: currentSound,
         durationSeconds: totalDuration,
@@ -646,6 +672,33 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         activeReferenceMode === 'elements'
             ? elements.length + referenceVideos.length + referenceAudios.length
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
+    const quoteRequest = useMemo(() => modelCatalog.catalog ? {
+        kind: 'video' as const,
+        modelId: selectedModel,
+        settings: {
+            mode: currentMode,
+            aspectRatio: currentAspectRatio,
+            sound: currentSound,
+            duration: totalDuration,
+            resolution: currentResolution,
+            fixedLens: currentFixedLens,
+            isMultiShot: currentIsMultiShot,
+        },
+        inputCounts: {
+            images: elements.length + frameReferenceCount,
+            videos: referenceVideos.length + klingVideoElements.length,
+            audios: referenceAudios.length,
+        },
+        catalogRevision: modelCatalog.catalog.revision,
+    } : null, [currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, frameReferenceCount, klingVideoElements.length, modelCatalog.catalog, referenceAudios.length, referenceVideos.length, selectedModel, totalDuration]);
+    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
+    useEffect(() => {
+        if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+        modelCatalog.refetch();
+    }, [modelCatalog.refetch, quoteState.error?.code]);
+    const estimatedCost = quoteState.quote?.costCredits ?? fallbackEstimatedCost;
+    const quotePending = Boolean(modelCatalog.catalog && quoteState.status !== 'ready');
     const estimatedGenerationTotalMs = estimateGenerationDurationMs({
         kind: 'video',
         model: selectedModel,
@@ -2280,6 +2333,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setError(`Insufficient credits. This costs ${estimatedCost} credits.`);
             return;
         }
+        if (quotePending) {
+            setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.');
+            return;
+        }
 
         setIsGenerating(true);
         setError(null);
@@ -2521,6 +2578,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 endFrame: activeReferenceMode === 'frames' ? nextEndFrameDescriptor : undefined,
                 seedanceAssets: isSeedance2Family ? nextSeedanceAssets : undefined,
                 sourceGenerationId: remixId || undefined,
+                catalogRevision: modelCatalog.catalog?.revision,
             };
 
             const response = await fetch('/api/generate-video', {
@@ -2533,7 +2591,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             });
 
             const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Failed to start generation');
+            if (!data.success) {
+                if (data.code === 'CATALOG_CHANGED') {
+                    setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+                    modelCatalog.refetch();
+                }
+                throw new Error(data.error || 'Failed to start generation');
+            }
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
@@ -2639,6 +2703,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     />
                                 </motion.div>
                             )}
+                            {catalogNotice ? (
+                                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioRemixNotice description={catalogNotice} />
+                                </motion.div>
+                            ) : null}
                         </AnimatePresence>
 
                         <motion.div
@@ -2672,7 +2741,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         className="absolute z-50 mt-2 w-full bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
                                         style={{ transformOrigin: 'top' }}
                                     >
-                                        {(Object.values(VIDEO_MODELS) as typeof VIDEO_MODELS[VideoModelId][]).map((modelOption) => {
+                                        {videoModelOptions.map((modelOption) => {
                                             const isActive = selectedModel === modelOption.id;
                                             const modelOptionDurationRange = getVideoDurationRange(modelOption.id);
 
@@ -3827,7 +3896,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                     <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{estimatedCost} credits</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{quotePending ? 'Calculating...' : `${estimatedCost} credits`}</div>
                                     </div>
                                 </div>
                             }
@@ -3896,7 +3965,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={isGenerating}
+                                        disabled={isGenerating || quotePending}
                                         className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4 text-base font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
                                     >
                                         {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Video</>}

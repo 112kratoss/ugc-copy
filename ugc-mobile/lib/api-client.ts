@@ -23,6 +23,12 @@ import type {
   SourceToolOption,
   VideoGenerationRequest,
 } from './types';
+import {
+  parseGenerationModelCatalog,
+  type GenerationModelCatalog,
+  type GenerationModelQuote,
+  type GenerationModelQuoteRequest,
+} from './generation-model-catalog';
 
 export class ApiError extends Error {
   constructor(
@@ -317,6 +323,20 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request<CreatePostResponse>('/api/posts', { method: 'POST', body }),
     listSourceTools: () =>
       request<{ tools: SourceToolOption[] }>('/api/source-tools'),
+    listGenerationModels: async (): Promise<GenerationModelCatalog> => {
+      const response = await request<unknown>(
+        '/api/generation-models?platform=mobile&schemaVersion=1',
+        {},
+        { auth: false, cacheTtlMs: CONTENT_CACHE_TTL_MS }
+      );
+      return parseGenerationModelCatalog(response);
+    },
+    quoteGenerationModel: (body: GenerationModelQuoteRequest, signal?: AbortSignal) =>
+      request<GenerationModelQuote>('/api/generation-models/quote', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal,
+      }),
     uploadPostResourceFile: (body: FormData) =>
       request<{ success: boolean; attachment: PostResourceAttachment }>('/api/posts/resource-files', {
         method: 'POST',

@@ -16,6 +16,13 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
+import type {
+    ImageModelId,
+    ImageOutputFormat,
+    ImageQualityMode,
+    ImageResolution,
+} from '@/lib/models';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
@@ -59,6 +66,7 @@ export async function POST(request: NextRequest) {
             outputFormat = 'jpg',
             googleSearch = false,
             sourceGenerationId = null,
+            catalogRevision = null,
         } = await request.json();
 
         if (!KIE_API_KEY) {
@@ -86,6 +94,40 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        let quote;
+        try {
+            quote = quoteGenerationModel({
+                kind: 'image',
+                modelId: model,
+                settings: {
+                    aspectRatio,
+                    resolution,
+                    qualityMode,
+                    outputFormat,
+                    googleSearch,
+                },
+                inputCounts: {
+                    images: Math.max(
+                        Array.isArray(imageUrls) ? imageUrls.length : 0,
+                        Array.isArray(elements) ? elements.length : 0
+                    ),
+                    videos: 0,
+                    audios: 0,
+                },
+                catalogRevision,
+            });
+        } catch (error) {
+            if (error instanceof CatalogError) {
+                return NextResponse.json({
+                    error: error.message,
+                    code: error.code,
+                    fieldErrors: error.fieldErrors,
+                }, { status: error.status });
+            }
+            throw error;
+        }
+        const normalizedSettings = quote.normalizedSettings;
+
         let validatedSourceGenerationId: string | null = null;
         try {
             validatedSourceGenerationId = await resolveSourceGenerationId(supabase, user.id, sourceGenerationId);
@@ -101,15 +143,15 @@ export async function POST(request: NextRequest) {
             supabase,
             creditSupabase: createServiceClient(),
             userId: user.id,
-            model,
+            model: model as ImageModelId,
             prompt,
             imageUrls,
             elements,
-            aspectRatio,
-            resolution,
-            qualityMode,
-            outputFormat,
-            googleSearch,
+            aspectRatio: String(normalizedSettings.aspectRatio),
+            resolution: normalizedSettings.resolution as ImageResolution,
+            qualityMode: normalizedSettings.qualityMode as ImageQualityMode | undefined,
+            outputFormat: normalizedSettings.outputFormat as ImageOutputFormat,
+            googleSearch: Boolean(normalizedSettings.googleSearch),
             sourceGenerationId: validatedSourceGenerationId,
         });
 

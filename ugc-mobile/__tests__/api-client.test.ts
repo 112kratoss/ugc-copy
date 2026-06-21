@@ -189,6 +189,55 @@ describe('mobile api client caching', () => {
     expect(response.tools[0].models[0].label).toBe('Gen-4');
   });
 
+  it('loads and caches the public generation model catalog', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      schemaVersion: 1,
+      revision: '0123456789abcdef',
+      defaults: { image: null, video: null, motion: null },
+      models: [],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.listGenerationModels();
+    await api.listGenerationModels();
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generation-models?platform=mobile&schemaVersion=1');
+    expect((init.headers as Headers).get('Authorization')).toBeNull();
+  });
+
+  it('requests an authenticated authoritative generation quote', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      modelId: 'nano-banana-2',
+      catalogRevision: '0123456789abcdef',
+      normalizedSettings: { aspectRatio: '1:1', resolution: '1K' },
+      costCredits: 8,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.quoteGenerationModel({
+      kind: 'image',
+      modelId: 'nano-banana-2',
+      settings: { aspectRatio: '1:1', resolution: '1K' },
+      inputCounts: { images: 0, videos: 0, audios: 0 },
+      catalogRevision: '0123456789abcdef',
+    });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generation-models/quote');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
   it('saves showcase posts with an idempotent target state and source surface', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,

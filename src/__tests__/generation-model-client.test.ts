@@ -1,0 +1,105 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import contractFixture from '../../contracts/generation-model-catalog-v1.json';
+import {
+  applyGenerationModelCatalogToRegistries,
+  getActiveRegistryModels,
+  loadWebGenerationModelCatalog,
+  parseClientGenerationModelCatalog,
+  requestWebGenerationQuote,
+  resolveCatalogModelId,
+} from '@/lib/generation-model-client';
+
+describe('web generation model catalog client', () => {
+  it('parses the shared schema-v1 fixture', () => {
+    const catalog = parseClientGenerationModelCatalog(contractFixture);
+    expect(catalog.models[0]).toMatchObject({ id: 'fixture-image', kind: 'image' });
+  });
+
+  it('adapts a remote-only model into the legacy web registry shape', () => {
+    const catalog = parseClientGenerationModelCatalog(contractFixture);
+    const registries = { image: { 'retired-image': { id: 'retired-image' } }, video: {}, motion: {} };
+
+    applyGenerationModelCatalogToRegistries(catalog, registries);
+
+    expect(registries.image).toHaveProperty('fixture-image');
+    expect((registries.image as Record<string, Record<string, unknown>>)['fixture-image']).toMatchObject({
+      id: 'fixture-image',
+      displayName: 'Fixture Image',
+      aspectRatios: ['1:1', '9:16'],
+      maxImages: 2,
+      supportsGoogleSearch: true,
+      catalogManaged: true,
+      catalogActive: true,
+    });
+    expect(registries.image['retired-image']).toMatchObject({ catalogActive: false });
+    expect(getActiveRegistryModels(registries.image).map((model) => model.id)).toEqual(['fixture-image']);
+    expect(resolveCatalogModelId(catalog, 'image', 'retired-image')).toBe('fixture-image');
+  });
+
+  it('prefers the server default when resolving a fresh active selection', () => {
+    const catalog = parseClientGenerationModelCatalog({
+      ...contractFixture,
+      models: [
+        ...contractFixture.models,
+        { ...contractFixture.models[0], id: 'bundled-active-image', displayName: 'Bundled Active Image' },
+      ],
+    });
+
+    expect(resolveCatalogModelId(catalog, 'image', 'bundled-active-image', { preferDefault: true })).toBe('fixture-image');
+  });
+
+  it('uses the last valid local catalog when the network request fails', async () => {
+    const storage = {
+      getItem: vi.fn(() => JSON.stringify(contractFixture)),
+      setItem: vi.fn(),
+    };
+    const fetcher = vi.fn(async () => {
+      throw new Error('offline');
+    });
+
+    await expect(loadWebGenerationModelCatalog({ fetcher: fetcher as unknown as typeof fetch, storage })).resolves.toMatchObject({
+      revision: '0123456789abcdef',
+    });
+  });
+
+  it('bypasses the browser cache when refreshing after a catalog conflict', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(contractFixture), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await loadWebGenerationModelCatalog({
+      fetcher: fetcher as unknown as typeof fetch,
+      storage: undefined,
+      forceRefresh: true,
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/generation-models?platform=web&schemaVersion=1',
+      { cache: 'no-store' }
+    );
+  });
+
+  it('requests an authoritative quote with the current catalog revision', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      modelId: 'fixture-image',
+      catalogRevision: '0123456789abcdef',
+      normalizedSettings: { aspectRatio: '1:1' },
+      costCredits: 7,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(requestWebGenerationQuote({
+      kind: 'image',
+      modelId: 'fixture-image',
+      settings: { aspectRatio: '1:1' },
+      inputCounts: { images: 0, videos: 0, audios: 0 },
+      catalogRevision: '0123456789abcdef',
+    }, 'token-1', undefined, fetcher as unknown as typeof fetch)).resolves.toMatchObject({ costCredits: 7 });
+
+    expect(fetcher).toHaveBeenCalledWith('/api/generation-models/quote', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
+    }));
+  });
+});

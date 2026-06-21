@@ -35,6 +35,10 @@ import {
   type WorkflowNodeKind,
 } from '@/lib/workflow-canvas';
 import { getClientE2EAuthState } from '@/lib/e2e-auth';
+import {
+  resolveCatalogModelId,
+  useWebGenerationModelCatalog,
+} from '@/lib/generation-model-client';
 import { supabase } from '@/lib/supabase';
 import { WorkflowCanvasChrome } from './WorkflowCanvasChrome';
 import { WorkflowCanvasLeftRail } from './WorkflowCanvasPanels';
@@ -151,6 +155,7 @@ export default function CreateWorkflowClient({
 }) {
   const router = useRouter();
   const { credits, refreshSessionState, session, updateCredits } = useAuth();
+  const modelCatalog = useWebGenerationModelCatalog();
   const e2eAuth = useMemo(() => getClientE2EAuthState(), []);
   const effectiveSession = session ?? e2eAuth?.session ?? null;
   const canvasSectionRef = useRef<HTMLElement | null>(null);
@@ -185,6 +190,47 @@ export default function CreateWorkflowClient({
   const markCanvasChanged = useCallback(() => {
     setChangeKey((current) => current + 1);
   }, []);
+
+  useEffect(() => {
+    if (!modelCatalog.catalog) {
+      return;
+    }
+
+    let migratedCount = 0;
+    const nextNodes = nodes.map((node) => {
+      const kind = node.type === 'image-generate'
+        ? 'image'
+        : node.type === 'video-generate'
+          ? 'video'
+          : node.type === 'motion-generate'
+            ? 'motion'
+            : null;
+      if (!kind) {
+        return node;
+      }
+
+      const selectedModel = typeof node.data.model === 'string' ? node.data.model : '';
+      const replacementModel = resolveCatalogModelId(modelCatalog.catalog!, kind, selectedModel);
+      if (!replacementModel || replacementModel === selectedModel) {
+        return node;
+      }
+
+      migratedCount += 1;
+      return {
+        ...node,
+        data: normalizeNodeData(node.type, {
+          ...node.data,
+          model: replacementModel,
+        } as Partial<WorkflowNodeData>),
+      };
+    });
+
+    if (migratedCount > 0) {
+      setNodes(nextNodes);
+      markCanvasChanged();
+      setError(`${migratedCount} retired workflow model${migratedCount === 1 ? ' was' : 's were'} replaced with current defaults. Review settings before running.`);
+    }
+  }, [markCanvasChanged, modelCatalog.catalog, nodes]);
 
   const authHeaders = useCallback(async () => {
     const token = effectiveSession?.access_token;

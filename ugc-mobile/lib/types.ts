@@ -102,6 +102,7 @@ export interface ImageGenerationRequest {
   outputFormat?: 'jpg' | 'png';
   googleSearch?: boolean;
   sourceGenerationId?: string | null;
+  catalogRevision?: string | null;
 }
 
 export interface VideoMultiPromptInput {
@@ -133,6 +134,7 @@ export interface VideoGenerationRequest {
   endFrame?: RemixMediaAssetDescriptor | null;
   seedanceAssets?: unknown | null;
   sourceGenerationId?: string | null;
+  catalogRevision?: string | null;
 }
 
 export interface MotionGenerationRequest {
@@ -146,6 +148,7 @@ export interface MotionGenerationRequest {
   characterImage?: RemixMediaAssetDescriptor | null;
   referenceVideo?: RemixMediaAssetDescriptor | null;
   sourceGenerationId?: string | null;
+  catalogRevision?: string | null;
 }
 
 export type PromptEnhancementMedium = 'image' | 'video' | 'motion';

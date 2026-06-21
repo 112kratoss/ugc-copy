@@ -130,6 +130,30 @@ describe('/api/generate route', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects a stale catalog revision before deducting credits', async () => {
+    const { POST } = await import('@/app/api/generate/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-2.6',
+          characterImageUrl: 'https://signed.example.com/character.png',
+          referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+          catalogRevision: 'stale-revision',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'CATALOG_CHANGED' });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('persists motion input descriptors for remix restoration', async () => {
     const { POST } = await import('@/app/api/generate/route');
     const response = await POST(

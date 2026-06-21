@@ -137,6 +137,32 @@ describe('/api/generate-video route', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects a stale catalog revision before deducting credits', async () => {
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-video',
+          prompt: 'A cinematic product video',
+          catalogRevision: 'stale-revision',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'CATALOG_CHANGED' });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('sends Kling single-shot requests with an explicit multi_shots flag', async () => {
     let providerBody: Record<string, unknown> | null = null;
 

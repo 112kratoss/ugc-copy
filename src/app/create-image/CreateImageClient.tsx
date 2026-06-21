@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
@@ -68,6 +68,12 @@ import {
     type ImageQualityMode,
     type ImageResolution,
 } from '@/lib/models';
+import {
+    getActiveRegistryModels,
+    resolveCatalogModelId,
+    useWebGenerationModelCatalog,
+    useWebGenerationModelQuote,
+} from '@/lib/generation-model-client';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 
@@ -156,6 +162,7 @@ type GenerationStatusResponse = {
 export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
+    const modelCatalog = useWebGenerationModelCatalog();
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
     const [elements, setElements] = useState<ImageElementDraft[]>([]);
@@ -173,8 +180,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
     const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const hasResolvedInitialCatalogModel = useRef(false);
     const hasRestoredPersistedMedia = useRef(false);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -206,11 +215,29 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     useEffect(() => {
         if (remixId) return;
         if (prefillPrompt) setPrompt(prefillPrompt);
-        if (prefillModel && prefillModel in IMAGE_MODELS) setSelectedModel(prefillModel as ModelId);
+        const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'image' && candidate.id === prefillModel));
+        if (prefillModel && (prefillModel in IMAGE_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
         if (prefillAspectRatio) setAspectRatio(prefillAspectRatio);
-    }, [prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
+    }, [modelCatalog.catalog, prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
 
     const model = IMAGE_MODELS[selectedModel];
+    const imageModelOptions = getActiveRegistryModels(
+        IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[ImageModelId]>
+    );
+
+    useEffect(() => {
+        if (!modelCatalog.catalog) return;
+        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
+        const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'image', selectedModel, { preferDefault });
+        hasResolvedInitialCatalogModel.current = true;
+        if (nextModelId && nextModelId !== selectedModel) {
+            const nextModel = (IMAGE_MODELS as unknown as Record<string, typeof model>)[nextModelId];
+            setSelectedModel(nextModelId as ModelId);
+            if (!preferDefault) {
+                setCatalogNotice(`Your previous image model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
+            }
+        }
+    }, [modelCatalog.catalog, selectedModel, prefillModel, remixId]);
     const revokePreviewUrl = (url: string | null | undefined) => {
         if (url?.startsWith('blob:')) {
             URL.revokeObjectURL(url);
@@ -746,17 +773,31 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
-    const calculateCost = () => {
+    const calculateFallbackCost = () => {
         return getImageCost(selectedModel, resolution, {
             qualityMode,
             referenceCount: elements.length,
         });
     };
-    const currentCost = calculateCost();
+    const quoteRequest = useMemo(() => modelCatalog.catalog ? {
+        kind: 'image' as const,
+        modelId: selectedModel,
+        settings: { aspectRatio, resolution, qualityMode, outputFormat: 'jpg', googleSearch },
+        inputCounts: { images: elements.length, videos: 0, audios: 0 },
+        catalogRevision: modelCatalog.catalog.revision,
+    } : null, [aspectRatio, elements.length, googleSearch, modelCatalog.catalog, qualityMode, resolution, selectedModel]);
+    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
+    useEffect(() => {
+        if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+        modelCatalog.refetch();
+    }, [modelCatalog.refetch, quoteState.error?.code]);
+    const currentCost = quoteState.quote?.costCredits ?? calculateFallbackCost();
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
     const showResolutionControl = supportsImageResolutionControl(selectedModel);
     const isGrokImageModel = selectedModel === 'grok-imagine-image';
     const insufficientCredits = userCredits !== null && userCredits < currentCost;
+    const quotePending = Boolean(modelCatalog.catalog && quoteState.status !== 'ready');
     const elementHandles = elements.map((element) => element.handle);
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
@@ -830,6 +871,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     const handleGenerate = async () => {
         if (!prompt.trim()) { setError('Please enter a prompt'); return; }
+        if (quotePending) { setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.'); return; }
         if (staleElementMentions.length > 0) {
             setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
             return;
@@ -933,11 +975,18 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     googleSearch: model.supportsGoogleSearch ? googleSearch : false,
                     outputFormat: 'jpg',
                     sourceGenerationId: remixId || undefined,
+                    catalogRevision: modelCatalog.catalog?.revision,
                 })
             });
 
             const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Failed to start generation');
+            if (!data.success) {
+                if (data.code === 'CATALOG_CHANGED') {
+                    setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+                    modelCatalog.refetch();
+                }
+                throw new Error(data.error || 'Failed to start generation');
+            }
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
 
@@ -1092,6 +1141,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 controls={
                     <>
                         <AnimatePresence>
+                            {catalogNotice ? (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -12 }}
+                                >
+                                    <StudioRemixNotice description={catalogNotice} />
+                                </motion.div>
+                            ) : null}
                             {remixId && !isRemixLoading && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 12 }}
@@ -1169,7 +1227,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         className="absolute z-50 mt-2 w-[calc(100%-3rem)] bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
                                         style={{ transformOrigin: 'top' }}
                                     >
-                                        {(Object.values(IMAGE_MODELS) as typeof IMAGE_MODELS[ModelId][]).map((m) => {
+                                        {imageModelOptions.map((m) => {
                                             const isActive = selectedModel === m.id;
                                             return (
                                                 <button
@@ -1564,7 +1622,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </div>
                                     <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{currentCost} credits</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{quotePending ? 'Calculating...' : `${currentCost} credits`}</div>
                                     </div>
                                 </div>
                             }
@@ -1609,7 +1667,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={!prompt.trim() || isGenerating || staleElementMentions.length > 0}
+                                        disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0}
                                         className={`flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r px-6 py-4 text-base font-semibold text-white transition ${accentStyles.generate} disabled:cursor-not-allowed disabled:opacity-50`}
                                     >
                                         {isGenerating ? (

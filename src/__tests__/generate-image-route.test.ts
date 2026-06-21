@@ -149,6 +149,31 @@ describe('/api/generate-image route', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects a stale catalog revision before deducting credits', async () => {
+    currentSupabaseMock = createSupabaseMock(null);
+
+    const { POST } = await import('@/app/api/generate-image/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          prompt: 'A product hero image',
+          model: 'nano-banana-2',
+          catalogRevision: 'stale-revision',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'CATALOG_CHANGED' });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('persists sourceGenerationId when the remix source is accessible', async () => {
     currentSupabaseMock = createSupabaseMock({
       id: 'source-1',
@@ -225,8 +250,11 @@ describe('/api/generate-image route', () => {
     );
 
     const data = await response.json();
-    expect(response.status).toBe(400);
-    expect(data.error).toContain('GPT Image 2 supports 1K, 2K at aspect ratio 1:1.');
+    expect(response.status).toBe(422);
+    expect(data).toMatchObject({
+      code: 'INVALID_MODEL_SETTINGS',
+      fieldErrors: { resolution: expect.any(String) },
+    });
     expect(currentSupabaseMock.inserts).toHaveLength(0);
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();

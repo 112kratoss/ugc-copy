@@ -5,6 +5,15 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   : undefined;
 
 const nextConfig: NextConfig = {
+  outputFileTracingExcludes: {
+    "**/*": [
+      "./audits/**",
+      "./model_api_references/**",
+      "./mockups/**",
+      "./output/**",
+      "./ugc-mobile/**",
+    ],
+  },
   images: {
     remotePatterns: supabaseUrl
       ? [

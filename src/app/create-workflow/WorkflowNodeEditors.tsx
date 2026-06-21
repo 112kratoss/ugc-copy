@@ -13,6 +13,7 @@ import {
   insertHandleIntoPrompt,
   isValidElementHandle,
 } from '@/lib/image-elements';
+import { getActiveRegistryModels } from '@/lib/generation-model-client';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
@@ -79,6 +80,17 @@ const VOICEOVER_MODEL_OPTIONS = [
   'text-to-speech-multilingual-v2',
   'text-to-dialogue-v3',
 ] as const;
+
+function getActiveModelOptions(registry: unknown): Array<{ value: string; label: string }> {
+  return getActiveRegistryModels(registry as Record<string, {
+    id: string;
+    displayName: string;
+    catalogActive?: boolean;
+  }>).map((model) => ({
+    value: model.id,
+    label: model.displayName,
+  }));
+}
 
 type SelectOption = string | { value: string; label: string };
 
@@ -2015,10 +2027,7 @@ function NodeEditorContent({
             label="Model"
             value={imageGenerateNode?.model || ''}
             onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
-            options={Object.values(IMAGE_MODELS).map((modelOption) => ({
-              value: modelOption.id,
-              label: modelOption.displayName,
-            }))}
+            options={getActiveModelOptions(IMAGE_MODELS)}
           />
           <SelectField
             label="Aspect ratio"
@@ -2076,10 +2085,7 @@ function NodeEditorContent({
             label="Model"
             value={videoGenerateNode.model}
             onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
-            options={Object.values(VIDEO_MODELS).map((modelOption) => ({
-              value: modelOption.id,
-              label: modelOption.displayName,
-            }))}
+            options={getActiveModelOptions(VIDEO_MODELS)}
           />
           {(videoModel.supportsMultiShot || videoGenerateNode.isMultiShot) && (
             <CheckboxField
@@ -2318,10 +2324,7 @@ function NodeEditorContent({
             label="Model"
             value={motionGenerateNode?.model || ''}
             onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
-            options={Object.values(MOTION_MODELS).map((modelOption) => ({
-              value: modelOption.id,
-              label: modelOption.displayName,
-            }))}
+            options={getActiveModelOptions(MOTION_MODELS)}
           />
           <SelectField
             label="Resolution"

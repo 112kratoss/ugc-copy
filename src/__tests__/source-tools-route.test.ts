@@ -91,4 +91,38 @@ describe('/api/source-tools route', () => {
     expect(payload.tools.some((tool: { slug: string }) => tool.slug === 'magicbooklet')).toBe(true);
     expect(payload.tools.some((tool: { slug: string }) => tool.slug === 'higgsfield')).toBe(true);
   });
+
+  it('derives magicbooklet source model labels from the generation catalog', async () => {
+    tableResults.set('source_tools', {
+      data: [
+        {
+          id: 'tool-app',
+          slug: 'magicbooklet',
+          label: 'magicbooklet',
+          supported_media_kinds: ['image', 'video'],
+          sort_order: 0,
+        },
+      ],
+      error: null,
+    });
+    tableResults.set('source_tool_models', {
+      data: [
+        {
+          source_tool_id: 'tool-app',
+          slug: 'stale-hardcoded-model',
+          label: 'Stale Hardcoded Model',
+          sort_order: 0,
+        },
+      ],
+      error: null,
+    });
+
+    const { GET } = await import('@/app/api/source-tools/route');
+    const response = await GET();
+    const payload = await response.json();
+    const magicbooklet = payload.tools.find((tool: { slug: string }) => tool.slug === 'magicbooklet');
+
+    expect(magicbooklet.models).toContainEqual({ slug: 'nano-banana-2', label: 'Nano Banana 2.0' });
+    expect(magicbooklet.models).not.toContainEqual({ slug: 'stale-hardcoded-model', label: 'Stale Hardcoded Model' });
+  });
 });

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "revision": "0123456789abcdef",
+  "defaults": {
+    "image": "fixture-image",
+    "video": null,
+    "motion": null
+  },
+  "models": [
+    {
+      "id": "fixture-image",
+      "kind": "image",
+      "displayName": "Fixture Image",
+      "description": "Contract fixture for schema-v1 clients.",
+      "badge": "New",
+      "recommended": true,
+      "sortOrder": 0,
+      "minClientSchemaVersion": 1,
+      "controls": [
+        {
+          "key": "aspectRatio",
+          "label": "Aspect ratio",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "1:1",
+          "options": [
+            { "value": "1:1", "label": "1:1" },
+            { "value": "9:16", "label": "9:16" }
+          ]
+        },
+        {
+          "key": "googleSearch",
+          "label": "Google Search",
+          "type": "boolean",
+          "presentation": "toggle",
+          "defaultValue": false
+        }
+      ],
+      "capabilities": {
+        "multiShot": false,
+        "sound": false,
+        "fixedLens": false,
+        "googleSearch": true,
+        "outputFormat": false
+      },
+      "inputs": {
+        "imageReferences": { "max": 2, "supportsNaming": true },
+        "videoReferences": null,
+        "audioReferences": null,
+        "startFrame": false,
+        "endFrame": false
+      }
+    }
+  ]
+}

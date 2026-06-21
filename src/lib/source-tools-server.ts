@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { createServiceClient } from '@/lib/server-helpers';
 import { FALLBACK_SOURCE_TOOLS, type SourceToolOption } from '@/lib/source-tools';
 
@@ -34,6 +35,18 @@ function normalizeSupportedMediaKinds(value: string[] | null): Array<'image' | '
   return normalized.length > 0 ? normalized : ['image', 'video'];
 }
 
+function withGenerationCatalogModels(tools: SourceToolOption[]): SourceToolOption[] {
+  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
+  const generationModels = catalog.models.map((model) => ({
+    slug: model.id,
+    label: model.displayName,
+  }));
+
+  return tools.map((tool) => tool.slug === 'magicbooklet'
+    ? { ...tool, models: generationModels }
+    : tool);
+}
+
 export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
   const supabase = createServiceClient();
 
@@ -46,14 +59,14 @@ export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
 
   if (toolsError) {
     if (isMissingCatalogSchemaError(toolsError)) {
-      return FALLBACK_SOURCE_TOOLS;
+      return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS);
     }
     throw toolsError;
   }
 
   const toolRows = (tools ?? []) as SourceToolRow[];
   if (toolRows.length === 0) {
-    return FALLBACK_SOURCE_TOOLS;
+    return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS);
   }
 
   const toolIds = toolRows.map((tool) => tool.id);
@@ -67,7 +80,7 @@ export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
 
   if (modelsError) {
     if (isMissingCatalogSchemaError(modelsError)) {
-      return FALLBACK_SOURCE_TOOLS;
+      return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS);
     }
     throw modelsError;
   }
@@ -79,7 +92,7 @@ export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
     modelsByToolId.set(model.source_tool_id, list);
   }
 
-  return toolRows.map((tool) => ({
+  return withGenerationCatalogModels(toolRows.map((tool) => ({
     slug: tool.slug,
     label: tool.label,
     supportedMediaKinds: normalizeSupportedMediaKinds(tool.supported_media_kinds),
@@ -87,5 +100,5 @@ export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
       slug: model.slug,
       label: model.label,
     })),
-  }));
+  })));
 }

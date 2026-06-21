@@ -884,9 +884,10 @@ export function getCreationSectionSummary(draft: CreationDraft): CreationSection
 
 export function getCreationReadiness(
   draft: CreationDraft,
-  validation: CreationValidationResult
+  validation: CreationValidationResult,
+  summaryOverride?: CreationSectionSummary
 ): CreationReadinessItem[] {
-  const summary = getCreationSectionSummary(draft);
+  const summary = summaryOverride ?? getCreationSectionSummary(draft);
   return [
     promptReadiness(draft),
     mediaReadiness(draft),

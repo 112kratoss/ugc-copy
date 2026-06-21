@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2 } from 'lucide-react';
@@ -44,6 +44,13 @@ import {
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
+import {
+    applyGenerationModelCatalogToRegistries,
+    getActiveRegistryModels,
+    resolveCatalogModelId,
+    useWebGenerationModelCatalog,
+    useWebGenerationModelQuote,
+} from '@/lib/generation-model-client';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
 const MOTION_MODELS = {
@@ -102,9 +109,11 @@ type GenerationStatusResponse = {
 export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
+    const modelCatalog = useWebGenerationModelCatalog();
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const hasResolvedInitialCatalogModel = useRef(false);
     const characterImageInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
 
@@ -117,6 +126,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
@@ -147,10 +157,27 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     useEffect(() => {
         if (remixId) return;
         if (prefillPrompt) setPrompt(prefillPrompt);
-        if (prefillModel && prefillModel in MOTION_MODELS) setSelectedModel(prefillModel as ModelId);
-    }, [prefillPrompt, prefillModel, remixId]);
+        const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'motion' && candidate.id === prefillModel));
+        if (prefillModel && (prefillModel in MOTION_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
+    }, [modelCatalog.catalog, prefillPrompt, prefillModel, remixId]);
 
     const model = MOTION_MODELS[selectedModel];
+    const motionModelOptions = getActiveRegistryModels(MOTION_MODELS as unknown as Record<string, typeof MOTION_MODELS[ModelId]>);
+    const maxVideoDuration = Number((model as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (model as unknown as { maxDuration?: number }).maxDuration ?? 30);
+    useEffect(() => {
+        if (!modelCatalog.catalog) return;
+        applyGenerationModelCatalogToRegistries(modelCatalog.catalog, { image: {}, video: {}, motion: MOTION_MODELS as unknown as Record<string, Record<string, unknown>> });
+        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
+        const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'motion', selectedModel, { preferDefault });
+        hasResolvedInitialCatalogModel.current = true;
+        if (nextModelId && nextModelId !== selectedModel) {
+            const nextModel = (MOTION_MODELS as unknown as Record<string, typeof model>)[nextModelId];
+            setSelectedModel(nextModelId as ModelId);
+            if (!preferDefault) {
+                setCatalogNotice(`Your previous motion model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
+            }
+        }
+    }, [modelCatalog.catalog, selectedModel, model, prefillModel, remixId]);
     const revokeObjectUrl = (url: string | null) => {
         if (url?.startsWith('blob:')) {
             URL.revokeObjectURL(url);
@@ -360,8 +387,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             }
 
             setDuration(previewVideo.duration);
-            if (previewVideo.duration > model.maxVideoDuration) {
-                setVideoError(`Reference video exceeds ${model.maxVideoDuration}s. Please choose a shorter clip.`);
+            if (previewVideo.duration > maxVideoDuration) {
+                setVideoError(`Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`);
             } else {
                 setVideoError(null);
             }
@@ -383,7 +410,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             previewVideo.removeEventListener('error', handleMetadataError);
             previewVideo.src = '';
         };
-    }, [model.maxVideoDuration, referenceVideo]);
+    }, [maxVideoDuration, referenceVideo]);
 
     // Generation Recovery & Persistence
     useEffect(() => {
@@ -528,6 +555,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (!referenceVideoFile && !referenceVideo) { alert('Please upload a reference video'); return; }
         const effectiveDuration = Math.ceil(duration);
         if (effectiveDuration <= 0) { alert('Invalid video duration'); return; }
+        if (quotePending) { setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.'); return; }
+        if (insufficientCredits) { setError(`Insufficient credits. This costs ${estimatedCost} credits.`); return; }
 
         setIsGenerating(true); setError(null); setOutputVideo(null);
         setLatestGenerationId(null); setLatestIsPublic(false); setPublishedMeta(null);
@@ -603,11 +632,16 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     characterImage: nextCharacterImageDescriptor,
                     referenceVideo: nextReferenceVideoDescriptor,
                     sourceGenerationId: remixId || undefined,
+                    catalogRevision: modelCatalog.catalog?.revision,
                 })
             });
 
             const data = await response.json();
             if (!data.success) {
+                if (data.code === 'CATALOG_CHANGED') {
+                    setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+                    modelCatalog.refetch();
+                }
                 const errorMessage = data.details
                     ? `${data.error}: ${data.details} (Code: ${data.code})`
                     : (data.error || 'Failed to start generation');
@@ -638,7 +672,22 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const creditsPerSecond = selectedModel === 'kling-3.0'
         ? (mode === '1080p' ? 20 : 12)
         : (mode === '1080p' ? 9 : 6);
-    const estimatedCost = duration > 0 ? Math.ceil(duration * creditsPerSecond) : 0;
+    const fallbackEstimatedCost = duration > 0 ? Math.ceil(duration * creditsPerSecond) : 0;
+    const quoteRequest = useMemo(() => modelCatalog.catalog ? {
+        kind: 'motion' as const,
+        modelId: selectedModel,
+        settings: { resolution: mode, characterOrientation, duration },
+        inputCounts: { images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 },
+        catalogRevision: modelCatalog.catalog.revision,
+    } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, referenceVideo, selectedModel]);
+    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
+    useEffect(() => {
+        if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+        modelCatalog.refetch();
+    }, [modelCatalog.refetch, quoteState.error?.code]);
+    const estimatedCost = quoteState.quote?.costCredits ?? fallbackEstimatedCost;
+    const quotePending = Boolean(modelCatalog.catalog && quoteState.status !== 'ready');
     const insufficientCredits = userCredits !== null && estimatedCost > 0 && userCredits < estimatedCost;
     const canGenerate = Boolean(characterImage || characterImageFile)
         && Boolean(referenceVideo || referenceVideoFile)
@@ -706,6 +755,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 controls={
                     <>
                         <AnimatePresence>
+                            {catalogNotice ? (
+                                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioRemixNotice description={catalogNotice} />
+                                </motion.div>
+                            ) : null}
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
@@ -783,7 +837,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                             className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] backdrop-blur-xl"
                                             style={{ transformOrigin: 'top' }}
                                         >
-                                            {(Object.values(MOTION_MODELS) as typeof MOTION_MODELS[ModelId][]).map((motionModel) => {
+                                            {motionModelOptions.map((motionModel) => {
                                                 const isActive = selectedModel === motionModel.id;
 
                                                 return (
@@ -807,7 +861,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                             <p className="mt-1 text-sm text-zinc-400">{motionModel.description}</p>
                                                             <div className="mt-2 flex flex-wrap gap-1.5">
                                                                 <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                                                                    Max {motionModel.maxVideoDuration}s
+                                                                    Max {Number((motionModel as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (motionModel as unknown as { maxDuration?: number }).maxDuration ?? 30)}s
                                                                 </span>
                                                                 <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
                                                                     720p / 1080p
@@ -920,7 +974,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 <p className="text-sm font-medium text-zinc-300">
                                                     {isDraggingVideo ? 'Drop video here' : 'Click or drag in the motion reference'}
                                                 </p>
-                                                <p className="mt-1 text-xs text-zinc-500">MP4 or MOV, up to 100MB and {model.maxVideoDuration}s.</p>
+                                                <p className="mt-1 text-xs text-zinc-500">MP4 or MOV, up to 100MB and {maxVideoDuration}s.</p>
                                             </div>
                                         </div>
                                     </label>
@@ -936,7 +990,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
                                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-white/8 bg-black/30 px-4 py-3 text-sm text-zinc-400">
                                     <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
-                                    <span>Limit: {model.maxVideoDuration}s</span>
+                                    <span>Limit: {maxVideoDuration}s</span>
                                 </div>
 
                                 {videoError ? (
@@ -1025,7 +1079,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     </div>
                                     <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{estimatedCost} credits</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{quotePending ? 'Calculating...' : `${estimatedCost} credits`}</div>
                                     </div>
                                 </div>
                             }
@@ -1066,7 +1120,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={!canGenerate || isGenerating}
+                                        disabled={!canGenerate || isGenerating || quotePending}
                                         className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-4 text-base font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (

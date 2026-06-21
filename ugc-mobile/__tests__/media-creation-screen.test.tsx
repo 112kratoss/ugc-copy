@@ -29,7 +29,15 @@ const authState = vi.hoisted(() => ({
     getImageGeneration: vi.fn(),
     getVideoGeneration: vi.fn(),
     getMotionGeneration: vi.fn(),
+    quoteGenerationModel: vi.fn(),
   },
+}));
+
+const catalogState = vi.hoisted(() => ({
+  catalog: null as unknown,
+  isLoading: false,
+  error: null as Error | null,
+  refetch: vi.fn(),
 }));
 
 vi.mock('expo-router', () => ({
@@ -104,8 +112,13 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+vi.mock('@/lib/use-generation-model-catalog', () => ({
+  useGenerationModelCatalog: () => catalogState,
+}));
+
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
+import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -136,9 +149,128 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.getVideoGeneration.mockReset();
     authState.api.startMotionGeneration.mockReset();
     authState.api.getMotionGeneration.mockReset();
+    authState.api.quoteGenerationModel.mockReset();
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'nano-banana-2',
+      catalogRevision: 'test-catalog-rev',
+      normalizedSettings: { aspectRatio: '4:5', resolution: '1K' },
+      costCredits: 8,
+    });
+    catalogState.catalog = createTestGenerationModelCatalog();
+    catalogState.isLoading = false;
+    catalogState.error = null;
+    catalogState.refetch.mockReset();
     vi.mocked(pickMedia).mockReset();
     vi.mocked(pickMediaList).mockReset();
     vi.mocked(uploadPickedMedia).mockReset();
+  });
+
+  it('renders a schema-v1 model supplied only by the remote catalog', () => {
+    catalogState.catalog = createTestGenerationModelCatalog([remoteImageModel]);
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Change').props.onPress();
+    });
+
+    expect(collectText(tree!.root)).toContain('Remote Image V1');
+  });
+
+  it('selects a remote-only model and applies its controls and reference limit', () => {
+    catalogState.catalog = createTestGenerationModelCatalog([remoteImageModel]);
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Change').props.onPress();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Remote Image V1').props.onPress();
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('2:3');
+    expect(text).toContain('2K');
+    expect(text).toContain('0 / 3');
+    expect(text).toContain('Remote Image V1 · 2:3 · 2K');
+  });
+
+  it('survives a catalog refresh that retires a selected remote-only model', () => {
+    catalogState.catalog = createTestGenerationModelCatalog([remoteImageModel]);
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Change').props.onPress();
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Remote Image V1').props.onPress();
+    });
+
+    catalogState.catalog = createTestGenerationModelCatalog();
+    expect(() => {
+      renderer.act(() => {
+        tree!.update(<MediaCreationScreen initialTool="image" />);
+      });
+    }).not.toThrow();
+
+    expect(collectText(tree!.root)).toContain('Nano Banana 2.0');
+    expect(collectText(tree!.root)).toContain('Model updated');
+  });
+
+  it('waits for a debounced server quote before enabling generation', async () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('Quote this image');
+    });
+
+    expect(findPressableByText(tree!.root, 'Generate Image').props.disabled).toBe(true);
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
+    expect(findPressableByText(tree!.root, 'Generate Image').props.disabled).toBe(false);
+    expect(collectText(tree!.root)).toContain('8');
+    vi.useRealTimers();
+  });
+
+  it('switches a retired draft model to the catalog default with a notice', async () => {
+    const catalog = createTestGenerationModelCatalog();
+    catalog.models = catalog.models.filter((model) => model.id !== 'nano-banana-2');
+    catalog.defaults.image = 'nano-banana-pro';
+    catalogState.catalog = catalog;
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Model updated');
+    expect(text).toContain('Your previous image model is no longer available. Switched to Nano Banana Pro.');
+    expect(text).toContain('Nano Banana Pro');
+  });
+
+  it('uses the catalog default for a fresh draft even when the bundled model is still active', async () => {
+    const catalog = createTestGenerationModelCatalog();
+    catalog.defaults.motion = 'kling-2.6';
+    catalogState.catalog = catalog;
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<MediaCreationScreen initialTool="motion" />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Kling 2.6 · 720p · 10s');
+    expect(text).not.toContain('Model updated');
   });
 
   it('renders the default image flow in prompt-first progressive order', () => {
@@ -454,6 +586,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
   });
 
   it('offers a post handoff after a generation succeeds with a generation id', async () => {
+    vi.useFakeTimers();
     authState.api.startImageGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-1',
@@ -477,6 +610,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    await renderer.act(async () => {
       findPressableByText(tree!.root, 'Generate Image').props.onPress();
     });
 
@@ -490,5 +627,6 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       pathname: '/post/new',
       params: { generationId: 'gen-1' },
     });
+    vi.useRealTimers();
   });
 });
