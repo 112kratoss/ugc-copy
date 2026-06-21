@@ -19,8 +19,9 @@ function createAuthClient() {
   };
 }
 
-function createAdminClient(options?: { remainingCredits?: number }) {
+function createAdminClient(options?: { remainingCredits?: number; rateLimitAllowed?: boolean }) {
   const remainingCredits = options?.remainingCredits ?? 98;
+  const rateLimitAllowed = options?.rateLimitAllowed ?? true;
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -38,6 +39,19 @@ function createAdminClient(options?: { remainingCredits?: number }) {
 
       if (fn === 'refund_ai_usage_event' || fn === 'refund_credits') {
         return { data: true, error: null };
+      }
+
+      if (fn === 'check_backend_rate_limit') {
+        return {
+          data: {
+            allowed: rateLimitAllowed,
+            limit: 60,
+            remaining: rateLimitAllowed ? 59 : 0,
+            retryAfterSeconds: rateLimitAllowed ? 0 : 42,
+            resetAt: '2026-06-21T06:30:00.000Z',
+          },
+          error: null,
+        };
       }
 
       return { data: null, error: null };
@@ -194,6 +208,36 @@ describe('/api/enhance-prompt route', () => {
     expect(response.status).toBe(400);
     expect(buildEnhancerSystemPromptMock).not.toHaveBeenCalled();
     expect(callPromptEnhancerMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limits prompt enhancement before deducting credits or calling the provider', async () => {
+    currentAdminClient = createAdminClient({ rateLimitAllowed: false });
+
+    const { POST } = await import('@/app/api/enhance-prompt/route');
+    const response = await POST(
+      new Request('http://localhost/api/enhance-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          medium: 'image',
+          selectedModel: 'nano-banana-pro',
+          prompt: 'Create a product poster',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(currentAdminClient.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
+      p_scope: 'prompt-enhancement',
+      p_subject_key: 'user-1',
+    }));
+    expect(currentAdminClient.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(callPromptEnhancerMock).not.toHaveBeenCalled();
+    expect(currentAdminClient.inserts).toHaveLength(0);
   });
 
   it('refunds credits if prompt enhancement fails after deduction', async () => {

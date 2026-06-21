@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/server-helpers';
 import {
+  BackendRateLimitError,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+  WORKFLOW_BLUEPRINT_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import {
   buildWorkflowSystemPrompt,
   buildWorkflowUserPrompt,
   extractBlueprintFromResponse,
@@ -33,6 +39,20 @@ export async function POST(request: NextRequest) {
     }
 
     const adminSupabase = createServiceClient();
+    try {
+      await enforceBackendRateLimit(adminSupabase, {
+        ...WORKFLOW_BLUEPRINT_RATE_LIMIT,
+        key: user.id,
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      console.error('[WorkflowBlueprint] Rate limit failed:', error);
+      return NextResponse.json({ error: 'Failed to check workflow planning limits.' }, { status: 500 });
+    }
+
     const { data: remainingCredits, error: creditError } = await adminSupabase.rpc('deduct_credits', {
       p_user_id: user.id,
       p_cost: WORKFLOW_BLUEPRINT_COST,

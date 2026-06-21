@@ -5,6 +5,8 @@ const afterMock = vi.fn((callback: () => Promise<void> | void) => callback());
 const executeWorkflowRunMock = vi.fn();
 const monitorWorkflowRunMock = vi.fn();
 const getWorkflowRunDetailsMock = vi.fn();
+let runRateLimitAllowed = true;
+let runAdminRpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
 
 vi.mock('next/server', async () => {
   const actual = await vi.importActual<typeof import('next/server')>('next/server');
@@ -58,12 +60,34 @@ const authenticateRequestMock = vi.fn(async () => ({
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
-  authenticateRequest: (..._args: unknown[]) => authenticateRequestMock(),
+  authenticateRequest: () => authenticateRequestMock(),
+  createServiceClient: () => ({
+    rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
+      runAdminRpcCalls.push({ fn, args });
+
+      if (fn === 'check_backend_rate_limit') {
+        return {
+          data: {
+            allowed: runRateLimitAllowed,
+            limit: 20,
+            remaining: runRateLimitAllowed ? 19 : 0,
+            retryAfterSeconds: runRateLimitAllowed ? 0 : 42,
+            resetAt: '2026-06-21T06:30:00.000Z',
+          },
+          error: null,
+        };
+      }
+
+      throw new Error(`Unexpected rpc: ${fn}`);
+    }),
+  }),
 }));
 
 describe('workflow run routes', () => {
   beforeEach(() => {
     vi.resetModules();
+    runRateLimitAllowed = true;
+    runAdminRpcCalls = [];
     afterMock.mockClear();
     executeWorkflowRunMock.mockReset();
     monitorWorkflowRunMock.mockReset();
@@ -72,6 +96,40 @@ describe('workflow run routes', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('POST /run rate limits workflow execution before starting runner work', async () => {
+    runRateLimitAllowed = false;
+    executeWorkflowRunMock.mockResolvedValue({
+      runId: 'run-1',
+      status: 'processing',
+    });
+
+    const { POST } = await import('@/app/api/workflow-canvases/[id]/run/route');
+    const response = await POST(
+      new Request('http://localhost/api/workflow-canvases/canvas-1/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startNodeId: 'node-1',
+          mode: 'branch',
+        }),
+      }) as never,
+      { params: Promise.resolve({ id: 'canvas-1' }) }
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(runAdminRpcCalls).toHaveLength(1);
+    expect(runAdminRpcCalls[0]).toMatchObject({
+      fn: 'check_backend_rate_limit',
+      args: {
+        p_scope: 'workflow-run:start',
+        p_subject_key: 'user-1',
+      },
+    });
+    expect(executeWorkflowRunMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
   });
 
   it('POST /run schedules the monitor once when execution is still processing', async () => {

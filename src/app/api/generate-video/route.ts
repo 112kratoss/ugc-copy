@@ -12,6 +12,12 @@ import {
 } from '@/lib/generation-timing';
 import { withBackendJobLock } from '@/lib/backend-job-lock';
 import {
+    BackendRateLimitError,
+    createBackendRateLimitResponse,
+    enforceBackendRateLimit,
+    MEDIA_GENERATION_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import {
     buildLockedGenerationStatusPayload,
     GENERATION_STATUS_LOCK_TTL_SECONDS,
     getGenerationStatusLockName,
@@ -281,9 +287,15 @@ export async function POST(request: NextRequest) {
             throw error;
         }
 
+        const adminSupabase = createServiceClient();
+        await enforceBackendRateLimit(adminSupabase, {
+            ...MEDIA_GENERATION_RATE_LIMIT,
+            key: user.id,
+        });
+
         const result = await startVideoGeneration({
             supabase,
-            creditSupabase: createServiceClient(),
+            creditSupabase: adminSupabase,
             userId: user.id,
             model: model as VideoModelId,
             prompt: typeof prompt === 'string' ? prompt : '',
@@ -319,6 +331,10 @@ export async function POST(request: NextRequest) {
             cost: result.cost,
         });
     } catch (error: unknown) {
+        if (error instanceof BackendRateLimitError) {
+            return createBackendRateLimitResponse(error);
+        }
+
         console.error('Error starting video generation:', error);
         const message = error instanceof Error ? error.message : 'Failed to start video generation';
         const status = error instanceof GenerationServiceError ? error.status : 500;

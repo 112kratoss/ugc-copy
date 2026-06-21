@@ -23,7 +23,8 @@ let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 function createSupabaseMock(
   sourceGeneration: SourceGenerationRow | null = null,
   localGeneration: LocalGenerationRow | null = null,
-  lockAcquired = true
+  lockAcquired = true,
+  rateLimitAllowed = true
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -46,6 +47,19 @@ function createSupabaseMock(
 
     if (fn === 'release_backend_job_lock') {
       return { data: true, error: null };
+    }
+
+    if (fn === 'check_backend_rate_limit') {
+      return {
+        data: {
+          allowed: rateLimitAllowed,
+          limit: 30,
+          remaining: rateLimitAllowed ? 29 : 0,
+          retryAfterSeconds: rateLimitAllowed ? 0 : 42,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     }
 
     return { data: null, error: null };
@@ -224,6 +238,40 @@ describe('/api/generate-video route', () => {
       },
     });
     expect(((providerBody as { input?: Record<string, unknown> } | null)?.input ?? {}).multi_prompt).toBeUndefined();
+  });
+
+  it('rate limits video starts before deducting credits or calling the provider', async () => {
+    currentSupabaseMock = createSupabaseMock(null, null, true, false);
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-video',
+          prompt: 'Two cats doing kung fu',
+          duration: 7,
+          aspectRatio: '16:9',
+          mode: 'std',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
+      p_scope: 'media-generation:start',
+      p_subject_key: 'user-1',
+    }));
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.inserts).toHaveLength(0);
   });
 
   it('sends Kling multi-shot requests with total duration and prompt segments', async () => {

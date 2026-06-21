@@ -6,6 +6,12 @@ import {
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
 import {
+  BackendRateLimitError,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+  SEEDANCE_ASSET_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import {
   normalizeSeedanceAssetStatus,
   type SeedanceAssetKind,
 } from '@/lib/seedance-assets';
@@ -132,6 +138,20 @@ export async function POST(request: NextRequest) {
     }
 
     const adminSupabase = createServiceClient();
+    try {
+      await enforceBackendRateLimit(adminSupabase, {
+        ...SEEDANCE_ASSET_RATE_LIMIT,
+        key: authResult.userId,
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      console.error('Seedance asset rate limit failed:', error);
+      return NextResponse.json({ error: 'Failed to check Seedance asset limits.' }, { status: 500 });
+    }
+
     const resolvedUrl = await resolveStoredMediaUrl(adminSupabase, normalizedUrl);
     const response = await fetch('https://api.kie.ai/api/v1/playground/createAsset', {
       method: 'POST',

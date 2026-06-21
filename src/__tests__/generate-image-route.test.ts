@@ -24,7 +24,8 @@ let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 function createSupabaseMock(
   sourceGeneration: SourceGenerationRow | null,
   localGeneration: LocalGenerationRow | null = null,
-  lockAcquired = true
+  lockAcquired = true,
+  rateLimitAllowed = true
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -47,6 +48,19 @@ function createSupabaseMock(
 
     if (fn === 'release_backend_job_lock') {
       return { data: true, error: null };
+    }
+
+    if (fn === 'check_backend_rate_limit') {
+      return {
+        data: {
+          allowed: rateLimitAllowed,
+          limit: 30,
+          remaining: rateLimitAllowed ? 29 : 0,
+          retryAfterSeconds: rateLimitAllowed ? 0 : 42,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     }
 
     return { data: null, error: null };
@@ -271,6 +285,37 @@ describe('/api/generate-image route', () => {
     expect(currentSupabaseMock.inserts).toHaveLength(0);
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rate limits image starts before deducting credits or calling the provider', async () => {
+    currentSupabaseMock = createSupabaseMock(null, null, true, false);
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await import('@/app/api/generate-image/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          prompt: 'A product hero image',
+          model: 'nano-banana-2',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
+      p_scope: 'media-generation:start',
+      p_subject_key: 'user-1',
+    }));
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.inserts).toHaveLength(0);
   });
 
   it('persists image element sourceGenerationId values for future remixes', async () => {

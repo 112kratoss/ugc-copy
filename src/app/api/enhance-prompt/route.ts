@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/server-helpers';
 import {
+    BackendRateLimitError,
+    createBackendRateLimitResponse,
+    enforceBackendRateLimit,
+    PROMPT_ENHANCEMENT_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import {
     getPromptEnhancementCost,
     buildEnhancerSystemPrompt,
     buildPromptEnhancementArtifacts,
@@ -60,6 +66,10 @@ export async function POST(request: NextRequest) {
 
         const cost = getPromptEnhancementCost();
         const adminSupabase = createServiceClient();
+        await enforceBackendRateLimit(adminSupabase, {
+            ...PROMPT_ENHANCEMENT_RATE_LIMIT,
+            key: user.id,
+        });
 
         // 3. Deduct credits
         const { data: remainingCredits, error: deductError } = await adminSupabase.rpc(
@@ -190,6 +200,10 @@ export async function POST(request: NextRequest) {
             );
         }
     } catch (error) {
+        if (error instanceof BackendRateLimitError) {
+            return createBackendRateLimitResponse(error);
+        }
+
         console.error('[EnhancePrompt] Unexpected error:', error);
         return NextResponse.json(
             { error: 'Internal server error' },

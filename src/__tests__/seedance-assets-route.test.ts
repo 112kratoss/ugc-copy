@@ -8,12 +8,37 @@ const resolveStoredMediaUrlMock = vi.fn(async (_supabase: unknown, value: string
   return value;
 });
 
+let rateLimitAllowed = true;
+let serviceRpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+
+function createServiceClientMock() {
+  return {
+    rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
+      serviceRpcCalls.push({ fn, args });
+      if (fn === 'check_backend_rate_limit') {
+        return {
+          data: {
+            allowed: rateLimitAllowed,
+            limit: 60,
+            remaining: rateLimitAllowed ? 59 : 0,
+            retryAfterSeconds: rateLimitAllowed ? 0 : 42,
+            resetAt: '2026-06-21T06:30:00.000Z',
+          },
+          error: null,
+        };
+      }
+
+      throw new Error(`Unexpected rpc: ${fn}`);
+    }),
+  };
+}
+
 vi.mock('@/lib/server-helpers', () => ({
   authenticateRequest: vi.fn(async () => ({
     userId: 'user-1',
     supabase: {},
   })),
-  createServiceClient: vi.fn(() => ({})),
+  createServiceClient: vi.fn(() => createServiceClientMock()),
   requireKieApiKey: vi.fn(() => 'test-key'),
   resolveStoredMediaUrl: resolveStoredMediaUrlMock,
 }));
@@ -21,6 +46,9 @@ vi.mock('@/lib/server-helpers', () => ({
 describe('/api/seedance-assets route', () => {
   beforeEach(() => {
     vi.resetModules();
+    rateLimitAllowed = true;
+    serviceRpcCalls = [];
+    resolveStoredMediaUrlMock.mockClear();
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -119,5 +147,48 @@ describe('/api/seedance-assets route', () => {
       status: 'active',
       sourceUrl: 'https://signed.example.com/uploads/user-1/ref.wav',
     });
+  });
+
+  it('rate limits Seedance asset creation before resolving media or calling the provider', async () => {
+    rateLimitAllowed = false;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: {
+          assetId: 'asset-123',
+          status: 'processing',
+        },
+      }),
+    } as Response);
+
+    const { POST } = await import('@/app/api/seedance-assets/route');
+    const response = await POST(
+      new Request('http://localhost/api/seedance-assets', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          url: 'uploads/user-1/reference.mp4',
+          assetType: 'Video',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(serviceRpcCalls).toHaveLength(1);
+    expect(serviceRpcCalls[0]).toMatchObject({
+      fn: 'check_backend_rate_limit',
+      args: {
+        p_scope: 'seedance-assets:create',
+        p_subject_key: 'user-1',
+      },
+    });
+    expect(resolveStoredMediaUrlMock).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

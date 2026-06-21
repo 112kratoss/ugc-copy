@@ -65,6 +65,7 @@ let simulateMissingAssistantSchema = false;
 let remainingCredits = 94;
 let usageEventUpdates: Array<Record<string, unknown>> = [];
 let adminRpcCalls: string[] = [];
+let assistantRateLimitAllowed = true;
 
 function createWorkflowSupabaseMock() {
   return {
@@ -296,6 +297,19 @@ function createAdminSupabaseMock() {
         return Promise.resolve({ data: true, error: null });
       }
 
+      if (fn === 'check_backend_rate_limit') {
+        return Promise.resolve({
+          data: {
+            allowed: assistantRateLimitAllowed,
+            limit: 30,
+            remaining: assistantRateLimitAllowed ? 29 : 0,
+            retryAfterSeconds: assistantRateLimitAllowed ? 0 : 42,
+            resetAt: '2026-06-21T06:30:00.000Z',
+          },
+          error: null,
+        });
+      }
+
       throw new Error(`Unexpected rpc: ${fn}`);
     },
     from(table: string) {
@@ -355,6 +369,7 @@ beforeEach(() => {
   remainingCredits = 94;
   usageEventUpdates = [];
   adminRpcCalls = [];
+  assistantRateLimitAllowed = true;
   mocks.authenticateRequest.mockResolvedValue({
     userId: canvasRow.user_id,
     supabase: createWorkflowSupabaseMock(),
@@ -430,6 +445,29 @@ describe('workflow assistant routes', () => {
     expect(data.error).toBe('Workflow assistant database tables are missing. Run migration 20260416120000_workflow_canvas_assistant.sql.');
     expect(adminRpcCalls).not.toContain('deduct_credits');
     expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it('rate limits workflow assistant messages before charging credits or calling the provider', async () => {
+    assistantRateLimitAllowed = false;
+
+    const { POST } = await import('@/app/api/workflow-canvases/[id]/assistant/messages/route');
+    const response = await POST(
+      new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: 'Create a before and after transformation using Seedance 2.0.',
+        }),
+      }) as never,
+      { params: Promise.resolve({ id: canvasRow.id }) }
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(adminRpcCalls).toContain('check_backend_rate_limit');
+    expect(adminRpcCalls).not.toContain('deduct_credits');
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(usageEventUpdates).toHaveLength(0);
   });
 
   it('creates a new assistant proposal from a chat message', async () => {

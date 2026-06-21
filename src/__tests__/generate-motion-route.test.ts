@@ -15,7 +15,11 @@ type LocalGenerationRow = {
 
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 
-function createSupabaseMock(localGeneration: LocalGenerationRow | null = null, lockAcquired = true) {
+function createSupabaseMock(
+  localGeneration: LocalGenerationRow | null = null,
+  lockAcquired = true,
+  rateLimitAllowed = true
+) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const rpc = vi.fn(async (fn: string) => {
@@ -37,6 +41,19 @@ function createSupabaseMock(localGeneration: LocalGenerationRow | null = null, l
 
     if (fn === 'release_backend_job_lock') {
       return { data: true, error: null };
+    }
+
+    if (fn === 'check_backend_rate_limit') {
+      return {
+        data: {
+          allowed: rateLimitAllowed,
+          limit: 30,
+          remaining: rateLimitAllowed ? 29 : 0,
+          retryAfterSeconds: rateLimitAllowed ? 0 : 42,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     }
 
     return { data: null, error: null };
@@ -213,6 +230,42 @@ describe('/api/generate route', () => {
         sourceGenerationId: 'source-video-1',
       },
     });
+  });
+
+  it('rate limits motion starts before deducting credits or calling the provider', async () => {
+    currentSupabaseMock = createSupabaseMock(null, true, false);
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await import('@/app/api/generate/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0',
+          characterImageUrl: 'https://signed.example.com/character.png',
+          referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+          duration: 6,
+          characterOrientation: 'image',
+          mode: '1080p',
+          prompt: 'Transfer the performance naturally.',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
+      p_scope: 'media-generation:start',
+      p_subject_key: 'user-1',
+    }));
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('deduct_credits', expect.anything());
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.inserts).toHaveLength(0);
   });
 
   it('returns provider-backed timing for motion generations', async () => {

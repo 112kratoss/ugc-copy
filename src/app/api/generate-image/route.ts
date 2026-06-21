@@ -18,6 +18,12 @@ import {
 } from '@/lib/generation-timing';
 import { withBackendJobLock } from '@/lib/backend-job-lock';
 import {
+    BackendRateLimitError,
+    createBackendRateLimitResponse,
+    enforceBackendRateLimit,
+    MEDIA_GENERATION_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import {
     buildLockedGenerationStatusPayload,
     GENERATION_STATUS_LOCK_TTL_SECONDS,
     getGenerationStatusLockName,
@@ -146,9 +152,15 @@ export async function POST(request: NextRequest) {
             throw error;
         }
 
+        const adminSupabase = createServiceClient();
+        await enforceBackendRateLimit(adminSupabase, {
+            ...MEDIA_GENERATION_RATE_LIMIT,
+            key: user.id,
+        });
+
         const result = await startImageGeneration({
             supabase,
-            creditSupabase: createServiceClient(),
+            creditSupabase: adminSupabase,
             userId: user.id,
             model: model as ImageModelId,
             prompt,
@@ -172,6 +184,10 @@ export async function POST(request: NextRequest) {
         });
 
     } catch (error: unknown) {
+        if (error instanceof BackendRateLimitError) {
+            return createBackendRateLimitResponse(error);
+        }
+
         console.error('Error starting image generation:', error);
         const message = error instanceof Error ? error.message : 'Failed to start image generation';
         const status = error instanceof GenerationServiceError ? error.status : 500;

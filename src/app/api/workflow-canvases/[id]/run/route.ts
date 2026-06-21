@@ -1,5 +1,11 @@
 import { after, NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/server-helpers';
+import {
+  BackendRateLimitError,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+  WORKFLOW_RUN_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import { authenticateRequest, createServiceClient } from '@/lib/server-helpers';
 import { normalizeWorkflowGraph } from '@/lib/workflow-canvas';
 import { executeWorkflowRun, monitorWorkflowRun } from '@/lib/workflow-runner';
 
@@ -30,6 +36,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
   if (error || !canvas) {
     return NextResponse.json({ error: 'Workflow canvas not found.' }, { status: 404 });
+  }
+
+  try {
+    await enforceBackendRateLimit(createServiceClient(), {
+      ...WORKFLOW_RUN_RATE_LIMIT,
+      key: userId,
+    });
+  } catch (rateLimitError) {
+    if (rateLimitError instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(rateLimitError);
+    }
+
+    console.error('Workflow run rate limit failed:', rateLimitError);
+    return NextResponse.json({ error: 'Failed to check workflow run limits.' }, { status: 500 });
   }
 
   try {

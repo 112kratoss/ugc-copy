@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  BackendRateLimitError,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+  WORKFLOW_ASSISTANT_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
 import { createServiceClient } from '@/lib/server-helpers';
 import {
   buildWorkflowAssistantSystemPrompt,
@@ -82,6 +88,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   }
 
   const adminSupabase = createServiceClient();
+
+  try {
+    await enforceBackendRateLimit(adminSupabase, {
+      ...WORKFLOW_ASSISTANT_RATE_LIMIT,
+      key: userId,
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    console.error('Workflow assistant rate limit failed:', error);
+    return NextResponse.json({ error: 'Failed to check workflow assistant limits.' }, { status: 500 });
+  }
 
   const { data: remainingCredits, error: creditError } = await adminSupabase.rpc('deduct_credits', {
     p_user_id: userId,
