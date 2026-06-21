@@ -72,6 +72,12 @@ export const POST_RESOURCE_ORDER_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const CREDIT_UNLOCK_RATE_LIMIT = {
+  scope: 'credit-unlock:spend',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,
