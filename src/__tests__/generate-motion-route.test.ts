@@ -15,7 +15,7 @@ type LocalGenerationRow = {
 
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 
-function createSupabaseMock(localGeneration: LocalGenerationRow | null = null) {
+function createSupabaseMock(localGeneration: LocalGenerationRow | null = null, lockAcquired = true) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const rpc = vi.fn(async (fn: string) => {
@@ -24,6 +24,18 @@ function createSupabaseMock(localGeneration: LocalGenerationRow | null = null) {
     }
 
     if (fn === 'refund_credits') {
+      return { data: true, error: null };
+    }
+
+    if (fn === 'refund_generation') {
+      return { data: true, error: null };
+    }
+
+    if (fn === 'try_acquire_backend_job_lock') {
+      return { data: lockAcquired, error: null };
+    }
+
+    if (fn === 'release_backend_job_lock') {
       return { data: true, error: null };
     }
 
@@ -250,6 +262,44 @@ describe('/api/generate route', () => {
       phaseLabel: 'Generating motion render',
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
     });
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('returns cached processing state without calling the provider when status refresh is already locked', async () => {
+    currentSupabaseMock = createSupabaseMock({
+      id: 'gen-motion-locked-1',
+      prediction_id: 'task-motion-locked-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0',
+      category: 'motion',
+      duration: 6,
+    }, false);
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate?id=task-motion-locked-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'processing',
+      output: null,
+      error: null,
+      retryAfterMs: 2000,
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 });

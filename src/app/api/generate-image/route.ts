@@ -16,6 +16,13 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { withBackendJobLock } from '@/lib/backend-job-lock';
+import {
+    buildLockedGenerationStatusPayload,
+    GENERATION_STATUS_LOCK_TTL_SECONDS,
+    getGenerationStatusLockName,
+    getGenerationStatusLockOwner,
+} from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import type {
     ImageModelId,
@@ -177,6 +184,7 @@ export async function POST(request: NextRequest) {
 
 // GET endpoint to check image generation status
 export async function GET(request: NextRequest) {
+    const startedAt = Date.now();
     const { searchParams } = new URL(request.url);
     const predictionId = searchParams.get('id');
 
@@ -231,22 +239,6 @@ export async function GET(request: NextRequest) {
             });
         }
 
-        // Query Kie.ai for status
-        const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
-            headers: { 'Authorization': `Bearer ${KIE_API_KEY}` },
-        });
-
-        const data = await response.json();
-
-        if (!response.ok || data.code !== 200) {
-            throw new Error(data.msg || 'Failed to check status');
-        }
-
-        const timing = normalizeMarketGenerationTiming({
-            kind: 'image',
-            task: data.data,
-            fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
-        });
         const workflowSettings = getWorkflowSettings(localGeneration?.workflow_settings);
         const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'image',
@@ -254,82 +246,111 @@ export async function GET(request: NextRequest) {
             resolution: typeof workflowSettings?.resolution === 'string' ? workflowSettings.resolution : null,
             referenceCount: Array.isArray(workflowSettings?.elements) ? workflowSettings.elements.length : 0,
         });
-        const timingWithEstimate = withGenerationTimingEstimate(timing, estimatedTotalMs);
-        const status = timing.appStatus;
-        let output = null;
-        let error = null;
 
-        if (status === 'succeeded') {
-            try {
-                const result = JSON.parse(data.data.resultJson);
-                const resultUrls = getGenerationResultUrls(result);
-                const tempUrl = resultUrls[0] || null;
+        const lockResult = await withBackendJobLock(adminSupabase, {
+            name: getGenerationStatusLockName(predictionId),
+            ttlSeconds: GENERATION_STATUS_LOCK_TTL_SECONDS,
+            owner: getGenerationStatusLockOwner(request, startedAt),
+        }, async () => {
+            // Query Kie.ai for status
+            const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
+                headers: { 'Authorization': `Bearer ${KIE_API_KEY}` },
+            });
 
-                if (tempUrl) {
-                    const userId = user?.id || localGeneration?.user_id;
-                    if (!localGeneration?.id || !userId) {
-                        throw new Error('Missing local generation record for completed image run');
-                    }
+            const data = await response.json();
 
-                    const persistedOutputs = await persistGeneratedOutputList(
-                        supabase,
-                        {
+            if (!response.ok || data.code !== 200) {
+                throw new Error(data.msg || 'Failed to check status');
+            }
+
+            const timing = normalizeMarketGenerationTiming({
+                kind: 'image',
+                task: data.data,
+                fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+            });
+            const timingWithEstimate = withGenerationTimingEstimate(timing, estimatedTotalMs);
+            const status = timing.appStatus;
+            let output = null;
+            let error = null;
+
+            if (status === 'succeeded') {
+                try {
+                    const result = JSON.parse(data.data.resultJson);
+                    const resultUrls = getGenerationResultUrls(result);
+                    const tempUrl = resultUrls[0] || null;
+
+                    if (tempUrl) {
+                        const userId = user?.id || localGeneration?.user_id;
+                        if (!localGeneration?.id || !userId) {
+                            throw new Error('Missing local generation record for completed image run');
+                        }
+
+                        const persistedOutputs = await persistGeneratedOutputList(
+                            supabase,
+                            {
+                                id: localGeneration.id,
+                                user_id: userId,
+                                prediction_id: predictionId,
+                                category: 'image',
+                                model: localGeneration?.model || 'nano-banana-2',
+                                workflow_settings: workflowSettings,
+                            },
+                            localGeneration?.model === 'grok-imagine-image' ? resultUrls : [tempUrl],
+                            toIsoTimestamp(timing.completedAtMs)
+                        );
+
+                        const resolvedOutputs = await resolveOutputPaths(
+                            adminSupabase,
+                            persistedOutputs.map((persistedOutput) => persistedOutput.storagePath)
+                        );
+                        await notifyGenerationStatus(adminSupabase, {
                             id: localGeneration.id,
                             user_id: userId,
-                            prediction_id: predictionId,
                             category: 'image',
                             model: localGeneration?.model || 'nano-banana-2',
-                            workflow_settings: workflowSettings,
-                        },
-                        localGeneration?.model === 'grok-imagine-image' ? resultUrls : [tempUrl],
-                        toIsoTimestamp(timing.completedAtMs)
-                    );
+                        }, 'succeeded');
+                        output = resolvedOutputs[0] || tempUrl;
+                        return {
+                            status,
+                            output,
+                            ...(resolvedOutputs.length > 1 ? { outputs: resolvedOutputs } : {}),
+                            error,
+                            timing: timingWithEstimate,
+                        };
+                    }
+                } catch (e) {
+                    console.error('Error handling success status:', e);
+                }
+            } else if (status === 'failed') {
+                error = data.data.failMsg || 'Unknown error';
+                await supabase
+                    .from('generations')
+                    .update({
+                        status: 'failed',
+                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                    })
+                    .eq('prediction_id', predictionId);
 
-                    const resolvedOutputs = await resolveOutputPaths(
-                        adminSupabase,
-                        persistedOutputs.map((persistedOutput) => persistedOutput.storagePath)
-                    );
+                // Refund credits for async failure (idempotent)
+                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                if (localGeneration?.id && localGeneration?.user_id) {
                     await notifyGenerationStatus(adminSupabase, {
                         id: localGeneration.id,
-                        user_id: userId,
-                        category: 'image',
-                        model: localGeneration?.model || 'nano-banana-2',
-                    }, 'succeeded');
-                    output = resolvedOutputs[0] || tempUrl;
-                    return NextResponse.json({
-                        status,
-                        output,
-                        ...(resolvedOutputs.length > 1 ? { outputs: resolvedOutputs } : {}),
-                        error,
-                        timing: timingWithEstimate,
-                    });
+                        user_id: localGeneration.user_id,
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }, 'failed');
                 }
-            } catch (e) {
-                console.error('Error handling success status:', e);
             }
-        } else if (status === 'failed') {
-            error = data.data.failMsg || 'Unknown error';
-            await supabase
-                .from('generations')
-                .update({
-                    status: 'failed',
-                    completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                })
-                .eq('prediction_id', predictionId);
 
-            // Refund credits for async failure (idempotent)
-            await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
-            if (localGeneration?.id && localGeneration?.user_id) {
-                await notifyGenerationStatus(adminSupabase, {
-                    id: localGeneration.id,
-                    user_id: localGeneration.user_id,
-                    category: localGeneration.category,
-                    model: localGeneration.model,
-                }, 'failed');
-            }
+            return { status, output, error, timing: timingWithEstimate };
+        });
+
+        if (!lockResult.acquired) {
+            return NextResponse.json(buildLockedGenerationStatusPayload(localGeneration, estimatedTotalMs));
         }
 
-        return NextResponse.json({ status, output, error, timing: timingWithEstimate });
+        return NextResponse.json(lockResult.value);
 
     } catch (error) {
         console.error('Error fetching image status:', error);

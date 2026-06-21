@@ -22,7 +22,8 @@ let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 
 function createSupabaseMock(
   sourceGeneration: SourceGenerationRow | null = null,
-  localGeneration: LocalGenerationRow | null = null
+  localGeneration: LocalGenerationRow | null = null,
+  lockAcquired = true
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -32,6 +33,18 @@ function createSupabaseMock(
     }
 
     if (fn === 'refund_credits') {
+      return { data: true, error: null };
+    }
+
+    if (fn === 'refund_generation') {
+      return { data: true, error: null };
+    }
+
+    if (fn === 'try_acquire_backend_job_lock') {
+      return { data: lockAcquired, error: null };
+    }
+
+    if (fn === 'release_backend_job_lock') {
       return { data: true, error: null };
     }
 
@@ -512,6 +525,43 @@ describe('/api/generate-video route', () => {
       phaseLabel: 'Queued at provider',
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
     });
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('returns cached processing state without calling the provider when status refresh is already locked', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-locked-1',
+      prediction_id: 'task-video-locked-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0-video',
+      category: 'video',
+    }, false);
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-locked-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'processing',
+      output: null,
+      error: null,
+      retryAfterMs: 2000,
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 });

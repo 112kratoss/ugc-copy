@@ -9,6 +9,13 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { withBackendJobLock } from '@/lib/backend-job-lock';
+import {
+    buildLockedGenerationStatusPayload,
+    GENERATION_STATUS_LOCK_TTL_SECONDS,
+    getGenerationStatusLockName,
+    getGenerationStatusLockOwner,
+} from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { persistGenerationInputMedia } from '@/lib/generation-input-media';
@@ -296,6 +303,7 @@ export async function POST(request: NextRequest) {
 
 // GET endpoint to check prediction status
 export async function GET(request: NextRequest) {
+    const startedAt = Date.now();
     const { searchParams } = new URL(request.url);
     const predictionId = searchParams.get('id');
 
@@ -349,24 +357,6 @@ export async function GET(request: NextRequest) {
             });
         }
 
-        // 2. Query Kie.ai
-        const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
-            headers: {
-                'Authorization': `Bearer ${KIE_API_KEY}`,
-            },
-        });
-
-        const data = await response.json();
-
-        if (!response.ok || data.code !== 200) {
-            throw new Error(data.msg || 'Failed to check status');
-        }
-
-        const timing = normalizeMarketGenerationTiming({
-            kind: 'motion',
-            task: data.data,
-            fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
-        });
         const workflowSettings =
             localGeneration?.workflow_settings && typeof localGeneration.workflow_settings === 'object'
                 ? localGeneration.workflow_settings as Record<string, unknown>
@@ -379,134 +369,165 @@ export async function GET(request: NextRequest) {
                 ? localGeneration.duration
                 : typeof workflowSettings?.duration === 'number'
                     ? workflowSettings.duration
-                    : null,
+                : null,
         });
-        const status = timing.appStatus;
-        let output = null;
-        let error = null;
 
-        if (status === 'succeeded') {
-            try {
-                const result = JSON.parse(data.data.resultJson);
-                const tempUrl = result.resultUrls?.[0] || null;
+        const lockResult = await withBackendJobLock(adminSupabase, {
+            name: getGenerationStatusLockName(predictionId),
+            ttlSeconds: GENERATION_STATUS_LOCK_TTL_SECONDS,
+            owner: getGenerationStatusLockOwner(request, startedAt),
+        }, async () => {
+            // 2. Query Kie.ai
+            const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
+                headers: {
+                    'Authorization': `Bearer ${KIE_API_KEY}`,
+                },
+            });
 
-                if (tempUrl) {
-                    console.log('Generating finished, persisting video...');
-                    const userId = user?.id || localGeneration?.user_id;
+            const data = await response.json();
 
-                    try {
-                        const videoRes = await fetch(tempUrl);
-                        if (!videoRes.ok) throw new Error('Failed to download video from Kie');
-                        const videoBlob = await videoRes.blob();
+            if (!response.ok || data.code !== 200) {
+                throw new Error(data.msg || 'Failed to check status');
+            }
 
-                        const fileName = `${userId}/generated_${predictionId}.mp4`;
-                        const { error: uploadError } = await supabase.storage
-                            .from('generated_videos')
-                            .upload(fileName, videoBlob, {
-                                contentType: 'video/mp4',
-                                upsert: true
-                            });
+            const timing = normalizeMarketGenerationTiming({
+                kind: 'motion',
+                task: data.data,
+                fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+            });
+            const status = timing.appStatus;
+            let output = null;
+            let error = null;
 
-                        if (uploadError) {
-                            console.error('Upload to Supabase failed:', uploadError);
-                            output = tempUrl;
-                        } else {
-                            // Store the storage path, not a public URL
-                            const storagePath = `generated_videos/${fileName}`;
-                            let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
-                            let previewError: string | null = null;
-                            try {
-                                preview = await createGenerationOutputPreview({
-                                    body: videoBlob,
-                                    category: 'video',
-                                    contentType: videoBlob.type || 'video/mp4',
-                                    storagePath,
-                                    supabase,
-                                });
-                            } catch (posterError) {
-                                console.error('Failed to create motion generation preview poster:', posterError);
-                                previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
-                            }
-                            // Generate a signed URL for the client
-                            const { data: signedData } = await supabase.storage
+            if (status === 'succeeded') {
+                try {
+                    const result = JSON.parse(data.data.resultJson);
+                    const tempUrl = result.resultUrls?.[0] || null;
+
+                    if (tempUrl) {
+                        console.log('Generating finished, persisting video...');
+                        const userId = user?.id || localGeneration?.user_id;
+
+                        try {
+                            const videoRes = await fetch(tempUrl);
+                            if (!videoRes.ok) throw new Error('Failed to download video from Kie');
+                            const videoBlob = await videoRes.blob();
+
+                            const fileName = `${userId}/generated_${predictionId}.mp4`;
+                            const { error: uploadError } = await supabase.storage
                                 .from('generated_videos')
-                                .createSignedUrl(fileName, 3600);
-                            output = signedData?.signedUrl || tempUrl;
+                                .upload(fileName, videoBlob, {
+                                    contentType: 'video/mp4',
+                                    upsert: true
+                                });
 
+                            if (uploadError) {
+                                console.error('Upload to Supabase failed:', uploadError);
+                                output = tempUrl;
+                            } else {
+                                // Store the storage path, not a public URL
+                                const storagePath = `generated_videos/${fileName}`;
+                                let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
+                                let previewError: string | null = null;
+                                try {
+                                    preview = await createGenerationOutputPreview({
+                                        body: videoBlob,
+                                        category: 'video',
+                                        contentType: videoBlob.type || 'video/mp4',
+                                        storagePath,
+                                        supabase,
+                                    });
+                                } catch (posterError) {
+                                    console.error('Failed to create motion generation preview poster:', posterError);
+                                    previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
+                                }
+                                // Generate a signed URL for the client
+                                const { data: signedData } = await supabase.storage
+                                    .from('generated_videos')
+                                    .createSignedUrl(fileName, 3600);
+                                output = signedData?.signedUrl || tempUrl;
+
+                                await supabase
+                                    .from('generations')
+                                    .update({
+                                        status: 'succeeded',
+                                        output_url: storagePath,
+                                        preview_url: preview?.previewStoragePath ?? null,
+                                        preview_thumbhash: preview?.previewThumbhash ?? null,
+                                        preview_status: preview ? 'ready' : 'failed',
+                                        preview_attempt_count: 1,
+                                        preview_error: previewError,
+                                        preview_generated_at: preview ? new Date().toISOString() : null,
+                                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                                    })
+                                    .eq('prediction_id', predictionId);
+                            }
+                        } catch (e) {
+                            console.error('Error persisting video to storage:', e);
+                            output = tempUrl;
+                        }
+
+                        if (!output || output === tempUrl) {
                             await supabase
                                 .from('generations')
                                 .update({
                                     status: 'succeeded',
-                                    output_url: storagePath,
-                                    preview_url: preview?.previewStoragePath ?? null,
-                                    preview_thumbhash: preview?.previewThumbhash ?? null,
-                                    preview_status: preview ? 'ready' : 'failed',
-                                    preview_attempt_count: 1,
-                                    preview_error: previewError,
-                                    preview_generated_at: preview ? new Date().toISOString() : null,
+                                    output_url: output,
                                     completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
                                 })
                                 .eq('prediction_id', predictionId);
                         }
-                    } catch (e) {
-                        console.error('Error persisting video to storage:', e);
-                        output = tempUrl;
                     }
 
-                    if (!output || output === tempUrl) {
-                        await supabase
-                            .from('generations')
-                            .update({
-                                status: 'succeeded',
-                                output_url: output,
-                                completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                            })
-                            .eq('prediction_id', predictionId);
-                    }
+                } catch (e) {
+                    console.error('Error handling success status:', e);
                 }
-
-            } catch (e) {
-                console.error('Error handling success status:', e);
-            }
-        } else if (status === 'failed') {
-            error = data.data.failMsg || 'Unknown error';
-
-            await supabase
-                .from('generations')
-                .update({
-                    status: 'failed',
-                    completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                })
-                .eq('prediction_id', predictionId);
-
-            // Refund credits for async failure (idempotent)
-            await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
-        }
-
-        if (localGeneration?.id && localGeneration?.user_id) {
-            if (status === 'succeeded' && output) {
-                await notifyGenerationStatus(adminSupabase, {
-                    id: localGeneration.id,
-                    user_id: localGeneration.user_id,
-                    category: localGeneration.category,
-                    model: localGeneration.model,
-                }, 'succeeded');
             } else if (status === 'failed') {
-                await notifyGenerationStatus(adminSupabase, {
-                    id: localGeneration.id,
-                    user_id: localGeneration.user_id,
-                    category: localGeneration.category,
-                    model: localGeneration.model,
-                }, 'failed');
+                error = data.data.failMsg || 'Unknown error';
+
+                await supabase
+                    .from('generations')
+                    .update({
+                        status: 'failed',
+                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                    })
+                    .eq('prediction_id', predictionId);
+
+                // Refund credits for async failure (idempotent)
+                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
             }
+
+            if (localGeneration?.id && localGeneration?.user_id) {
+                if (status === 'succeeded' && output) {
+                    await notifyGenerationStatus(adminSupabase, {
+                        id: localGeneration.id,
+                        user_id: localGeneration.user_id,
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }, 'succeeded');
+                } else if (status === 'failed') {
+                    await notifyGenerationStatus(adminSupabase, {
+                        id: localGeneration.id,
+                        user_id: localGeneration.user_id,
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }, 'failed');
+                }
+            }
+
+            return {
+                status,
+                output,
+                error,
+                timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
+            };
+        });
+
+        if (!lockResult.acquired) {
+            return NextResponse.json(buildLockedGenerationStatusPayload(localGeneration, estimatedTotalMs));
         }
 
-        return NextResponse.json({
-            status,
-            output,
-            error,
-            timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
-        });
+        return NextResponse.json(lockResult.value);
 
     } catch (error) {
         console.error('Error fetching prediction:', error);

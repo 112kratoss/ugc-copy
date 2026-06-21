@@ -10,6 +10,13 @@ import {
     toIsoTimestamp,
     withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
+import { withBackendJobLock } from '@/lib/backend-job-lock';
+import {
+    buildLockedGenerationStatusPayload,
+    GENERATION_STATUS_LOCK_TTL_SECONDS,
+    getGenerationStatusLockName,
+    getGenerationStatusLockOwner,
+} from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
 import { GenerationServiceError, startVideoGeneration } from '@/lib/generation-services';
@@ -323,6 +330,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+    const startedAt = Date.now();
     const { searchParams } = new URL(request.url);
     const predictionId = searchParams.get('id');
 
@@ -412,71 +420,33 @@ export async function GET(request: NextRequest) {
             completedAt: localGeneration?.completed_at,
         });
 
-        if (selectedModel === 'veo-3.1') {
-            const response = await fetch(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
-                headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-            });
+        const lockResult = await withBackendJobLock(adminSupabase, {
+            name: getGenerationStatusLockName(predictionId),
+            ttlSeconds: GENERATION_STATUS_LOCK_TTL_SECONDS,
+            owner: getGenerationStatusLockOwner(request, startedAt),
+        }, async () => {
+            if (selectedModel === 'veo-3.1') {
+                const response = await fetch(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
+                    headers: { Authorization: `Bearer ${KIE_API_KEY}` },
+                });
 
-            const data = await response.json();
+                const data = await response.json();
 
-            if (!response.ok || data.code !== 200) {
-                throw new Error(data.msg || 'Failed to check status');
-            }
-
-            const successFlag = data.data?.successFlag;
-            const responseData = data.data?.response;
-            timing = normalizeVeoGenerationTiming({
-                kind: 'video',
-                task: data.data,
-                fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
-            });
-            status = timing.appStatus;
-
-            if (successFlag === 1) {
-                const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
-
-                if (tempUrl) {
-                    output = await persistVideoOutput(
-                        supabase,
-                        predictionId,
-                        user?.id || localGeneration?.user_id,
-                        tempUrl,
-                        toIsoTimestamp(timing.completedAtMs)
-                    );
+                if (!response.ok || data.code !== 200) {
+                    throw new Error(data.msg || 'Failed to check status');
                 }
-            } else if (successFlag === 2 || successFlag === 3) {
-                error = data.data?.errorMessage || data.msg || 'Unknown error';
-                await supabase
-                    .from('generations')
-                    .update({
-                        status: 'failed',
-                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                    })
-                    .eq('prediction_id', predictionId);
-                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
-            }
-        } else {
-            const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
-                headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-            });
 
-            const data = await response.json();
+                const successFlag = data.data?.successFlag;
+                const responseData = data.data?.response;
+                timing = normalizeVeoGenerationTiming({
+                    kind: 'video',
+                    task: data.data,
+                    fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+                });
+                status = timing.appStatus;
 
-            if (!response.ok || data.code !== 200) {
-                throw new Error(data.msg || 'Failed to check status');
-            }
-
-            timing = normalizeMarketGenerationTiming({
-                kind: 'video',
-                task: data.data,
-                fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
-            });
-            status = timing.appStatus;
-
-            if (status === 'succeeded') {
-                try {
-                    const result = JSON.parse(data.data.resultJson);
-                    const tempUrl = getFirstResultUrl(result.resultUrls);
+                if (successFlag === 1) {
+                    const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
 
                     if (tempUrl) {
                         output = await persistVideoOutput(
@@ -487,46 +457,96 @@ export async function GET(request: NextRequest) {
                             toIsoTimestamp(timing.completedAtMs)
                         );
                     }
-                } catch (parseError) {
-                    console.error('Error handling success status:', parseError);
+                } else if (successFlag === 2 || successFlag === 3) {
+                    error = data.data?.errorMessage || data.msg || 'Unknown error';
+                    await supabase
+                        .from('generations')
+                        .update({
+                            status: 'failed',
+                            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                        })
+                        .eq('prediction_id', predictionId);
+                    await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
                 }
-            } else if (status === 'failed') {
-                error = data.data.failMsg || 'Unknown error';
-                await supabase
-                    .from('generations')
-                    .update({
-                        status: 'failed',
-                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                    })
-                    .eq('prediction_id', predictionId);
-                await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
-            }
-        }
+            } else {
+                const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
+                    headers: { Authorization: `Bearer ${KIE_API_KEY}` },
+                });
 
-        if (localGeneration?.id && localGeneration?.user_id) {
-            if (status === 'succeeded' && output) {
-                await notifyGenerationStatus(adminSupabase, {
-                    id: localGeneration.id,
-                    user_id: localGeneration.user_id,
-                    category: localGeneration.category,
-                    model: localGeneration.model,
-                }, 'succeeded');
-            } else if (status === 'failed') {
-                await notifyGenerationStatus(adminSupabase, {
-                    id: localGeneration.id,
-                    user_id: localGeneration.user_id,
-                    category: localGeneration.category,
-                    model: localGeneration.model,
-                }, 'failed');
-            }
-        }
+                const data = await response.json();
 
-        return NextResponse.json({
-            status,
-            output,
-            error,
-            timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
+                if (!response.ok || data.code !== 200) {
+                    throw new Error(data.msg || 'Failed to check status');
+                }
+
+                timing = normalizeMarketGenerationTiming({
+                    kind: 'video',
+                    task: data.data,
+                    fallbackStartedAtMs: localGeneration?.created_at ? Date.parse(localGeneration.created_at) : null,
+                });
+                status = timing.appStatus;
+
+                if (status === 'succeeded') {
+                    try {
+                        const result = JSON.parse(data.data.resultJson);
+                        const tempUrl = getFirstResultUrl(result.resultUrls);
+
+                        if (tempUrl) {
+                            output = await persistVideoOutput(
+                                supabase,
+                                predictionId,
+                                user?.id || localGeneration?.user_id,
+                                tempUrl,
+                                toIsoTimestamp(timing.completedAtMs)
+                            );
+                        }
+                    } catch (parseError) {
+                        console.error('Error handling success status:', parseError);
+                    }
+                } else if (status === 'failed') {
+                    error = data.data.failMsg || 'Unknown error';
+                    await supabase
+                        .from('generations')
+                        .update({
+                            status: 'failed',
+                            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                        })
+                        .eq('prediction_id', predictionId);
+                    await adminSupabase.rpc('refund_generation', { p_prediction_id: predictionId });
+                }
+            }
+
+            if (localGeneration?.id && localGeneration?.user_id) {
+                if (status === 'succeeded' && output) {
+                    await notifyGenerationStatus(adminSupabase, {
+                        id: localGeneration.id,
+                        user_id: localGeneration.user_id,
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }, 'succeeded');
+                } else if (status === 'failed') {
+                    await notifyGenerationStatus(adminSupabase, {
+                        id: localGeneration.id,
+                        user_id: localGeneration.user_id,
+                        category: localGeneration.category,
+                        model: localGeneration.model,
+                    }, 'failed');
+                }
+            }
+
+            return {
+                status,
+                output,
+                error,
+                timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
+            };
         });
+
+        if (!lockResult.acquired) {
+            return NextResponse.json(buildLockedGenerationStatusPayload(localGeneration, estimatedTotalMs));
+        }
+
+        return NextResponse.json(lockResult.value);
     } catch (error) {
         console.error('Error fetching video status:', error);
         return NextResponse.json({ error: 'Failed to fetch generation status' }, { status: 500 });

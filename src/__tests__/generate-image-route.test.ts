@@ -23,7 +23,8 @@ let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;
 
 function createSupabaseMock(
   sourceGeneration: SourceGenerationRow | null,
-  localGeneration: LocalGenerationRow | null = null
+  localGeneration: LocalGenerationRow | null = null,
+  lockAcquired = true
 ) {
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -33,6 +34,18 @@ function createSupabaseMock(
     }
 
     if (fn === 'refund_credits') {
+      return { data: true, error: null };
+    }
+
+    if (fn === 'refund_generation') {
+      return { data: true, error: null };
+    }
+
+    if (fn === 'try_acquire_backend_job_lock') {
+      return { data: lockAcquired, error: null };
+    }
+
+    if (fn === 'release_backend_job_lock') {
       return { data: true, error: null };
     }
 
@@ -359,6 +372,46 @@ describe('/api/generate-image route', () => {
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
+  it('returns cached processing state without calling the provider when status refresh is already locked', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-image-locked-1',
+      prediction_id: 'task-image-locked-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'nano-banana-2',
+      category: 'image',
+      workflow_settings: {
+        resolution: '1K',
+      },
+    }, false);
+
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=task-image-locked-1', {
+        headers: {
+          Authorization: 'Bearer token',
+        },
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      status: 'processing',
+      output: null,
+      error: null,
+      retryAfterMs: 2000,
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
   it('persists and returns all Grok image outputs when the provider succeeds', async () => {
     currentSupabaseMock = createSupabaseMock(null, {
       id: 'gen-grok-image-1',
@@ -377,7 +430,6 @@ describe('/api/generate-image route', () => {
     });
 
     const serverHelpers = await import('@/lib/server-helpers');
-    vi.mocked(serverHelpers.createServiceClient).mockReturnValue({} as never);
     vi.mocked(serverHelpers.resolveStoredMediaUrl).mockImplementation(async (_supabase, outputUrl) => `signed:${outputUrl}`);
 
     vi.stubGlobal(
