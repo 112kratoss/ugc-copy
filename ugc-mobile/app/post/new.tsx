@@ -397,6 +397,7 @@ export default function NewPostScreen() {
       const uploadedItems = await Promise.all(
         picked.slice(0, availableSlots).map(async (asset, index): Promise<PostComposerMediaItem> => {
           const uploaded = await uploadPickedMedia(asset.uri, {
+            api,
             fileName: asset.fileName,
             mimeType: asset.mimeType,
             ...(kind === 'mixed' ? {} : { kind }),

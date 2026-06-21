@@ -4,6 +4,8 @@ import type {
   GenerationStartResponse,
   GenerationStatusResponse,
   ImageGenerationRequest,
+  MediaUploadIntentRequest,
+  MediaUploadIntentResponse,
   MarketplaceResourceList,
   MarketplaceResourceDetailResponse,
   MobileNotificationPreferences,
@@ -360,6 +362,11 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       request<{ success: boolean; attachment: PostResourceAttachment }>('/api/posts/resource-files', {
         method: 'POST',
         body,
+      }),
+    createMediaUpload: (body: MediaUploadIntentRequest) =>
+      request<MediaUploadIntentResponse>('/api/uploads/media/sign', {
+        method: 'POST',
+        body: JSON.stringify(body),
       }),
     listPosts: (params?: Record<string, QueryValue>) => request(`/api/posts${buildQuery(params)}`),
     listOwnerPosts: (params?: Record<string, QueryValue>) =>

@@ -4,13 +4,15 @@ import * as ImagePicker from 'expo-image-picker';
 import { getMissingMobileEnvKeys } from './env';
 import { supabase } from './supabase';
 import { getUploadExtension, readUriUploadBody } from './upload-file';
+import type { MagicbookletApiClient } from './api-client';
+import type { MediaUploadKind } from './types';
 
 export interface UploadedMedia {
   signedUrl: string;
   storagePath: string;
   mimeType: string;
   fileName: string;
-  kind: 'image' | 'video' | 'audio';
+  kind: MediaUploadKind;
   durationSeconds?: number | null;
   sizeBytes?: number | null;
 }
@@ -101,10 +103,11 @@ export async function pickResourceDocument() {
 export async function uploadPickedMedia(
   uri: string,
   options: {
+    api?: Pick<MagicbookletApiClient, 'createMediaUpload'>;
     bucket?: string;
     fileName?: string | null;
     mimeType?: string | null;
-    kind?: 'image' | 'video' | 'audio';
+    kind?: MediaUploadKind;
     durationSeconds?: number | null;
     sizeBytes?: number | null;
   } = {}
@@ -117,24 +120,28 @@ export async function uploadPickedMedia(
     throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
   }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    throw new Error('Please sign in before uploading media.');
-  }
-
   const uploadBody = await readUriUploadBody(uri, {
     mimeType: options.mimeType,
     sizeBytes: options.sizeBytes,
   });
   const mimeType = uploadBody.mimeType;
+  const kind = options.kind ?? (mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('audio/') ? 'audio' : 'image');
   const extension = getUploadExtension(mimeType, options.fileName);
   const fileName = sanitizeUploadFileName(options.fileName, `${Date.now()}.${extension || 'bin'}`);
-  const storageKey = `${user.id}/${Math.random().toString(36).slice(2)}-${fileName}`;
 
-  const { error: uploadError } = await supabase.storage.from(bucket).upload(storageKey, uploadBody.body, {
+  if (!options.api) {
+    throw new Error('Media uploads must be authorized by the app API.');
+  }
+
+  const uploadIntent = await options.api.createMediaUpload({
+    fileName,
+    mimeType,
+    kind,
+    sizeBytes: uploadBody.sizeBytes,
+  });
+  assertClientUploadBucket(uploadIntent.bucket);
+
+  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(uploadIntent.path, uploadIntent.token, uploadBody.body, {
     contentType: mimeType,
   });
 
@@ -142,17 +149,17 @@ export async function uploadPickedMedia(
     throw new Error(uploadError.message);
   }
 
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(storageKey, 3600);
+  const { data, error } = await supabase.storage.from(uploadIntent.bucket).createSignedUrl(uploadIntent.path, 3600);
   if (error || !data?.signedUrl) {
     throw new Error(error?.message ?? 'Could not create signed media URL.');
   }
 
   return {
     signedUrl: data.signedUrl,
-    storagePath: `${bucket}/${storageKey}`,
+    storagePath: uploadIntent.storagePath,
     mimeType,
     fileName,
-    kind: options.kind ?? (mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('audio/') ? 'audio' : 'image'),
+    kind,
     durationSeconds: options.durationSeconds ?? null,
     sizeBytes: uploadBody.sizeBytes,
   };

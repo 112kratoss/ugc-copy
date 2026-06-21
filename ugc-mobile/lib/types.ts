@@ -68,6 +68,25 @@ export interface GenerationStartResponse {
   cost?: number;
 }
 
+export type MediaUploadKind = 'image' | 'video' | 'audio';
+
+export interface MediaUploadIntentRequest {
+  fileName: string;
+  mimeType: string;
+  kind: MediaUploadKind;
+  sizeBytes: number;
+}
+
+export interface MediaUploadIntentResponse {
+  success: boolean;
+  bucket: 'uploads';
+  path: string;
+  storagePath: string;
+  token: string;
+  signedUploadUrl: string | null;
+  expiresInSeconds: number;
+}
+
 export interface GenerationStatusResponse {
   status: 'waiting' | 'processing' | 'succeeded' | 'failed' | string;
   output?: string | null;

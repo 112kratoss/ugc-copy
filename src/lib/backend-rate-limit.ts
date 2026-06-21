@@ -102,6 +102,12 @@ export const POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
+  scope: 'temporary-media-upload:sign',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,

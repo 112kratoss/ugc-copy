@@ -362,6 +362,7 @@ export function MediaCreationScreen({
       const uploaded: MediaDraft[] = [];
       for (const asset of picked) {
         const media = await uploadPickedMedia(asset.uri, {
+          api,
           fileName: asset.fileName,
           mimeType: asset.mimeType,
           kind: 'image',
@@ -389,6 +390,7 @@ export function MediaCreationScreen({
       const picked = await pickMedia('image');
       if (!picked) return;
       const uploaded = await uploadPickedMedia(picked.uri, {
+        api,
         fileName: picked.fileName,
         mimeType: picked.mimeType,
         kind: 'image',
@@ -417,6 +419,7 @@ export function MediaCreationScreen({
       const picked = await pickMedia('video');
       if (!picked) return;
       const uploaded = await uploadPickedMedia(picked.uri, {
+        api,
         fileName: picked.fileName,
         mimeType: picked.mimeType,
         kind: 'video',
@@ -446,6 +449,7 @@ export function MediaCreationScreen({
       const picked = await pickAudioDocument();
       if (!picked) return;
       const uploaded = await uploadPickedMedia(picked.uri, {
+        api,
         fileName: picked.name,
         mimeType: picked.mimeType,
         kind: 'audio',
