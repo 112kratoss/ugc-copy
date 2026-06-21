@@ -1,5 +1,18 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/server-helpers';
+import {
+    BackendRateLimitError,
+    CONTACT_SUBMISSION_RATE_LIMIT,
+    createBackendRateLimitResponse,
+    enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
+
+function getContactRateLimitKey(request: Request) {
+    const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+    const realIp = request.headers.get('x-real-ip')?.trim();
+
+    return forwardedFor || realIp || '127.0.0.1';
+}
 
 export async function POST(req: Request) {
     try {
@@ -20,7 +33,26 @@ export async function POST(req: Request) {
             );
         }
 
-        const { error } = await createServiceClient()
+        const adminSupabase = createServiceClient();
+
+        try {
+            await enforceBackendRateLimit(adminSupabase, {
+                ...CONTACT_SUBMISSION_RATE_LIMIT,
+                key: getContactRateLimitKey(req),
+            });
+        } catch (error) {
+            if (error instanceof BackendRateLimitError) {
+                return createBackendRateLimitResponse(error);
+            }
+
+            console.error('Contact rate limit check failed:', error);
+            return NextResponse.json(
+                { error: 'Failed to check contact submission limits.' },
+                { status: 500 }
+            );
+        }
+
+        const { error } = await adminSupabase
             .from('contact_messages')
             .insert({
                 name: name.trim(),
