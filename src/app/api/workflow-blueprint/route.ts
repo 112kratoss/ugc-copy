@@ -16,6 +16,8 @@ import {
 } from '@/lib/workflow-blueprint';
 import {
   AiUsageLedgerError,
+  buildAiUsageReplayResponse,
+  getAiUsageLedgerIdempotencyKey,
   markAiUsageSucceeded,
   refundAiUsageLedger,
   startAiUsageLedger,
@@ -56,6 +58,7 @@ export async function POST(request: NextRequest) {
 
     let ledger;
     try {
+      const idempotencyKey = getAiUsageLedgerIdempotencyKey(request, input as unknown as Record<string, unknown>);
       ledger = await startAiUsageLedger(adminSupabase, {
         userId: user.id,
         feature: 'workflow_blueprint',
@@ -64,6 +67,7 @@ export async function POST(request: NextRequest) {
         medium: 'video',
         cost: WORKFLOW_BLUEPRINT_COST,
         inputPrompt: JSON.stringify(input),
+        idempotencyKey,
       });
     } catch (ledgerError) {
       if (ledgerError instanceof AiUsageLedgerError) {
@@ -75,6 +79,10 @@ export async function POST(request: NextRequest) {
       }
 
       throw ledgerError;
+    }
+
+    if (ledger.idempotentReplay) {
+      return NextResponse.json(buildAiUsageReplayResponse(ledger));
     }
 
     try {
@@ -106,10 +114,11 @@ export async function POST(request: NextRequest) {
       }
 
       const blueprint = sanitizeBlueprint(extractBlueprintFromResponse(content));
+      const responsePayload = { blueprint, remainingCredits: ledger.remainingCredits };
 
-      await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify(blueprint));
+      await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify(blueprint), responsePayload);
 
-      return NextResponse.json({ blueprint, remainingCredits: ledger.remainingCredits });
+      return NextResponse.json(responsePayload);
     } catch (error) {
       await refundAiUsageLedger(adminSupabase, ledger, error);
 

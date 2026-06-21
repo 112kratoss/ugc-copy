@@ -27,6 +27,21 @@ describe('generation start idempotency migration', () => {
   });
 });
 
+describe('AI usage event idempotency migration', () => {
+  it('stores only hashed client request keys and prevents duplicate paid AI requests per user and feature', () => {
+    const sql = readMigration('_ai_usage_event_idempotency.sql');
+
+    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS client_request_key_hash text/i);
+    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS response_payload jsonb/i);
+    expect(sql).toMatch(/ai_usage_events_client_request_key_hash_sha256/i);
+    expect(sql).toMatch(/client_request_key_hash ~ '\^\[a-f0-9\]\{64\}\$'/i);
+    expect(sql).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS ai_usage_events_user_feature_client_request_key_hash_idx/i);
+    expect(sql).toMatch(/ON public\.ai_usage_events \(user_id, feature, client_request_key_hash\)/i);
+    expect(sql).toMatch(/WHERE client_request_key_hash IS NOT NULL/i);
+    expect(sql).toMatch(/Raw keys are never stored/i);
+  });
+});
+
 describe('post resource bundle migration audit hardening', () => {
   it('keeps the historical migration audit table service-role only', () => {
     const sql = readMigration('_harden_post_resource_bundle_migration_audit.sql');

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const buildEnhancerSystemPromptMock = vi.fn();
 const callPromptEnhancerMock = vi.fn();
@@ -25,10 +26,20 @@ function createAdminClient(options?: {
   remainingCredits?: number;
   rateLimitAllowed?: boolean;
   usageInsertError?: Error | null;
+  existingUsageEvent?: {
+    id: string;
+    user_id: string;
+    feature: string;
+    client_request_key_hash: string;
+    status: string;
+    cost: number;
+    response_payload?: Record<string, unknown> | null;
+  } | null;
 }) {
   const remainingCredits = options?.remainingCredits ?? 98;
   const rateLimitAllowed = options?.rateLimitAllowed ?? true;
   const usageInsertError = options?.usageInsertError ?? null;
+  const existingUsageEvent = options?.existingUsageEvent ?? null;
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -64,11 +75,18 @@ function createAdminClient(options?: {
       return { data: null, error: null };
     }),
     from: vi.fn((table: string) => {
+      if (table === 'profiles') {
+        return createSelectChain([{ id: 'user-1', credits: remainingCredits }]);
+      }
+
       if (table !== 'ai_usage_events') {
         throw new Error(`Unexpected table access: ${table}`);
       }
 
       return {
+        select() {
+          return createSelectChain(existingUsageEvent ? [existingUsageEvent] : []);
+        },
         insert(record: Record<string, unknown>) {
           inserts.push(record);
           return {
@@ -94,6 +112,33 @@ function createAdminClient(options?: {
       };
     }),
   };
+}
+
+function createSelectChain(rows: Array<Record<string, unknown>>) {
+  const filters: Array<{ column: string; value: unknown }> = [];
+  const chain = {
+    select: vi.fn(() => chain),
+    eq: vi.fn((column: string, value: unknown) => {
+      filters.push({ column, value });
+      return chain;
+    }),
+    maybeSingle: vi.fn(async () => ({
+      data: rows.find((row) => filters.every((filter) => row[filter.column] === filter.value)) ?? null,
+      error: null,
+    })),
+  };
+
+  return chain;
+}
+
+function testKeyHash(userId: string, feature: string, key: string) {
+  return createHash('sha256')
+    .update(userId)
+    .update('\0')
+    .update(feature)
+    .update('\0')
+    .update(key)
+    .digest('hex');
 }
 
 vi.mock('@supabase/supabase-js', async (importOriginal) => {
@@ -202,6 +247,60 @@ describe('/api/enhance-prompt route', () => {
       status: 'succeeded',
       output_text: data.enhancedPrompt,
     });
+  });
+
+  it('replays a completed idempotent enhancement without charging credits or calling the provider again', async () => {
+    currentAdminClient = createAdminClient({
+      remainingCredits: 83,
+      existingUsageEvent: {
+        id: 'event-existing',
+        user_id: 'user-1',
+        feature: 'prompt_enhancement',
+        client_request_key_hash: testKeyHash('user-1', 'prompt_enhancement', 'enhance-click-1'),
+        status: 'succeeded',
+        cost: 2,
+        response_payload: {
+          enhancedPrompt: 'existing enhanced prompt',
+          remainingCredits: 91,
+          agentId: 'generic-media-enhancer',
+          qualityScore: 88,
+          warnings: [],
+          appliedSafeguards: ['existing safeguard'],
+        },
+      },
+    });
+
+    const { POST } = await import('@/app/api/enhance-prompt/route');
+    const response = await POST(
+      new Request('http://localhost/api/enhance-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'enhance-click-1',
+        },
+        body: JSON.stringify({
+          medium: 'image',
+          selectedModel: 'nano-banana-pro',
+          prompt: 'Create a product poster',
+          idempotencyKey: 'enhance-click-1',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      idempotentReplay: true,
+      enhancedPrompt: 'existing enhanced prompt',
+      remainingCredits: 83,
+      agentId: 'generic-media-enhancer',
+      qualityScore: 88,
+    });
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).toContain('check_backend_rate_limit');
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).not.toContain('deduct_credits');
+    expect(currentAdminClient.inserts).toHaveLength(0);
+    expect(buildEnhancerSystemPromptMock).not.toHaveBeenCalled();
+    expect(callPromptEnhancerMock).not.toHaveBeenCalled();
   });
 
   it('rejects unsupported models before calling the enhancer', async () => {

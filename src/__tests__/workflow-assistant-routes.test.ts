@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 
 import { createStarterGraph } from '@/lib/workflow-canvas';
 
@@ -65,6 +66,15 @@ let simulateMissingAssistantSchema = false;
 let remainingCredits = 94;
 let usageEventUpdates: Array<Record<string, unknown>> = [];
 let usageEventInsertError: Error | null = null;
+let existingUsageEvent: {
+  id: string;
+  user_id: string;
+  feature: string;
+  client_request_key_hash: string;
+  status: string;
+  cost: number;
+  response_payload?: Record<string, unknown> | null;
+} | null = null;
 let adminRpcCalls: string[] = [];
 let assistantRateLimitAllowed = true;
 
@@ -314,11 +324,18 @@ function createAdminSupabaseMock() {
       throw new Error(`Unexpected rpc: ${fn}`);
     },
     from(table: string) {
+      if (table === 'profiles') {
+        return createSelectChain([{ id: canvasRow.user_id, credits: remainingCredits }]);
+      }
+
       if (table !== 'ai_usage_events') {
         throw new Error(`Unexpected service table: ${table}`);
       }
 
       return {
+        select() {
+          return createSelectChain(existingUsageEvent ? [existingUsageEvent] : []);
+        },
         insert() {
           return {
             select() {
@@ -348,6 +365,33 @@ function createAdminSupabaseMock() {
   };
 }
 
+function createSelectChain(rows: Array<Record<string, unknown>>) {
+  const filters: Array<{ column: string; value: unknown }> = [];
+  const chain = {
+    select: vi.fn(() => chain),
+    eq: vi.fn((column: string, value: unknown) => {
+      filters.push({ column, value });
+      return chain;
+    }),
+    maybeSingle: vi.fn(async () => ({
+      data: rows.find((row) => filters.every((filter) => row[filter.column] === filter.value)) ?? null,
+      error: null,
+    })),
+  };
+
+  return chain;
+}
+
+function testKeyHash(userId: string, feature: string, key: string) {
+  return createHash('sha256')
+    .update(userId)
+    .update('\0')
+    .update(feature)
+    .update('\0')
+    .update(key)
+    .digest('hex');
+}
+
 beforeEach(() => {
   vi.resetModules();
   assistantMessages = [];
@@ -372,6 +416,7 @@ beforeEach(() => {
   remainingCredits = 94;
   usageEventUpdates = [];
   usageEventInsertError = null;
+  existingUsageEvent = null;
   adminRpcCalls = [];
   assistantRateLimitAllowed = true;
   mocks.authenticateRequest.mockResolvedValue({
@@ -498,6 +543,77 @@ describe('workflow assistant routes', () => {
     expect(data.proposal.proposed_graph.nodes.some((node: { data: { managed?: boolean } }) => node.data.managed)).toBe(true);
     expect(assistantProposals[0].status).toBe('ready');
     expect(usageEventUpdates.some((update) => update.status === 'succeeded')).toBe(true);
+  });
+
+  it('replays a completed idempotent assistant response without charging credits or persisting duplicate messages', async () => {
+    existingUsageEvent = {
+      id: 'usage-existing',
+      user_id: canvasRow.user_id,
+      feature: 'workflow_assistant',
+      client_request_key_hash: testKeyHash(canvasRow.user_id, 'workflow_assistant', 'assistant-click-1'),
+      status: 'succeeded',
+      cost: 4,
+      response_payload: {
+        messages: [{
+          id: 'msg-replay-1',
+          canvasId: canvasRow.id,
+          role: 'assistant',
+          content: 'Replayed assistant answer',
+          proposalId: 'proposal-replay',
+          createdAt: '2026-04-16T08:20:00.000Z',
+        }],
+        proposal: {
+          id: 'proposal-replay',
+          canvasId: canvasRow.id,
+          baseRevision: canvasRow.revision,
+          status: 'ready',
+          summary: 'Replayed proposal',
+          diff: {
+            regionId: 'assistant-region-replay',
+            nodes: { added: [], changed: [], removed: [] },
+            edges: { added: 0, removed: 0 },
+          },
+          proposedGraph: createStarterGraph(),
+          createdAt: '2026-04-16T08:20:00.000Z',
+          appliedAt: null,
+          discardedAt: null,
+        },
+        remainingCredits: 99,
+      },
+    };
+
+    const { POST } = await import('@/app/api/workflow-canvases/[id]/assistant/messages/route');
+    const response = await POST(
+      new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': 'assistant-click-1',
+        },
+        body: JSON.stringify({
+          content: 'Create a before and after lightning transformation workflow.',
+          idempotencyKey: 'assistant-click-1',
+        }),
+      }) as never,
+      { params: Promise.resolve({ id: canvasRow.id }) }
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({
+      idempotentReplay: true,
+      remainingCredits,
+      proposal: {
+        id: 'proposal-replay',
+        summary: 'Replayed proposal',
+      },
+    });
+    expect(data.messages).toHaveLength(1);
+    expect(adminRpcCalls).toContain('check_backend_rate_limit');
+    expect(adminRpcCalls).not.toContain('deduct_credits');
+    expect(assistantMessages).toHaveLength(0);
+    expect(assistantProposals).toHaveLength(1);
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it('refunds and skips the provider when usage event creation fails after deduction', async () => {

@@ -19,6 +19,8 @@ import {
 import { authenticateRequest } from '@/lib/server-helpers';
 import {
   AiUsageLedgerError,
+  buildAiUsageReplayResponse,
+  getAiUsageLedgerIdempotencyKey,
   markAiUsageSucceeded,
   refundAiUsageLedger,
   startAiUsageLedger,
@@ -111,6 +113,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
   let ledger;
   try {
+    const idempotencyKey = getAiUsageLedgerIdempotencyKey(request, body as Record<string, unknown>);
     ledger = await startAiUsageLedger(adminSupabase, {
       userId,
       feature: 'workflow_assistant',
@@ -119,6 +122,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       medium: 'video',
       cost: WORKFLOW_ASSISTANT_COST,
       inputPrompt: content,
+      idempotencyKey,
     });
   } catch (ledgerError) {
     if (ledgerError instanceof AiUsageLedgerError) {
@@ -130,6 +134,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     throw ledgerError;
+  }
+
+  if (ledger.idempotentReplay) {
+    return NextResponse.json(buildAiUsageReplayResponse(ledger));
   }
 
   try {
@@ -249,17 +257,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       throw messageInsert.error;
     }
 
+    const messages = normalizeAssistantMessages(messageInsert.data ?? []);
+    const responsePayload = {
+      messages,
+      proposal,
+      remainingCredits: ledger.remainingCredits,
+    };
+
     await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify({
       proposalId: proposal.id,
       summary: blueprint.changeSummary,
       reply: blueprint.assistantReply,
-    }));
+    }), responsePayload);
 
-    return NextResponse.json({
-      messages: normalizeAssistantMessages(messageInsert.data ?? []),
-      proposal,
-      remainingCredits: ledger.remainingCredits,
-    });
+    return NextResponse.json(responsePayload);
   } catch (error) {
     if (isMissingWorkflowCanvasAssistantSchemaError(error)) {
       await refundAiUsageLedger(adminSupabase, ledger, error);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
 const createUserClientMock = vi.hoisted(() => vi.fn());
@@ -21,10 +22,20 @@ function createAdminClient(options?: {
   remainingCredits?: number;
   rateLimitAllowed?: boolean;
   usageInsertError?: Error | null;
+  existingUsageEvent?: {
+    id: string;
+    user_id: string;
+    feature: string;
+    client_request_key_hash: string;
+    status: string;
+    cost: number;
+    response_payload?: Record<string, unknown> | null;
+  } | null;
 }) {
   const remainingCredits = options?.remainingCredits ?? 94;
   const rateLimitAllowed = options?.rateLimitAllowed ?? true;
   const usageInsertError = options?.usageInsertError ?? null;
+  const existingUsageEvent = options?.existingUsageEvent ?? null;
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
@@ -60,11 +71,18 @@ function createAdminClient(options?: {
       throw new Error(`Unexpected rpc: ${fn}`);
     }),
     from: vi.fn((table: string) => {
+      if (table === 'profiles') {
+        return createSelectChain([{ id: 'user-1', credits: remainingCredits }]);
+      }
+
       if (table !== 'ai_usage_events') {
         throw new Error(`Unexpected table access: ${table}`);
       }
 
       return {
+        select() {
+          return createSelectChain(existingUsageEvent ? [existingUsageEvent] : []);
+        },
         insert(record: Record<string, unknown>) {
           inserts.push(record);
           return {
@@ -90,6 +108,33 @@ function createAdminClient(options?: {
       };
     }),
   };
+}
+
+function createSelectChain(rows: Array<Record<string, unknown>>) {
+  const filters: Array<{ column: string; value: unknown }> = [];
+  const chain = {
+    select: vi.fn(() => chain),
+    eq: vi.fn((column: string, value: unknown) => {
+      filters.push({ column, value });
+      return chain;
+    }),
+    maybeSingle: vi.fn(async () => ({
+      data: rows.find((row) => filters.every((filter) => row[filter.column] === filter.value)) ?? null,
+      error: null,
+    })),
+  };
+
+  return chain;
+}
+
+function testKeyHash(userId: string, feature: string, key: string) {
+  return createHash('sha256')
+    .update(userId)
+    .update('\0')
+    .update(feature)
+    .update('\0')
+    .update(key)
+    .digest('hex');
 }
 
 function createBlueprintRequest() {
@@ -221,6 +266,59 @@ describe('/api/workflow-blueprint route', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
+  });
+
+  it('replays a completed idempotent blueprint without charging credits or calling the provider again', async () => {
+    currentAdminClient = createAdminClient({
+      remainingCredits: 82,
+      existingUsageEvent: {
+        id: 'event-existing',
+        user_id: 'user-1',
+        feature: 'workflow_blueprint',
+        client_request_key_hash: testKeyHash('user-1', 'workflow_blueprint', 'blueprint-click-1'),
+        status: 'succeeded',
+        cost: 6,
+        response_payload: {
+          blueprint: {
+            title: 'Existing workflow',
+            creativeStrategy: 'Reuse the previous paid answer.',
+            shots: [],
+          },
+          remainingCredits: 90,
+        },
+      },
+    });
+
+    const { POST } = await import('@/app/api/workflow-blueprint/route');
+    const response = await POST(
+      new Request('http://localhost/api/workflow-blueprint', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'blueprint-click-1',
+        },
+        body: JSON.stringify({
+          productName: 'Creator Kit',
+          audience: 'UGC creators',
+          primaryMessage: 'Create polished launch videos faster',
+          idempotencyKey: 'blueprint-click-1',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      idempotentReplay: true,
+      remainingCredits: 82,
+      blueprint: {
+        title: 'Existing workflow',
+      },
+    });
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).toContain('check_backend_rate_limit');
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).not.toContain('deduct_credits');
+    expect(currentAdminClient.inserts).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('refunds and skips the provider when usage event creation fails after deduction', async () => {

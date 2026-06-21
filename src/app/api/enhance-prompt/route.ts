@@ -20,6 +20,8 @@ import {
 import { inspectPromptQuality } from '@/lib/prompt-quality';
 import {
     AiUsageLedgerError,
+    buildAiUsageReplayResponse,
+    getAiUsageLedgerIdempotencyKey,
     markAiUsageSucceeded,
     refundAiUsageLedger,
     startAiUsageLedger,
@@ -72,6 +74,7 @@ export async function POST(request: NextRequest) {
 
         let ledger;
         try {
+            const idempotencyKey = getAiUsageLedgerIdempotencyKey(request, body as Record<string, unknown>);
             ledger = await startAiUsageLedger(adminSupabase, {
                 userId: user.id,
                 feature: 'prompt_enhancement',
@@ -80,6 +83,7 @@ export async function POST(request: NextRequest) {
                 medium,
                 cost,
                 inputPrompt: prompt,
+                idempotencyKey,
             });
         } catch (ledgerError) {
             if (ledgerError instanceof AiUsageLedgerError) {
@@ -94,6 +98,10 @@ export async function POST(request: NextRequest) {
             }
 
             throw ledgerError;
+        }
+
+        if (ledger.idempotentReplay) {
+            return NextResponse.json(buildAiUsageReplayResponse(ledger));
         }
 
         try {
@@ -125,9 +133,7 @@ export async function POST(request: NextRequest) {
                 context,
             });
 
-            await markAiUsageSucceeded(adminSupabase, ledger, enhancedPrompt);
-
-            return NextResponse.json({
+            const responsePayload = {
                 enhancedPrompt,
                 remainingCredits: ledger.remainingCredits,
                 agentId: artifacts.agentId,
@@ -137,7 +143,11 @@ export async function POST(request: NextRequest) {
                     ...artifacts.appliedSafeguards,
                     ...safeguardResult.appliedSafeguards,
                 ],
-            });
+            };
+
+            await markAiUsageSucceeded(adminSupabase, ledger, enhancedPrompt, responsePayload);
+
+            return NextResponse.json(responsePayload);
         } catch (enhanceError) {
             console.error('[EnhancePrompt] Enhancement failed:', enhanceError);
 
