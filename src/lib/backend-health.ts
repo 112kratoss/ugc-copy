@@ -100,7 +100,7 @@ export type BackendHealth = {
 };
 
 const JOB_THRESHOLDS: Array<{ name: string; expectedMaxAgeMinutes: number }> = [
-  { name: 'media-preview-repair', expectedMaxAgeMinutes: 60 },
+  { name: 'media-preview-repair', expectedMaxAgeMinutes: 120 },
   { name: 'mobile-push-receipts', expectedMaxAgeMinutes: 36 * 60 },
   { name: 'generation-completions', expectedMaxAgeMinutes: 15 },
 ];

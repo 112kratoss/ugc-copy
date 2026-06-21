@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/media-preview-repair",
-      "schedule": "*/15 * * * *"
+      "schedule": "7 * * * *"
     },
     {
       "path": "/api/cron/generation-completions",

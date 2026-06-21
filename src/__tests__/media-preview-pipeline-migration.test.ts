@@ -25,11 +25,11 @@ describe('media preview pipeline migration', () => {
     expect(migration).toContain("posts_category_check CHECK (category IN ('image', 'video', 'text'))");
   });
 
-  it('schedules repair every fifteen minutes', () => {
+  it('schedules repair hourly as a low-cost fallback', () => {
     const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
     expect(vercel.crons).toContainEqual({
       path: '/api/cron/media-preview-repair',
-      schedule: '*/15 * * * *',
+      schedule: '7 * * * *',
     });
   });
 });
