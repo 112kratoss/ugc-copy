@@ -2,6 +2,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  BackendRateLimitError,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+  POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import type { PostResourceAttachment } from '@/lib/post-resource-bundles';
 
@@ -84,6 +90,20 @@ export async function POST(request: NextRequest) {
   }
 
   const adminSupabase = createServiceClient();
+  try {
+    await enforceBackendRateLimit(adminSupabase, {
+      ...POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT,
+      key: user.id,
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    console.error('Post resource file upload rate limit check failed:', error);
+    return NextResponse.json({ error: 'Failed to check resource upload limits.' }, { status: 500 });
+  }
+
   const formData = await request.formData();
   const file = formData.get('file');
 

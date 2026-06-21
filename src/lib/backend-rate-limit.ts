@@ -96,6 +96,12 @@ export const SHOWCASE_PUBLISH_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT = {
+  scope: 'post-resource-file:upload',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,
