@@ -19,6 +19,7 @@ type GenerationRow = {
 };
 
 type SupabaseMockOptions = {
+  generationInsertErrors?: Error[];
   generationUpdateErrors?: Error[];
   sharedGenerations?: GenerationRow[];
 };
@@ -28,6 +29,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
   const uploads: Array<{ bucket: string; filePath: string }> = [];
   const inputMediaRows: Record<string, unknown>[] = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  const generationInsertErrors = [...(options.generationInsertErrors ?? [])];
   const generationUpdateErrors = [...(options.generationUpdateErrors ?? [])];
 
   const supabase = {
@@ -60,30 +62,35 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
 
       return {
         insert(record: Record<string, unknown>) {
-          const row: GenerationRow = {
-            id: `gen-${generations.length + 1}`,
-            user_id: String(record.user_id),
-            prediction_id: typeof record.prediction_id === 'string' ? record.prediction_id : null,
-            status: String(record.status),
-            output_url: record.output_url ? String(record.output_url) : null,
-            model: String(record.model),
-            category: record.category ? String(record.category) : null,
-            workflow_settings: (record.workflow_settings as Record<string, unknown>) ?? null,
-            prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
-            cost: typeof record.cost === 'number' ? record.cost : undefined,
-            duration: typeof record.duration === 'number' ? record.duration : undefined,
-            client_request_key_hash: typeof record.client_request_key_hash === 'string'
-              ? record.client_request_key_hash
-              : null,
-            created_at: typeof record.created_at === 'string' ? record.created_at : new Date().toISOString(),
-            completed_at: typeof record.completed_at === 'string' ? record.completed_at : null,
-          };
-          generations.push(row);
-
           return {
             select() {
               return {
                 async single() {
+                  const insertError = generationInsertErrors.shift();
+                  if (insertError) {
+                    return { data: null, error: insertError };
+                  }
+
+                  const row: GenerationRow = {
+                    id: `gen-${generations.length + 1}`,
+                    user_id: String(record.user_id),
+                    prediction_id: typeof record.prediction_id === 'string' ? record.prediction_id : null,
+                    status: String(record.status),
+                    output_url: record.output_url ? String(record.output_url) : null,
+                    model: String(record.model),
+                    category: record.category ? String(record.category) : null,
+                    workflow_settings: (record.workflow_settings as Record<string, unknown>) ?? null,
+                    prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
+                    cost: typeof record.cost === 'number' ? record.cost : undefined,
+                    duration: typeof record.duration === 'number' ? record.duration : undefined,
+                    client_request_key_hash: typeof record.client_request_key_hash === 'string'
+                      ? record.client_request_key_hash
+                      : null,
+                    created_at: typeof record.created_at === 'string' ? record.created_at : new Date().toISOString(),
+                    completed_at: typeof record.completed_at === 'string' ? record.completed_at : null,
+                  };
+                  generations.push(row);
+
                   return { data: { id: row.id }, error: null };
                 },
               };
@@ -493,6 +500,42 @@ describe('generation services', () => {
     });
   });
 
+  it('uses the backend client to reserve image generation rows after auth', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-backend-reserve-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationInsertErrors: [new Error('user client cannot reserve generation rows')],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startImageGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'k'.repeat(64),
+      prompt: 'A backend-reserved image generation.',
+      model: 'nano-banana-2',
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-image-backend-reserve-1',
+      generationId: 'gen-1',
+    });
+    expect(sharedGenerations[0]).toMatchObject({
+      user_id: 'user-1',
+      status: 'processing',
+      prediction_id: 'task-image-backend-reserve-1',
+      client_request_key_hash: 'k'.repeat(64),
+    });
+  });
+
   it('marks a reserved image generation failed and retryable when provider submission fails', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);
@@ -522,6 +565,42 @@ describe('generation services', () => {
       client_request_key_hash: null,
     });
     expect(generations[0].completed_at).toEqual(expect.any(String));
+  });
+
+  it('uses the backend client to mark backend-reserved image starts failed when provider submission fails', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => ({ code: 500, msg: 'Provider unavailable' }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationUpdateErrors: [new Error('user client cannot mark failed starts')],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    await expect(startImageGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'l'.repeat(64),
+      prompt: 'A provider-failed image generation.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('Provider unavailable');
+
+    expect(backendClient.rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fn: 'deduct_credits' }),
+      expect.objectContaining({ fn: 'refund_credits' }),
+    ]));
+    expect(sharedGenerations[0]).toMatchObject({
+      status: 'failed',
+      prediction_id: null,
+      client_request_key_hash: null,
+    });
+    expect(sharedGenerations[0].completed_at).toEqual(expect.any(String));
   });
 
   it('retries attaching a provider task before refunding after provider work starts', async () => {
@@ -921,6 +1000,46 @@ describe('generation services', () => {
     });
   });
 
+  it('uses the backend client to reserve video generation rows after auth', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-video-backend-reserve-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationInsertErrors: [new Error('user client cannot reserve video generation rows')],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startVideoGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'm'.repeat(64),
+      prompt: 'A backend-reserved video generation.',
+      model: 'kling-3.0-video',
+      duration: 7,
+      mode: 'std',
+      aspectRatio: '16:9',
+      sound: true,
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-video-backend-reserve-1',
+      generationId: 'gen-1',
+    });
+    expect(sharedGenerations[0]).toMatchObject({
+      user_id: 'user-1',
+      status: 'processing',
+      prediction_id: 'task-video-backend-reserve-1',
+      client_request_key_hash: 'm'.repeat(64),
+    });
+  });
+
   it('uses the backend client to attach video provider task ids after provider work starts', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);
@@ -1181,6 +1300,47 @@ describe('generation services', () => {
       status: 'processing',
       prediction_id: 'task-motion-durable-1',
       client_request_key_hash: 'e'.repeat(64),
+    });
+  });
+
+  it('uses the backend client to reserve motion generation rows after auth', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-motion-backend-reserve-1' } }),
+    } as Response);
+
+    const sharedGenerations: GenerationRow[] = [];
+    const userClient = createSupabaseMock([], {
+      sharedGenerations,
+      generationInsertErrors: [new Error('user client cannot reserve motion generation rows')],
+    });
+    const backendClient = createSupabaseMock([], { sharedGenerations });
+
+    const result = await startMotionGeneration({
+      supabase: userClient.supabase,
+      creditSupabase: backendClient.supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'n'.repeat(64),
+      prompt: 'A backend-reserved motion generation.',
+      model: 'kling-2.6',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 10,
+      characterOrientation: 'video',
+      mode: '720p',
+    });
+
+    expect(result).toMatchObject({
+      predictionId: 'task-motion-backend-reserve-1',
+      generationId: 'gen-1',
+    });
+    expect(sharedGenerations[0]).toMatchObject({
+      user_id: 'user-1',
+      status: 'processing',
+      prediction_id: 'task-motion-backend-reserve-1',
+      client_request_key_hash: 'n'.repeat(64),
     });
   });
 

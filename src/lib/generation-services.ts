@@ -1264,7 +1264,7 @@ export async function startImageGeneration(params: {
       }
     }
 
-    generationId = await reserveGenerationRecord(supabase, {
+    generationId = await reserveGenerationRecord(creditSupabase, {
       user_id: userId,
       model,
       cost,
@@ -1312,7 +1312,7 @@ export async function startImageGeneration(params: {
   } catch (error) {
     if (!predictionId) {
       await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(supabase, generationId);
+      await markGenerationStartFailedQuietly(creditSupabase, generationId);
     }
     throw error;
   }
@@ -1761,7 +1761,7 @@ export async function startVideoGeneration(params: {
       };
     }
 
-    generationId = await reserveGenerationRecord(supabase, {
+    generationId = await reserveGenerationRecord(creditSupabase, {
       user_id: userId,
       model: providerModelId,
       cost,
@@ -1923,7 +1923,7 @@ export async function startVideoGeneration(params: {
   } catch (error) {
     if (!predictionId) {
       await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(supabase, generationId);
+      await markGenerationStartFailedQuietly(creditSupabase, generationId);
     }
     throw error;
   }
@@ -1987,7 +1987,7 @@ export async function startMotionGeneration(params: {
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
-    generationId = await reserveGenerationRecord(supabase, {
+    generationId = await reserveGenerationRecord(creditSupabase, {
       user_id: userId,
       model: selectedModel.apiModelId,
       duration,
@@ -2055,7 +2055,7 @@ export async function startMotionGeneration(params: {
   } catch (error) {
     if (!predictionId) {
       await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(supabase, generationId);
+      await markGenerationStartFailedQuietly(creditSupabase, generationId);
     }
     throw error;
   }
