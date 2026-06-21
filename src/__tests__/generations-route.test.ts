@@ -43,6 +43,7 @@ let inputMediaState: Array<{
   sort_order: number;
   metadata: Record<string, unknown> | null;
 }> = [];
+let serviceTableCalls: string[] = [];
 const syncGenerationStatusesMock = vi.fn(async (params?: { generationIds: string[] }) => {
   void params;
 });
@@ -182,6 +183,7 @@ vi.mock('@/lib/generation-services', () => ({
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
     from(table: string) {
+      serviceTableCalls.push(table);
       if (table === 'generation_input_media') {
         return {
           select() {
@@ -273,6 +275,7 @@ describe('/api/generations route', () => {
     syncGenerationStatusesMock.mockReset();
     syncGenerationStatusesMock.mockResolvedValue(undefined);
     generationPreviewColumnsAvailable = true;
+    serviceTableCalls = [];
     generationsState = [
       {
         id: 'gen-1',
@@ -401,6 +404,53 @@ describe('/api/generations route', () => {
       hasMore: true,
       nextCursor: '2',
     });
+  });
+
+  it('returns lightweight summary pages without expanding input media or paywall details', async () => {
+    generationsState = [
+      {
+        ...generationsState[0],
+        id: 'gen-summary-1',
+        output_url: 'generated_images/user-1/summary-1.jpg',
+        workflow_settings: {
+          outputs: [
+            { index: 0, storagePath: 'generated_images/user-1/summary-1.jpg' },
+            { index: 1, storagePath: 'generated_images/user-1/summary-2.jpg' },
+          ],
+          elements: [
+            {
+              id: 'element-summary',
+              displayName: 'Hero product',
+              storagePath: 'uploads/user-1/product.png',
+            },
+          ],
+        },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations?detail=summary&limit=1'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations).toHaveLength(1);
+    expect(data.generations[0]).toMatchObject({
+      id: 'gen-summary-1',
+      output_url: 'https://signed.example.com/generated_images/user-1/summary-1.jpg',
+      output_count: 2,
+    });
+    expect(data.generations[0].workflow_settings).toBeUndefined();
+    expect(data.generations[0].input_media).toBeUndefined();
+    expect(data.generations[0].paywallPrefill).toBeUndefined();
+    expect(data.generations[0].output_urls).toBeUndefined();
+    expect(serviceTableCalls).not.toContain('generation_input_media');
   });
 
   it('supports owner-scoped exact generation lookup without loading the whole history', async () => {

@@ -46,6 +46,11 @@ function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }
 
+function getWorkflowOutputCount(workflowSettings: Record<string, unknown> | null): number | null {
+    const outputs = workflowSettings?.outputs;
+    return Array.isArray(outputs) && outputs.length > 0 ? outputs.length : null;
+}
+
 function inferVisualContentType(value: string | null): string | null {
     if (!value) return null;
     if (/\.(mp4|mov|m4v|webm)(\?|$)/i.test(value) || value.startsWith('generated_videos/')) return 'video/unknown';
@@ -171,6 +176,7 @@ export async function GET(request: NextRequest) {
 
         const includeArchived = request.nextUrl.searchParams.get('includeArchived') === 'true';
         const requestedGenerationId = request.nextUrl.searchParams.get('id')?.trim() || null;
+        const summaryOnly = request.nextUrl.searchParams.get('detail') === 'summary';
         const requestedLimit = parsePositiveInteger(request.nextUrl.searchParams.get('limit'), DEFAULT_GENERATIONS_PAGE_LIMIT);
         const pageLimit = Math.min(requestedLimit, MAX_GENERATIONS_PAGE_LIMIT);
         const cursorOffset = Math.max(0, parsePositiveInteger(request.nextUrl.searchParams.get('cursor'), 0));
@@ -254,17 +260,22 @@ export async function GET(request: NextRequest) {
         }
 
         const adminSupabase = createServiceClient();
-        const inputMediaMap = await loadGenerationInputMediaMap({
-            supabase: adminSupabase,
-            generationIds,
-            urlMode: 'signed',
-        });
+        const inputMediaMap = summaryOnly
+            ? new Map()
+            : await loadGenerationInputMediaMap({
+                supabase: adminSupabase,
+                generationIds,
+                urlMode: 'signed',
+            });
 
         const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
             const workflowSettings = getWorkflowSettings(generation.workflow_settings);
-            const outputUrls = await getPersistedOutputUrls(workflowSettings, adminSupabase);
+            const outputCount = getWorkflowOutputCount(workflowSettings);
+            const outputUrls = summaryOnly ? [] : await getPersistedOutputUrls(workflowSettings, adminSupabase);
             const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
-            const inputMedia = durableInputMedia.length > 0
+            const inputMedia = summaryOnly
+                ? []
+                : durableInputMedia.length > 0
                 ? durableInputMedia
                 : await buildLegacyGenerationInputMedia({
                     supabase: adminSupabase,
@@ -273,13 +284,15 @@ export async function GET(request: NextRequest) {
                     category: generation.category ?? null,
                     workflowSettings: workflowSettings ?? {},
                 });
-            const paywallPrefill = buildGenerationPaywallPrefill({
-                category: generation.category,
-                model: generation.model,
-                prompt: generation.prompt,
-                workflowSettings,
-                inputMedia,
-            });
+            const paywallPrefill = summaryOnly
+                ? null
+                : buildGenerationPaywallPrefill({
+                    category: generation.category,
+                    model: generation.model,
+                    prompt: generation.prompt,
+                    workflowSettings,
+                    inputMedia,
+                });
             const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation);
             const previewUrl = await resolveGenerationPreviewUrl(adminSupabase, generation, outputUrl);
             const classification = classifyVisualMedia({
@@ -320,9 +333,12 @@ export async function GET(request: NextRequest) {
                     creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
                     media,
                     preview_url: previewUrl,
+                    ...(outputCount !== null ? { output_count: outputCount } : {}),
                     ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
-                    input_media: inputMedia,
-                    paywallPrefill,
+                    ...(summaryOnly ? {} : {
+                        input_media: inputMedia,
+                        paywallPrefill,
+                    }),
                     linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                     linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
                     linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,
@@ -338,9 +354,12 @@ export async function GET(request: NextRequest) {
                 media,
                 output_url: outputUrl,
                 preview_url: previewUrl,
+                ...(outputCount !== null ? { output_count: outputCount } : {}),
                 ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
-                input_media: inputMedia,
-                paywallPrefill,
+                ...(summaryOnly ? {} : {
+                    input_media: inputMedia,
+                    paywallPrefill,
+                }),
                 linked_post_id: linkedPostMap.get(generation.id)?.id ?? null,
                 linked_post_title: linkedPostMap.get(generation.id)?.title ?? null,
                 linked_post_visibility: linkedPostMap.get(generation.id)?.visibility ?? null,

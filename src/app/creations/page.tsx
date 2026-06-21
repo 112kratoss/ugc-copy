@@ -29,6 +29,7 @@ interface Generation {
     id: string;
     output_url: string | null;
     output_urls?: string[] | null;
+    output_count?: number | null;
     input_media?: GenerationInputMediaItem[] | null;
     status: string;
     created_at: string;
@@ -211,6 +212,7 @@ function preserveStableMediaUrl(
 function buildGenerationsPageUrl(cursor?: string | null): string {
     const params = new URLSearchParams({
         includeArchived: 'true',
+        detail: 'summary',
         limit: String(CREATIONS_GENERATIONS_PAGE_SIZE),
     });
 
@@ -219,6 +221,18 @@ function buildGenerationsPageUrl(cursor?: string | null): string {
     }
 
     return `/api/generations?${params.toString()}`;
+}
+
+function buildGenerationDetailUrl(generationId: string): string {
+    return `/api/generations?${new URLSearchParams({
+        includeArchived: 'true',
+        id: generationId,
+        limit: '1',
+    }).toString()}`;
+}
+
+function hasFullGenerationDetails(generation: Generation): boolean {
+    return generation.input_media !== undefined || generation.paywallPrefill !== undefined;
 }
 
 function getNextGenerationCursor(payload: GenerationsApiResponse): string | null {
@@ -257,6 +271,9 @@ function mergeGenerationRefresh(
             ...incomingGeneration,
             output_url: preserveStableMediaUrl(previousGeneration.output_url, incomingGeneration.output_url),
             output_urls: mergedOutputUrls,
+            output_count: incomingGeneration.output_count ?? previousGeneration.output_count,
+            input_media: incomingGeneration.input_media ?? previousGeneration.input_media,
+            paywallPrefill: incomingGeneration.paywallPrefill ?? previousGeneration.paywallPrefill,
         };
     });
 
@@ -301,6 +318,8 @@ export default function CreationsPage() {
     const [generationsNextCursor, setGenerationsNextCursor] = useState<string | null>(null);
     const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
+    const [generationDetailLoadingId, setGenerationDetailLoadingId] = useState<string | null>(null);
+    const [generationDetailError, setGenerationDetailError] = useState<string | null>(null);
     const generationsRef = useRef<Generation[]>([]);
     const [filter, setFilter] = useState<FilterType>('all');
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
@@ -454,6 +473,61 @@ export default function CreationsPage() {
         }
     }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, router, userId]);
 
+    const cacheGenerations = useCallback((nextGenerations: Generation[]) => {
+        generationsRef.current = nextGenerations;
+        setGenerations(nextGenerations);
+        writeCreationsWorkspaceCache(userId, {
+            generations: nextGenerations,
+            posts,
+            profile,
+        });
+    }, [posts, profile, userId]);
+
+    const loadGenerationDetail = useCallback(async (generation: Generation): Promise<Generation> => {
+        if (hasFullGenerationDetails(generation)) {
+            return generation;
+        }
+
+        if (!accessToken || !userId) {
+            router.push('/login');
+            throw new Error('Authentication required.');
+        }
+
+        setGenerationDetailLoadingId(generation.id);
+        setGenerationDetailError(null);
+
+        try {
+            const response = await fetch(buildGenerationDetailUrl(generation.id), {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            const data = await response.json() as GenerationsApiResponse;
+
+            if (!response.ok) {
+                throw new Error('Failed to load creation details.');
+            }
+
+            const loadedGeneration = Array.isArray(data.generations) ? data.generations[0] : null;
+            if (!loadedGeneration) {
+                throw new Error('Creation details were not found.');
+            }
+
+            const [mergedGeneration] = mergeGenerationRefresh([generation], [loadedGeneration]);
+            const previousGenerations = generationsRef.current;
+            const nextGenerations = previousGenerations.some((item) => item.id === mergedGeneration.id)
+                ? previousGenerations.map((item) => item.id === mergedGeneration.id ? mergedGeneration : item)
+                : [mergedGeneration, ...previousGenerations];
+            cacheGenerations(nextGenerations);
+            return mergedGeneration;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to load creation details.';
+            console.error('Failed to load creation details:', error);
+            setGenerationDetailError(message);
+            throw error;
+        } finally {
+            setGenerationDetailLoadingId(null);
+        }
+    }, [accessToken, cacheGenerations, router, userId]);
+
     useEffect(() => {
         void fetchCreations();
     }, [fetchCreations]);
@@ -480,15 +554,29 @@ export default function CreationsPage() {
         };
     }, [fetchCreations, hasProcessingGenerations]);
 
-    const openPublishModal = (generation: Generation, options?: {
+    const openPreviewModal = async (generation: Generation) => {
+        try {
+            const detailedGeneration = await loadGenerationDetail(generation);
+            setPreviewGen(detailedGeneration);
+        } catch {
+            // Error state is stored in generationDetailError for the page-level notice.
+        }
+    };
+
+    const openPublishModal = async (generation: Generation, options?: {
         shareAfterPublish?: boolean;
         showPaidShortcut?: boolean;
         initialSellAutoUnlock?: boolean;
     }) => {
-        setPublishTarget(generation);
-        setInitialSellAutoUnlockInPublishModal(Boolean(options?.initialSellAutoUnlock));
-        setShareAfterPublish(Boolean(options?.shareAfterPublish));
-        setShowPaidShortcutInPublishModal(options?.showPaidShortcut ?? true);
+        try {
+            const detailedGeneration = await loadGenerationDetail(generation);
+            setPublishTarget(detailedGeneration);
+            setInitialSellAutoUnlockInPublishModal(Boolean(options?.initialSellAutoUnlock));
+            setShareAfterPublish(Boolean(options?.shareAfterPublish));
+            setShowPaidShortcutInPublishModal(options?.showPaidShortcut ?? true);
+        } catch {
+            // Error state is stored in generationDetailError for the page-level notice.
+        }
     };
 
     const closePublishModal = () => {
@@ -499,7 +587,7 @@ export default function CreationsPage() {
     };
 
     const openUnlockModalForGeneration = (generation: Generation) => {
-        openPublishModal(generation, {
+        void openPublishModal(generation, {
             showPaidShortcut: true,
             initialSellAutoUnlock: true,
         });
@@ -1072,7 +1160,7 @@ export default function CreationsPage() {
                         type="button"
                         onClick={() => {
                             setPreviewGen(null);
-                            openPublishModal(generation);
+                            void openPublishModal(generation);
                         }}
                         className={primaryClass}
                     >
@@ -1305,6 +1393,12 @@ export default function CreationsPage() {
                             : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
                     </div>
                 </div>
+
+                {generationDetailError ? (
+                    <div role="alert" className="mb-6 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                        {generationDetailError}
+                    </div>
+                ) : null}
 
                 {shouldShowPortfolioStarter ? (
                     <section className="mb-8 rounded-[28px] border border-purple-400/15 bg-[linear-gradient(135deg,rgba(88,28,135,0.22),rgba(2,6,23,0.78)_48%,rgba(15,118,110,0.16))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-md sm:p-6">
@@ -1608,6 +1702,7 @@ export default function CreationsPage() {
                                 const hasLinkedVisibilityAction =
                                     Boolean(workspaceState.linkedPost) && Boolean(nextLinkedPostVisibility);
                                 const hasCompactActionRow = hasSecondaryInlineAction || hasLinkedVisibilityAction;
+                                const isGenerationDetailLoading = generationDetailLoadingId === gen.id;
                                 return (
                                     <div
                                         key={gen.id}
@@ -1622,8 +1717,8 @@ export default function CreationsPage() {
                                                     mediaKind={mediaKind}
                                                     src={primaryMediaUrl}
                                                     alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
-                                                    outputCount={outputUrls.length}
-                                                    onOpen={() => setPreviewGen(gen)}
+                                                    outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
+                                                    onOpen={() => void openPreviewModal(gen)}
                                                     onRestore={!isAudio ? () => requestPreviewRestore(gen) : undefined}
                                                     isRestoring={restoringGenerationId === gen.id}
                                                 />
@@ -1700,19 +1795,29 @@ export default function CreationsPage() {
                                                     {primaryIsPublish ? (
                                                         <button
                                                             type="button"
-                                                            onClick={() => openPublishModal(gen)}
+                                                            onClick={() => void openPublishModal(gen)}
+                                                            disabled={isGenerationDetailLoading}
                                                             className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
                                                         >
-                                                            <Globe className="h-4 w-4" />
+                                                            {isGenerationDetailLoading ? (
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                            ) : (
+                                                                <Globe className="h-4 w-4" />
+                                                            )}
                                                             {workspaceState.primaryAction.label}
                                                         </button>
                                                     ) : primaryIsUnlock ? (
                                                         <button
                                                             type="button"
                                                             onClick={() => openUnlockModalForGeneration(gen)}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+                                                            disabled={isGenerationDetailLoading}
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
                                                         >
-                                                            <Wand2 className="h-4 w-4" />
+                                                            {isGenerationDetailLoading ? (
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                            ) : (
+                                                                <Wand2 className="h-4 w-4" />
+                                                            )}
                                                             {workspaceState.primaryAction.label}
                                                         </button>
                                                     ) : null}
@@ -1757,10 +1862,15 @@ export default function CreationsPage() {
                                                 <div className="flex min-w-0 flex-wrap gap-2">
                                                     <button
                                                         type="button"
-                                                        onClick={() => setPreviewGen(gen)}
+                                                        onClick={() => void openPreviewModal(gen)}
+                                                        disabled={isGenerationDetailLoading}
                                                         className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                                                     >
-                                                        <Eye className="h-3.5 w-3.5" />
+                                                        {isGenerationDetailLoading ? (
+                                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                        ) : (
+                                                            <Eye className="h-3.5 w-3.5" />
+                                                        )}
                                                         Details
                                                     </button>
                                                     {canCopyLinkedPost && workspaceState.linkedPost?.publicPath ? (

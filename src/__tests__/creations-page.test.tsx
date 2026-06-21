@@ -68,7 +68,8 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
     ...init,
   });
 
-const GENERATIONS_PAGE_URL = '/api/generations?includeArchived=true&limit=36';
+const GENERATIONS_PAGE_URL = '/api/generations?includeArchived=true&detail=summary&limit=36';
+const NEXT_GENERATIONS_PAGE_URL = `${GENERATIONS_PAGE_URL}&cursor=36`;
 
 const makeGeneration = (overrides: Record<string, unknown> = {}) => ({
   id: 'gen-image',
@@ -225,7 +226,7 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/generations?includeArchived=true&limit=36&cursor=36') {
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
         return Promise.resolve(jsonResponse({
           generations: [
             makeGeneration({
@@ -264,7 +265,7 @@ describe('CreationsPage', () => {
     expect(fetchMock).toHaveBeenCalledWith(GENERATIONS_PAGE_URL, {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
-    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&limit=36&cursor=36', {
+    expect(fetchMock).toHaveBeenCalledWith(NEXT_GENERATIONS_PAGE_URL, {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
   });
@@ -350,10 +351,25 @@ describe('CreationsPage', () => {
   });
 
   it('opens the publish setup modal from a generated card Add unlock action', async () => {
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
       if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-linked',
+              title: 'Linked generated post',
+              linked_post_id: 'post-linked',
+              linked_post_title: 'Linked generated post',
+              linked_post_visibility: 'public',
+              linked_post_archived_at: null,
+            }),
+          ],
+        }));
+      }
+
+      if (url === '/api/generations?includeArchived=true&id=gen-linked&limit=1') {
         return Promise.resolve(jsonResponse({
           generations: [
             makeGeneration({
@@ -383,13 +399,17 @@ describe('CreationsPage', () => {
       }
 
       return Promise.reject(new Error(`Unexpected request: ${url}`));
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(<CreationsPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: /^add unlock$/i }));
 
-    expect(screen.getByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-linked&limit=1', {
+      headers: { Authorization: 'Bearer layout-session-token' },
+    });
     expect(screen.getByRole('checkbox', { name: /sell the prompt and setup/i })).toBeChecked();
     expect(navigationState.push).not.toHaveBeenCalled();
   });
@@ -400,6 +420,17 @@ describe('CreationsPage', () => {
       const url = String(input);
 
       if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-bundled',
+              title: 'Bundled generated post',
+            }),
+          ],
+        }));
+      }
+
+      if (url === '/api/generations?includeArchived=true&id=gen-bundled&limit=1') {
         return Promise.resolve(jsonResponse({
           generations: [
             makeGeneration({
@@ -477,7 +508,10 @@ describe('CreationsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^manage unlock$/i }));
 
-    expect(screen.getByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-bundled&limit=1', {
+      headers: { Authorization: 'Bearer layout-session-token' },
+    });
     const sellPackageCheckbox = screen.getByRole('checkbox', { name: /sell the prompt and setup/i });
     expect(sellPackageCheckbox).toBeChecked();
     expect(navigationState.push).not.toHaveBeenCalled();
