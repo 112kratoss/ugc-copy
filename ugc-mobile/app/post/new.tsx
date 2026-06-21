@@ -1232,8 +1232,8 @@ function getMadeWithToolOptions(sourceTools: SourceToolOption[]): SourceToolOpti
     }
   };
 
-  sourceTools.forEach(addTool);
-  POST_COMPOSER_SOURCE_OPTIONS.forEach(addTool);
+  const tools = sourceTools.length > 0 ? sourceTools : POST_COMPOSER_SOURCE_OPTIONS;
+  tools.forEach(addTool);
 
   return [...optionsByKey.values()];
 }

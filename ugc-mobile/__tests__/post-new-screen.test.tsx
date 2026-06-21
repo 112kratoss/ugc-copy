@@ -752,6 +752,9 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
 
   it('uses web-style searchable Made With pickers instead of an always-visible chip strip', () => {
     paramsState.params = {};
+    sourceToolsState.tools = [];
+    authState.api.listSourceTools.mockResolvedValue({ tools: [] });
+
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<NewPostScreen />);
@@ -770,6 +773,31 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(openedText).toContain('Manual');
     expect(openedText).toContain('Magicbooklet');
     expect(openedText).toContain('Runway');
+  });
+
+  it('does not merge bundled fallback tools into a non-empty server source catalog', () => {
+    paramsState.params = {};
+    sourceToolsState.tools = [{
+      slug: 'server-only-tool',
+      label: 'Server Only Tool',
+      models: [{ slug: 'server-model', label: 'Server Model' }],
+      supportedMediaKinds: ['image'],
+    }];
+    authState.api.listSourceTools.mockResolvedValue({ tools: sourceToolsState.tools });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onFocus();
+    });
+
+    const openedText = collectText(tree!.root);
+    expect(openedText).toContain('Server Only Tool');
+    expect(openedText).not.toContain('Magicbooklet');
+    expect(openedText).not.toContain('Runway');
   });
 
   it('creates custom tools and models from the mobile Made With picker', () => {
