@@ -275,27 +275,26 @@ export async function requestWebGenerationQuote(
 
 export function useWebGenerationModelQuote(input: GenerationModelQuoteInput | null, accessToken?: string | null) {
   const serializedInput = input ? JSON.stringify(input) : null;
+  const requestKey = serializedInput ? `${accessToken ?? ''}\n${serializedInput}` : null;
   const [state, setState] = useState<{
+    key: string;
     status: 'idle' | 'pending' | 'ready' | 'error';
     quote: GenerationModelQuote | null;
     error: WebCatalogRequestError | null;
-  }>({ status: 'idle', quote: null, error: null });
+  } | null>(null);
 
   useEffect(() => {
-    if (!serializedInput) {
-      setState({ status: 'idle', quote: null, error: null });
-      return;
-    }
+    if (!serializedInput || !requestKey) return;
     const controller = new AbortController();
-    setState({ status: 'pending', quote: null, error: null });
     const timer = window.setTimeout(() => {
       void requestWebGenerationQuote(JSON.parse(serializedInput) as GenerationModelQuoteInput, accessToken, controller.signal)
         .then((quote) => {
-          if (!controller.signal.aborted) setState({ status: 'ready', quote, error: null });
+          if (!controller.signal.aborted) setState({ key: requestKey, status: 'ready', quote, error: null });
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
           setState({
+            key: requestKey,
             status: 'error',
             quote: null,
             error: error instanceof WebCatalogRequestError
@@ -308,7 +307,13 @@ export function useWebGenerationModelQuote(input: GenerationModelQuoteInput | nu
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [accessToken, serializedInput]);
+  }, [accessToken, requestKey, serializedInput]);
 
-  return state;
+  if (!requestKey) {
+    return { status: 'idle' as const, quote: null, error: null };
+  }
+  if (state?.key === requestKey) {
+    return { status: state.status, quote: state.quote, error: state.error };
+  }
+  return { status: 'pending' as const, quote: null, error: null };
 }
