@@ -219,14 +219,6 @@ export async function POST(request: NextRequest) {
         const selectedSourceGenerationId = typeof sourceGenerationId === 'string' ? sourceGenerationId : null;
         const selectedCatalogRevision = typeof catalogRevision === 'string' ? catalogRevision : null;
 
-        if (!KIE_API_KEY) {
-            console.error('KIE_AI_API_KEY not found in environment variables');
-            return NextResponse.json(
-                { error: 'Server configuration error: API key missing' },
-                { status: 500 }
-            );
-        }
-
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -240,6 +232,14 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(
                 { error: 'Unauthorized: Please log in to generate videos' },
                 { status: 401 }
+            );
+        }
+
+        if (!KIE_API_KEY) {
+            console.error('KIE_AI_API_KEY not found in environment variables');
+            return NextResponse.json(
+                { error: 'Server configuration error: API key missing' },
+                { status: 500 }
             );
         }
 

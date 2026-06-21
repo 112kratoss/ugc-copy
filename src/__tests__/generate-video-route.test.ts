@@ -173,6 +173,35 @@ describe('/api/generate-video route', () => {
     vi.restoreAllMocks();
   });
 
+  it('authenticates before reporting provider configuration errors', async () => {
+    currentSupabaseMock = createSupabaseMock(null, null, true, true, null);
+    delete process.env.KIE_AI_API_KEY;
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-video',
+          prompt: 'A cinematic product video',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: 'Unauthorized: Please log in to generate videos',
+    });
+    expect(currentSupabaseMock.client.auth.getUser).toHaveBeenCalledTimes(1);
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('rejects a stale catalog revision before deducting credits', async () => {
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);

@@ -169,6 +169,34 @@ describe('/api/generate route', () => {
     vi.restoreAllMocks();
   });
 
+  it('authenticates before reporting provider configuration errors', async () => {
+    currentSupabaseMock = createSupabaseMock(null, true, true, null);
+    delete process.env.KIE_AI_API_KEY;
+
+    const { POST } = await import('@/app/api/generate/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'kling-2.6',
+          characterImageUrl: 'https://signed.example.com/character.png',
+          referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: 'Unauthorized: Please log in to generate videos',
+    });
+    expect(currentSupabaseMock.client.auth.getUser).toHaveBeenCalledTimes(1);
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('rejects a stale catalog revision before deducting credits', async () => {
     const { POST } = await import('@/app/api/generate/route');
     const response = await POST(

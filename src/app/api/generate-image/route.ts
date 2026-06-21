@@ -95,13 +95,6 @@ export async function POST(request: NextRequest) {
         const selectedSourceGenerationId = typeof sourceGenerationId === 'string' ? sourceGenerationId : null;
         const selectedCatalogRevision = typeof catalogRevision === 'string' ? catalogRevision : null;
 
-        if (!KIE_API_KEY) {
-            console.error('KIE_AI_API_KEY not found in environment variables');
-            return NextResponse.json(
-                { error: 'Server configuration error: API key missing' },
-                { status: 500 }
-            );
-        }
         // Initialize Supabase client with user context
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -117,6 +110,14 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(
                 { error: 'Unauthorized: Please log in to generate images' },
                 { status: 401 }
+            );
+        }
+
+        if (!KIE_API_KEY) {
+            console.error('KIE_AI_API_KEY not found in environment variables');
+            return NextResponse.json(
+                { error: 'Server configuration error: API key missing' },
+                { status: 500 }
             );
         }
 
