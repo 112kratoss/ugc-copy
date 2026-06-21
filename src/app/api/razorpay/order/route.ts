@@ -1,22 +1,11 @@
 import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
-import { createClient } from '@supabase/supabase-js';
 
 import { PRICING_PLAN_MAP } from '@/lib/pricing';
-import { createServiceClient } from '@/lib/server-helpers';
-
-// Initialize Supabase with User Auth Token
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string;
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 export async function POST(req: Request) {
     try {
-        // Initialize Razorpay inside to avoid build-time errors
-        const razorpay = new Razorpay({
-            key_id: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID as string,
-            key_secret: process.env.RAZORPAY_KEY_SECRET as string,
-        });
-
         const { planId } = await req.json();
 
         if (!planId) {
@@ -29,9 +18,7 @@ export async function POST(req: Request) {
         }
 
         // Authenticate before creating an external order or privileged transaction row.
-        const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-            global: { headers: { Authorization: req.headers.get('Authorization')! } },
-        });
+        const supabase = createUserClient(req);
 
         // Get authenticated user
         const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -43,6 +30,12 @@ export async function POST(req: Request) {
         }
 
         const amountInSubunits = plan.priceInr * 100;
+        // Initialize Razorpay only after validation/authentication to keep rejected requests cheap.
+        const razorpay = new Razorpay({
+            key_id: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID as string,
+            key_secret: process.env.RAZORPAY_KEY_SECRET as string,
+        });
+
         const razorpayOrder = await razorpay.orders.create({
             amount: amountInSubunits,
             currency: 'INR',

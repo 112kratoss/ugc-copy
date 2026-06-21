@@ -4,7 +4,7 @@
  * and credit deduction logic to eliminate duplication.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 
@@ -14,7 +14,7 @@ let cachedServiceClient: SupabaseClient | null = null;
 // ─── Supabase Client Factories ────────────────────────────────────────────────
 
 /** Creates a Supabase client scoped to the calling user's JWT. */
-export function createUserClient(request: NextRequest): SupabaseClient {
+export function createUserClient(request: Request): SupabaseClient {
     const authorization = request.headers.get('Authorization');
 
     return createClient(
@@ -119,7 +119,7 @@ export interface AuthResult {
  * Returns a NextResponse error if authentication fails.
  */
 export async function authenticateRequest(
-    request: NextRequest
+    request: Request
 ): Promise<AuthResult | NextResponse> {
     const supabase = createUserClient(request);
     const { data: { user }, error } = await supabase.auth.getUser();
