@@ -28,6 +28,11 @@ type StalledGenerationRow = {
   cost: number | string | null;
 };
 
+type PendingGenerationWithoutProviderTaskRow = {
+  created_at: string | null;
+  cost: number | string | null;
+};
+
 type GenerationCompletionQueueRow = {
   status: string | null;
   created_at: string | null;
@@ -63,12 +68,16 @@ export type BackendGenerationHealth = {
   status: BackendHealthStatus;
   recentWindowMinutes: number;
   stalledAfterMinutes: number;
+  pendingWithoutProviderTaskAfterMinutes: number;
   recentCounts: Record<string, number>;
   recentCreditCostTotal: number;
   recentCreditCostByStatus: Record<string, number>;
   stalledActiveCount: number;
   stalledActiveCreditCost: number;
   oldestStalledCreatedAt: string | null;
+  pendingWithoutProviderTaskCount: number;
+  pendingWithoutProviderTaskCreditCost: number;
+  oldestPendingWithoutProviderTaskCreatedAt: string | null;
 };
 
 export type BackendCompletionQueueHealth = {
@@ -108,6 +117,7 @@ const JOB_THRESHOLDS: Array<{ name: string; expectedMaxAgeMinutes: number }> = [
 const JOB_LOOKBACK_HOURS = 48;
 const GENERATION_RECENT_WINDOW_MINUTES = 60;
 const GENERATION_STALLED_AFTER_MINUTES = 60;
+const GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES = 5;
 const COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES = 15;
 const COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES = 10;
 
@@ -201,6 +211,7 @@ function buildJobHealth(
 function buildGenerationHealth(
   recentRows: GenerationStatusRow[],
   stalledRows: StalledGenerationRow[],
+  pendingWithoutProviderTaskRows: PendingGenerationWithoutProviderTaskRow[],
 ): { health: BackendGenerationHealth; issues: BackendHealthIssue[] } {
   const recentCounts = recentRows.reduce<Record<string, number>>((counts, row) => {
     const status = row.status ?? 'unknown';
@@ -218,8 +229,12 @@ function buildGenerationHealth(
   const stalledActiveCreditCost = roundCredits(
     stalledRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
   );
+  const pendingWithoutProviderTaskCreditCost = roundCredits(
+    pendingWithoutProviderTaskRows.reduce((total, row) => total + getCreditCost(row.cost), 0),
+  );
   const issues: BackendHealthIssue[] = [];
   const stalledActiveCount = stalledRows.length;
+  const pendingWithoutProviderTaskCount = pendingWithoutProviderTaskRows.length;
 
   let status: BackendHealthStatus = 'ok';
   if (stalledActiveCount > 0) {
@@ -230,18 +245,30 @@ function buildGenerationHealth(
       message: `${stalledActiveCount} active generation(s) are older than ${GENERATION_STALLED_AFTER_MINUTES} minutes.`,
     });
   }
+  if (pendingWithoutProviderTaskCount > 0) {
+    status = 'degraded';
+    issues.push({
+      severity: 'degraded',
+      code: 'GENERATION_PENDING_WITHOUT_PROVIDER_TASK',
+      message: `${pendingWithoutProviderTaskCount} pending generation(s) have no provider task id after ${GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES} minutes.`,
+    });
+  }
 
   return {
     health: {
       status,
       recentWindowMinutes: GENERATION_RECENT_WINDOW_MINUTES,
       stalledAfterMinutes: GENERATION_STALLED_AFTER_MINUTES,
+      pendingWithoutProviderTaskAfterMinutes: GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES,
       recentCounts,
       recentCreditCostTotal,
       recentCreditCostByStatus,
       stalledActiveCount,
       stalledActiveCreditCost,
       oldestStalledCreatedAt: stalledRows[0]?.created_at ?? null,
+      pendingWithoutProviderTaskCount,
+      pendingWithoutProviderTaskCreditCost,
+      oldestPendingWithoutProviderTaskCreatedAt: pendingWithoutProviderTaskRows[0]?.created_at ?? null,
     },
     issues,
   };
@@ -351,11 +378,15 @@ export async function collectBackendHealth(
   const stalledBefore = new Date(
     now.getTime() - GENERATION_STALLED_AFTER_MINUTES * 60 * 1000,
   ).toISOString();
+  const pendingWithoutProviderTaskBefore = new Date(
+    now.getTime() - GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES * 60 * 1000,
+  ).toISOString();
 
   const [
     jobRunsResult,
     recentGenerationsResult,
     stalledGenerationsResult,
+    pendingWithoutProviderTaskResult,
     completionQueueResult,
   ] = await Promise.all([
     client
@@ -377,6 +408,14 @@ export async function collectBackendHealth(
       .order('created_at', { ascending: true })
       .limit(50),
     client
+      .from('generations')
+      .select('created_at,cost')
+      .eq('status', 'pending')
+      .is('prediction_id', null)
+      .lt('created_at', pendingWithoutProviderTaskBefore)
+      .order('created_at', { ascending: true })
+      .limit(50),
+    client
       .from('generation_completion_jobs')
       .select('status,created_at,next_attempt_at,locked_at')
       .in('status', ['pending', 'processing', 'failed'])
@@ -387,6 +426,7 @@ export async function collectBackendHealth(
   if (jobRunsResult.error) throw jobRunsResult.error;
   if (recentGenerationsResult.error) throw recentGenerationsResult.error;
   if (stalledGenerationsResult.error) throw stalledGenerationsResult.error;
+  if (pendingWithoutProviderTaskResult.error) throw pendingWithoutProviderTaskResult.error;
   if (completionQueueResult.error) throw completionQueueResult.error;
 
   const jobRows = (jobRunsResult.data ?? []) as BackendJobRunRow[];
@@ -394,6 +434,7 @@ export async function collectBackendHealth(
   const generationResult = buildGenerationHealth(
     (recentGenerationsResult.data ?? []) as GenerationStatusRow[],
     (stalledGenerationsResult.data ?? []) as StalledGenerationRow[],
+    (pendingWithoutProviderTaskResult.data ?? []) as PendingGenerationWithoutProviderTaskRow[],
   );
   const completionQueueResultHealth = buildCompletionQueueHealth(
     (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[],

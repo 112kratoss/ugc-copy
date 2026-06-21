@@ -10,6 +10,8 @@ type QueryResult = {
 class FakeQueryBuilder {
   select = vi.fn(() => this);
   gte = vi.fn(() => this);
+  eq = vi.fn(() => this);
+  is = vi.fn(() => this);
   order = vi.fn(() => this);
   limit = vi.fn(() => this);
   in = vi.fn(() => this);
@@ -95,6 +97,7 @@ describe('collectBackendHealth', () => {
           ],
         },
         { error: null, data: [] },
+        { error: null, data: [] },
       ],
     });
 
@@ -129,12 +132,16 @@ describe('collectBackendHealth', () => {
     expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost');
     expect(db.builders.generations[1].select).toHaveBeenCalledWith('created_at,cost');
     expect(db.builders.generations[1].in).toHaveBeenCalledWith('status', ['pending', 'waiting', 'processing']);
+    expect(db.builders.generations[2].select).toHaveBeenCalledWith('created_at,cost');
+    expect(db.builders.generations[2].eq).toHaveBeenCalledWith('status', 'pending');
+    expect(db.builders.generations[2].is).toHaveBeenCalledWith('prediction_id', null);
   });
 
   it('warns when a scheduled job has no recent run records', async () => {
     const db = createClient({
       backend_job_runs: { error: null, data: [] },
       generations: [
+        { error: null, data: [] },
         { error: null, data: [] },
         { error: null, data: [] },
       ],
@@ -176,6 +183,7 @@ describe('collectBackendHealth', () => {
       generations: [
         { error: null, data: [] },
         { error: null, data: [{ created_at: '2026-06-21T08:30:00.000Z', cost: 16 }] },
+        { error: null, data: [] },
       ],
     });
 
@@ -249,6 +257,7 @@ describe('collectBackendHealth', () => {
       generations: [
         { error: null, data: [] },
         { error: null, data: [] },
+        { error: null, data: [] },
       ],
     });
 
@@ -267,10 +276,79 @@ describe('collectBackendHealth', () => {
     ]));
   });
 
+  it('degrades when pending generations have no provider task id after the attach window', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T00:15:00.000Z',
+            finished_at: '2026-06-21T00:15:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        {
+          error: null,
+          data: [
+            { created_at: '2026-06-21T09:50:00.000Z', cost: 8 },
+            { created_at: '2026-06-21T09:52:00.000Z', cost: 12 },
+          ],
+        },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.status).toBe('degraded');
+    expect(health.generations).toMatchObject({
+      pendingWithoutProviderTaskAfterMinutes: 5,
+      pendingWithoutProviderTaskCount: 2,
+      pendingWithoutProviderTaskCreditCost: 20,
+      oldestPendingWithoutProviderTaskCreatedAt: '2026-06-21T09:50:00.000Z',
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'GENERATION_PENDING_WITHOUT_PROVIDER_TASK',
+        severity: 'degraded',
+      }),
+    ]));
+    expect(db.builders.generations[2].lt).toHaveBeenCalledWith(
+      'created_at',
+      '2026-06-21T09:55:00.000Z',
+    );
+  });
+
   it('throws when an operational query fails', async () => {
     const db = createClient({
       backend_job_runs: { data: null, error: new Error('database unavailable') },
       generations: [
+        { error: null, data: [] },
         { error: null, data: [] },
         { error: null, data: [] },
       ],
