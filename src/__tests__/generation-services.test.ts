@@ -16,6 +16,7 @@ type GenerationRow = {
   client_request_key_hash?: string | null;
   created_at?: string;
   completed_at?: string | null;
+  refunded?: boolean;
 };
 
 type SupabaseMockOptions = {
@@ -126,6 +127,62 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
             status: 'succeeded',
             generation_id: row.id,
             output_url: row.output_url,
+            refunded: false,
+          },
+          error: null,
+        };
+      }
+
+      if (fn === 'attach_generation_provider_task') {
+        const updateError = generationUpdateErrors.shift();
+        if (updateError) {
+          return { data: null, error: updateError };
+        }
+
+        const row = generations.find((generation) => generation.id === args.p_generation_id);
+        const predictionId = typeof args.p_prediction_id === 'string' ? args.p_prediction_id.trim() : '';
+        if (!row || !predictionId) {
+          return {
+            data: { status: row ? 'invalid_request' : 'missing' },
+            error: null,
+          };
+        }
+
+        if (row.status === 'failed' || row.status === 'succeeded' || Boolean(row.refunded)) {
+          return {
+            data: {
+              status: 'already_settled',
+              generation_id: row.id,
+              prediction_id: row.prediction_id,
+              generation_status: row.status,
+              refunded: Boolean(row.refunded),
+            },
+            error: null,
+          };
+        }
+
+        if (row.prediction_id) {
+          return {
+            data: {
+              status: row.prediction_id === predictionId ? 'already_attached' : 'prediction_conflict',
+              generation_id: row.id,
+              prediction_id: row.prediction_id,
+              generation_status: row.status,
+              refunded: Boolean(row.refunded),
+            },
+            error: null,
+          };
+        }
+
+        row.prediction_id = predictionId;
+        row.status = 'processing';
+
+        return {
+          data: {
+            status: 'attached',
+            generation_id: row.id,
+            prediction_id: row.prediction_id,
+            generation_status: row.status,
             refunded: false,
           },
           error: null,
@@ -720,19 +777,30 @@ describe('generation services', () => {
     const atomicClient = {
       rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
         rpcCalls.push({ fn, args });
-        if (fn !== 'start_generation') {
-          throw new Error(`Generation starts must use start_generation, received ${fn}.`);
+        if (fn === 'start_generation') {
+          return {
+            data: {
+              status: 'started',
+              generation_id: 'gen-atomic-1',
+              remaining_credits: 91,
+              cost: args.p_cost,
+            },
+            error: null,
+          };
         }
 
-        return {
-          data: {
-            status: 'started',
-            generation_id: 'gen-atomic-1',
-            remaining_credits: 91,
-            cost: args.p_cost,
-          },
-          error: null,
-        };
+        if (fn === 'attach_generation_provider_task') {
+          return {
+            data: {
+              status: 'attached',
+              generation_id: args.p_generation_id,
+              prediction_id: args.p_prediction_id,
+            },
+            error: null,
+          };
+        }
+
+        throw new Error(`Unexpected generation start RPC: ${fn}.`);
       }),
       from: vi.fn((table: string) => {
         if (table !== 'generations') {
@@ -782,11 +850,15 @@ describe('generation services', () => {
           p_client_request_key_hash: 'q'.repeat(64),
         }),
       }),
+      {
+        fn: 'attach_generation_provider_task',
+        args: {
+          p_generation_id: 'gen-atomic-1',
+          p_prediction_id: 'task-image-atomic-start-1',
+        },
+      },
     ]);
-    expect(generationUpdates[0]).toMatchObject({
-      prediction_id: 'task-image-atomic-start-1',
-      status: 'processing',
-    });
+    expect(generationUpdates).toHaveLength(0);
   });
 
   it('stores generation start idempotency hashes on created image rows', async () => {
@@ -977,6 +1049,15 @@ describe('generation services', () => {
       predictionId: 'task-image-attach-retry-1',
       generationId: 'gen-1',
     });
+    expect(rpcCalls).toEqual(expect.arrayContaining([
+      {
+        fn: 'attach_generation_provider_task',
+        args: {
+          p_generation_id: 'gen-1',
+          p_prediction_id: 'task-image-attach-retry-1',
+        },
+      },
+    ]));
     expect(rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
     expect(generations[0]).toMatchObject({
       status: 'processing',
@@ -1017,6 +1098,15 @@ describe('generation services', () => {
       predictionId: 'task-image-backend-attach-1',
       generationId: 'gen-1',
     });
+    expect(backendClient.rpcCalls).toEqual(expect.arrayContaining([
+      {
+        fn: 'attach_generation_provider_task',
+        args: {
+          p_generation_id: 'gen-1',
+          p_prediction_id: 'task-image-backend-attach-1',
+        },
+      },
+    ]));
     expect(backendClient.rpcCalls.some((call) => call.fn === 'refund_credits')).toBe(false);
     expect(sharedGenerations[0]).toMatchObject({
       status: 'processing',

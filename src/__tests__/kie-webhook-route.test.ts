@@ -36,8 +36,12 @@ function createServiceClientMock() {
   const updateIs = vi.fn(async () => ({ data: null, error: null }));
   const update = vi.fn(() => ({ eq: updateEq }));
   const from = vi.fn(() => ({ update }));
-  const client = { service: 'supabase', from };
-  return { client, from, update, updateEq, updateIs };
+  const rpc = vi.fn(async () => ({
+    data: { status: 'attached', generation_id: 'gen-1', prediction_id: 'task-1' },
+    error: null,
+  }));
+  const client = { service: 'supabase', from, rpc };
+  return { client, from, update, updateEq, updateIs, rpc };
 }
 
 function signedKieRequest(
@@ -126,13 +130,11 @@ describe('/api/webhooks/kie route', () => {
     ));
 
     expect(response.status).toBe(200);
-    expect(serviceClientMock.from).toHaveBeenCalledWith('generations');
-    expect(serviceClientMock.update).toHaveBeenCalledWith({
-      prediction_id: 'task-1',
-      status: 'processing',
+    expect(serviceClientMock.rpc).toHaveBeenCalledWith('attach_generation_provider_task', {
+      p_generation_id: 'gen-1',
+      p_prediction_id: 'task-1',
     });
-    expect(serviceClientMock.updateEq).toHaveBeenCalledWith('id', 'gen-1');
-    expect(serviceClientMock.updateIs).toHaveBeenCalledWith('prediction_id', null);
+    expect(serviceClientMock.from).not.toHaveBeenCalledWith('generations');
     expect(mocks.enqueueGenerationCompletionJob).toHaveBeenCalledWith(
       serviceClientMock.client,
       {
@@ -145,5 +147,32 @@ describe('/api/webhooks/kie route', () => {
         },
       },
     );
+  });
+
+  it('does not enqueue completion work when a callback generation id is already terminal', async () => {
+    serviceClientMock.rpc.mockResolvedValueOnce({
+      data: {
+        status: 'already_settled',
+        generation_id: 'gen-1',
+        prediction_id: null,
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/webhooks/kie/route');
+    const payload = { data: { taskId: 'task-1', state: 'success' } };
+    const response = await POST(signedKieRequest(
+      payload,
+      '1782039000',
+      'http://localhost/api/webhooks/kie?generationId=gen-1',
+    ));
+
+    expect(response.status).toBe(200);
+    expect(serviceClientMock.rpc).toHaveBeenCalledWith('attach_generation_provider_task', {
+      p_generation_id: 'gen-1',
+      p_prediction_id: 'task-1',
+    });
+    expect(mocks.enqueueGenerationCompletionJob).not.toHaveBeenCalled();
+    expect(mocks.after).not.toHaveBeenCalled();
   });
 });

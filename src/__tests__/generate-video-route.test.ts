@@ -125,6 +125,17 @@ function createSupabaseMock(
       };
     }
 
+    if (fn === 'attach_generation_provider_task') {
+      return {
+        data: {
+          status: 'attached',
+          generation_id: args.p_generation_id,
+          prediction_id: args.p_prediction_id,
+        },
+        error: null,
+      };
+    }
+
     if (fn === 'refund_generation') {
       return { data: true, error: null };
     }

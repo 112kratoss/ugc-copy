@@ -4,6 +4,7 @@ import {
   enqueueGenerationCompletionJob,
   processGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
+import { attachGenerationProviderTask } from '@/lib/generation-services';
 import {
   extractKieWebhookTaskId,
   verifyKieWebhookAuthorization,
@@ -33,22 +34,27 @@ function errorMessage(error: unknown): string {
 async function attachCallbackGenerationId(
   serviceClient: ReturnType<typeof createServiceClient>,
   params: { generationId: string | null; predictionId: string },
-) {
+): Promise<'attached' | 'already_attached' | 'skipped'> {
   const generationId = params.generationId?.trim();
-  if (!generationId) return;
+  if (!generationId) return 'attached';
 
-  const { error } = await serviceClient
-    .from('generations')
-    .update({
-      prediction_id: params.predictionId,
-      status: 'processing',
-    })
-    .eq('id', generationId)
-    .is('prediction_id', null);
+  const status = await attachGenerationProviderTask(serviceClient, {
+    generationId,
+    predictionId: params.predictionId,
+  });
 
-  if (error) {
-    throw error;
+  if (status === 'attached' || status === 'already_attached') {
+    return status;
   }
+
+  console.error(JSON.stringify({
+    level: 'warn',
+    msg: 'kie_webhook_provider_task_attach_skipped',
+    generationId,
+    predictionId: params.predictionId,
+    status,
+  }));
+  return 'skipped';
 }
 
 function buildCompletionJobPayload(
@@ -98,10 +104,15 @@ export async function POST(request: Request) {
 
   const serviceClient = createServiceClient();
   const callbackGenerationId = url.searchParams.get('generationId');
-  await attachCallbackGenerationId(serviceClient, {
+  const attachStatus = await attachCallbackGenerationId(serviceClient, {
     generationId: callbackGenerationId,
     predictionId,
   });
+
+  if (attachStatus === 'skipped') {
+    return NextResponse.json({ received: true, predictionId });
+  }
+
   await enqueueGenerationCompletionJob(serviceClient, {
     predictionId,
     payload: buildCompletionJobPayload(payload, { generationId: callbackGenerationId }),

@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { syncGenerationStatusByPredictionId } from '@/lib/generation-services';
+import {
+  attachGenerationProviderTask,
+  syncGenerationStatusByPredictionId,
+} from '@/lib/generation-services';
 
 const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
@@ -229,16 +232,7 @@ async function reattachProviderTaskFromCallbackId(
   client: SupabaseClient,
   params: { generationId: string; predictionId: string },
 ) {
-  const { error } = await client
-    .from('generations')
-    .update({
-      prediction_id: params.predictionId,
-      status: 'processing',
-    })
-    .eq('id', params.generationId)
-    .is('prediction_id', null);
-
-  if (error) throw error;
+  return attachGenerationProviderTask(client, params);
 }
 
 async function syncCompletionJobGenerationStatus(params: {
@@ -258,10 +252,14 @@ async function syncCompletionJobGenerationStatus(params: {
   const callbackGenerationId = getCallbackGenerationId(params.job.payload);
   if (!callbackGenerationId) return result;
 
-  await reattachProviderTaskFromCallbackId(params.supabase, {
+  const attachStatus = await reattachProviderTaskFromCallbackId(params.supabase, {
     generationId: callbackGenerationId,
     predictionId: params.job.prediction_id,
   });
+
+  if (attachStatus !== 'attached' && attachStatus !== 'already_attached') {
+    return result;
+  }
 
   return syncGenerationStatusByPredictionId({
     supabase: params.supabase,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { syncGenerationStatusByPredictionId } from '@/lib/generation-services';
+import { attachGenerationProviderTask, syncGenerationStatusByPredictionId } from '@/lib/generation-services';
 import {
   claimGenerationCompletionJobs,
   enqueueGenerationCompletionJob,
@@ -13,6 +13,7 @@ import {
 } from '@/lib/generation-completion-jobs';
 
 vi.mock('@/lib/generation-services', () => ({
+  attachGenerationProviderTask: vi.fn(),
   syncGenerationStatusByPredictionId: vi.fn(),
 }));
 
@@ -63,6 +64,8 @@ function createDueProbeClient(results: Array<{ data: unknown[] | null; error: Er
 
 describe('generation completion jobs', () => {
   beforeEach(() => {
+    vi.mocked(attachGenerationProviderTask).mockReset();
+    vi.mocked(attachGenerationProviderTask).mockResolvedValue('attached');
     vi.mocked(syncGenerationStatusByPredictionId).mockReset();
   });
 
@@ -301,18 +304,65 @@ describe('generation completion jobs', () => {
     });
 
     expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(2);
-    expect(client.from).toHaveBeenCalledWith('generations');
-    expect(client.update).toHaveBeenCalledWith({
-      prediction_id: 'task-1',
-      status: 'processing',
+    expect(attachGenerationProviderTask).toHaveBeenCalledWith(client, {
+      generationId: 'generation-1',
+      predictionId: 'task-1',
     });
-    expect(client.updateEq).toHaveBeenCalledWith('id', 'generation-1');
-    expect(client.updateIs).toHaveBeenCalledWith('prediction_id', null);
+    expect(client.from).not.toHaveBeenCalledWith('generations');
     expect(client.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
       p_id: 'job-1',
       p_locked_by: 'worker-1',
       p_succeeded: true,
       p_error: null,
+      p_retry_delay_seconds: 60,
+    });
+  });
+
+  it('does not re-sync callback generation ids that are already settled', async () => {
+    const webhookPayload = {
+      data: { taskId: 'task-1', state: 'success' },
+      magicbooklet: { callbackGenerationId: 'generation-1' },
+    };
+    const client = createCompletionWorkerClient([
+      {
+        data: [{
+          id: 'job-1',
+          prediction_id: 'task-1',
+          payload: webhookPayload,
+          status: 'processing',
+          attempt_count: 1,
+          locked_by: 'worker-1',
+        }],
+        error: null,
+      },
+      { data: 'pending', error: null },
+    ]);
+    vi.mocked(syncGenerationStatusByPredictionId)
+      .mockResolvedValueOnce({ found: false, status: 'missing', generation: null });
+    vi.mocked(attachGenerationProviderTask).mockResolvedValueOnce('already_settled');
+
+    await expect(processGenerationCompletionJobs({
+      supabase: client as never,
+      creditSupabase: client as never,
+      lockedBy: 'worker-1',
+      limit: 5,
+    })).resolves.toEqual({
+      claimed: 1,
+      completed: 0,
+      retried: 1,
+      failed: 0,
+    });
+
+    expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(1);
+    expect(attachGenerationProviderTask).toHaveBeenCalledWith(client, {
+      generationId: 'generation-1',
+      predictionId: 'task-1',
+    });
+    expect(client.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
+      p_id: 'job-1',
+      p_locked_by: 'worker-1',
+      p_succeeded: false,
+      p_error: 'Generation row not found for provider task.',
       p_retry_delay_seconds: 60,
     });
   });

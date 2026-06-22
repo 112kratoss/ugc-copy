@@ -118,6 +118,11 @@ export interface SyncableGenerationRecord {
 
 export type GenerationSyncStatus = 'missing' | 'skipped' | 'waiting' | 'processing' | 'succeeded' | 'failed';
 type GenerationTerminalSettlementStatus = 'succeeded' | 'failed';
+export type GenerationProviderTaskAttachStatus =
+  | 'attached'
+  | 'already_attached'
+  | 'already_settled'
+  | 'prediction_conflict';
 
 export type GenerationStatusSyncResult =
   | { found: false; status: 'missing'; generation: null }
@@ -270,6 +275,46 @@ export async function settleGenerationSucceeded(
   }
 
   throw new GenerationServiceError('Failed to settle successful generation.', 500);
+}
+
+export async function attachGenerationProviderTask(
+  supabase: SupabaseClient,
+  params: {
+    generationId: string;
+    predictionId: string;
+  },
+): Promise<GenerationProviderTaskAttachStatus> {
+  const { data, error } = await supabase.rpc('attach_generation_provider_task', {
+    p_generation_id: params.generationId,
+    p_prediction_id: params.predictionId,
+  });
+
+  if (error || !isRecord(data)) {
+    throw new GenerationServiceError(
+      supabaseErrorMessage(error, 'Failed to attach provider task to generation.'),
+      500,
+    );
+  }
+
+  const status = typeof data.status === 'string' ? data.status : null;
+  if (
+    status === 'attached'
+    || status === 'already_attached'
+    || status === 'already_settled'
+    || status === 'prediction_conflict'
+  ) {
+    return status;
+  }
+
+  if (status === 'missing') {
+    throw new GenerationServiceError('Generation not found for provider task attach.', 404);
+  }
+
+  if (status === 'invalid_request') {
+    throw new GenerationServiceError('Invalid provider task attach request.', 400);
+  }
+
+  throw new GenerationServiceError('Failed to attach provider task to generation.', 500);
 }
 
 async function createKieTask(
@@ -425,18 +470,20 @@ async function markGenerationProviderStarted(
   predictionId: string,
 ) {
   let lastError: unknown = null;
+  let lastStatus: GenerationProviderTaskAttachStatus | null = null;
 
   for (let attempt = 1; attempt <= PROVIDER_TASK_ATTACH_ATTEMPTS; attempt += 1) {
-    const { error } = await supabase
-      .from('generations')
-      .update({
-        prediction_id: predictionId,
-        status: 'processing',
-      })
-      .eq('id', generationId);
+    try {
+      const status = await attachGenerationProviderTask(supabase, { generationId, predictionId });
+      if (status === 'attached' || status === 'already_attached') {
+        return;
+      }
 
-    if (!error) return;
-    lastError = error;
+      lastStatus = status;
+      break;
+    } catch (error) {
+      lastError = error;
+    }
   }
 
   console.error(JSON.stringify({
@@ -445,6 +492,7 @@ async function markGenerationProviderStarted(
     generationId,
     predictionId,
     attempts: PROVIDER_TASK_ATTACH_ATTEMPTS,
+    status: lastStatus,
     error: supabaseErrorMessage(lastError, 'Failed to attach provider task to generation.'),
   }));
   throw new GenerationServiceError('Failed to attach provider task to generation.', 500);

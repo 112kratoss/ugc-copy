@@ -46,6 +46,7 @@ describe('credit mutation security boundary', () => {
     const signatures = [
       'start_ai_usage_event(uuid, integer, text, text, text, text, text, text)',
       'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
+      'attach_generation_provider_task(uuid, text)',
       'settle_generation_failed(text, timestamp with time zone)',
       'settle_generation_succeeded(text, text, timestamp with time zone, text, text, text, integer, text, timestamp with time zone, jsonb)',
     ];
@@ -91,6 +92,7 @@ describe('credit mutation security boundary', () => {
     expect(generateVideo).toContain('settleGenerationFailed');
     expect(generateVideo).toContain('settleGenerationSucceeded');
     expect(generationServices).toContain("supabase.rpc('start_generation'");
+    expect(generationServices).toContain("supabase.rpc('attach_generation_provider_task'");
     expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('settle_generation_failed'");
