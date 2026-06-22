@@ -351,6 +351,7 @@ export async function GET(request: NextRequest) {
 
                         const persistedOutputs = await persistGeneratedOutputList(
                             supabase,
+                            adminSupabase,
                             {
                                 id: localGeneration.id,
                                 user_id: userId,
@@ -363,9 +364,21 @@ export async function GET(request: NextRequest) {
                             toIsoTimestamp(timing.completedAtMs)
                         );
 
+                        if (persistedOutputs.status === 'failed') {
+                            status = 'failed';
+                            error = 'Generation was already settled as failed.';
+                            output = null;
+                            return {
+                                status,
+                                output,
+                                error,
+                                timing: timingWithEstimate,
+                            };
+                        }
+
                         const resolvedOutputs = await resolveOutputPaths(
                             adminSupabase,
-                            persistedOutputs.map((persistedOutput) => persistedOutput.storagePath)
+                            persistedOutputs.outputs.map((persistedOutput) => persistedOutput.storagePath)
                         );
                         await notifyGenerationStatus(adminSupabase, {
                             id: localGeneration.id,

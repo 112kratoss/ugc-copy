@@ -117,6 +117,7 @@ export interface SyncableGenerationRecord {
 }
 
 export type GenerationSyncStatus = 'missing' | 'skipped' | 'waiting' | 'processing' | 'succeeded' | 'failed';
+type GenerationTerminalSettlementStatus = 'succeeded' | 'failed';
 
 export type GenerationStatusSyncResult =
   | { found: false; status: 'missing'; generation: null }
@@ -125,6 +126,11 @@ export type GenerationStatusSyncResult =
 export interface PersistedGenerationOutput {
   index: number;
   storagePath: string;
+}
+
+export interface PersistedGenerationOutputListResult {
+  status: GenerationTerminalSettlementStatus;
+  outputs: PersistedGenerationOutput[];
 }
 
 function supabaseErrorMessage(error: unknown, fallback: string): string {
@@ -214,6 +220,56 @@ export async function settleGenerationFailed(
   }
 
   throw new GenerationServiceError('Failed to settle failed generation.', 500);
+}
+
+export async function settleGenerationSucceeded(
+  settlementSupabase: SupabaseClient,
+  params: {
+    predictionId: string;
+    outputUrl?: string | null;
+    completedAt?: string | null;
+    previewUrl?: string | null;
+    previewThumbhash?: string | null;
+    previewStatus?: 'pending' | 'ready' | 'failed' | string | null;
+    previewAttemptCount?: number | null;
+    previewError?: string | null;
+    previewGeneratedAt?: string | null;
+    workflowSettings?: Record<string, unknown> | null;
+  },
+): Promise<GenerationTerminalSettlementStatus> {
+  const { data, error } = await settlementSupabase.rpc('settle_generation_succeeded', {
+    p_prediction_id: params.predictionId,
+    p_output_url: params.outputUrl ?? null,
+    p_completed_at: params.completedAt ?? null,
+    p_preview_url: params.previewUrl ?? null,
+    p_preview_thumbhash: params.previewThumbhash ?? null,
+    p_preview_status: params.previewStatus ?? null,
+    p_preview_attempt_count: params.previewAttemptCount ?? null,
+    p_preview_error: params.previewError ?? null,
+    p_preview_generated_at: params.previewGeneratedAt ?? null,
+    p_workflow_settings: params.workflowSettings ?? null,
+  });
+
+  if (error || !isRecord(data)) {
+    throw new GenerationServiceError(
+      supabaseErrorMessage(error, 'Failed to settle successful generation.'),
+      500,
+    );
+  }
+
+  const status = typeof data.status === 'string' ? data.status : null;
+  if (status === 'succeeded' || status === 'already_succeeded') return 'succeeded';
+  if (status === 'already_failed') return 'failed';
+
+  if (status === 'missing') {
+    throw new GenerationServiceError('Generation not found for success settlement.', 404);
+  }
+
+  if (status === 'invalid_request') {
+    throw new GenerationServiceError('Invalid generation success settlement request.', 400);
+  }
+
+  throw new GenerationServiceError('Failed to settle successful generation.', 500);
 }
 
 async function createKieTask(
@@ -704,11 +760,13 @@ function getFallbackPreviewUrl(
 
 async function persistGeneratedOutput(
   supabase: SupabaseClient,
+  settlementSupabase: SupabaseClient,
   generation: SyncableGenerationRecord,
   tempUrl: string,
   completedAt?: string | null
-) {
+): Promise<GenerationTerminalSettlementStatus> {
   const bucket = getStorageBucket(generation.category, generation.model);
+  const settledAt = completedAt ?? new Date().toISOString();
 
   try {
     const mediaResponse = await fetch(tempUrl);
@@ -729,19 +787,15 @@ async function persistGeneratedOutput(
 
     if (uploadError) {
       console.error('Upload to Supabase Storage failed:', uploadError);
-      await supabase
-        .from('generations')
-        .update({
-          status: 'succeeded',
-          output_url: tempUrl,
-          preview_url: getFallbackPreviewUrl(generation.category, mediaBlob.type, tempUrl),
-          preview_status: 'failed',
-          preview_attempt_count: 1,
-          preview_error: 'Generated output could not be persisted for preview processing.',
-          completed_at: completedAt ?? new Date().toISOString(),
-        })
-        .eq('id', generation.id);
-      return;
+      return settleGenerationSucceeded(settlementSupabase, {
+        predictionId: generation.prediction_id!,
+        outputUrl: tempUrl,
+        previewUrl: getFallbackPreviewUrl(generation.category, mediaBlob.type, tempUrl),
+        previewStatus: 'failed',
+        previewAttemptCount: 1,
+        previewError: 'Generated output could not be persisted for preview processing.',
+        completedAt: settledAt,
+      });
     }
 
     const storagePath = `${bucket}/${fileName}`;
@@ -753,43 +807,38 @@ async function persistGeneratedOutput(
       supabase,
     });
 
-    await supabase
-      .from('generations')
-      .update({
-        status: 'succeeded',
-        output_url: storagePath,
-        preview_url: preview.previewUrl,
-        preview_thumbhash: preview.previewThumbhash,
-        preview_status: preview.previewStatus,
-        preview_attempt_count: 1,
-        preview_error: preview.previewError,
-        preview_generated_at: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
-        completed_at: completedAt ?? new Date().toISOString(),
-      })
-      .eq('id', generation.id);
+    return settleGenerationSucceeded(settlementSupabase, {
+      predictionId: generation.prediction_id!,
+      outputUrl: storagePath,
+      previewUrl: preview.previewUrl,
+      previewThumbhash: preview.previewThumbhash,
+      previewStatus: preview.previewStatus,
+      previewAttemptCount: 1,
+      previewError: preview.previewError,
+      previewGeneratedAt: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
+      completedAt: settledAt,
+    });
   } catch (error) {
     console.error('Error persisting generated output:', error);
-    await supabase
-      .from('generations')
-      .update({
-        status: 'succeeded',
-        output_url: tempUrl,
-        preview_url: getFallbackPreviewUrl(generation.category, null, tempUrl),
-        preview_status: 'failed',
-        preview_attempt_count: 1,
-        preview_error: error instanceof Error ? error.message.slice(0, 500) : 'Generated output persistence failed.',
-        completed_at: completedAt ?? new Date().toISOString(),
-      })
-      .eq('id', generation.id);
+    return settleGenerationSucceeded(settlementSupabase, {
+      predictionId: generation.prediction_id!,
+      outputUrl: tempUrl,
+      previewUrl: getFallbackPreviewUrl(generation.category, null, tempUrl),
+      previewStatus: 'failed',
+      previewAttemptCount: 1,
+      previewError: error instanceof Error ? error.message.slice(0, 500) : 'Generated output persistence failed.',
+      completedAt: settledAt,
+    });
   }
 }
 
 export async function persistGeneratedOutputList(
   supabase: SupabaseClient,
+  settlementSupabase: SupabaseClient,
   generation: Pick<SyncableGenerationRecord, 'id' | 'user_id' | 'prediction_id' | 'category' | 'model' | 'workflow_settings'>,
   tempUrls: string[],
   completedAt?: string | null
-): Promise<PersistedGenerationOutput[]> {
+): Promise<PersistedGenerationOutputListResult> {
   const bucket = getStorageBucket(generation.category, generation.model);
   const outputs: PersistedGenerationOutput[] = [];
   let primaryPreview = {
@@ -878,12 +927,20 @@ export async function persistGeneratedOutputList(
     };
   }
 
-  await supabase
-    .from('generations')
-    .update(updatePayload)
-    .eq('id', generation.id);
+  const status = await settleGenerationSucceeded(settlementSupabase, {
+    predictionId: generation.prediction_id!,
+    outputUrl: primaryOutput,
+    previewUrl: typeof updatePayload.preview_url === 'string' ? updatePayload.preview_url : null,
+    previewThumbhash: typeof updatePayload.preview_thumbhash === 'string' ? updatePayload.preview_thumbhash : null,
+    previewStatus: typeof updatePayload.preview_status === 'string' ? updatePayload.preview_status : null,
+    previewAttemptCount: typeof updatePayload.preview_attempt_count === 'number' ? updatePayload.preview_attempt_count : null,
+    previewError: typeof updatePayload.preview_error === 'string' ? updatePayload.preview_error : null,
+    previewGeneratedAt: typeof updatePayload.preview_generated_at === 'string' ? updatePayload.preview_generated_at : null,
+    completedAt: completedAt ?? new Date().toISOString(),
+    workflowSettings: updatePayload.workflow_settings as Record<string, unknown> | undefined,
+  });
 
-  return outputs;
+  return { status, outputs };
 }
 
 async function markGenerationFailed(
@@ -953,17 +1010,13 @@ async function syncSingleGenerationStatusFromProviderPayload(
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       } else {
-        await supabase
-          .from('generations')
-          .update({
-            status: 'succeeded',
-            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-          })
-          .eq('id', generation.id);
+        return settleGenerationSucceeded(creditSupabase, {
+          predictionId: generation.prediction_id,
+          completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        });
       }
-      return 'succeeded';
     }
 
     if (successFlag === 2 || successFlag === 3) {
@@ -995,25 +1048,22 @@ async function syncSingleGenerationStatusFromProviderPayload(
 
     if (tempUrl) {
       if (generation.model === 'grok-imagine-image') {
-        await persistGeneratedOutputList(
+        return (await persistGeneratedOutputList(
           supabase,
+          creditSupabase,
           generation,
           getGenerationResultUrls(result),
           toIsoTimestamp(timing.completedAtMs)
-        );
+        )).status;
       } else {
-        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       }
     } else {
-      await supabase
-        .from('generations')
-        .update({
-          status: 'succeeded',
-          completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-        })
-        .eq('id', generation.id);
+      return settleGenerationSucceeded(creditSupabase, {
+        predictionId: generation.prediction_id,
+        completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+      });
     }
-    return 'succeeded';
   }
 
   if (state === 'fail') {
@@ -1064,17 +1114,13 @@ async function syncSingleGenerationStatus(
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       } else {
-        await supabase
-          .from('generations')
-          .update({
-            status: 'succeeded',
-            completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-          })
-          .eq('id', generation.id);
+        return settleGenerationSucceeded(creditSupabase, {
+          predictionId: generation.prediction_id,
+          completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        });
       }
-      return 'succeeded';
     }
 
     if (successFlag === 2 || successFlag === 3) {
@@ -1120,25 +1166,22 @@ async function syncSingleGenerationStatus(
 
     if (tempUrl) {
       if (generation.model === 'grok-imagine-image') {
-        await persistGeneratedOutputList(
+        return (await persistGeneratedOutputList(
           supabase,
+          creditSupabase,
           generation,
           getGenerationResultUrls(result),
           toIsoTimestamp(timing.completedAtMs)
-        );
+        )).status;
       } else {
-        await persistGeneratedOutput(supabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       }
     } else {
-      await supabase
-        .from('generations')
-        .update({
-          status: 'succeeded',
-          completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-        })
-        .eq('id', generation.id);
+      return settleGenerationSucceeded(creditSupabase, {
+        predictionId: generation.prediction_id,
+        completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+      });
     }
-    return 'succeeded';
   }
 
   if (state === 'fail') {

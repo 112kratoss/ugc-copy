@@ -28,7 +28,12 @@ import {
 } from '@/lib/generation-status-lock';
 import { CatalogError, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { VIDEO_MODELS, VideoModelId } from '@/lib/models';
-import { GenerationServiceError, settleGenerationFailed, startVideoGeneration } from '@/lib/generation-services';
+import {
+    GenerationServiceError,
+    settleGenerationFailed,
+    settleGenerationSucceeded,
+    startVideoGeneration,
+} from '@/lib/generation-services';
 import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
@@ -111,11 +116,14 @@ function getFirstResultUrl(value: unknown): string | null {
 
 async function persistVideoOutput(
     supabase: SupabaseClient,
+    settlementSupabase: SupabaseClient,
     predictionId: string,
     userId: string | undefined,
     tempUrl: string,
     completedAt?: string | null
-): Promise<string> {
+): Promise<{ status: 'succeeded' | 'failed'; output: string | null }> {
+    const settledAt = completedAt ?? new Date().toISOString();
+
     try {
         const videoRes = await fetch(tempUrl);
         if (!videoRes.ok) {
@@ -134,57 +142,63 @@ async function persistVideoOutput(
 
         if (uploadError) {
             console.error('Upload to Supabase Storage failed:', uploadError);
-            await supabase
-                .from('generations')
-                .update({
-                    status: 'succeeded',
-                    output_url: tempUrl,
-                    completed_at: completedAt ?? new Date().toISOString(),
-                })
-                .eq('prediction_id', predictionId);
-            return tempUrl;
+            const status = await settleGenerationSucceeded(settlementSupabase, {
+                predictionId,
+                outputUrl: tempUrl,
+                completedAt: settledAt,
+            });
+            return {
+                status,
+                output: status === 'succeeded' ? tempUrl : null,
+            };
         }
 
         const storagePath = `generated_videos/${fileName}`;
-        let previewUrl: string | null = null;
+        let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
+        let previewError: string | null = null;
         try {
-            const preview = await createGenerationOutputPreview({
+            preview = await createGenerationOutputPreview({
                 body: videoBlob,
                 category: 'video',
                 contentType: videoBlob.type || 'video/mp4',
                 storagePath,
                 supabase,
             });
-            previewUrl = preview?.previewStoragePath ?? null;
         } catch (posterError) {
             console.error('Failed to create video generation preview poster:', posterError);
+            previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
         }
         const { data: signedData } = await supabase.storage
             .from('generated_videos')
             .createSignedUrl(fileName, 3600);
 
-        await supabase
-            .from('generations')
-            .update({
-                status: 'succeeded',
-                output_url: storagePath,
-                preview_url: previewUrl,
-                completed_at: completedAt ?? new Date().toISOString(),
-            })
-            .eq('prediction_id', predictionId);
+        const status = await settleGenerationSucceeded(settlementSupabase, {
+            predictionId,
+            outputUrl: storagePath,
+            previewUrl: preview?.previewStoragePath ?? null,
+            previewThumbhash: preview?.previewThumbhash ?? null,
+            previewStatus: preview ? 'ready' : 'failed',
+            previewAttemptCount: 1,
+            previewError,
+            previewGeneratedAt: preview ? new Date().toISOString() : null,
+            completedAt: settledAt,
+        });
 
-        return signedData?.signedUrl || tempUrl;
+        return {
+            status,
+            output: status === 'succeeded' ? signedData?.signedUrl || tempUrl : null,
+        };
     } catch (error) {
         console.error('Error persisting video to storage:', error);
-        await supabase
-            .from('generations')
-            .update({
-                status: 'succeeded',
-                output_url: tempUrl,
-                completed_at: completedAt ?? new Date().toISOString(),
-            })
-            .eq('prediction_id', predictionId);
-        return tempUrl;
+        const status = await settleGenerationSucceeded(settlementSupabase, {
+            predictionId,
+            outputUrl: tempUrl,
+            completedAt: settledAt,
+        });
+        return {
+            status,
+            output: status === 'succeeded' ? tempUrl : null,
+        };
     }
 }
 
@@ -517,13 +531,27 @@ export async function GET(request: NextRequest) {
                     const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
 
                     if (tempUrl) {
-                        output = await persistVideoOutput(
+                        const persisted = await persistVideoOutput(
                             supabase,
+                            adminSupabase,
                             predictionId,
                             user?.id || localGeneration?.user_id,
                             tempUrl,
                             toIsoTimestamp(timing.completedAtMs)
                         );
+                        status = persisted.status;
+                        output = persisted.output;
+                        if (status === 'failed') {
+                            error = 'Generation was already settled as failed.';
+                        }
+                    } else {
+                        status = await settleGenerationSucceeded(adminSupabase, {
+                            predictionId,
+                            completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                        });
+                        if (status === 'failed') {
+                            error = 'Generation was already settled as failed.';
+                        }
                     }
                 } else if (successFlag === 2 || successFlag === 3) {
                     error = data.data?.errorMessage || data.msg || 'Unknown error';
@@ -557,13 +585,27 @@ export async function GET(request: NextRequest) {
                         const tempUrl = getFirstResultUrl(result.resultUrls);
 
                         if (tempUrl) {
-                            output = await persistVideoOutput(
+                            const persisted = await persistVideoOutput(
                                 supabase,
+                                adminSupabase,
                                 predictionId,
                                 user?.id || localGeneration?.user_id,
                                 tempUrl,
                                 toIsoTimestamp(timing.completedAtMs)
                             );
+                            status = persisted.status;
+                            output = persisted.output;
+                            if (status === 'failed') {
+                                error = 'Generation was already settled as failed.';
+                            }
+                        } else {
+                            status = await settleGenerationSucceeded(adminSupabase, {
+                                predictionId,
+                                completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                            });
+                            if (status === 'failed') {
+                                error = 'Generation was already settled as failed.';
+                            }
                         }
                     } catch (parseError) {
                         console.error('Error handling success status:', parseError);

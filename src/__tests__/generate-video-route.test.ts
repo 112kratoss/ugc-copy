@@ -88,6 +88,43 @@ function createSupabaseMock(
       };
     }
 
+    if (fn === 'settle_generation_succeeded') {
+      if (!localGeneration) {
+        return {
+          data: { status: 'missing' },
+          error: null,
+        };
+      }
+
+      if (localGeneration.status === 'failed') {
+        return {
+          data: {
+            status: 'already_failed',
+            generation_id: localGeneration.id,
+            output_url: localGeneration.output_url,
+            refunded: true,
+          },
+          error: null,
+        };
+      }
+
+      localGeneration.status = 'succeeded';
+      localGeneration.output_url = typeof args.p_output_url === 'string' ? args.p_output_url : null;
+      localGeneration.completed_at = typeof args.p_completed_at === 'string'
+        ? args.p_completed_at
+        : '2026-04-15T10:01:00.000Z';
+
+      return {
+        data: {
+          status: 'succeeded',
+          generation_id: localGeneration.id,
+          output_url: localGeneration.output_url,
+          refunded: false,
+        },
+        error: null,
+      };
+    }
+
     if (fn === 'refund_generation') {
       return { data: true, error: null };
     }
@@ -134,6 +171,15 @@ function createSupabaseMock(
         })),
       },
       rpc,
+      storage: {
+        from: vi.fn(() => ({
+          upload: vi.fn(async () => ({ error: null })),
+          createSignedUrl: vi.fn(async (filePath: string) => ({
+            data: { signedUrl: `signed:generated_videos/${filePath}` },
+            error: null,
+          })),
+        })),
+      },
       from: vi.fn((table: string) => {
         if (table !== 'generations') {
           throw new Error(`Unexpected table access: ${table}`);
@@ -856,6 +902,62 @@ describe('/api/generate-video route', () => {
       'refund_generation',
       expect.anything()
     );
+    expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('settles live provider video success with the atomic backend RPC', async () => {
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-live-success-1',
+      prediction_id: 'task-video-live-success-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0-video',
+      category: 'video',
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/recordInfo')) {
+        return {
+          ok: true,
+          json: async () => ({
+            code: 200,
+            data: {
+              state: 'success',
+              completeTime: '2026-04-15T10:01:00.000Z',
+              resultJson: JSON.stringify({
+                resultUrls: ['https://provider.example.com/video.mp4'],
+              }),
+            },
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        blob: async () => new Blob(['video'], { type: 'video/mp4' }),
+      } as Response;
+    }));
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-live-success-1', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'succeeded',
+      output: 'signed:generated_videos/user-1/generated_task-video-live-success-1.mp4',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_succeeded', expect.objectContaining({
+      p_prediction_id: 'task-video-live-success-1',
+      p_output_url: 'generated_videos/user-1/generated_task-video-live-success-1.mp4',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+    }));
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

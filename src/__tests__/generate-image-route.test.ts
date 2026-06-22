@@ -89,6 +89,46 @@ function createSupabaseMock(
       };
     }
 
+    if (fn === 'settle_generation_succeeded') {
+      if (!localGeneration) {
+        return {
+          data: { status: 'missing' },
+          error: null,
+        };
+      }
+
+      if (localGeneration.status === 'failed') {
+        return {
+          data: {
+            status: 'already_failed',
+            generation_id: localGeneration.id,
+            output_url: localGeneration.output_url,
+            refunded: true,
+          },
+          error: null,
+        };
+      }
+
+      localGeneration.status = 'succeeded';
+      localGeneration.output_url = typeof args.p_output_url === 'string' ? args.p_output_url : null;
+      localGeneration.completed_at = typeof args.p_completed_at === 'string'
+        ? args.p_completed_at
+        : '2026-04-15T10:01:00.000Z';
+      if (args.p_workflow_settings && typeof args.p_workflow_settings === 'object') {
+        localGeneration.workflow_settings = args.p_workflow_settings as Record<string, unknown>;
+      }
+
+      return {
+        data: {
+          status: 'succeeded',
+          generation_id: localGeneration.id,
+          output_url: localGeneration.output_url,
+          refunded: false,
+        },
+        error: null,
+      };
+    }
+
     if (fn === 'refund_generation') {
       return { data: true, error: null };
     }
@@ -819,15 +859,17 @@ describe('/api/generate-image route', () => {
         'signed:generated_images/user-1/generated_task-grok-image-1_1.jpg',
       ],
     });
-    expect(currentSupabaseMock.updates[0]).toMatchObject({
-      status: 'succeeded',
-      output_url: 'generated_images/user-1/generated_task-grok-image-1_0.jpg',
-      workflow_settings: {
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_succeeded', expect.objectContaining({
+      p_prediction_id: 'task-grok-image-1',
+      p_output_url: 'generated_images/user-1/generated_task-grok-image-1_0.jpg',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_workflow_settings: expect.objectContaining({
         outputs: [
           { index: 0, storagePath: 'generated_images/user-1/generated_task-grok-image-1_0.jpg' },
           { index: 1, storagePath: 'generated_images/user-1/generated_task-grok-image-1_1.jpg' },
         ],
-      },
-    });
+      }),
+    }));
+    expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 });

@@ -93,6 +93,45 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
         };
       }
 
+      if (fn === 'settle_generation_succeeded') {
+        const row = generations.find((generation) => generation.prediction_id === args.p_prediction_id);
+        if (!row) {
+          return {
+            data: { status: 'missing' },
+            error: null,
+          };
+        }
+
+        if (row.status === 'failed' || Boolean((row as { refunded?: boolean }).refunded)) {
+          return {
+            data: {
+              status: 'already_failed',
+              generation_id: row.id,
+              output_url: row.output_url,
+              refunded: Boolean((row as { refunded?: boolean }).refunded),
+            },
+            error: null,
+          };
+        }
+
+        row.status = 'succeeded';
+        row.output_url = typeof args.p_output_url === 'string' ? args.p_output_url : null;
+        row.completed_at = typeof args.p_completed_at === 'string' ? args.p_completed_at : new Date().toISOString();
+        if (args.p_workflow_settings && typeof args.p_workflow_settings === 'object') {
+          row.workflow_settings = args.p_workflow_settings as Record<string, unknown>;
+        }
+
+        return {
+          data: {
+            status: 'succeeded',
+            generation_id: row.id,
+            output_url: row.output_url,
+            refunded: false,
+          },
+          error: null,
+        };
+      }
+
       if (fn === 'refund_generation' || fn === 'refund_credits') {
         return { data: true, error: null };
       }
@@ -1944,7 +1983,7 @@ describe('generation services', () => {
         blob: async () => new Blob(['audio'], { type: 'audio/mpeg' }),
       } as Response);
 
-    const { supabase, generations, uploads } = createSupabaseMock([{
+    const { supabase, generations, uploads, rpcCalls } = createSupabaseMock([{
       id: 'gen-audio-1',
       user_id: 'user-1',
       prediction_id: 'task-audio-1',
@@ -1968,6 +2007,14 @@ describe('generation services', () => {
     expect(uploads[0]).toEqual({
       bucket: 'generated_audio',
       filePath: 'user-1/generated_task-audio-1.mp3',
+    });
+    expect(rpcCalls).toContainEqual({
+      fn: 'settle_generation_succeeded',
+      args: expect.objectContaining({
+        p_prediction_id: 'task-audio-1',
+        p_output_url: 'generated_audio/user-1/generated_task-audio-1.mp3',
+        p_completed_at: '2026-04-15T10:00:12.000Z',
+      }),
     });
   });
 

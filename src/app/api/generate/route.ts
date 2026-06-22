@@ -30,7 +30,12 @@ import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId, SourceGenerationValidationError } from '@/lib/source-generation';
-import { GenerationServiceError, settleGenerationFailed, startMotionGeneration } from '@/lib/generation-services';
+import {
+    GenerationServiceError,
+    settleGenerationFailed,
+    settleGenerationSucceeded,
+    startMotionGeneration,
+} from '@/lib/generation-services';
 import {
     GenerationStartIdempotencyError,
     getGenerationStartIdempotencyKey,
@@ -343,6 +348,12 @@ export async function GET(request: NextRequest) {
                     if (tempUrl) {
                         console.log('Generating finished, persisting video...');
                         const userId = user?.id || localGeneration?.user_id;
+                        let settlementOutputUrl: string | null = tempUrl;
+                        let previewUrl: string | null = null;
+                        let previewThumbhash: string | null = null;
+                        let previewStatus: 'ready' | 'failed' | null = null;
+                        let previewError: string | null = null;
+                        let previewGeneratedAt: string | null = null;
 
                         try {
                             const videoRes = await fetch(tempUrl);
@@ -364,7 +375,6 @@ export async function GET(request: NextRequest) {
                                 // Store the storage path, not a public URL
                                 const storagePath = `generated_videos/${fileName}`;
                                 let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
-                                let previewError: string | null = null;
                                 try {
                                     preview = await createGenerationOutputPreview({
                                         body: videoBlob,
@@ -377,41 +387,44 @@ export async function GET(request: NextRequest) {
                                     console.error('Failed to create motion generation preview poster:', posterError);
                                     previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
                                 }
+                                previewUrl = preview?.previewStoragePath ?? null;
+                                previewThumbhash = preview?.previewThumbhash ?? null;
+                                previewStatus = preview ? 'ready' : 'failed';
+                                previewGeneratedAt = preview ? new Date().toISOString() : null;
                                 // Generate a signed URL for the client
                                 const { data: signedData } = await supabase.storage
                                     .from('generated_videos')
                                     .createSignedUrl(fileName, 3600);
                                 output = signedData?.signedUrl || tempUrl;
-
-                                await supabase
-                                    .from('generations')
-                                    .update({
-                                        status: 'succeeded',
-                                        output_url: storagePath,
-                                        preview_url: preview?.previewStoragePath ?? null,
-                                        preview_thumbhash: preview?.previewThumbhash ?? null,
-                                        preview_status: preview ? 'ready' : 'failed',
-                                        preview_attempt_count: 1,
-                                        preview_error: previewError,
-                                        preview_generated_at: preview ? new Date().toISOString() : null,
-                                        completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                                    })
-                                    .eq('prediction_id', predictionId);
+                                settlementOutputUrl = storagePath;
                             }
                         } catch (e) {
                             console.error('Error persisting video to storage:', e);
                             output = tempUrl;
                         }
 
-                        if (!output || output === tempUrl) {
-                            await supabase
-                                .from('generations')
-                                .update({
-                                    status: 'succeeded',
-                                    output_url: output,
-                                    completed_at: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-                                })
-                                .eq('prediction_id', predictionId);
+                        status = await settleGenerationSucceeded(adminSupabase, {
+                            predictionId,
+                            outputUrl: settlementOutputUrl,
+                            previewUrl,
+                            previewThumbhash,
+                            previewStatus,
+                            previewAttemptCount: previewStatus ? 1 : null,
+                            previewError,
+                            previewGeneratedAt,
+                            completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                        });
+                        if (status === 'failed') {
+                            output = null;
+                            error = 'Generation was already settled as failed.';
+                        }
+                    } else {
+                        status = await settleGenerationSucceeded(adminSupabase, {
+                            predictionId,
+                            completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+                        });
+                        if (status === 'failed') {
+                            error = 'Generation was already settled as failed.';
                         }
                     }
 

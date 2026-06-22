@@ -47,6 +47,7 @@ describe('credit mutation security boundary', () => {
       'start_ai_usage_event(uuid, integer, text, text, text, text, text, text)',
       'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
       'settle_generation_failed(text, timestamp with time zone)',
+      'settle_generation_succeeded(text, text, timestamp with time zone, text, text, text, integer, text, timestamp with time zone, jsonb)',
     ];
 
     for (const signature of signatures) {
@@ -85,11 +86,14 @@ describe('credit mutation security boundary', () => {
     expect(generate).toContain('startMotionGeneration');
     expect(generate).toContain('creditSupabase: adminSupabase');
     expect(generate).toContain('settleGenerationFailed');
+    expect(generate).toContain('settleGenerationSucceeded');
     expect(generateImage).toContain('settleGenerationFailed');
     expect(generateVideo).toContain('settleGenerationFailed');
+    expect(generateVideo).toContain('settleGenerationSucceeded');
     expect(generationServices).toContain("supabase.rpc('start_generation'");
     expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('settle_generation_failed'");
+    expect(generationServices).toContain("settlementSupabase.rpc('settle_generation_succeeded'");
   });
 });
