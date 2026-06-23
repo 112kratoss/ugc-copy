@@ -8,9 +8,9 @@ Make the shared backend for web and mobile production-ready, cost-efficient, per
 
 ## Overall Progress
 
-**Total completion: 98.6%**
+**Total completion: 98.7%**
 
-- Completed milestones: **219**
+- Completed milestones: **220**
 - Open completion gates: **3**
 - Active workstreams: **0**
 
@@ -249,6 +249,7 @@ Use this convention:
 - [x] ~~Add a protected backend ops dashboard feed that aggregates health, cost, and alert signals for no-extra-vendor production dashboarding.~~
 - [x] ~~Separate protected ops read authentication from cron execution authentication with `OPS_READ_SECRET` while keeping cron routes restricted to `CRON_SECRET`.~~
 - [x] ~~Keep backend cost and dashboard collectors available when Supabase Storage metadata is not exposed through the Data API, surfacing storage-growth measurement as a warning instead of failing the protected ops endpoints.~~
+- [x] ~~Align the local Supabase Auth config baseline with production password hardening guidance so future config pushes do not weaken password length, character requirements, or password-change reauthentication.~~
 - [x] ~~Configure the RevenueCat production webhook authorization header and matching Vercel Production `REVENUECAT_WEBHOOK_AUTH_TOKEN` secret without exposing the generated token.~~
 - [x] ~~Redact tracked local Supabase service-role examples from agent workflow docs and add a regression test against shipping live-looking local secrets.~~
 - [x] ~~Deploy and verify the Vercel Pro production cutover with the `bom1` deployment, public catalog cache headers, private no-store protected routes, and the consolidated backend cron firing on production.~~
@@ -584,10 +585,11 @@ Use this convention:
 | 2026-06-23 | Added dedicated protected ops read authentication. | completed locally; production env staged | Added `OPS_READ_SECRET` support for health/cost/alert/dashboard ops endpoints, kept cron execution restricted to `CRON_SECRET`, documented the new production capability in `.env.example` and the runbook, and added `OPS_READ_SECRET` to Vercel Production as a sensitive variable without printing its value; red tests verified ops reads initially rejected the new secret and `.env.example` missed it, then focused auth/ops/environment/progress tests passed with 11 files / 53 tests, full `npm test` passed with 373 files / 1789 tests, `npx tsc --noEmit --pretty false` passed, `npm run lint` exited 0 with the existing 25 warnings, `npm run build` passed, and `git diff --check` passed; tracker reached 218 completed milestones, 4 open gates, and 98.2% |
 | 2026-06-23 | Kept protected backend cost, alert, and dashboard collectors available when Supabase Storage metadata is unavailable through the Data API. | completed locally; production deployment pending | Red tests verified `PGRST106 Invalid schema: storage` previously threw from the cost collector and opaque ops logs rendered `[object Object]`; green implementation converts only that storage-schema case into `STORAGE_GROWTH_UNAVAILABLE` warning metrics while keeping other query errors fatal, and serializes structured collector failures in protected ops logs. Verification passed focused ops tests with 11 files / 50 tests, real local Supabase collector smoke returned `status: "warning"` with `STORAGE_GROWTH_UNAVAILABLE`, `npx tsc --noEmit --pretty false`, `git diff --check`, `npm run lint` exited 0 with the existing 25 warnings, `npm run build`, and full `npm test` passed with 373 files / 1793 tests; tracker reached 219 completed milestones, 4 open gates, and 98.2% |
 | 2026-06-23 | Deployed and production-smoked the protected backend ops dashboard gate. | completed in production | Commit `4557c44` deployed as Vercel production deployment `dpl_AV1r7CuxN21iYtjCBKFTJA6pMcCu` at `https://ugc-2j58dmoni-athuls-projects-2ab559ed.vercel.app`, was aliased to `magicbooklet.com` and `www.magicbooklet.com`, and listed functions in `bom1`; authorized production smoke with `OPS_READ_SECRET` returned `200` and `Cache-Control: private, no-store` for `/api/ops/backend-health`, `/api/ops/backend-costs`, `/api/ops/backend-alerts`, and `/api/ops/backend-dashboard`; health returned `status: "ok"` with no missing environment, costs returned `status: "warning"` with `STORAGE_GROWTH_UNAVAILABLE`, alerts returned one matching warning, dashboard returned three panels with `health:ok`, `costs:warning`, and `alerts:warning`; fresh `vercel logs --since 10m` showed only the four info-level smoke requests and no error logs; tracker reached 219 completed local milestones, 3 open gates, and 98.6% |
+| 2026-06-23 | Re-audited remaining external gates and hardened the local Supabase Auth baseline. | completed locally; external settings still open | Live Supabase security advisors for project `ildfmhozpibwiopeavfg` still report `auth_leaked_password_protection` WARN with remediation `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`; live performance advisors still report `auth_db_connections_absolute` INFO with remediation `https://supabase.com/docs/guides/deployment/going-into-prod`; RevenueCat integration `whintgr1689ecfb68` still points production events `cancellation`, `non_renewing_purchase`, and `refund_reversed` at `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, but the available RevenueCat toolset has no send-test-webhook action. Added `src/__tests__/supabase-auth-config.test.ts`, watched it fail against `minimum_password_length = 6`, then updated `supabase/config.toml` to `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`; green focused Auth config test passed; tracker reached 220 completed local milestones, 3 open gates, and 98.7% |
 
 ## Next Working Order
 
-1. Trigger a signed RevenueCat dashboard/provider test webhook and verify it reaches `/api/mobile/commerce/revenuecat-webhook`.
-2. Optionally configure `BACKEND_ALERT_DELIVERY_URL` for push notifications after the protected dashboard is live.
-3. Enable leaked-password protection in Supabase Auth and verify the advisor warning clears.
-4. Switch Supabase Auth database connections to percentage-based allocation and verify the advisor warning clears.
+1. In RevenueCat dashboard, send a signed production test webhook for integration `whintgr1689ecfb68`, then verify Vercel logs show `/api/mobile/commerce/revenuecat-webhook` accepted it instead of returning an unconfigured or unauthorized response.
+2. In Supabase dashboard for project `ildfmhozpibwiopeavfg`, enable Auth leaked-password protection under Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` clears.
+3. In Supabase dashboard for project `ildfmhozpibwiopeavfg`, switch Auth database connections from fixed `10` connections to percentage-based allocation before any compute scaling, then re-run performance advisors until `auth_db_connections_absolute` clears.
+4. Optionally configure `BACKEND_ALERT_DELIVERY_URL` for push notifications after the protected dashboard is live.

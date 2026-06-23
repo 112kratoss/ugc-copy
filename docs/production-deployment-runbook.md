@@ -60,6 +60,16 @@ npx --yes vercel@latest env ls production --format=json
 
 7. Confirm Supabase security and performance advisors. Leaked-password protection must be enabled before broad public launch. Use percentage-based Auth database connections before increasing compute size.
 
+## External Dashboard Gates
+
+These settings are intentionally verified against the provider dashboards/advisors because they are outside the application codebase:
+
+- Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
+- Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
+- RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
+
+The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
+
 ## Deployment Order
 
 1. Keep schema changes additive and compatible with the currently released web and mobile clients.
