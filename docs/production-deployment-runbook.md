@@ -70,6 +70,20 @@ These settings are intentionally verified against the provider dashboards/adviso
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
 
+Use the repeatable production gate helper after each external change:
+
+```bash
+npm run ops:external-gates
+```
+
+For Supabase Auth, prefer the narrow Management API patch over `supabase config push`. The local `supabase/config.toml` also contains development rate-limit and email-confirmation settings, so a broad config push can unintentionally mutate production. With a scoped Supabase Management API token, this command applies only leaked-password protection and the Auth DB connection strategy:
+
+```bash
+SUPABASE_MANAGEMENT_API_TOKEN=... npm run ops:external-gates -- --apply-supabase-auth
+```
+
+The default patch is `password_hibp_enabled = true`, `db_max_pool_size_unit = "percent"`, and `db_max_pool_size = 17`. The `17%` value preserves the current effective Auth cap of roughly 10 connections on the current 60-connection database while allowing the cap to scale with future compute upgrades. Override it with `SUPABASE_AUTH_DB_POOL_PERCENT` only after reviewing live connection telemetry or Supabase support guidance.
+
 ## Deployment Order
 
 1. Keep schema changes additive and compatible with the currently released web and mobile clients.

@@ -17,6 +17,7 @@
     "backfill:post-media-previews": "npm run backfill:media-previews",
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "db:migrations:check": "node scripts/check-supabase-migration-drift.mjs",
+    "ops:external-gates": "node scripts/production-external-gates.mjs",
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
     "build": "next build",
