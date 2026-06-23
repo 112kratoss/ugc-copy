@@ -271,6 +271,25 @@ describe('creator tool card links', () => {
     });
   });
 
+  it('keeps the cacheable homepage renderable when showcase content is unavailable', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getShowcaseFeedPageMock.mockRejectedValue(new Error('Supabase host unavailable during build'));
+
+    render(await Home());
+
+    expect(screen.getByText(/What would you like to/i)).toBeInTheDocument();
+    expect(screen.getByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '0');
+    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
+      items: [],
+      initialSession: null,
+      initialCredits: null,
+    });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Failed to load homepage showcase content:',
+      expect.any(Error)
+    );
+  });
+
   it('uses one full-card link for each creator path on the launchpad page', async () => {
     render(await CreateHubPage());
 

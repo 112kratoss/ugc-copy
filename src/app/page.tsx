@@ -8,7 +8,10 @@ import { SectionHeader, Text } from '@/app/components/DesignSystem';
 import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowcasePreviewGrid';
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
-import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
+import {
+  buildCreatorToolPreviewMap,
+  loadCreatorToolPreviewMap,
+} from '@/lib/creator-tool-previews';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import {
@@ -18,6 +21,7 @@ import {
   siteConfig,
 } from '@/lib/seo';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
@@ -68,18 +72,71 @@ const LATEST_MODELS = [
   },
 ] as const;
 
+function createEmptyHomeShowcaseFeed(): ShowcaseFeedPage {
+  return {
+    items: [],
+    availableTools: [],
+    pageInfo: {
+      hasMore: false,
+      nextOffset: null,
+      limit: 12,
+      offset: 0,
+    },
+  };
+}
+
+async function loadHomeShowcaseFeed(): Promise<{
+  feed: ShowcaseFeedPage;
+  usedFallback: boolean;
+}> {
+  try {
+    return {
+      feed: await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'top-saves',
+        offset: 0,
+        limit: 12,
+        viewerUserId: null,
+        countryCode: null,
+      }),
+      usedFallback: false,
+    };
+  } catch (error) {
+    console.error('Failed to load homepage showcase content:', error);
+    return {
+      feed: createEmptyHomeShowcaseFeed(),
+      usedFallback: true,
+    };
+  }
+}
+
+async function loadHomeCreatorToolPreviewMap({
+  seedItems,
+  skipRemoteFallback,
+}: {
+  seedItems: ShowcaseFeedItem[];
+  skipRemoteFallback: boolean;
+}) {
+  if (skipRemoteFallback) {
+    return buildCreatorToolPreviewMap(seedItems);
+  }
+
+  try {
+    return await loadCreatorToolPreviewMap({
+      viewerUserId: null,
+      seedItems,
+    });
+  } catch (error) {
+    console.error('Failed to load homepage creator tool previews:', error);
+    return buildCreatorToolPreviewMap(seedItems);
+  }
+}
+
 export default async function Home() {
-  const showcaseFeed = await getShowcaseFeedPage({
-    category: 'all',
-    sort: 'top-saves',
-    offset: 0,
-    limit: 12,
-    viewerUserId: null,
-    countryCode: null,
-  });
-  const previewByTool = await loadCreatorToolPreviewMap({
-    viewerUserId: null,
+  const { feed: showcaseFeed, usedFallback } = await loadHomeShowcaseFeed();
+  const previewByTool = await loadHomeCreatorToolPreviewMap({
     seedItems: showcaseFeed.items,
+    skipRemoteFallback: usedFallback,
   });
 
   return (
