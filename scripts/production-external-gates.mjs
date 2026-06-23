@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
 const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'ildfmhozpibwiopeavfg';
+const REVENUECAT_WEBHOOK_URL = process.env.REVENUECAT_WEBHOOK_URL
+  || 'https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook';
 const DEFAULT_AUTH_DB_POOL_PERCENT = Number(process.env.SUPABASE_AUTH_DB_POOL_PERCENT || 17);
 const TARGET_LINTS = new Set([
   'auth_leaked_password_protection',
@@ -164,20 +166,83 @@ async function applySupabaseAuthPatch() {
   console.log(JSON.stringify(redactedAuthFields(after), null, 2));
 }
 
+function buildRevenueCatProbePayload(now = Date.now()) {
+  return {
+    api_version: '1.0',
+    event: {
+      id: `external-gate-probe-${now}`,
+      type: 'TEST',
+      event_timestamp_ms: now,
+    },
+  };
+}
+
+function assertRevenueCatProbeSuccess({ status, cacheControl, body }) {
+  if (status !== 200) {
+    throw new Error(`RevenueCat webhook probe failed: expected HTTP 200, got HTTP ${status}.`);
+  }
+  if (!body || body.received !== true || body.ignored !== true) {
+    throw new Error('RevenueCat webhook probe failed: expected an ignored test-event response.');
+  }
+  if (!String(cacheControl || '').includes('private') || !String(cacheControl || '').includes('no-store')) {
+    throw new Error('RevenueCat webhook probe failed: expected private no-store cache headers.');
+  }
+}
+
+async function probeRevenueCatWebhook() {
+  const token = process.env.REVENUECAT_WEBHOOK_AUTH_TOKEN;
+  if (!token) {
+    throw new Error('Set REVENUECAT_WEBHOOK_AUTH_TOKEN before using --probe-revenuecat-webhook.');
+  }
+
+  const response = await fetch(REVENUECAT_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: token,
+      'Content-Type': 'application/json',
+      'X-Request-ID': `revenuecat-external-gate-${Date.now()}`,
+    },
+    body: JSON.stringify(buildRevenueCatProbePayload()),
+  });
+  const cacheControl = response.headers.get('cache-control') || '';
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error('RevenueCat webhook probe failed: response was not JSON.');
+  }
+
+  assertRevenueCatProbeSuccess({
+    body,
+    cacheControl,
+    status: response.status,
+  });
+  console.log('RevenueCat webhook probe: accepted harmless signed TEST event');
+  console.log(JSON.stringify({
+    cacheControl,
+    status: response.status,
+    url: REVENUECAT_WEBHOOK_URL,
+  }, null, 2));
+}
+
 function printUsage() {
   console.log(`Usage:
   node scripts/production-external-gates.mjs [--check]
   node scripts/production-external-gates.mjs --print-supabase-auth-patch
   SUPABASE_MANAGEMENT_API_TOKEN=... node scripts/production-external-gates.mjs --apply-supabase-auth
+  REVENUECAT_WEBHOOK_AUTH_TOKEN='Bearer ...' node scripts/production-external-gates.mjs --probe-revenuecat-webhook
 
 Default: --check
 
 The Supabase Auth patch is intentionally narrow:
 ${JSON.stringify(buildSupabaseAuthPatch(), null, 2)}
 
-RevenueCat remains a provider-dashboard gate: send a signed test webhook for integration
-whintgr1689ecfb68 to https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook,
-then verify Vercel production logs accepted it.`);
+RevenueCat provider delivery remains a dashboard gate: send a signed test webhook for
+integration whintgr1689ecfb68 to ${REVENUECAT_WEBHOOK_URL}, then verify Vercel
+production logs accepted it. Use --probe-revenuecat-webhook to verify the deployed
+endpoint accepts the same configured authorization header before or after the provider
+dashboard test.`);
 }
 
 function selfTest() {
@@ -211,6 +276,24 @@ function selfTest() {
     db_max_pool_size_unit: 'percent',
   });
   assert.throws(() => buildSupabaseAuthPatch(0), /between 1 and 100/);
+  assert.deepEqual(buildRevenueCatProbePayload(123), {
+    api_version: '1.0',
+    event: {
+      id: 'external-gate-probe-123',
+      type: 'TEST',
+      event_timestamp_ms: 123,
+    },
+  });
+  assert.doesNotThrow(() => assertRevenueCatProbeSuccess({
+    body: { received: true, ignored: true },
+    cacheControl: 'private, no-store',
+    status: 200,
+  }));
+  assert.throws(() => assertRevenueCatProbeSuccess({
+    body: { error: 'Unauthorized.' },
+    cacheControl: 'private, no-store',
+    status: 401,
+  }), /expected HTTP 200/);
   console.log('production-external-gates self-test passed');
 }
 
@@ -232,6 +315,10 @@ async function main() {
   if (args.has('--apply-supabase-auth')) {
     await applySupabaseAuthPatch();
     runSupabaseAdvisorCheck();
+    return;
+  }
+  if (args.has('--probe-revenuecat-webhook')) {
+    await probeRevenueCatWebhook();
     return;
   }
 

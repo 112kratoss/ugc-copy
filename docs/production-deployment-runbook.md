@@ -84,6 +84,14 @@ SUPABASE_MANAGEMENT_API_TOKEN=... npm run ops:external-gates -- --apply-supabase
 
 The default patch is `password_hibp_enabled = true`, `db_max_pool_size_unit = "percent"`, and `db_max_pool_size = 17`. The `17%` value preserves the current effective Auth cap of roughly 10 connections on the current 60-connection database while allowing the cap to scale with future compute upgrades. Override it with `SUPABASE_AUTH_DB_POOL_PERCENT` only after reviewing live connection telemetry or Supabase support guidance.
 
+For RevenueCat, first verify that the deployed endpoint accepts the same configured authorization header without mutating purchase state. This sends a harmless `TEST` event that the backend intentionally ignores with `200` and private no-store headers:
+
+```bash
+REVENUECAT_WEBHOOK_AUTH_TOKEN='Bearer ...' npm run ops:external-gates -- --probe-revenuecat-webhook
+```
+
+This probe does not replace the provider-dashboard gate. After it passes, send the RevenueCat dashboard test webhook for integration `whintgr1689ecfb68` and verify Vercel logs show a provider-delivered `POST /api/mobile/commerce/revenuecat-webhook` returning `200`.
+
 ## Deployment Order
 
 1. Keep schema changes additive and compatible with the currently released web and mobile clients.
