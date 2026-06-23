@@ -231,12 +231,11 @@ export default function ShowcaseScreen() {
         style={{
           flex: 1,
           backgroundColor: appTheme.colors.background,
-          marginBottom: tabBarMetrics.contentBottomOverlapPadding - 10,
         }}
         contentContainerStyle={{
           paddingTop: topInset + appTheme.spacing.screen,
           paddingHorizontal: FEED_HORIZONTAL_PADDING,
-          paddingBottom: appTheme.spacing.section + 8,
+          paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
         }}
         ListHeaderComponent={
           <View style={{ gap: appTheme.spacing.section, paddingBottom: appTheme.spacing.section }}>

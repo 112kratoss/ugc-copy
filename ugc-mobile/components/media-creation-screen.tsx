@@ -327,11 +327,12 @@ export function MediaCreationScreen({
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
-  const contentBottomReserve = insideTab ? tabBarMetrics.contentBottomPadding : 0;
-  const contentBottomPadding = insideTab ? appTheme.spacing.section + FLOATING_REVIEW_BAR_HEIGHT : bottomInset + 36;
+  const showFloatingReviewBar = insideTab && hasStartedCreationDraft(currentDraft) && !isPromptFocused;
+  const contentBottomPadding = insideTab
+    ? tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section + (showFloatingReviewBar ? FLOATING_REVIEW_BAR_HEIGHT + appTheme.spacing.gap : 0)
+    : bottomInset + 36;
   const issueCount = validation.errors.length + validation.warnings.length + (message ? 1 : 0);
   const generateDisabled = isGenerating || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
-  const showFloatingReviewBar = insideTab && hasStartedCreationDraft(currentDraft) && !isPromptFocused;
 
   const changeTool = (tool: CreatorToolId) => {
     setActiveTool(tool);
@@ -731,7 +732,7 @@ export function MediaCreationScreen({
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         keyboardShouldPersistTaps="handled"
-        style={{ flex: 1, marginBottom: contentBottomReserve }}
+        style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: topInset + 14,
           paddingHorizontal: isCompact ? 16 : 20,
@@ -788,7 +789,7 @@ export function MediaCreationScreen({
       {showFloatingReviewBar ? (
         <FloatingGenerateReviewBar
           accent={meta.accent}
-          bottom={contentBottomReserve + 8}
+          bottom={tabBarMetrics.contentBottomPadding + 8}
           credits={credits ?? 0}
           cost={activeQuote.status === 'ready' ? activeQuote.cost : null}
           disabled={generateDisabled}

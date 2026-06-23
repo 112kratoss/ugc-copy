@@ -392,19 +392,19 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(text).toContain('Optional for motion');
   });
 
-  it('reserves viewport space for the floating tab bar when rendered inside the create tab', () => {
+  it('lets the create tab scroll behind the floating tab bar', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
     });
 
     const scrollView = tree!.root.find((node) => String(node.type) === 'scrollview');
-    expect(scrollView.props.style).toEqual(expect.objectContaining({
+    expect(scrollView.props.style).not.toEqual(expect.objectContaining({
       marginBottom: expect.any(Number),
     }));
-    expect(scrollView.props.style.marginBottom).toBeGreaterThan(120);
     expect(scrollView.props.contentContainerStyle.paddingBottom).toBeGreaterThan(100);
     expect(collectText(tree!.root)).not.toContain('Review and generate');
+    const basePaddingBottom = scrollView.props.contentContainerStyle.paddingBottom;
 
     const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
     renderer.act(() => {
@@ -412,16 +412,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     expect(collectText(tree!.root)).toContain('Review and generate');
+    const scrollViewWithReview = tree!.root.find((node) => String(node.type) === 'scrollview');
+    expect(scrollViewWithReview.props.style).not.toEqual(expect.objectContaining({
+      marginBottom: expect.any(Number),
+    }));
+    expect(scrollViewWithReview.props.contentContainerStyle.paddingBottom).toBeGreaterThan(basePaddingBottom);
 
     renderer.act(() => {
       promptInput.props.onFocus();
     });
     expect(collectText(tree!.root)).not.toContain('Review and generate');
+    const focusedScrollView = tree!.root.find((node) => String(node.type) === 'scrollview');
+    expect(focusedScrollView.props.contentContainerStyle.paddingBottom).toBe(basePaddingBottom);
 
     renderer.act(() => {
       promptInput.props.onBlur();
     });
     expect(collectText(tree!.root)).toContain('Review and generate');
+    const blurredScrollView = tree!.root.find((node) => String(node.type) === 'scrollview');
+    expect(blurredScrollView.props.contentContainerStyle.paddingBottom).toBeGreaterThan(basePaddingBottom);
   });
 
   it('shows the authoritative server quote in the floating review bar', async () => {
