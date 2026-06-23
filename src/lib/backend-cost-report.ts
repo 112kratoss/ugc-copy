@@ -38,6 +38,11 @@ type StorageObjectCostRow = {
   created_at: string | null;
 };
 
+type SupabaseQueryError = {
+  code?: unknown;
+  message?: unknown;
+};
+
 export type BackendCostReportIssue = {
   severity: Exclude<BackendCostReportStatus, 'ok'>;
   code: string;
@@ -216,6 +221,18 @@ function maxStatus(statuses: BackendCostReportStatus[]): BackendCostReportStatus
   if (statuses.includes('degraded')) return 'degraded';
   if (statuses.includes('warning')) return 'warning';
   return 'ok';
+}
+
+function isStorageSchemaUnavailableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message } = error as SupabaseQueryError;
+  return code === 'PGRST106'
+    && typeof message === 'string'
+    && message.toLowerCase().includes('invalid schema')
+    && message.toLowerCase().includes('storage');
 }
 
 function getStorageObjectSize(metadata: unknown): number {
@@ -535,7 +552,10 @@ export async function collectBackendCostReport(
   if (aiUsageResult.error) throw aiUsageResult.error;
   if (providerDependenciesResult.error) throw providerDependenciesResult.error;
   if (rateLimitsResult.error) throw rateLimitsResult.error;
-  if (storageObjectsResult.error) throw storageObjectsResult.error;
+  const storageGrowthUnavailable = Boolean(
+    storageObjectsResult.error && isStorageSchemaUnavailableError(storageObjectsResult.error),
+  );
+  if (storageObjectsResult.error && !storageGrowthUnavailable) throw storageObjectsResult.error;
 
   const generationSpend = buildGenerationSpend((generationsResult.data ?? []) as GenerationCostRow[]);
   const aiUsageSpend = buildAiUsageSpend((aiUsageResult.data ?? []) as AiUsageCostRow[]);
@@ -543,7 +563,9 @@ export async function collectBackendCostReport(
     (providerDependenciesResult.data ?? []) as ProviderDependencyCostRow[],
   );
   const rateLimitPressure = buildRateLimitPressure((rateLimitsResult.data ?? []) as RateLimitCostRow[]);
-  const storageGrowth = buildStorageGrowth((storageObjectsResult.data ?? []) as StorageObjectCostRow[]);
+  const storageGrowth = buildStorageGrowth(
+    storageGrowthUnavailable ? [] : (storageObjectsResult.data ?? []) as StorageObjectCostRow[],
+  );
   const issues = buildCostIssues({
     generationSpend,
     aiUsageSpend,
@@ -552,6 +574,13 @@ export async function collectBackendCostReport(
     storageGrowth,
     budgetPolicy,
   });
+  if (storageGrowthUnavailable) {
+    issues.push({
+      severity: 'warning',
+      code: 'STORAGE_GROWTH_UNAVAILABLE',
+      message: 'Generated storage growth could not be measured because the Supabase storage schema is unavailable through the Data API.',
+    });
+  }
 
   return {
     status: maxStatus(['ok', ...issues.map((issue) => issue.severity)]),

@@ -115,6 +115,35 @@ describe('ops route adapter service', () => {
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('database unavailable'));
   });
 
+  it('logs structured collector failure details instead of opaque object strings', async () => {
+    const logError = vi.fn();
+    const collect = vi.fn(async () => {
+      throw {
+        code: 'PGRST106',
+        message: 'Invalid schema: storage',
+      };
+    });
+
+    const response = await getProtectedOpsRouteResponse({
+      request: new Request('http://localhost/api/ops/backend-costs', {
+        headers: { 'x-request-id': 'ops-adapter-storage-schema-1' },
+      }),
+      collect,
+      failureLogMessage: 'backend_cost_report_failed',
+      failureResponseError: 'Failed to collect backend cost report.',
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ service: 'supabase' })),
+        isAuthorizedOpsRequest: () => true,
+        logError,
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('PGRST106'));
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Invalid schema: storage'));
+    expect(logError).not.toHaveBeenCalledWith(expect.stringContaining('[object Object]'));
+  });
+
   it('creates protected GET handlers that forward requests through the ops adapter', async () => {
     const serviceClient = { service: 'supabase' };
     const collect = vi.fn(async () => ({

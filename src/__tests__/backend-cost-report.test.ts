@@ -7,7 +7,7 @@ import {
 
 type QueryResult = {
   data: unknown[] | null;
-  error: Error | null;
+  error: unknown | null;
 };
 
 class FakeQueryBuilder {
@@ -265,6 +265,54 @@ describe('collectBackendCostReport', () => {
       'generated_videos',
       'generated_audio',
       'generation_inputs',
+    ]);
+  });
+
+  it('keeps cost reporting available when the Supabase storage schema is not exposed through the Data API', async () => {
+    const now = new Date('2026-06-22T10:00:00.000Z');
+    const db = createClient({
+      generations: {
+        error: null,
+        data: [],
+      },
+      ai_usage_events: {
+        error: null,
+        data: [],
+      },
+      provider_dependency_events: {
+        error: null,
+        data: [],
+      },
+      backend_rate_limits: {
+        error: null,
+        data: [],
+      },
+      'storage.objects': {
+        data: null,
+        error: {
+          code: 'PGRST106',
+          details: null,
+          hint: 'Only the following schemas are exposed: public, graphql_public',
+          message: 'Invalid schema: storage',
+        },
+      },
+    });
+
+    const report = await collectBackendCostReport(db.client as never, now);
+
+    expect(report.status).toBe('warning');
+    expect(report.storageGrowth).toEqual({
+      recentObjectCount: 0,
+      recentBytes: 0,
+      largestObjectBytes: 0,
+      bytesByBucket: {},
+      objectsByBucket: {},
+    });
+    expect(report.issues).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'STORAGE_GROWTH_UNAVAILABLE',
+      }),
     ]);
   });
 
