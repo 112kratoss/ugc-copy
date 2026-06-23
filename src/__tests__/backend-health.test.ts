@@ -80,6 +80,15 @@ describe('collectBackendHealth', () => {
         error: null,
         data: [
           {
+            job_name: 'backend-alert-delivery',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:59:00.000Z',
+            finished_at: '2026-06-21T09:59:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'media-preview-repair',
             status: 'succeeded',
             started_at: '2026-06-21T09:45:00.000Z',
@@ -123,6 +132,7 @@ describe('collectBackendHealth', () => {
 
     const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
 
+    expect(health.issues).toEqual([]);
     expect(health.status).toBe('ok');
     expect(health.environment).toEqual({
       status: 'ok',
@@ -138,9 +148,14 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 312,
-      coveredJobCount: 3,
+      logicalDailyInvocations: 456,
+      coveredJobCount: 4,
       coveredJobs: expect.arrayContaining([
+        expect.objectContaining({
+          name: 'backend-alert-delivery',
+          cadenceMinutes: 10,
+          dailyInvocations: 144,
+        }),
         expect.objectContaining({
           name: 'generation-completions',
           cadenceMinutes: 10,
@@ -158,7 +173,12 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(3);
+    expect(health.jobs).toHaveLength(4);
+    expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
+      status: 'ok',
+      dailyInvocations: 144,
+      expectedMaxAgeMinutes: 40,
+    });
     expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,
@@ -198,6 +218,15 @@ describe('collectBackendHealth', () => {
       backend_job_runs: {
         error: null,
         data: [
+          {
+            job_name: 'backend-alert-delivery',
+            status: 'skipped',
+            started_at: '2026-06-21T09:59:00.000Z',
+            finished_at: '2026-06-21T09:59:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
           {
             job_name: 'media-preview-repair',
             status: 'succeeded',
@@ -318,6 +347,15 @@ describe('collectBackendHealth', () => {
       backend_job_runs: {
         error: null,
         data: [
+          {
+            job_name: 'backend-alert-delivery',
+            status: 'skipped',
+            started_at: '2026-06-21T09:59:00.000Z',
+            finished_at: '2026-06-21T09:59:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
           {
             job_name: 'media-preview-repair',
             status: 'succeeded',
@@ -455,7 +493,11 @@ describe('collectBackendHealth', () => {
       ],
     });
 
-    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+    const health = await collectBackendHealth(
+      db.client as never,
+      new Date('2026-06-21T10:00:00.000Z'),
+      COMPLETE_BACKEND_ENVIRONMENT,
+    );
 
     expect(health.status).toBe('warning');
     expect(health.issues).toEqual(expect.arrayContaining([
@@ -468,6 +510,15 @@ describe('collectBackendHealth', () => {
       backend_job_runs: {
         error: null,
         data: [
+          {
+            job_name: 'backend-alert-delivery',
+            status: 'skipped',
+            started_at: '2026-06-21T09:59:00.000Z',
+            finished_at: '2026-06-21T09:59:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
           {
             job_name: 'media-preview-repair',
             status: 'skipped',
@@ -504,10 +555,27 @@ describe('collectBackendHealth', () => {
       ],
     });
 
-    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+    const health = await collectBackendHealth(
+      db.client as never,
+      new Date('2026-06-21T10:00:00.000Z'),
+      COMPLETE_BACKEND_ENVIRONMENT,
+    );
 
+    expect(health.issues).toEqual([]);
     expect(health.status).toBe('ok');
     expect(health.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'backend-alert-delivery',
+        status: 'ok',
+        route: '/api/cron/backend-alert-delivery',
+        schedule: '*/10 * * * *',
+        cadenceMinutes: 10,
+        dailyInvocations: 144,
+        maxMissedRunsBeforeDegraded: 4,
+        lastHealthyAt: '2026-06-21T09:59:00.000Z',
+        lastSuccessAt: null,
+        recentSkips: 1,
+      }),
       expect.objectContaining({
         name: 'media-preview-repair',
         status: 'ok',

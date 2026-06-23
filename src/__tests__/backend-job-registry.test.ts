@@ -50,6 +50,7 @@ describe('backend job registry', () => {
 
   it('keeps every logical backend job represented in backend health metadata', () => {
     expect(BACKEND_JOB_REGISTRY.map((job) => job.name).sort()).toEqual([
+      'backend-alert-delivery',
       'generation-completions',
       'media-preview-repair',
       'mobile-push-receipts',
@@ -79,7 +80,7 @@ describe('backend job registry', () => {
 
     expect(getCronScheduleDailyInvocations('*/10 * * * *')).toBe(144);
     expect(getCronScheduleDailyInvocations('0 * * * *')).toBe(24);
-    expect(logicalDailyRuns).toBe(312);
+    expect(logicalDailyRuns).toBe(456);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBeLessThanOrEqual(BACKEND_JOB_DAILY_INVOCATION_BUDGET);
     expect(
@@ -95,11 +96,13 @@ describe('backend job registry', () => {
       windowMinutes: BACKEND_JOB_SCHEDULER.cadenceMinutes,
     })).toBe(false);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:00:00.000Z')).map((job) => job.name)).toEqual([
+      'backend-alert-delivery',
       'generation-completions',
       'media-preview-repair',
       'mobile-push-receipts',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:10:00.000Z')).map((job) => job.name)).toEqual([
+      'backend-alert-delivery',
       'generation-completions',
       'mobile-push-receipts',
     ]);

@@ -53,6 +53,21 @@ describe('backend environment contract', () => {
     expect(health.configuredRequirementCount).toBe(health.totalRequirementCount - 1);
   });
 
+  it('does not require an external alert delivery destination when protected ops dashboarding exists', () => {
+    const health = collectBackendEnvironmentHealth({
+      ...COMPLETE_ENVIRONMENT,
+      BACKEND_ALERT_DELIVERY_URL: undefined,
+      BACKEND_ALERT_DELIVERY_AUTH_HEADER: undefined,
+    });
+
+    expect(health).toEqual({
+      status: 'ok',
+      configuredRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
+      totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
+      missing: [],
+    });
+  });
+
   it('documents every production-only secret in the environment template', () => {
     const template = fs.readFileSync(path.resolve(process.cwd(), '.env.example'), 'utf8');
     const gitignore = fs.readFileSync(path.resolve(process.cwd(), '.gitignore'), 'utf8');
@@ -60,6 +75,8 @@ describe('backend environment contract', () => {
     expect(template).toContain('CRON_SECRET=');
     expect(template).toContain('KIE_WEBHOOK_HMAC_KEY=');
     expect(template).toContain('REVENUECAT_WEBHOOK_AUTH_TOKEN=');
+    expect(template).toContain('BACKEND_ALERT_DELIVERY_URL=');
+    expect(template).toContain('BACKEND_ALERT_DELIVERY_AUTH_HEADER=');
     expect(gitignore).toContain('!.env.example');
   });
 

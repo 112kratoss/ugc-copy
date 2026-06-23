@@ -27,6 +27,8 @@ The protected backend health endpoint reports only missing capability names, nev
 - Razorpay: `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`.
 - RevenueCat: `REVENUECAT_SECRET_API_KEY` or `REVENUECAT_REST_API_KEY`, plus `REVENUECAT_WEBHOOK_AUTH_TOKEN`.
 
+Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus optional `BACKEND_ALERT_DELIVERY_AUTH_HEADER`. The protected backend dashboard is the no-extra-vendor monitoring baseline, so the external alert hook is not a required production capability.
+
 Keep secrets scoped to Production unless a separate preview environment has isolated provider credentials and an isolated database. Never connect untrusted preview branches to production service-role credentials.
 
 ## Pre-Deployment Gate
@@ -106,6 +108,10 @@ curl -sS \
 
 curl -sS \
   -H "Authorization: Bearer $CRON_SECRET" \
+  https://magicbooklet.com/api/ops/backend-dashboard
+
+curl -sS \
+  -H "Authorization: Bearer $CRON_SECRET" \
   https://magicbooklet.com/api/ops/backend-alerts
 ```
 
@@ -113,7 +119,7 @@ Expect a configured environment, a current build id, no stale scheduler, no sett
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `generation-completions`, `media-preview-repair`, and `mobile-push-receipts`.
+Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `generation-completions`, `media-preview-repair`, and `mobile-push-receipts`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 
@@ -178,23 +184,28 @@ Production migrations are forward-only. Do not run destructive down migrations d
 | Missing environment capability | Any item in backend health `environment.missing` | Treat as a release blocker for the affected capability and restore the production variable. |
 | Spend anomaly | Daily provider spend or failed paid cost exceeds its configured budget | Disable new paid work for the affected provider, preserve reconciliation, and investigate pricing or abuse. |
 
-The protected `/api/ops/backend-health`, `/api/ops/backend-costs`, and `/api/ops/backend-alerts` endpoints are the canonical operational views. Connect alert delivery to a monitored destination before broad public launch; until then, check them after each release and on every incident.
+The protected `/api/ops/backend-dashboard`, `/api/ops/backend-health`, `/api/ops/backend-costs`, and `/api/ops/backend-alerts` endpoints are the canonical operational views. Check the dashboard after each release and on every incident. Configure external alert delivery when you want push notifications to a monitored incident channel.
 
 ## Production Alert Delivery Wiring
 
-Wire a monitored destination such as Better Stack, PagerDuty, Slack workflow, or another incident channel to call `/api/ops/backend-alerts` with `Authorization: Bearer $CRON_SECRET` after production deployment. Treat non-`2xx` responses as alertable; `503` means the backend is degraded and the response body still contains the normalized alert payload.
+The internal `/api/ops/backend-dashboard` endpoint is the cost-conscious production dashboarding baseline. It aggregates health, costs, and alerts behind the same `Authorization: Bearer $CRON_SECRET` guard and must remain private with `Cache-Control: private, no-store`.
+
+Optionally wire a monitored destination such as Better Stack, PagerDuty, Slack workflow, or another incident channel through `BACKEND_ALERT_DELIVERY_URL`. The `backend-alert-delivery` logical job runs under the existing `/api/cron/backend-jobs` scheduler, so this does not add another Vercel cron invocation. It posts only warning/degraded summaries by default; set `BACKEND_ALERT_DELIVERY_NOTIFY_OK=true` only when the destination needs explicit recovery events. Use `BACKEND_ALERT_DELIVERY_AUTH_HEADER` when the destination requires an authorization header.
+
+As a secondary check, a monitor may also call `/api/ops/backend-dashboard` or `/api/ops/backend-alerts` with `Authorization: Bearer $CRON_SECRET` after production deployment. Treat non-`2xx` responses as alertable; `503` means the backend is degraded and the response body still contains the normalized dashboard or alert payload.
 
 The endpoint must remain private: expect `Cache-Control: private, no-store`, an `x-request-id`, and no shared-cache hit. Do not expose `CRON_SECRET` to browser clients, mobile clients, or public monitor pages.
 
-External alert delivery should route on the stable `delivery` object:
+External alert delivery should route on the stable outbound payload:
 
-- `delivery.severity`: page on `degraded`, notify on `warning`, resolve on `ok`.
+- `event`: `backend_alerts`.
+- `delivery.severity`: page on `degraded`, notify on `warning`, resolve on explicit `ok` notifications only if enabled.
 - `delivery.dedupeKey`: group repeated events without hiding a changed root cause.
 - `delivery.summary`: use as the human-readable incident body.
 - `delivery.runbookPath`: link responders back to this runbook.
 - `delivery.monitorEndpoints`: include the protected follow-up endpoints to inspect.
 
-Use `/api/ops/backend-health` and `/api/ops/backend-costs` as dashboard panels. Use `/api/ops/backend-alerts` as the paging source because it combines health, cost, spend, provider, scheduler, media, and settlement signals into one normalized contract.
+Use `/api/ops/backend-dashboard` as the primary dashboard feed. Use `/api/ops/backend-health` and `/api/ops/backend-costs` as drill-down panels. Use `/api/ops/backend-alerts` as the paging source because it combines health, cost, spend, provider, scheduler, media, and settlement signals into one normalized contract.
 
 ## Routine Review
 

@@ -3,6 +3,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
 import { getApiRequestId } from '@/lib/api-cache';
+import {
+  deliverBackendAlerts,
+  getBackendAlertDeliveryNotConfiguredSummary,
+  hasConfiguredBackendAlertDelivery,
+} from '@/lib/backend-alert-delivery';
 import { withBackendJobLock } from '@/lib/backend-job-lock';
 import {
   finishBackendJobRun,
@@ -304,6 +309,29 @@ export function runGenerationCompletionsBackendJob(options: {
         pruned,
       };
     },
+  });
+}
+
+export function runBackendAlertDeliveryJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['backend-alert-delivery'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'backend_alert_delivery_started',
+      skippedNoWork: 'backend_alert_delivery_skipped_not_configured',
+      skippedLocked: 'backend_alert_delivery_skipped',
+      completed: 'backend_alert_delivery_completed',
+      failed: 'backend_alert_delivery_failed',
+    },
+    hasWork: async () => hasConfiguredBackendAlertDelivery(),
+    onNoWork: async () => getBackendAlertDeliveryNotConfiguredSummary(),
+    run: (client, context) => deliverBackendAlerts(client, { now: new Date(context.startedAtMs) }),
   });
 }
 

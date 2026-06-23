@@ -10,7 +10,7 @@ Make the shared backend for web and mobile production-ready, cost-efficient, per
 
 **Total completion: 98.2%**
 
-- Completed milestones: **215**
+- Completed milestones: **217**
 - Open completion gates: **4**
 - Active workstreams: **0**
 
@@ -245,6 +245,8 @@ Use this convention:
 - [x] ~~Finish the high-traffic route thinning pass by enforcing a tested 12-line API route entrypoint ceiling after moving business logic into domain services and adapters.~~
 - [x] ~~Decide that cron-polled backend jobs should stay on the consolidated Vercel cron orchestrator until documented latency, duration, backlog, parallelism, or cost thresholds justify a durable queue or workflow service.~~
 - [x] ~~Add a normalized backend alert delivery payload and tested production wiring instructions for monitoring `/api/ops/backend-health`, `/api/ops/backend-costs`, and `/api/ops/backend-alerts` after deployment.~~
+- [x] ~~Add a cost-conscious outbound backend alert delivery job under the consolidated Vercel cron scheduler with optional production environment visibility, provider-timeout telemetry, and no extra Vercel cron invocation.~~
+- [x] ~~Add a protected backend ops dashboard feed that aggregates health, cost, and alert signals for no-extra-vendor production dashboarding.~~
 - [x] ~~Configure the RevenueCat production webhook authorization header and matching Vercel Production `REVENUECAT_WEBHOOK_AUTH_TOKEN` secret without exposing the generated token.~~
 - [x] ~~Redact tracked local Supabase service-role examples from agent workflow docs and add a regression test against shipping live-looking local secrets.~~
 - [x] ~~Deploy and verify the Vercel Pro production cutover with the `bom1` deployment, public catalog cache headers, private no-store protected routes, and the consolidated backend cron firing on production.~~
@@ -259,7 +261,7 @@ Use this convention:
 ## Remaining Before We Can Call This Ideal
 
 - [x] ~~Finish thinning high-traffic API routes by moving remaining business logic into domain service modules with small route handlers.~~
-- [ ] Wire the protected backend health, cost report, and alert endpoints into production dashboarding or alert delivery after deployment.
+- [ ] Deploy and production-smoke the protected backend dashboard that aggregates health, cost report, and alert endpoints.
 - [ ] Enable leaked-password protection in the Supabase Auth dashboard and verify the advisor warning clears.
 - [ ] Switch Supabase Auth database connections from a fixed count to percentage-based allocation before scaling database compute.
 - [ ] Trigger and verify a signed RevenueCat dashboard/provider test webhook reaches `/api/mobile/commerce/revenuecat-webhook`.
@@ -573,10 +575,13 @@ Use this convention:
 | 2026-06-23 | Verified the consolidated production cron fired on the new deployment. | completed in production | Vercel expanded logs for the immutable deployment showed the 13:20 IST `GET /api/cron/backend-jobs` production cron tick starting `generation-completions` and `mobile-push-receipts`, then skipping cleanly when no due generation jobs or pending push receipts existed; tracker reached 215 completed milestones / 97.7% |
 | 2026-06-23 | Hardened homepage prerendering against public showcase feed outages so CI placeholder Supabase URLs no longer fail the production build. | completed in git | Commit `93a9b91` (`Keep homepage build resilient to feed outages`) added a homepage fallback plus a red/green regression test; local verification passed `npm test` with 370 web files / 1777 tests, `npx tsc --noEmit --pretty false`, `npm run lint` with 0 errors and 25 existing warnings, placeholder-env `npm run build`, `cd ugc-mobile && npm test` with 52 files / 379 tests, and `cd ugc-mobile && npm run typecheck` |
 | 2026-06-23 | Verified the finalized pushed state from a clean checkout. | completed from clean checkout | Fresh clone `/tmp/ugc-clean-checkout-3xZcLo/repo` at commit `93a9b91` passed web `npm ci`, `npm test` with 370 files / 1777 tests, `npx tsc --noEmit --pretty false`, placeholder-env `npm run build`, and `npm run lint` with 0 errors and 25 existing warnings; mobile `npm ci` succeeded on retry after a transient `ECONNRESET`, then `npm test` passed 52 files / 379 tests and `npm run typecheck` passed; tracker reached 215 completed milestones, 4 open gates, and 98.2% |
+| 2026-06-23 | Added outbound backend alert delivery support without adding another Vercel cron invocation. | completed locally; external destination optional | Added `backend-alert-delivery` to the consolidated job registry, protected cron trigger route, backend health metadata, optional `.env.example` documentation, and runbook guidance; delivery posts warning/degraded payloads to `BACKEND_ALERT_DELIVERY_URL`, skips cleanly when unconfigured, uses the named provider timeout boundary, and does not make production health depend on an extra monitoring vendor; red tests verified the missing delivery module and missing job registry entry, then focused backend ops tests passed with 12 files / 61 tests, full `npm test` passed with 371 files / 1781 tests, `npx tsc --noEmit --pretty false` passed, `npm run lint` exited 0 with the existing 25 warnings, `npm run build` passed and listed `/api/cron/backend-alert-delivery`, and `git diff --check` passed; tracker reached 216 completed milestones, 4 open gates, and 98.2% |
+| 2026-06-23 | Added a protected backend ops dashboard feed and made external alert delivery optional. | completed locally; production deploy pending | Added `/api/ops/backend-dashboard`, `src/lib/backend-ops-dashboard.ts`, dashboard route/service tests, optional alert-delivery environment semantics, and runbook guidance that uses the protected dashboard as the no-extra-vendor monitoring baseline; red tests verified the missing dashboard module, missing dashboard route, and previously required `BACKEND_ALERT_DELIVERY_URL`; focused backend ops tests passed with 17 files / 81 tests, full `npm test` passed with 373 files / 1788 tests, `npx tsc --noEmit --pretty false` passed, `npm run lint` exited 0 with the existing 25 warnings, `npm run build` passed and listed `/api/ops/backend-dashboard`, and `git diff --check` passed; tracker reached 217 completed milestones, 4 open gates, and 98.2% |
 
 ## Next Working Order
 
-1. Trigger a signed RevenueCat dashboard/provider test webhook and verify it reaches `/api/mobile/commerce/revenuecat-webhook`.
-2. Configure a production alert delivery destination against `/api/ops/backend-alerts` and verify it receives the normalized `delivery` payload.
-3. Enable leaked-password protection in Supabase Auth and verify the advisor warning clears.
-4. Switch Supabase Auth database connections to percentage-based allocation and verify the advisor warning clears.
+1. Commit, push, deploy, and production-smoke `/api/ops/backend-dashboard` with `Authorization: Bearer $CRON_SECRET`.
+2. Trigger a signed RevenueCat dashboard/provider test webhook and verify it reaches `/api/mobile/commerce/revenuecat-webhook`.
+3. Optionally configure `BACKEND_ALERT_DELIVERY_URL` for push notifications after the protected dashboard is live.
+4. Enable leaked-password protection in Supabase Auth and verify the advisor warning clears.
+5. Switch Supabase Auth database connections to percentage-based allocation and verify the advisor warning clears.

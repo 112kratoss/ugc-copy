@@ -1,4 +1,5 @@
 export type BackendJobName =
+  | 'backend-alert-delivery'
   | 'generation-completions'
   | 'media-preview-repair'
   | 'mobile-push-receipts';
@@ -159,6 +160,15 @@ export const BACKEND_JOB_SCHEDULER = {
 } as const satisfies BackendJobSchedulerDefinition;
 
 export const BACKEND_JOB_REGISTRY = [
+  defineBackendJob({
+    name: 'backend-alert-delivery',
+    route: '/api/cron/backend-alert-delivery',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'alert_delivery_not_configured',
+    maxMissedRunsBeforeDegraded: 4,
+  }),
   defineBackendJob({
     name: 'generation-completions',
     route: '/api/cron/generation-completions',

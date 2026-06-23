@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
+  runBackendAlertDeliveryJob: vi.fn(),
   runGenerationCompletionsBackendJob: vi.fn(),
   runMediaPreviewRepairBackendJob: vi.fn(),
   runMobilePushReceiptsBackendJob: vi.fn(),
@@ -27,6 +28,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
 
   return {
     ...actual,
+    runBackendAlertDeliveryJob: (...args: unknown[]) => (
+      mocks.runBackendAlertDeliveryJob(...args)
+    ),
     runGenerationCompletionsBackendJob: (...args: unknown[]) => (
       mocks.runGenerationCompletionsBackendJob(...args)
     ),
@@ -47,6 +51,16 @@ describe('/api/cron/backend-jobs route', () => {
     vi.stubEnv('CRON_SECRET', 'secret-123');
     mocks.createServiceClient.mockReset();
     mocks.createServiceClient.mockReturnValue({ service: 'supabase' });
+    mocks.runBackendAlertDeliveryJob.mockReset();
+    mocks.runBackendAlertDeliveryJob.mockResolvedValue({
+      success: true,
+      job: 'backend-alert-delivery',
+      route: '/api/cron/backend-alert-delivery',
+      status: 'skipped',
+      skipped: true,
+      reason: 'alert_delivery_not_configured',
+      summary: { configured: false },
+    });
     mocks.runGenerationCompletionsBackendJob.mockReset();
     mocks.runGenerationCompletionsBackendJob.mockResolvedValue({
       success: true,
@@ -88,6 +102,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('cron-reject-1');
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
+    expect(mocks.runBackendAlertDeliveryJob).not.toHaveBeenCalled();
     expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
@@ -111,6 +126,10 @@ describe('/api/cron/backend-jobs route', () => {
       serviceClient: { service: 'supabase' },
       triggerRoute: '/api/cron/backend-jobs',
     };
+    expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledWith({
+      ...expectedOptions,
+      requestId: 'iad1::scheduler-1:backend-alert-delivery',
+    });
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledWith({
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:generation-completions',
@@ -126,11 +145,19 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
+      dueJobs: ['backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
     });
   });
 
   it('starts due logical jobs concurrently so one slow job does not block the scheduler tick', async () => {
+    const alertResult = {
+      success: true as const,
+      job: 'backend-alert-delivery',
+      route: '/api/cron/backend-alert-delivery',
+      status: 'skipped' as const,
+      skipped: true as const,
+      reason: 'alert_delivery_not_configured',
+    };
     const generationResult = {
       success: true as const,
       job: 'generation-completions',
@@ -153,9 +180,11 @@ describe('/api/cron/backend-jobs route', () => {
       status: 'succeeded' as const,
       summary: { updatedCount: 1 },
     };
+    const alerts = deferredResult<typeof alertResult>();
     const generation = deferredResult<typeof generationResult>();
     const repair = deferredResult<typeof repairResult>();
     const receipts = deferredResult<typeof receiptsResult>();
+    mocks.runBackendAlertDeliveryJob.mockReturnValueOnce(alerts.promise);
     mocks.runGenerationCompletionsBackendJob.mockReturnValueOnce(generation.promise);
     mocks.runMediaPreviewRepairBackendJob.mockReturnValueOnce(repair.promise);
     mocks.runMobilePushReceiptsBackendJob.mockReturnValueOnce(receipts.promise);
@@ -170,10 +199,12 @@ describe('/api/cron/backend-jobs route', () => {
 
     await Promise.resolve();
 
+    expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
 
+    alerts.resolve(alertResult);
     generation.resolve(generationResult);
     repair.resolve(repairResult);
     receipts.resolve(receiptsResult);
@@ -184,6 +215,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       results: [
+        expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
         expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
         expect.objectContaining({ job: 'media-preview-repair', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
@@ -200,11 +232,12 @@ describe('/api/cron/backend-jobs route', () => {
     }));
 
     expect(response.status).toBe(200);
+    expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['generation-completions', 'mobile-push-receipts'],
+      dueJobs: ['backend-alert-delivery', 'generation-completions', 'mobile-push-receipts'],
     });
   });
 
@@ -223,12 +256,14 @@ describe('/api/cron/backend-jobs route', () => {
     }));
 
     expect(response.status).toBe(500);
+    expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       results: [
+        expect.objectContaining({ status: 'skipped' }),
         expect.objectContaining({ status: 'failed' }),
         expect.objectContaining({ status: 'succeeded' }),
         expect.objectContaining({ status: 'succeeded' }),

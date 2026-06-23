@@ -32,6 +32,7 @@ function succeededResult(job: BackendJobDefinition['name']): BackendJobExecution
 describe('runBackendJobsSchedulerForRoute', () => {
   const serviceClient = { service: 'supabase' };
   const createServiceClient = vi.fn();
+  const runBackendAlertDeliveryJob = vi.fn();
   const runGenerationCompletionsBackendJob = vi.fn();
   const runMediaPreviewRepairBackendJob = vi.fn();
   const runMobilePushReceiptsBackendJob = vi.fn();
@@ -39,6 +40,8 @@ describe('runBackendJobsSchedulerForRoute', () => {
   beforeEach(() => {
     createServiceClient.mockReset();
     createServiceClient.mockReturnValue(serviceClient);
+    runBackendAlertDeliveryJob.mockReset();
+    runBackendAlertDeliveryJob.mockResolvedValue(succeededResult('backend-alert-delivery'));
     runGenerationCompletionsBackendJob.mockReset();
     runGenerationCompletionsBackendJob.mockResolvedValue(succeededResult('generation-completions'));
     runMediaPreviewRepairBackendJob.mockReset();
@@ -58,10 +61,12 @@ describe('runBackendJobsSchedulerForRoute', () => {
         now: () => Date.parse('2026-06-23T10:00:00.000Z'),
         createServiceClient,
         getDueBackendJobs: () => [
+          backendJob('backend-alert-delivery'),
           backendJob('generation-completions'),
           backendJob('media-preview-repair'),
           backendJob('mobile-push-receipts'),
         ],
+        runBackendAlertDeliveryJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
@@ -73,8 +78,9 @@ describe('runBackendJobsSchedulerForRoute', () => {
       body: {
         success: true,
         scheduler: '/api/cron/backend-jobs',
-        dueJobs: ['generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
+        dueJobs: ['backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
         results: [
+          expect.objectContaining({ job: 'backend-alert-delivery', status: 'succeeded' }),
           expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
           expect.objectContaining({ job: 'media-preview-repair', status: 'succeeded' }),
           expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
@@ -82,6 +88,12 @@ describe('runBackendJobsSchedulerForRoute', () => {
       },
     });
     expect(createServiceClient).toHaveBeenCalledTimes(1);
+    expect(runBackendAlertDeliveryJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-42:backend-alert-delivery',
+      startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
     expect(runGenerationCompletionsBackendJob).toHaveBeenCalledWith({
       requestId: 'bom1::scheduler-42:generation-completions',
       startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
@@ -109,6 +121,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
         now: () => Date.parse('2026-06-23T10:05:00.000Z'),
         createServiceClient,
         getDueBackendJobs: () => [],
+        runBackendAlertDeliveryJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
@@ -125,6 +138,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
       },
     });
     expect(createServiceClient).not.toHaveBeenCalled();
+    expect(runBackendAlertDeliveryJob).not.toHaveBeenCalled();
     expect(runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
@@ -147,9 +161,11 @@ describe('runBackendJobsSchedulerForRoute', () => {
         now: () => Date.parse('2026-06-23T10:00:00.000Z'),
         createServiceClient,
         getDueBackendJobs: () => [
+          backendJob('backend-alert-delivery'),
           backendJob('generation-completions'),
           backendJob('media-preview-repair'),
         ],
+        runBackendAlertDeliveryJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
@@ -159,8 +175,9 @@ describe('runBackendJobsSchedulerForRoute', () => {
     expect(result.status).toBe(500);
     expect(result.body).toMatchObject({
       success: false,
-      dueJobs: ['generation-completions', 'media-preview-repair'],
+      dueJobs: ['backend-alert-delivery', 'generation-completions', 'media-preview-repair'],
       results: [
+        expect.objectContaining({ job: 'backend-alert-delivery', status: 'succeeded' }),
         expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
         expect.objectContaining({ job: 'media-preview-repair', status: 'failed' }),
       ],
