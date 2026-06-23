@@ -8,10 +8,10 @@ Make the shared backend for web and mobile production-ready, cost-efficient, per
 
 ## Overall Progress
 
-**Total completion: 97.7%**
+**Total completion: 98.2%**
 
 - Completed milestones: **215**
-- Open completion gates: **5**
+- Open completion gates: **4**
 - Active workstreams: **0**
 
 The percentage is `completed milestones / (completed milestones + open completion gates)`. Active workstreams are status-only and are excluded because they duplicate open completion gates. Update this block whenever a checklist item is added or completed; `src/__tests__/backend-idealization-progress.test.ts` verifies that the displayed counts and percentage match the checklist.
@@ -266,7 +266,7 @@ Use this convention:
 - [x] ~~Deploy and verify Vercel Pro settings: a single `bom1` Fluid deployment, consolidated cron, function max durations, required production environment variables, and private no-store API responses.~~
 - [x] ~~Ensure one deployment owner per release; verify the next `main` push does not create a duplicate manual/Codex production deployment.~~
 - [x] ~~Decide whether any cron-polled jobs should graduate to a more durable queue/workflow pattern once volume justifies it.~~
-- [ ] Run full web and mobile test suites from a clean checkout after all backend hardening changes are finalized.
+- [x] ~~Run full web and mobile test suites from a clean checkout after all backend hardening changes are finalized.~~
 - [x] ~~Commit, push, and verify the deployed production environment.~~
 
 ## Change History
@@ -571,10 +571,12 @@ Use this convention:
 | 2026-06-23 | Verified the Vercel production cutover for the pushed backend release. | completed in production | Deployment `dpl_6TBtthqXcALq4Q3uEugraHwAcs9M` for `https://ugc-f68mlzmz6-athuls-projects-2ab559ed.vercel.app` reached `READY`, was aliased to `magicbooklet.com`, `www.magicbooklet.com`, and the main-branch aliases, listed functions in `bom1`, and appeared as the single latest Production deployment from the Git push; `npx --yes vercel@latest env ls production` showed the required Supabase, KIE, Razorpay, cron, and RevenueCat variables present, including `REVENUECAT_WEBHOOK_AUTH_TOKEN` |
 | 2026-06-23 | Production-smoked the deployed backend boundary. | completed in production | `GET /api/generation-models?platform=web&schemaVersion=1` returned `200`, `cache-control: public, max-age=300`, deterministic `etag`, `x-vercel-id` from `bom1`, schema version `1`, defaults for image/video/motion, and 12 active models; unauthenticated `GET /api/ops/backend-health`, `/api/ops/backend-costs`, `/api/ops/backend-alerts`, and `/api/cron/backend-jobs` returned `401` with `cache-control: private, no-store`; unauthenticated `POST /api/mobile/commerce/revenuecat-webhook` returned `401` instead of an unconfigured response, proving the deployed function loaded the webhook authorization boundary |
 | 2026-06-23 | Verified the consolidated production cron fired on the new deployment. | completed in production | Vercel expanded logs for the immutable deployment showed the 13:20 IST `GET /api/cron/backend-jobs` production cron tick starting `generation-completions` and `mobile-push-receipts`, then skipping cleanly when no due generation jobs or pending push receipts existed; tracker reached 215 completed milestones / 97.7% |
+| 2026-06-23 | Hardened homepage prerendering against public showcase feed outages so CI placeholder Supabase URLs no longer fail the production build. | completed in git | Commit `93a9b91` (`Keep homepage build resilient to feed outages`) added a homepage fallback plus a red/green regression test; local verification passed `npm test` with 370 web files / 1777 tests, `npx tsc --noEmit --pretty false`, `npm run lint` with 0 errors and 25 existing warnings, placeholder-env `npm run build`, `cd ugc-mobile && npm test` with 52 files / 379 tests, and `cd ugc-mobile && npm run typecheck` |
+| 2026-06-23 | Verified the finalized pushed state from a clean checkout. | completed from clean checkout | Fresh clone `/tmp/ugc-clean-checkout-3xZcLo/repo` at commit `93a9b91` passed web `npm ci`, `npm test` with 370 files / 1777 tests, `npx tsc --noEmit --pretty false`, placeholder-env `npm run build`, and `npm run lint` with 0 errors and 25 existing warnings; mobile `npm ci` succeeded on retry after a transient `ECONNRESET`, then `npm test` passed 52 files / 379 tests and `npm run typecheck` passed; tracker reached 215 completed milestones, 4 open gates, and 98.2% |
 
 ## Next Working Order
 
 1. Trigger a signed RevenueCat dashboard/provider test webhook and verify it reaches `/api/mobile/commerce/revenuecat-webhook`.
 2. Configure a production alert delivery destination against `/api/ops/backend-alerts` and verify it receives the normalized `delivery` payload.
-3. Enable the remaining Supabase Auth dashboard hardening settings and verify advisors clear.
-4. Run the clean-checkout web and mobile verification sweep for the finalized pushed state.
+3. Enable leaked-password protection in Supabase Auth and verify the advisor warning clears.
+4. Switch Supabase Auth database connections to percentage-based allocation and verify the advisor warning clears.
