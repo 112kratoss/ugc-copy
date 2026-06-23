@@ -22,6 +22,7 @@ The protected backend health endpoint reports only missing capability names, nev
 - Supabase privileged key: `SUPABASE_SERVICE_ROLE_KEY`.
 - Canonical origin: `NEXT_PUBLIC_SITE_URL`.
 - Scheduler authentication: `CRON_SECRET`.
+- Protected ops dashboard authentication: `OPS_READ_SECRET`.
 - Generation provider: `KIE_AI_API_KEY`.
 - Generation webhook authentication: `KIE_WEBHOOK_HMAC_KEY` or legacy `WEBHOOK_SECRET`.
 - Razorpay: `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`.
@@ -72,7 +73,7 @@ npx --yes vercel@latest env ls production --format=json
 
 ## Post-Deployment Smoke Tests
 
-Store `CRON_SECRET` in a temporary shell environment without printing it. Do not place the value in documentation or command history.
+Store `OPS_READ_SECRET` and `CRON_SECRET` in temporary shell environments without printing them. Use `OPS_READ_SECRET` for read-only ops dashboard smoke tests and `CRON_SECRET` only for scheduler/cron tests. Do not place either value in documentation or command history.
 
 ### Build And Region
 
@@ -103,15 +104,15 @@ Expect `401`, `Cache-Control: private, no-store`, and no shared-cache hit. Repea
 
 ```bash
 curl -sS \
-  -H "Authorization: Bearer $CRON_SECRET" \
+  -H "Authorization: Bearer $OPS_READ_SECRET" \
   https://magicbooklet.com/api/ops/backend-health
 
 curl -sS \
-  -H "Authorization: Bearer $CRON_SECRET" \
+  -H "Authorization: Bearer $OPS_READ_SECRET" \
   https://magicbooklet.com/api/ops/backend-dashboard
 
 curl -sS \
-  -H "Authorization: Bearer $CRON_SECRET" \
+  -H "Authorization: Bearer $OPS_READ_SECRET" \
   https://magicbooklet.com/api/ops/backend-alerts
 ```
 
@@ -188,13 +189,13 @@ The protected `/api/ops/backend-dashboard`, `/api/ops/backend-health`, `/api/ops
 
 ## Production Alert Delivery Wiring
 
-The internal `/api/ops/backend-dashboard` endpoint is the cost-conscious production dashboarding baseline. It aggregates health, costs, and alerts behind the same `Authorization: Bearer $CRON_SECRET` guard and must remain private with `Cache-Control: private, no-store`.
+The internal `/api/ops/backend-dashboard` endpoint is the cost-conscious production dashboarding baseline. It aggregates health, costs, and alerts behind the `Authorization: Bearer $OPS_READ_SECRET` guard and must remain private with `Cache-Control: private, no-store`. The ops endpoints continue to accept `CRON_SECRET` for compatibility, but monitors should use `OPS_READ_SECRET` so read-only checks do not share scheduler credentials.
 
 Optionally wire a monitored destination such as Better Stack, PagerDuty, Slack workflow, or another incident channel through `BACKEND_ALERT_DELIVERY_URL`. The `backend-alert-delivery` logical job runs under the existing `/api/cron/backend-jobs` scheduler, so this does not add another Vercel cron invocation. It posts only warning/degraded summaries by default; set `BACKEND_ALERT_DELIVERY_NOTIFY_OK=true` only when the destination needs explicit recovery events. Use `BACKEND_ALERT_DELIVERY_AUTH_HEADER` when the destination requires an authorization header.
 
-As a secondary check, a monitor may also call `/api/ops/backend-dashboard` or `/api/ops/backend-alerts` with `Authorization: Bearer $CRON_SECRET` after production deployment. Treat non-`2xx` responses as alertable; `503` means the backend is degraded and the response body still contains the normalized dashboard or alert payload.
+As a secondary check, a monitor may also call `/api/ops/backend-dashboard` or `/api/ops/backend-alerts` with `Authorization: Bearer $OPS_READ_SECRET` after production deployment. Treat non-`2xx` responses as alertable; `503` means the backend is degraded and the response body still contains the normalized dashboard or alert payload.
 
-The endpoint must remain private: expect `Cache-Control: private, no-store`, an `x-request-id`, and no shared-cache hit. Do not expose `CRON_SECRET` to browser clients, mobile clients, or public monitor pages.
+The endpoint must remain private: expect `Cache-Control: private, no-store`, an `x-request-id`, and no shared-cache hit. Do not expose `OPS_READ_SECRET` or `CRON_SECRET` to browser clients, mobile clients, or public monitor pages.
 
 External alert delivery should route on the stable outbound payload:
 

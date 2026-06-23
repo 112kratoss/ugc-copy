@@ -14,6 +14,7 @@ const COMPLETE_ENVIRONMENT = {
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
   NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.com',
   CRON_SECRET: 'cron-secret',
+  OPS_READ_SECRET: 'ops-read-secret',
   KIE_AI_API_KEY: 'kie-key',
   KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
   NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp-key',
@@ -73,6 +74,7 @@ describe('backend environment contract', () => {
     const gitignore = fs.readFileSync(path.resolve(process.cwd(), '.gitignore'), 'utf8');
 
     expect(template).toContain('CRON_SECRET=');
+    expect(template).toContain('OPS_READ_SECRET=');
     expect(template).toContain('KIE_WEBHOOK_HMAC_KEY=');
     expect(template).toContain('REVENUECAT_WEBHOOK_AUTH_TOKEN=');
     expect(template).toContain('BACKEND_ALERT_DELIVERY_URL=');

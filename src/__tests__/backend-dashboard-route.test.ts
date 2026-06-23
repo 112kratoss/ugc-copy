@@ -36,6 +36,7 @@ describe('/api/ops/backend-dashboard route', () => {
       },
     });
     process.env.CRON_SECRET = 'secret-123';
+    process.env.OPS_READ_SECRET = 'ops-secret-123';
   });
 
   it('rejects unauthorized dashboard requests before touching Supabase', async () => {
@@ -54,7 +55,7 @@ describe('/api/ops/backend-dashboard route', () => {
   it('returns a no-store dashboard for authorized ops checks', async () => {
     const { GET } = await import('@/app/api/ops/backend-dashboard/route');
     const response = await GET(new NextRequest('http://localhost/api/ops/backend-dashboard', {
-      headers: { authorization: 'Bearer secret-123', 'x-request-id': 'dashboard-ok-1' },
+      headers: { authorization: 'Bearer ops-secret-123', 'x-request-id': 'dashboard-ok-1' },
     }));
     const body = await response.json();
 

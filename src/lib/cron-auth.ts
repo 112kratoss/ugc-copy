@@ -17,14 +17,32 @@ function timingSafeStringEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export function isAuthorizedCronRequest(request: Request) {
-  const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) {
+function configuredSecret(environment: NodeJS.ProcessEnv, key: string): string | null {
+  const secret = environment[key]?.trim();
+  return secret ? secret : null;
+}
+
+function isAuthorizedBearerRequest(
+  request: Request,
+  secretKeys: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const secrets = secretKeys
+    .map((key) => configuredSecret(environment, key))
+    .filter((secret): secret is string => Boolean(secret));
+
+  if (secrets.length === 0) {
     return false;
   }
 
-  return timingSafeStringEqual(
-    request.headers.get('authorization') ?? '',
-    `Bearer ${secret}`,
-  );
+  const authorization = request.headers.get('authorization') ?? '';
+  return secrets.some((secret) => timingSafeStringEqual(authorization, `Bearer ${secret}`));
+}
+
+export function isAuthorizedCronRequest(request: Request) {
+  return isAuthorizedBearerRequest(request, ['CRON_SECRET']);
+}
+
+export function isAuthorizedOpsRequest(request: Request) {
+  return isAuthorizedBearerRequest(request, ['OPS_READ_SECRET', 'CRON_SECRET']);
 }

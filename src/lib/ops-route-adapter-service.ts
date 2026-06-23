@@ -3,7 +3,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { API_CACHE_CONTROL, createApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
-import { isAuthorizedCronRequest } from '@/lib/cron-auth';
+import { isAuthorizedOpsRequest } from '@/lib/cron-auth';
 import { createServiceClient } from '@/lib/server-helpers';
 
 type OperationalStatus = {
@@ -12,7 +12,7 @@ type OperationalStatus = {
 
 type OpsRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
-  isAuthorizedOpsRequest?: typeof isAuthorizedCronRequest;
+  isAuthorizedOpsRequest?: typeof isAuthorizedOpsRequest;
   logError?: (message: string) => void;
 };
 
@@ -36,7 +36,7 @@ function errorMessage(error: unknown): string {
 function resolveDependencies(dependencies: OpsRouteDependencies | undefined) {
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
-    isAuthorizedOpsRequest: dependencies?.isAuthorizedOpsRequest ?? isAuthorizedCronRequest,
+    isAuthorizedOpsRequest: dependencies?.isAuthorizedOpsRequest ?? isAuthorizedOpsRequest,
     logError: dependencies?.logError ?? console.error,
   };
 }

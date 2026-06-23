@@ -13,6 +13,7 @@ export const BACKEND_ENVIRONMENT_REQUIREMENTS = [
   { id: 'supabase-service-role', keys: ['SUPABASE_SERVICE_ROLE_KEY'] },
   { id: 'production-site-url', keys: ['NEXT_PUBLIC_SITE_URL'] },
   { id: 'cron-auth', keys: ['CRON_SECRET'] },
+  { id: 'ops-read-auth', keys: ['OPS_READ_SECRET'] },
   { id: 'generation-provider', keys: ['KIE_AI_API_KEY'] },
   { id: 'generation-webhook-auth', keys: ['KIE_WEBHOOK_HMAC_KEY', 'WEBHOOK_SECRET'] },
   { id: 'razorpay-public-key', keys: ['NEXT_PUBLIC_RAZORPAY_KEY_ID'] },
