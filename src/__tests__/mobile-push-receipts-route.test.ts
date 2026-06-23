@@ -104,9 +104,13 @@ describe('/api/cron/mobile-push-receipts route', () => {
 
   it('rejects requests without the cron secret', async () => {
     const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
-    const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts'));
+    const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {
+      headers: { 'x-request-id': 'push-receipts-reject-1' },
+    }));
 
     expect(response.status).toBe(401);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('push-receipts-reject-1');
     expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
     expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
   });
@@ -132,16 +136,20 @@ describe('/api/cron/mobile-push-receipts route', () => {
     const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {
       headers: {
         authorization: 'Bearer secret-123',
+        'x-request-id': 'push-receipts-run-1',
       },
     }));
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('push-receipts-run-1');
     expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
     expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({
         name: 'mobile-push-receipts',
         route: '/api/cron/mobile-push-receipts',
+        requestId: 'push-receipts-run-1',
       }),
     );
     expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith(
@@ -261,6 +269,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
   });
 
   it('records failed receipt processing before returning a retryable error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     mocks.processPendingMobilePushReceipts.mockRejectedValueOnce(new Error('receipt processor failed'));
 
     const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
@@ -283,14 +292,18 @@ describe('/api/cron/mobile-push-receipts route', () => {
       { service: 'supabase' },
       expect.objectContaining({ nowMs: expect.any(Number) }),
     );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('mobile_push_receipts_failed'));
   });
 
-  it('runs every 15 minutes on Vercel Pro so receipts are checked before Expo expires them', () => {
+  it('is covered by the shared Vercel Pro backend job orchestrator', () => {
     const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
 
     expect(vercel.crons).toContainEqual({
-      path: '/api/cron/mobile-push-receipts',
-      schedule: '*/15 * * * *',
+      path: '/api/cron/backend-jobs',
+      schedule: '*/10 * * * *',
     });
+    expect(vercel.crons).not.toContainEqual(expect.objectContaining({
+      path: '/api/cron/mobile-push-receipts',
+    }));
   });
 });

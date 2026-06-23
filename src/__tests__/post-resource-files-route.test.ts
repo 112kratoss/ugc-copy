@@ -26,6 +26,11 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientFactory(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/posts/resource-files route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -60,10 +65,12 @@ describe('/api/posts/resource-files route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/resource-files', {
         method: 'POST',
+        headers: { 'x-request-id': 'post-resource-file-auth-1' },
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'post-resource-file-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
   });
 
@@ -94,12 +101,14 @@ describe('/api/posts/resource-files route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/resource-files', {
         method: 'POST',
+        headers: { 'x-request-id': 'post-resource-file-rate-limit-1' },
         body: formData,
       }) as never
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('47');
+    expectPrivateNoStoreTraceHeaders(response, 'post-resource-file-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'post-resource-file:upload',

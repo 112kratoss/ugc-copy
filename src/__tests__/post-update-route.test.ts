@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 const getMarketplaceQualityErrorForPostBundleMock = vi.hoisted(() => vi.fn());
 const updatePostWithResourceBundleAtomicallyMock = vi.hoisted(() => vi.fn());
 const createServiceClientMock = vi.hoisted(() => vi.fn());
+const rateLimitRpcMock = vi.hoisted(() => vi.fn());
 const sourceToolTableCalls = vi.hoisted(() => ({
   rpcCalls: [] as Array<Record<string, unknown>>,
   rpcError: null as { message?: string } | null,
@@ -40,6 +41,12 @@ const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
   { slug: 'higgsfield', label: 'Higgsfield', models: [{ slug: 'soul', label: 'Soul' }], supportedMediaKinds: ['image', 'video'] },
 ]);
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 type LoadedPostMock = {
   id: string;
   user_id: string;
@@ -159,6 +166,10 @@ vi.mock('@/lib/server-helpers', () => ({
       throw new Error(`Unexpected table access: ${table}`);
     },
     rpc(name: string, args: Record<string, unknown>) {
+      if (name === 'check_backend_rate_limit') {
+        return rateLimitRpcMock(name, args);
+      }
+
       if (name !== 'save_post_source_tools_with_catalog' && name !== 'replace_post_media') {
         throw new Error(`Unexpected rpc call: ${name}`);
       }
@@ -206,6 +217,17 @@ describe('/api/posts/[postId] route', () => {
     getMarketplaceQualityErrorForPostBundleMock.mockReset();
     getMarketplaceQualityErrorForPostBundleMock.mockResolvedValue('Quality should not run for private draft unlocks.');
     createServiceClientMock.mockReset();
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 60,
+        remaining: 59,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     updatePostWithResourceBundleAtomicallyMock.mockReset();
     updatePostWithResourceBundleAtomicallyMock.mockImplementation(async ({ patch }) => ({
       postId: 'post-1',
@@ -243,6 +265,87 @@ describe('/api/posts/[postId] route', () => {
     ];
   });
 
+  it('returns 429 before updating an owner post when mutation capacity is exhausted', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 60,
+        remaining: 0,
+        retryAfterSeconds: 23,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { PUT } = await import('@/app/api/posts/[postId]/route');
+    const response = await PUT(new Request('http://localhost/api/posts/post-1', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+        'x-request-id': 'post-update-rate-limit',
+      },
+      body: JSON.stringify({
+        title: 'Helpful launch proof',
+        visibility: 'private',
+        resourceBundle: { accessMode: 'none' },
+      }),
+    }) as NextRequest, {
+      params: Promise.resolve({ postId: 'post-1' }),
+    });
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('23');
+    expectPrivateNoStoreTraceHeaders(response, 'post-update-rate-limit');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 23,
+    });
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'post:mutate',
+      p_subject_key: 'user-1',
+      p_limit: 60,
+      p_window_seconds: 600,
+    });
+    expect(updatePostWithResourceBundleAtomicallyMock).not.toHaveBeenCalled();
+    expect(sourceToolTableCalls.rpcCalls).toHaveLength(0);
+  });
+
+  it('returns 429 before deleting an owner post when mutation capacity is exhausted', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 60,
+        remaining: 0,
+        retryAfterSeconds: 31,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { DELETE } = await import('@/app/api/posts/[postId]/route');
+    const response = await DELETE(new Request('http://localhost/api/posts/post-1', {
+      method: 'DELETE',
+      headers: {
+        Authorization: 'Bearer token',
+        'x-request-id': 'post-delete-rate-limit',
+      },
+    }) as NextRequest, {
+      params: Promise.resolve({ postId: 'post-1' }),
+    });
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('31');
+    expectPrivateNoStoreTraceHeaders(response, 'post-delete-rate-limit');
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'post:mutate',
+      p_subject_key: 'user-1',
+      p_limit: 60,
+      p_window_seconds: 600,
+    });
+  });
+
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
     const { PUT } = await import('@/app/api/posts/[postId]/route');
     const response = await PUT(new Request('http://localhost/api/posts/post-1', {
@@ -250,6 +353,7 @@ describe('/api/posts/[postId] route', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
+        'x-request-id': 'post-update-success',
       },
       body: JSON.stringify({
         title: 'Helpful launch proof',
@@ -274,6 +378,7 @@ describe('/api/posts/[postId] route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'post-update-success');
     expect(getMarketplaceQualityErrorForPostBundleMock).not.toHaveBeenCalled();
     expect(updatePostWithResourceBundleAtomicallyMock).toHaveBeenCalledWith(expect.objectContaining({
       patch: expect.objectContaining({

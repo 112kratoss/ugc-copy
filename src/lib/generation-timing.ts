@@ -1,4 +1,4 @@
-import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
+import { isAudioModel, isImageModel, isMotionModel } from '@/lib/client-generation-models';
 
 export type GenerationKind = 'image' | 'video' | 'motion' | 'audio';
 export type GenerationAppStatus = 'processing' | 'waiting' | 'succeeded' | 'failed';

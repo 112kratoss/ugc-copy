@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn(async () => ({
@@ -16,12 +16,10 @@ const orderInsertMock = vi.fn(async () => ({ error: null }));
 const adminClient = { from: fromMock, rpc: rpcMock };
 const createServiceClientFactory = vi.fn(() => adminClient);
 const getMarketplacePriceQuoteMock = vi.fn();
-const razorpayOrdersCreateMock = vi.fn(async () => ({ id: 'order_market_123' }));
-const RazorpayMock = vi.fn(function RazorpayMock(this: { orders: { create: typeof razorpayOrdersCreateMock } }) {
-  this.orders = {
-    create: razorpayOrdersCreateMock,
-  };
-});
+const providerFetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'order_market_123' }), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' },
+}));
 
 let assetRows: Array<{
   id: string;
@@ -64,11 +62,17 @@ vi.mock('@/lib/marketplace-server', () => ({
   getMarketplacePriceQuote: (...args: unknown[]) => getMarketplacePriceQuoteMock(...args),
 }));
 
-vi.mock('razorpay', () => ({
-  default: RazorpayMock,
-}));
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
 
 describe('/api/marketplace/order route', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.resetModules();
     assetRows = [{
@@ -112,9 +116,14 @@ describe('/api/marketplace/order route', () => {
       formatted: '₹415',
       note: null,
     });
-    RazorpayMock.mockClear();
-    razorpayOrdersCreateMock.mockClear();
-    razorpayOrdersCreateMock.mockResolvedValue({ id: 'order_market_123' });
+    providerFetchMock.mockClear();
+    providerFetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 'order_market_123' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID = 'rzp_test_key';
+    process.env.RAZORPAY_KEY_SECRET = 'razorpay-secret';
+    vi.stubGlobal('fetch', providerFetchMock);
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -130,14 +139,22 @@ describe('/api/marketplace/order route', () => {
     const response = await POST(
       new Request('http://localhost/api/marketplace/order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: 'Bearer private-token',
+          'x-request-id': 'market-order-auth-1',
+        },
         body: JSON.stringify({ assetId: 'asset-1' }),
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'market-order-auth-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(getMarketplacePriceQuoteMock).not.toHaveBeenCalled();
+    expect(providerFetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects missing asset IDs before creating an admin client', async () => {
@@ -163,6 +180,7 @@ describe('/api/marketplace/order route', () => {
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(fromMock).not.toHaveBeenCalled();
     expect(getMarketplacePriceQuoteMock).not.toHaveBeenCalled();
+    expect(providerFetchMock).not.toHaveBeenCalled();
   });
 
   it('rate limits marketplace order creation before listing lookup or payment work', async () => {
@@ -189,13 +207,17 @@ describe('/api/marketplace/order route', () => {
     const response = await POST(
       new Request('http://localhost/api/marketplace/order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'market-order-rate-limit-1',
+        },
         body: JSON.stringify({ assetId: 'asset-1' }),
       }) as never
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('41');
+    expectPrivateNoStoreTraceHeaders(response, 'market-order-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'marketplace-order:create',
@@ -205,8 +227,7 @@ describe('/api/marketplace/order route', () => {
     });
     expect(fromMock).not.toHaveBeenCalled();
     expect(getMarketplacePriceQuoteMock).not.toHaveBeenCalled();
-    expect(RazorpayMock).not.toHaveBeenCalled();
-    expect(razorpayOrdersCreateMock).not.toHaveBeenCalled();
+    expect(providerFetchMock).not.toHaveBeenCalled();
     expect(orderInsertMock).not.toHaveBeenCalled();
   });
 
@@ -227,12 +248,14 @@ describe('/api/marketplace/order route', () => {
         headers: {
           'Content-Type': 'application/json',
           'x-vercel-ip-country': 'IN',
+          'x-request-id': 'market-order-success-1',
         },
         body: JSON.stringify({ assetId: 'asset-1', locale: 'en-IN' }),
       }) as never
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'market-order-success-1');
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'marketplace-order:create',
       p_subject_key: 'buyer-1',
@@ -240,15 +263,11 @@ describe('/api/marketplace/order route', () => {
       p_window_seconds: 600,
     });
     expect(getMarketplacePriceQuoteMock).toHaveBeenCalledWith(500, 'IN');
-    expect(razorpayOrdersCreateMock).toHaveBeenCalledWith({
-      amount: 41500,
-      currency: 'INR',
-      receipt: expect.stringMatching(/^mkt_buyer-1_\d+$/),
-      notes: {
-        asset_id: 'asset-1',
-        buyer_user_id: 'buyer-1',
-      },
-    });
+    expect(providerFetchMock).toHaveBeenCalledWith('https://api.razorpay.com/v1/orders', expect.objectContaining({
+      method: 'POST',
+      body: expect.stringContaining('"amount":41500'),
+      signal: expect.any(AbortSignal),
+    }));
     expect(orderInsertMock).toHaveBeenCalledWith({
       asset_id: 'asset-1',
       buyer_user_id: 'buyer-1',
@@ -257,5 +276,40 @@ describe('/api/marketplace/order route', () => {
       currency: 'INR',
       status: 'created',
     });
+  });
+
+  it('returns 504 when Razorpay order creation times out before recording a marketplace order', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    providerFetchMock.mockRejectedValueOnce(new DOMException('Timed out', 'TimeoutError'));
+
+    const { POST } = await import('@/app/api/marketplace/order/route');
+    const response = await POST(
+      new Request('http://localhost/api/marketplace/order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vercel-ip-country': 'IN',
+        },
+        body: JSON.stringify({ assetId: 'asset-1', locale: 'en-IN' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Payment provider timed out. Please try again.',
+    });
+    expect(providerFetchMock).toHaveBeenCalledOnce();
+    expect(orderInsertMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('Marketplace order creation failed:', expect.objectContaining({
+      name: 'ExternalServiceTimeoutError',
+    }));
   });
 });

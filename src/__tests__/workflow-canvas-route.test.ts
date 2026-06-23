@@ -16,6 +16,7 @@ let canvasState: CanvasRow;
 let forceConditionalUpdateRace = false;
 let shouldFallbackToLegacyUpdate = false;
 let updateCalls = 0;
+const rateLimitRpcMock = vi.fn();
 
 function createSupabaseMock() {
   return {
@@ -117,7 +118,15 @@ const authenticateRequestMock = vi.fn(async () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   authenticateRequest: () => authenticateRequestMock(),
+  createServiceClient: () => ({
+    rpc: rateLimitRpcMock,
+  }),
 }));
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
 
 describe('/api/workflow-canvases/[id] PATCH', () => {
   beforeEach(() => {
@@ -134,6 +143,17 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
     forceConditionalUpdateRace = false;
     shouldFallbackToLegacyUpdate = false;
     updateCalls = 0;
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 240,
+        remaining: 239,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
   });
 
   afterEach(() => {
@@ -145,7 +165,10 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
     const response = await PATCH(
       new Request('http://localhost/api/workflow-canvases/canvas-1', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-canvas-stale-1',
+        },
         body: JSON.stringify({
           title: 'Older draft',
           graph: canvasState.graph,
@@ -157,6 +180,7 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
 
     const data = await response.json();
     expect(response.status).toBe(409);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-canvas-stale-1');
     expect(data.canvas.revision).toBe(2);
     expect(updateCalls).toBe(0);
   });
@@ -168,7 +192,10 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
     const response = await PATCH(
       new Request('http://localhost/api/workflow-canvases/canvas-1', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-canvas-noop-1',
+        },
         body: JSON.stringify({
           title: 'Local draft',
           graph: canvasState.graph,
@@ -190,7 +217,10 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
     const response = await PATCH(
       new Request('http://localhost/api/workflow-canvases/canvas-1', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-canvas-noop-1',
+        },
         body: JSON.stringify({
           title: canvasState.title,
           graph: canvasState.graph,
@@ -203,6 +233,7 @@ describe('/api/workflow-canvases/[id] PATCH', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-canvas-noop-1');
     expect(data.canvas.revision).toBe(2);
     expect(updateCalls).toBe(0);
   });

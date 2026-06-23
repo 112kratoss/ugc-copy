@@ -17,9 +17,11 @@ type ProfileRow = {
 
 let profilesState: ProfileRow[] = [];
 const authUserId = '11111111-1111-1111-1111-111111111111';
+const rateLimitRpcMock = vi.fn();
 
 function createAdminClient() {
   return {
+    rpc: rateLimitRpcMock,
     from(table: string) {
       if (table !== 'profiles') {
         throw new Error(`Unexpected table: ${table}`);
@@ -142,6 +144,11 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/profile route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -178,6 +185,17 @@ describe('/api/profile route', () => {
     createUserClientMock.mockClear();
     createServiceClientMock.mockClear();
     createServiceClientMock.mockImplementation(() => createAdminClient());
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 120,
+        remaining: 119,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
   });
 
   afterEach(() => {
@@ -186,10 +204,13 @@ describe('/api/profile route', () => {
 
   it('returns the current profile and suggested username when missing', async () => {
     const { GET } = await import('@/app/api/profile/route');
-    const response = await GET(new Request('http://localhost/api/profile') as never);
+    const response = await GET(new Request('http://localhost/api/profile', {
+      headers: { 'x-request-id': 'profile-get-success-1' },
+    }) as never);
     const data = await response.json();
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-get-success-1');
     expect(data.username).toBeNull();
     expect(data.suggestedUsername).toBe('creator-11111111');
     expect(data.displayName).toBe('Existing Creator');
@@ -207,9 +228,12 @@ describe('/api/profile route', () => {
     });
 
     const { GET } = await import('@/app/api/profile/route');
-    const response = await GET(new Request('http://localhost/api/profile') as never);
+    const response = await GET(new Request('http://localhost/api/profile', {
+      headers: { 'x-request-id': 'profile-get-auth-1' },
+    }) as never);
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-get-auth-1');
     expect(createServiceClientMock).not.toHaveBeenCalled();
   });
 
@@ -227,12 +251,16 @@ describe('/api/profile route', () => {
     const response = await PATCH(
       new Request('http://localhost/api/profile', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-patch-auth-1',
+        },
         body: JSON.stringify({ displayName: 'Blocked' }),
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-patch-auth-1');
     expect(createServiceClientMock).not.toHaveBeenCalled();
   });
 
@@ -254,7 +282,10 @@ describe('/api/profile route', () => {
     const response = await PATCH(
       new Request('http://localhost/api/profile', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-patch-success-1',
+        },
         body: JSON.stringify({
           username: 'Creator-Name',
           displayName: 'Creator Name',
@@ -266,8 +297,59 @@ describe('/api/profile route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-patch-success-1');
     expect(data.username).toBe('creator-name');
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'profile:update',
+      p_subject_key: authUserId,
+      p_limit: 30,
+      p_window_seconds: 600,
+    });
     expect(profilesState[0].username).toBe('creator-name');
+  });
+
+  it('rate limits profile updates before validation and persistence', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 30,
+        remaining: 0,
+        retryAfterSeconds: 40,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { PATCH } = await import('@/app/api/profile/route');
+    const response = await PATCH(
+      new Request('http://localhost/api/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-patch-rate-limit-1',
+        },
+        body: JSON.stringify({
+          username: 'taken-name',
+          displayName: 'Creator Name',
+        }),
+      }) as never
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('40');
+    expectPrivateNoStoreTraceHeaders(response, 'profile-patch-rate-limit-1');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 40,
+    });
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'profile:update',
+      p_subject_key: authUserId,
+      p_limit: 30,
+      p_window_seconds: 600,
+    });
+    expect(profilesState[0].username).toBeNull();
   });
 
   it('creates the profile row on first save if it is missing', async () => {
@@ -302,7 +384,10 @@ describe('/api/profile route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-validate-success-1',
+        },
         body: JSON.stringify({
           username: 'available-name',
           displayName: 'Creator Name',
@@ -312,7 +397,14 @@ describe('/api/profile route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-validate-success-1');
     expect(data.ok).toBe(true);
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'profile:validate',
+      p_subject_key: authUserId,
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
     expect(profilesState[0].username).toBeNull();
   });
 
@@ -330,13 +422,54 @@ describe('/api/profile route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-validate-auth-1',
+        },
         body: JSON.stringify({ username: 'blocked-name' }),
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-validate-auth-1');
     expect(createServiceClientMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limits profile validation before username uniqueness checks', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 120,
+        remaining: 0,
+        retryAfterSeconds: 20,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/profile/validate/route');
+    const response = await POST(
+      new Request('http://localhost/api/profile/validate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-validate-rate-limit-1',
+        },
+        body: JSON.stringify({
+          username: 'taken-name',
+          displayName: 'Creator Name',
+        }),
+      }) as never
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('20');
+    expectPrivateNoStoreTraceHeaders(response, 'profile-validate-rate-limit-1');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 20,
+    });
   });
 
   it('returns field errors for invalid usernames', async () => {

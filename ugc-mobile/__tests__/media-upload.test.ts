@@ -98,10 +98,15 @@ describe('mobile media uploads', () => {
       signedUploadUrl: 'https://storage.example.com/upload-token',
       expiresInSeconds: 7200,
     }));
+    const createMediaReadUrl = vi.fn(async () => ({
+      success: true,
+      signedUrl: 'https://storage.example.com/uploads/user-1/signed.png',
+      expiresInSeconds: 3600,
+    }));
     const { uploadPickedMedia } = await import('../lib/media');
 
     await expect(uploadPickedMedia('file:///image.png', {
-      api: { createMediaUpload },
+      api: { createMediaUpload, createMediaReadUrl },
       fileName: '../reference image?.png',
       mimeType: 'image/png',
       kind: 'image',
@@ -119,6 +124,9 @@ describe('mobile media uploads', () => {
       kind: 'image',
       sizeBytes: 3,
     });
+    expect(createMediaReadUrl).toHaveBeenCalledWith({
+      storagePath: 'uploads/user-1/server-issued-reference.png',
+    });
     expect(uploadState.uploadToSignedUrl).toHaveBeenCalledWith(
       'uploads',
       'user-1/server-issued-reference.png',
@@ -126,11 +134,7 @@ describe('mobile media uploads', () => {
       expect.any(ArrayBuffer),
       { contentType: 'image/png' },
     );
-    expect(uploadState.createSignedUrl).toHaveBeenCalledWith(
-      'uploads',
-      'user-1/server-issued-reference.png',
-      3600,
-    );
+    expect(uploadState.createSignedUrl).not.toHaveBeenCalled();
     expect(uploadState.upload).not.toHaveBeenCalled();
   });
 
@@ -144,10 +148,15 @@ describe('mobile media uploads', () => {
       signedUploadUrl: 'https://storage.example.com/upload-token',
       expiresInSeconds: 7200,
     }));
+    const createMediaReadUrl = vi.fn(async () => ({
+      success: true,
+      signedUrl: 'https://storage.example.com/uploads/user-1/signed-bad-name.png',
+      expiresInSeconds: 3600,
+    }));
     const { uploadPickedMedia } = await import('../lib/media');
 
     await expect(uploadPickedMedia('file:///image.png', {
-      api: { createMediaUpload },
+      api: { createMediaUpload, createMediaReadUrl },
       fileName: '../bad name?.png',
       mimeType: 'image/png',
     } as never)).resolves.toMatchObject({

@@ -265,6 +265,11 @@ vi.mock('@/lib/server-helpers', () => ({
   resolveStoredMediaUrl: vi.fn(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/generate route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -302,6 +307,7 @@ describe('/api/generate route', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-request-id': 'motion-post-auth-1',
         },
         body: JSON.stringify({
           model: 'kling-2.6',
@@ -312,6 +318,7 @@ describe('/api/generate route', () => {
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'motion-post-auth-1');
     expect(await response.json()).toEqual({
       error: 'Unauthorized: Please log in to generate videos',
     });
@@ -330,6 +337,7 @@ describe('/api/generate route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'motion-stale-catalog-1',
         },
         body: JSON.stringify({
           model: 'kling-2.6',
@@ -341,6 +349,9 @@ describe('/api/generate route', () => {
     );
 
     expect(response.status).toBe(409);
+    expectPrivateNoStoreTraceHeaders(response, 'motion-stale-catalog-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('Bearer token');
     expect(await response.json()).toMatchObject({ code: 'CATALOG_CHANGED' });
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
@@ -354,6 +365,7 @@ describe('/api/generate route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'motion-rate-limit-1',
         },
         body: JSON.stringify({
           model: 'kling-3.0',
@@ -407,6 +419,7 @@ describe('/api/generate route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'motion-rate-limit-1',
         },
         body: JSON.stringify({
           model: 'kling-3.0',
@@ -421,6 +434,8 @@ describe('/api/generate route', () => {
     );
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'motion-rate-limit-1');
+    expect(response.headers.get('Retry-After')).toBe('42');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
       p_scope: 'media-generation:start',
@@ -499,12 +514,14 @@ describe('/api/generate route', () => {
       new Request('http://localhost/api/generate?id=task-motion-status-1', {
         headers: {
           Authorization: 'Bearer token',
+          'x-request-id': 'motion-status-1',
         },
       }) as never
     );
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'motion-status-1');
     expect(data.status).toBe('processing');
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
@@ -694,6 +711,13 @@ describe('/api/generate route', () => {
   });
 
   it('settles live provider motion success with the atomic backend RPC', async () => {
+    const statusSignal = AbortSignal.abort();
+    const mediaSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+      .mockReturnValueOnce(statusSignal)
+      .mockReturnValueOnce(mediaSignal);
+    let statusInit: RequestInit | undefined;
+    let mediaInit: RequestInit | undefined;
     currentSupabaseMock = createSupabaseMock({
       id: 'gen-motion-live-success-1',
       prediction_id: 'task-motion-live-success-1',
@@ -707,9 +731,10 @@ describe('/api/generate route', () => {
       duration: 6,
     });
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/recordInfo')) {
+        statusInit = init;
         return {
           ok: true,
           json: async () => ({
@@ -725,6 +750,7 @@ describe('/api/generate route', () => {
         } as Response;
       }
 
+      mediaInit = init;
       return {
         ok: true,
         blob: async () => new Blob(['video'], { type: 'video/mp4' }),
@@ -747,6 +773,10 @@ describe('/api/generate route', () => {
       p_output_url: 'generated_videos/user-1/generated_task-motion-live-success-1.mp4',
       p_completed_at: '2026-04-15T10:01:00.000Z',
     }));
+    expect(timeoutSpy).toHaveBeenNthCalledWith(1, 10_000);
+    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 60_000);
+    expect(statusInit?.signal).toBe(statusSignal);
+    expect(mediaInit?.signal).toBe(mediaSignal);
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

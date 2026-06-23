@@ -50,18 +50,28 @@ describe('backend-owned RPC security migration', () => {
   });
 
   it('routes save and remix mutations through the service client', () => {
-    const saveRoute = fs.readFileSync(
-      path.join(projectRoot, 'src/app/api/showcase/save/route.ts'),
+    const saveService = fs.readFileSync(
+      path.join(projectRoot, 'src/lib/showcase-save-service.ts'),
       'utf8'
     );
     const remixRoute = fs.readFileSync(
       path.join(projectRoot, 'src/app/api/showcase/remix/route.ts'),
       'utf8'
     );
+    const remixRouteAdapter = fs.readFileSync(
+      path.join(projectRoot, 'src/lib/showcase-remix-route-adapter-service.ts'),
+      'utf8'
+    );
+    const remixService = fs.readFileSync(
+      path.join(projectRoot, 'src/lib/showcase-remix-service.ts'),
+      'utf8'
+    );
 
-    expect(saveRoute).toContain("serviceClient.rpc('set_post_save_state'");
-    expect(saveRoute).toContain("serviceClient.rpc('toggle_post_save'");
-    expect(saveRoute).toContain("serviceClient.rpc('toggle_showcase_save'");
-    expect(remixRoute).toContain("adminSupabase.rpc('increment_post_remix_count'");
+    expect(saveService).toContain("serviceClient.rpc('set_post_save_state'");
+    expect(saveService).toContain("serviceClient.rpc('toggle_post_save'");
+    expect(saveService).toContain("serviceClient.rpc('toggle_showcase_save'");
+    expect(remixRoute).toContain('postShowcaseRemixRouteResponse');
+    expect(remixRouteAdapter).toContain('remixShowcasePostForRoute');
+    expect(remixService).toContain("serviceClient.rpc('increment_post_remix_count'");
   });
 });

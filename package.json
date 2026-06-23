@@ -2,6 +2,14 @@
   "name": "magicbooklet",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "^8.5.10"
+    }
+  },
   "scripts": {
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
     "backfill:media-previews": "tsx scripts/backfill-media-previews.ts",
@@ -18,19 +26,17 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.8.0",
-    "@supabase/supabase-js": "^2.95.0",
+    "@supabase/ssr": "0.12.0",
+    "@supabase/supabase-js": "2.108.2",
     "@xyflow/react": "^12.10.1",
     "clsx": "^2.1.1",
     "ffmpeg-static": "^5.3.0",
     "framer-motion": "^12.33.0",
-    "gray-matter": "^4.0.3",
     "localforage": "^1.10.0",
     "lucide-react": "^0.563.0",
-    "next": "16.1.6",
-    "razorpay": "^2.9.6",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "remark": "^15.0.1",
     "remark-html": "^16.0.1",
     "sharp": "^0.34.5",
@@ -41,11 +47,11 @@
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "^16.2.9",
     "jsdom": "^28.1.0",
     "tailwindcss": "^4",
     "tsx": "^4.20.6",

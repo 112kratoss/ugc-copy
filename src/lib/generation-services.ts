@@ -54,13 +54,15 @@ import {
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
-import {
-  createGenerationOutputPreview,
-  isImageGenerationPreview,
-} from '@/lib/generation-media-preview';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildKieWebhookCallbackUrl, extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
+import {
+  fetchWithProviderTimeout,
+  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+  PROVIDER_STATUS_POLL_TIMEOUT_MS,
+  PROVIDER_TASK_CREATE_TIMEOUT_MS,
+} from '@/lib/provider-fetch';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
@@ -327,14 +329,14 @@ async function createKieTask(
     ? body.callBackUrl
     : buildKieWebhookCallbackUrl({ generationId: options.generationId });
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithProviderTimeout(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${KIE_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ ...body, callBackUrl: callbackUrl }),
-  });
+  }, PROVIDER_TASK_CREATE_TIMEOUT_MS, fetch, 'KIE task creation');
 
   const data = await response.json();
   if (!response.ok || data.code !== 200) {
@@ -770,13 +772,16 @@ async function createGenerationPreviewQuietly({
   supabase: SupabaseClient;
 }) {
   try {
-    const preview = await createGenerationOutputPreview({
-      body,
-      category,
-      contentType,
-      storagePath,
-      supabase,
-    });
+    const resolvedContentType = contentType || body.type || null;
+    const preview = category === 'image' || resolvedContentType?.startsWith('image/')
+      ? await import('@/lib/generation-media-preview').then(({ createGenerationImagePreview }) => (
+        createGenerationImagePreview({ body, storagePath, supabase })
+      ))
+      : category === 'video' || category === 'motion' || resolvedContentType?.startsWith('video/')
+        ? await import('@/lib/generation-video-preview').then(({ createGenerationVideoPoster }) => (
+          createGenerationVideoPoster({ body, storagePath, supabase })
+        ))
+        : null;
     return {
       previewUrl: preview?.previewStoragePath ?? null,
       previewThumbhash: preview?.previewThumbhash ?? null,
@@ -803,7 +808,7 @@ function getFallbackPreviewUrl(
     return null;
   }
 
-  return isImageGenerationPreview(category, contentType) ? outputUrl : null;
+  return category === 'image' || contentType?.startsWith('image/') ? outputUrl : null;
 }
 
 async function persistGeneratedOutput(
@@ -817,7 +822,13 @@ async function persistGeneratedOutput(
   const settledAt = completedAt ?? new Date().toISOString();
 
   try {
-    const mediaResponse = await fetch(tempUrl);
+    const mediaResponse = await fetchWithProviderTimeout(
+      tempUrl,
+      {},
+      PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+      fetch,
+      'KIE generated media download'
+    );
     if (!mediaResponse.ok) {
       throw new Error('Failed to download generated media from KIE');
     }
@@ -898,7 +909,13 @@ export async function persistGeneratedOutputList(
 
   for (const [index, tempUrl] of tempUrls.entries()) {
     try {
-      const mediaResponse = await fetch(tempUrl);
+      const mediaResponse = await fetchWithProviderTimeout(
+        tempUrl,
+        {},
+        PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+        fetch,
+        'KIE generated media download'
+      );
       if (!mediaResponse.ok) {
         throw new Error('Failed to download generated media from KIE');
       }
@@ -1142,9 +1159,9 @@ async function syncSingleGenerationStatus(
     : Date.parse(generation.created_at);
 
   if (isVeoGeneration(generation)) {
-    const response = await fetch(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
+    const response = await fetchWithProviderTimeout(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
       headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-    });
+    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE Veo status');
     const data = await response.json();
 
     if (!response.ok || data.code !== 200) {
@@ -1183,9 +1200,9 @@ async function syncSingleGenerationStatus(
     return nextStatus;
   }
 
-  const response = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
+  const response = await fetchWithProviderTimeout(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
     headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-  });
+  }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE task status');
   const data = await response.json();
 
   if (!response.ok || data.code !== 200) {

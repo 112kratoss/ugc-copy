@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 
 const getMarketplaceQualityErrorForPostBundleMock = vi.hoisted(() => vi.fn());
 const savePostResourceBundleMock = vi.hoisted(() => vi.fn());
+const rateLimitRpcMock = vi.hoisted(() => vi.fn());
 const loadedPost = vi.hoisted(() => ({
   value: {
     id: 'post-1',
@@ -54,8 +55,15 @@ vi.mock('@/lib/server-helpers', () => ({
       return query;
     },
   }),
-  createServiceClient: () => ({}),
+  createServiceClient: () => ({
+    rpc: rateLimitRpcMock,
+  }),
 }));
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
 
 describe('/api/posts/[postId]/resource-bundle route', () => {
   beforeEach(() => {
@@ -73,6 +81,17 @@ describe('/api/posts/[postId]/resource-bundle route', () => {
     };
     getMarketplaceQualityErrorForPostBundleMock.mockReset();
     getMarketplaceQualityErrorForPostBundleMock.mockResolvedValue('Quality should not run for private draft unlocks.');
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 60,
+        remaining: 59,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     savePostResourceBundleMock.mockReset();
     savePostResourceBundleMock.mockResolvedValue({
       id: 'bundle-1',
@@ -87,6 +106,7 @@ describe('/api/posts/[postId]/resource-bundle route', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
+        'x-request-id': 'resource-bundle-save-1',
       },
       body: JSON.stringify({
         resourceBundle: {
@@ -108,6 +128,7 @@ describe('/api/posts/[postId]/resource-bundle route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'resource-bundle-save-1');
     expect(getMarketplaceQualityErrorForPostBundleMock).not.toHaveBeenCalled();
     expect(savePostResourceBundleMock).toHaveBeenCalledWith(expect.objectContaining({
       postVisibility: 'private',

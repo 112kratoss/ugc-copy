@@ -343,6 +343,13 @@ describe('CreatorProfileCard', () => {
         } as Response;
       }
 
+      if (url.endsWith('/api/profile/media/cleanup')) {
+        return {
+          ok: true,
+          json: async () => ({ success: true }),
+        } as Response;
+      }
+
       throw new Error(`Unexpected fetch to ${url}`);
     });
 
@@ -381,8 +388,17 @@ describe('CreatorProfileCard', () => {
       { contentType: 'image/png' }
     );
     expect(supabaseMocks.upload).not.toHaveBeenCalled();
-    expect(supabaseMocks.remove).toHaveBeenCalledWith([
-      'test-user-id/avatar-server-issued.png',
-    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/profile/media/cleanup',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({ paths: ['test-user-id/avatar-server-issued.png'] }),
+      })
+    );
+    expect(supabaseMocks.remove).not.toHaveBeenCalled();
   });
 });

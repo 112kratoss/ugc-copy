@@ -10,10 +10,8 @@ const videoPosterState = vi.hoisted(() => ({
   )),
 }));
 
-vi.mock('@/lib/generation-media-preview', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/generation-media-preview')>();
+vi.mock('@/lib/video-poster', () => {
   return {
-    ...actual,
     createVideoPosterBuffer: videoPosterState.createVideoPosterBuffer,
   };
 });

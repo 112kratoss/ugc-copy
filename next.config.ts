@@ -10,8 +10,14 @@ const nextConfig: NextConfig = {
       "./audits/**",
       "./model_api_references/**",
       "./mockups/**",
+      "./next.config.ts",
       "./output/**",
+      "./package-lock.json",
+      "./scripts/**",
       "./ugc-mobile/**",
+    ],
+    "/api/generate-image": [
+      "./node_modules/ffmpeg-static/**",
     ],
   },
   images: {

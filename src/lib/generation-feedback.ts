@@ -1,4 +1,4 @@
-import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
+import { isAudioModel, isImageModel, isMotionModel } from '@/lib/client-generation-models';
 import { formatDurationShort } from '@/lib/generation-timing';
 
 export const BACKGROUND_PROCESSING_ERROR = '__BACKGROUND_PROCESSING__';

@@ -1,0 +1,125 @@
+import 'server-only';
+
+import { NextResponse } from 'next/server';
+
+import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
+import {
+  BackendRateLimitError,
+  SHOWCASE_PUBLISH_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
+import {
+  fetchWithProviderTimeout,
+  withProviderFetchRequestId,
+} from '@/lib/provider-fetch';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import {
+  publishGenerationToShowcaseForRoute,
+  type ShowcasePublishRequestBody,
+} from '@/lib/showcase-publish-service';
+
+type ShowcasePublishRouteDependencies = {
+  createServiceClient?: typeof createServiceClient;
+  createUserClient?: typeof createUserClient;
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  fetchWithProviderTimeout?: typeof fetchWithProviderTimeout;
+  logError?: typeof console.error;
+  publishGenerationToShowcaseForRoute?: typeof publishGenerationToShowcaseForRoute;
+  withProviderFetchRequestId?: typeof withProviderFetchRequestId;
+};
+
+function resolveDependencies(dependencies: ShowcasePublishRouteDependencies | undefined) {
+  return {
+    createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
+    createUserClient: dependencies?.createUserClient ?? createUserClient,
+    enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
+    logError: dependencies?.logError ?? console.error,
+    publishGenerationToShowcaseForRoute:
+      dependencies?.publishGenerationToShowcaseForRoute ?? publishGenerationToShowcaseForRoute,
+    withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
+  };
+}
+
+async function getAuthenticatedUserId(
+  request: Request,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  const supabase = dependencies.createUserClient(request);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  return authError || !user
+    ? { ok: false as const }
+    : { ok: true as const, supabase, userId: user.id };
+}
+
+async function handleShowcasePublishPOST(
+  request: Request,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  try {
+    const auth = await getAuthenticatedUserId(request, dependencies);
+    if (!auth.ok) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const adminSupabase = dependencies.createServiceClient();
+    try {
+      await dependencies.enforceBackendRateLimit(adminSupabase, {
+        ...SHOWCASE_PUBLISH_RATE_LIMIT,
+        key: auth.userId,
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      dependencies.logError('Showcase publish rate limit check failed:', error);
+      return NextResponse.json({ error: 'Failed to check showcase publish limits.' }, { status: 500 });
+    }
+
+    const requestBody = await request.json() as Partial<ShowcasePublishRequestBody>;
+    if (!requestBody.generationId) {
+      return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
+    }
+
+    const result = await dependencies.publishGenerationToShowcaseForRoute({
+      adminSupabase,
+      body: requestBody as ShowcasePublishRequestBody,
+      dependencies: {
+        fetchWithProviderTimeout: dependencies.fetchWithProviderTimeout,
+      },
+      supabase: auth.supabase,
+      userId: auth.userId,
+    });
+
+    if (!result.ok) {
+      return NextResponse.json(result.body, { status: result.status });
+    }
+
+    return NextResponse.json(result.body);
+  } catch (error) {
+    dependencies.logError('Publish error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function postShowcasePublishRouteResponse({
+  dependencies,
+  request,
+}: {
+  dependencies?: ShowcasePublishRouteDependencies;
+  request: Request;
+}) {
+  const resolvedDependencies = resolveDependencies(dependencies);
+  return resolvedDependencies.withProviderFetchRequestId(getApiRequestId(request), async () => (
+    applyPrivateNoStoreApiResponseHeaders(
+      await handleShowcasePublishPOST(request, resolvedDependencies),
+      request,
+    )
+  ));
+}

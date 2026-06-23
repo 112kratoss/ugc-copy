@@ -30,6 +30,18 @@ export const MEDIA_GENERATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const GENERATION_LIFECYCLE_MUTATION_RATE_LIMIT = {
+  scope: 'generation-lifecycle:mutate',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const POST_MUTATION_RATE_LIMIT = {
+  scope: 'post:mutate',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const PROMPT_ENHANCEMENT_RATE_LIMIT = {
   scope: 'prompt-enhancement',
   limit: 60,
@@ -54,9 +66,21 @@ export const CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const CREATOR_FOLLOW_MUTATION_RATE_LIMIT = {
+  scope: 'creator-follow:mutate',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const CREDIT_ORDER_RATE_LIMIT = {
   scope: 'credit-order:create',
   limit: 10,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const CREDIT_ORDER_VERIFY_RATE_LIMIT = {
+  scope: 'credit-order:verify',
+  limit: 30,
   windowSeconds: 10 * 60,
 } as const;
 
@@ -66,9 +90,39 @@ export const MARKETPLACE_ORDER_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const MARKETPLACE_ORDER_VERIFY_RATE_LIMIT = {
+  scope: 'marketplace-order:verify',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MARKETPLACE_ASSET_SAVE_RATE_LIMIT = {
+  scope: 'marketplace-asset:save',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MARKETPLACE_ASSET_IMPORT_RATE_LIMIT = {
+  scope: 'marketplace-asset:import',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_RESOURCE_ORDER_RATE_LIMIT = {
   scope: 'post-resource-order:create',
   limit: 10,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const POST_RESOURCE_ORDER_VERIFY_RATE_LIMIT = {
+  scope: 'post-resource-order:verify',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const POST_RESOURCE_FREE_UNLOCK_RATE_LIMIT = {
+  scope: 'post-resource-free-unlock:open',
+  limit: 60,
   windowSeconds: 10 * 60,
 } as const;
 
@@ -90,9 +144,63 @@ export const MOBILE_COMMERCE_RESTORE_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const MOBILE_PUSH_TOKEN_REGISTER_RATE_LIMIT = {
+  scope: 'mobile-push-token:register',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MOBILE_PUSH_TOKEN_UNREGISTER_RATE_LIMIT = {
+  scope: 'mobile-push-token:unregister',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MOBILE_NOTIFICATION_PREFERENCES_UPDATE_RATE_LIMIT = {
+  scope: 'mobile-notification-preferences:update',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MOBILE_NOTIFICATION_READ_RATE_LIMIT = {
+  scope: 'mobile-notifications:read',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MOBILE_NOTIFICATION_READ_ALL_RATE_LIMIT = {
+  scope: 'mobile-notifications:read-all',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_PUBLISH_RATE_LIMIT = {
   scope: 'showcase:publish',
   limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const SHOWCASE_SHARE_RATE_LIMIT = {
+  scope: 'showcase:share',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const SHOWCASE_SAVE_RATE_LIMIT = {
+  scope: 'showcase:save',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const SHOWCASE_REMIX_RATE_LIMIT = {
+  scope: 'showcase:remix',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const SHOWCASE_PREVIEW_READ_URL_RATE_LIMIT = {
+  scope: 'showcase-preview:read-url',
+  limit: 240,
   windowSeconds: 10 * 60,
 } as const;
 
@@ -102,9 +210,45 @@ export const POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const POST_RESOURCE_FILE_READ_URL_RATE_LIMIT = {
+  scope: 'post-resource-file:read-url',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const MEDIA_READ_SIGN_RATE_LIMIT = {
+  scope: 'media-read:sign',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const GENERATION_MODEL_QUOTE_RATE_LIMIT = {
+  scope: 'generation-model:quote',
+  limit: 240,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
   scope: 'temporary-media-upload:sign',
   limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const TEMPORARY_MEDIA_UPLOAD_READ_URL_RATE_LIMIT = {
+  scope: 'temporary-media-upload:read-url',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const WORKFLOW_ASSET_UPLOAD_SIGN_RATE_LIMIT = {
+  scope: 'workflow-asset-upload:sign',
+  limit: 40,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const WORKFLOW_ASSET_UPLOAD_READ_URL_RATE_LIMIT = {
+  scope: 'workflow-asset-upload:read-url',
+  limit: 80,
   windowSeconds: 10 * 60,
 } as const;
 
@@ -114,9 +258,33 @@ export const PROFILE_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const PROFILE_MEDIA_UPLOAD_CLEANUP_RATE_LIMIT = {
+  scope: 'profile-media-upload:cleanup',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const PROFILE_VALIDATE_RATE_LIMIT = {
+  scope: 'profile:validate',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const PROFILE_UPDATE_RATE_LIMIT = {
+  scope: 'profile:update',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WORKFLOW_ASSISTANT_RATE_LIMIT = {
   scope: 'workflow-assistant',
   limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const WORKFLOW_CANVAS_MUTATION_RATE_LIMIT = {
+  scope: 'workflow-canvas:mutate',
+  limit: 240,
   windowSeconds: 10 * 60,
 } as const;
 

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn(async () => ({
   data: {
@@ -42,6 +44,11 @@ vi.mock('@/lib/mobile-commerce', () => ({
   verifyMobilePurchase: (...args: unknown[]) => verifyMobilePurchaseMock(...args),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/mobile/commerce routes', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -59,11 +66,7 @@ describe('/api/mobile/commerce routes', () => {
       error: null,
     });
     completeMobileCreditPurchaseMock.mockClear();
-    completeMobileCreditPurchaseMock.mockResolvedValue({
-      success: true,
-      entitlement: 'credits',
-      credits: 120,
-    });
+    completeMobileCreditPurchaseMock.mockResolvedValue(mobileApiContract.endpoints.mobileCommerceSync.response);
     completeMobileMarketplaceUnlockMock.mockClear();
     completeMobilePostResourceUnlockMock.mockClear();
     normalizeMobileCommercePayloadMock.mockClear();
@@ -80,11 +83,7 @@ describe('/api/mobile/commerce routes', () => {
       transactionId: 'tx-1',
     });
     restoreMobileEntitlementsMock.mockClear();
-    restoreMobileEntitlementsMock.mockResolvedValue({
-      success: true,
-      entitlements: [],
-      credits: 120,
-    });
+    restoreMobileEntitlementsMock.mockResolvedValue(mobileApiContract.endpoints.mobileCommerceRestore.response);
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -100,12 +99,16 @@ describe('/api/mobile/commerce routes', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/commerce/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-commerce-sync-auth-1',
+        },
         body: JSON.stringify({ productId: 'credits-1' }),
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-sync-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(normalizeMobileCommercePayloadMock).not.toHaveBeenCalled();
     expect(verifyMobilePurchaseMock).not.toHaveBeenCalled();
@@ -135,13 +138,17 @@ describe('/api/mobile/commerce routes', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/commerce/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-commerce-sync-rate-limit-1',
+        },
         body: JSON.stringify({ productId: 'credits-1' }),
       }) as never
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('43');
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-sync-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'mobile-commerce:sync',
@@ -168,12 +175,17 @@ describe('/api/mobile/commerce routes', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/commerce/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-commerce-sync-success-1',
+        },
         body: JSON.stringify({ productId: 'credits-1' }),
       }) as never
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-sync-success-1');
+    await expect(response.json()).resolves.toEqual(mobileApiContract.endpoints.mobileCommerceSync.response);
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'mobile-commerce:sync',
       p_subject_key: 'buyer-1',
@@ -201,10 +213,12 @@ describe('/api/mobile/commerce routes', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/commerce/restore', {
         method: 'POST',
+        headers: { 'x-request-id': 'mobile-commerce-restore-auth-1' },
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-restore-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(restoreMobileEntitlementsMock).not.toHaveBeenCalled();
   });
@@ -233,11 +247,13 @@ describe('/api/mobile/commerce routes', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/commerce/restore', {
         method: 'POST',
+        headers: { 'x-request-id': 'mobile-commerce-restore-rate-limit-1' },
       }) as never
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('88');
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-restore-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'mobile-commerce:restore',
@@ -262,10 +278,13 @@ describe('/api/mobile/commerce routes', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/commerce/restore', {
         method: 'POST',
+        headers: { 'x-request-id': 'mobile-commerce-restore-success-1' },
       }) as never
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-restore-success-1');
+    await expect(response.json()).resolves.toEqual(mobileApiContract.endpoints.mobileCommerceRestore.response);
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'mobile-commerce:restore',
       p_subject_key: 'buyer-1',

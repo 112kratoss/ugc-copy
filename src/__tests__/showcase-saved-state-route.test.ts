@@ -72,10 +72,14 @@ describe('/api/showcase/saved-state route', () => {
   it('returns saved public post ids from post_saves', async () => {
     const { GET } = await import('@/app/api/showcase/saved-state/route');
     const response = await GET(
-      new NextRequest('http://localhost/api/showcase/saved-state?ids=post-1,post-2')
+      new NextRequest('http://localhost/api/showcase/saved-state?ids=post-1,post-2', {
+        headers: { 'x-request-id': 'saved-state-1' },
+      })
     );
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('saved-state-1');
     await expect(response.json()).resolves.toEqual(['post-1']);
     expect(postSavesResultMock).toHaveBeenCalledTimes(1);
     expect(legacySavesResultMock).not.toHaveBeenCalled();
@@ -100,6 +104,7 @@ describe('/api/showcase/saved-state route', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     await expect(response.json()).resolves.toEqual(['gen-1']);
     expect(postSavesResultMock).toHaveBeenCalledTimes(1);
     expect(legacySavesResultMock).toHaveBeenCalledTimes(1);

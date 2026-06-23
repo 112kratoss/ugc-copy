@@ -51,6 +51,11 @@ vi.mock('@/lib/mobile-notifications', () => ({
   notifyCreatorFollowed: (...args: unknown[]) => notifyCreatorFollowedMock(...args),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/profile/follow/notify route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -101,12 +106,16 @@ describe('/api/profile/follow/notify route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/follow/notify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-follow-notify-auth-1',
+        },
         body: JSON.stringify({ followingId: 'creator-1' }),
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-follow-notify-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
@@ -142,13 +151,17 @@ describe('/api/profile/follow/notify route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/follow/notify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-follow-notify-rate-limit-1',
+        },
         body: JSON.stringify({ followingId: 'creator-1' }),
       }) as never
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('44');
+    expectPrivateNoStoreTraceHeaders(response, 'profile-follow-notify-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'creator-follow:notify',
@@ -165,12 +178,16 @@ describe('/api/profile/follow/notify route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/follow/notify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-follow-notify-success-1',
+        },
         body: JSON.stringify({ followingId: 'creator-1' }),
       }) as never
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-follow-notify-success-1');
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'creator-follow:notify',
       p_subject_key: 'follower-1',

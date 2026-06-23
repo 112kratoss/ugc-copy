@@ -25,6 +25,13 @@ describe('/api/ops/backend-health route', () => {
       checkedAt: '2026-06-21T10:00:00.000Z',
       buildId: 'test-build',
       catalog: { revision: 'catalog-revision', schemaVersion: 1, activeModels: 12 },
+      scheduler: {
+        status: 'ok',
+        route: '/api/cron/backend-jobs',
+        schedule: '*/10 * * * *',
+        dailyInvocations: 144,
+        dailyInvocationBudget: 180,
+      },
       jobs: [],
       generations: {
         status: 'ok',
@@ -41,9 +48,13 @@ describe('/api/ops/backend-health route', () => {
 
   it('rejects unauthorized health checks', async () => {
     const { GET } = await import('@/app/api/ops/backend-health/route');
-    const response = await GET(new NextRequest('http://localhost/api/ops/backend-health'));
+    const response = await GET(new NextRequest('http://localhost/api/ops/backend-health', {
+      headers: { 'x-request-id': 'health-unauthorized-1' },
+    }));
 
     expect(response.status).toBe(401);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('health-unauthorized-1');
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
     expect(mocks.collectBackendHealth).not.toHaveBeenCalled();
   });
@@ -51,14 +62,19 @@ describe('/api/ops/backend-health route', () => {
   it('returns no-store health for authorized checks', async () => {
     const { GET } = await import('@/app/api/ops/backend-health/route');
     const response = await GET(new NextRequest('http://localhost/api/ops/backend-health', {
-      headers: { authorization: 'Bearer secret-123' },
+      headers: { authorization: 'Bearer secret-123', 'x-request-id': 'health-ok-1' },
     }));
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('health-ok-1');
     expect(mocks.createServiceClient).toHaveBeenCalledOnce();
-    expect(mocks.collectBackendHealth).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.collectBackendHealth).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      undefined,
+      process.env,
+    );
     expect(body).toMatchObject({ status: 'ok', buildId: 'test-build' });
   });
 
@@ -68,6 +84,13 @@ describe('/api/ops/backend-health route', () => {
       checkedAt: '2026-06-21T10:00:00.000Z',
       buildId: 'test-build',
       catalog: { revision: 'catalog-revision', schemaVersion: 1, activeModels: 12 },
+      scheduler: {
+        status: 'ok',
+        route: '/api/cron/backend-jobs',
+        schedule: '*/10 * * * *',
+        dailyInvocations: 144,
+        dailyInvocationBudget: 180,
+      },
       jobs: [],
       generations: {
         status: 'degraded',
@@ -98,15 +121,17 @@ describe('/api/ops/backend-health route', () => {
 
     const { GET } = await import('@/app/api/ops/backend-health/route');
     const response = await GET(new NextRequest('http://localhost/api/ops/backend-health', {
-      headers: { authorization: 'Bearer secret-123' },
+      headers: { authorization: 'Bearer secret-123', 'x-request-id': 'health-failed-1' },
     }));
 
     expect(response.status).toBe(500);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('health-failed-1');
     await expect(response.json()).resolves.toMatchObject({
       status: 'degraded',
       error: 'Failed to collect backend health.',
     });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('backend_health_failed'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('health-failed-1'));
   });
 });

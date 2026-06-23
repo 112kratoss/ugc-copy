@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateWorkflowPage from '@/app/create-workflow/page';
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { createStarterGraph, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
 
 const mockPush = vi.fn();
@@ -374,10 +375,11 @@ describe('CreateWorkflowPage', () => {
     importUrl: string;
     graph: WorkflowCanvasRecord['graph'];
   }>;
-  let lastRunRequest: { canvasId: string; mode: string; startNodeId: string } | null;
+  let lastRunRequest: { canvasId: string; mode: string; startNodeId: string; catalogRevision?: string | null } | null;
   let orderedCanvasIds: string[];
   let nextCanvasIdNumber: number;
   let nextShareIdNumber: number;
+  const workflowCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
 
   function buildShareId(value: number) {
     return `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
@@ -463,6 +465,13 @@ describe('CreateWorkflowPage', () => {
     vi.stubGlobal('fetch', vi.fn(async (input, init) => {
       const url = String(input);
       const method = init?.method || 'GET';
+
+      if (url.includes('/api/generation-models') && method === 'GET') {
+        return {
+          ok: true,
+          json: async () => workflowCatalog,
+        } as Response;
+      }
 
       if (url.endsWith('/api/workflow-canvases') && method === 'GET') {
         return {
@@ -616,6 +625,7 @@ describe('CreateWorkflowPage', () => {
           canvasId: runMatch[1],
           mode: payload.mode,
           startNodeId: payload.startNodeId,
+          catalogRevision: payload.catalogRevision,
         };
 
         return {
@@ -1009,6 +1019,7 @@ describe('CreateWorkflowPage', () => {
         canvasId: 'canvas-1',
         mode: 'branch',
         startNodeId: promptNodeId,
+        catalogRevision: workflowCatalog.revision,
       });
     });
 

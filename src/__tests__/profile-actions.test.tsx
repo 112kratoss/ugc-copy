@@ -8,13 +8,10 @@ import type { EditableCreatorProfile } from '@/lib/profile';
 const mockPush = vi.fn();
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
-  from: vi.fn(),
-  insert: vi.fn(),
-  delete: vi.fn(),
 }));
 
-let followLookupData: { follower_id: string } | null = null;
-let followLookupError: unknown = null;
+let followState = false;
+let fetchMock: ReturnType<typeof vi.fn>;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
@@ -40,7 +37,6 @@ vi.mock('@/lib/supabase', () => ({
     auth: {
       getSession: supabaseMocks.getSession,
     },
-    from: supabaseMocks.from,
   },
 }));
 
@@ -62,54 +58,28 @@ const profile: EditableCreatorProfile = {
 describe('ProfileActions', () => {
   beforeEach(() => {
     mockPush.mockReset();
-    followLookupData = null;
-    followLookupError = null;
-    supabaseMocks.insert.mockReset().mockResolvedValue({ error: null });
-    supabaseMocks.delete.mockReset().mockResolvedValue({ error: null });
-    supabaseMocks.from.mockImplementation((table: string) => {
-      if (table !== 'follows') {
-        throw new Error(`Unexpected table: ${table}`);
+    followState = false;
+    fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/profile/follow?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer viewer-token' });
+        return {
+          ok: true,
+          json: async () => ({ following: followState }),
+        };
       }
 
-      return {
-        select() {
-          return {
-            eq(column: string, value: unknown) {
-              expect(column).toBe('follower_id');
-              expect(value).toBe('viewer-1');
-              return {
-                eq(innerColumn: string, innerValue: unknown) {
-                  expect(innerColumn).toBe('following_id');
-                  expect(innerValue).toBe(profile.id);
-                  return {
-                    maybeSingle: vi.fn(async () => ({
-                      data: followLookupData,
-                      error: followLookupError,
-                    })),
-                  };
-                },
-              };
-            },
-          };
-        },
-        insert: supabaseMocks.insert,
-        delete() {
-          return {
-            eq(column: string, value: unknown) {
-              expect(column).toBe('follower_id');
-              expect(value).toBe('viewer-1');
-              return {
-                eq(innerColumn: string, innerValue: unknown) {
-                  expect(innerColumn).toBe('following_id');
-                  expect(innerValue).toBe(profile.id);
-                  return supabaseMocks.delete();
-                },
-              };
-            },
-          };
-        },
-      };
+      if (url === '/api/profile/follow') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { following?: boolean };
+        followState = Boolean(body.following);
+        return {
+          ok: true,
+          json: async () => ({ following: followState }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
     });
+    vi.stubGlobal('fetch', fetchMock);
   });
 
   afterEach(() => {
@@ -133,16 +103,20 @@ describe('ProfileActions', () => {
     fireEvent.click(followButton);
 
     await waitFor(() => {
-      expect(supabaseMocks.insert).toHaveBeenCalledWith({
-        follower_id: 'viewer-1',
-        following_id: profile.id,
-      });
+      expect(fetchMock).toHaveBeenCalledWith('/api/profile/follow', expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer viewer-token',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({ followingId: profile.id, following: true }),
+      }));
     });
     expect(await screen.findByRole('button', { name: /^following$/i })).toBeInTheDocument();
   });
 
   it('toggles from following to follow for a logged-in non-owner', async () => {
-    followLookupData = { follower_id: 'viewer-1' };
+    followState = true;
     supabaseMocks.getSession.mockResolvedValue({
       data: {
         session: {
@@ -159,18 +133,32 @@ describe('ProfileActions', () => {
     fireEvent.click(followingButton);
 
     await waitFor(() => {
-      expect(supabaseMocks.delete).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith('/api/profile/follow', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ followingId: profile.id, following: false }),
+      }));
     });
     expect(await screen.findByRole('button', { name: /^follow$/i })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('shows loading feedback while follow is pending', async () => {
-    let resolveInsert: (value: { error: null }) => void = () => undefined;
-    supabaseMocks.insert.mockImplementation(
-      () => new Promise((resolve) => {
-        resolveInsert = resolve;
-      })
-    );
+    let resolveFollow: (value: Response) => void = () => undefined;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/profile/follow?')) {
+        return {
+          ok: true,
+          json: async () => ({ following: false }),
+        };
+      }
+
+      if (url === '/api/profile/follow') {
+        return new Promise((resolve) => {
+          resolveFollow = resolve;
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
     supabaseMocks.getSession.mockResolvedValue({
       data: {
         session: {
@@ -188,13 +176,28 @@ describe('ProfileActions', () => {
     expect(loadingButton).toBeDisabled();
     expect(screen.getAllByText('Following creator...').length).toBeGreaterThan(0);
 
-    resolveInsert({ error: null });
+    resolveFollow({
+      ok: true,
+      json: async () => ({ following: true }),
+    } as Response);
     expect(await screen.findByRole('button', { name: /^following$/i })).toBeInTheDocument();
   });
 
   it('restores the previous follow state when the update fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    supabaseMocks.insert.mockResolvedValue({ error: new Error('Insert failed') });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/profile/follow?')) {
+        return {
+          ok: true,
+          json: async () => ({ following: false }),
+        };
+      }
+
+      return {
+        ok: false,
+        json: async () => ({ error: 'Insert failed' }),
+      };
+    });
     supabaseMocks.getSession.mockResolvedValue({
       data: {
         session: {
@@ -265,6 +268,6 @@ describe('ProfileActions', () => {
         `/login?returnUrl=${encodeURIComponent('/creators/creator-name')}`
       );
     });
-    expect(supabaseMocks.insert).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/profile/follow', expect.anything());
   });
 });

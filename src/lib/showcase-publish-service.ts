@@ -1,0 +1,558 @@
+import 'server-only';
+
+import path from 'node:path';
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+import {
+  ensureDurableGenerationMedia,
+  type CreatedGenerationMediaLocation,
+} from '@/lib/durable-generation-media';
+import { isAudioModel } from '@/lib/models';
+import {
+  buildFreeGenerationReferenceBundle,
+  buildGenerationReferenceResourceItems,
+  getMarketplaceQualityErrorForPostBundle,
+  mergeGenerationReferenceItemsIntoBundle,
+  publishGenerationPostWithResourceBundleAtomically,
+} from '@/lib/post-resource-bundles-server';
+import {
+  deriveTitleFromBody,
+  isMissingPostsSchemaError,
+  isMissingPostResourceBundlesSchemaError,
+} from '@/lib/posts-server';
+import { getStoredMediaLocation } from '@/lib/server-helpers';
+import { listSourceToolsCatalog } from '@/lib/source-tools-server';
+import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
+import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showcase';
+import {
+  fetchWithProviderTimeout,
+  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+} from '@/lib/provider-fetch';
+import {
+  validatePostResourceBundleInput,
+  type PostResourceBundleInput,
+} from '@/lib/post-resource-bundles';
+
+type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
+
+const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
+  'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
+const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt';
+const GENERATION_SELECT_WITHOUT_SHOWCASE_ASSET = 'id, user_id, status, model, category, output_url, title, description, prompt';
+
+type GenerationRow = {
+  id: string;
+  user_id: string;
+  status: string;
+  model: string;
+  category: string | null;
+  creation_mode?: string | null;
+  output_url: string | null;
+  showcase_asset_path?: string | null;
+  title?: string | null;
+  description?: string | null;
+  prompt?: string | null;
+};
+
+export type ShowcasePublishRequestBody = {
+  generationId: string;
+  isPublic?: boolean;
+  visibility?: 'public' | 'unlisted' | 'private';
+  title?: string;
+  description?: string;
+  prompt?: string;
+  body?: string;
+  category?: string;
+  workflowSettings?: unknown;
+  exposePromptPublic?: boolean;
+  shareInputMediaForRemix?: boolean;
+  includeGenerationReferences?: boolean;
+  resourceBundle?: PostResourceBundleInput | null;
+};
+
+export type ShowcasePublishServiceDependencies = {
+  ensureDurableGenerationMedia: typeof ensureDurableGenerationMedia;
+  fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
+  getStoredMediaLocation: typeof getStoredMediaLocation;
+  buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
+  buildFreeGenerationReferenceBundle: typeof buildFreeGenerationReferenceBundle;
+  mergeGenerationReferenceItemsIntoBundle: typeof mergeGenerationReferenceItemsIntoBundle;
+  validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
+  getMarketplaceQualityErrorForPostBundle: typeof getMarketplaceQualityErrorForPostBundle;
+  publishGenerationPostWithResourceBundleAtomically: typeof publishGenerationPostWithResourceBundleAtomically;
+  deriveTitleFromBody: typeof deriveTitleFromBody;
+  isMissingPostsSchemaError: typeof isMissingPostsSchemaError;
+  isMissingPostResourceBundlesSchemaError: typeof isMissingPostResourceBundlesSchemaError;
+  listSourceToolsCatalog: typeof listSourceToolsCatalog;
+};
+
+export type ShowcasePublishServiceResult =
+  | {
+      ok: true;
+      body: {
+        success: true;
+        isPublic: boolean;
+        visibility: 'public' | 'unlisted' | 'private';
+        postId: string | null;
+        showcasePath: string | null;
+        ownerPath: string | null;
+        resourceBundlePath: string | null;
+        resourceBundleStatus: 'draft' | 'published' | null;
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 400 | 403 | 404 | 500;
+      body: {
+        error: string;
+      };
+    };
+
+function resolveDependencies(
+  dependencies: Partial<ShowcasePublishServiceDependencies> | undefined,
+): ShowcasePublishServiceDependencies {
+  return {
+    ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
+    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
+    getStoredMediaLocation: dependencies?.getStoredMediaLocation ?? getStoredMediaLocation,
+    buildGenerationReferenceResourceItems:
+      dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
+    buildFreeGenerationReferenceBundle:
+      dependencies?.buildFreeGenerationReferenceBundle ?? buildFreeGenerationReferenceBundle,
+    mergeGenerationReferenceItemsIntoBundle:
+      dependencies?.mergeGenerationReferenceItemsIntoBundle ?? mergeGenerationReferenceItemsIntoBundle,
+    validatePostResourceBundleInput: dependencies?.validatePostResourceBundleInput ?? validatePostResourceBundleInput,
+    getMarketplaceQualityErrorForPostBundle:
+      dependencies?.getMarketplaceQualityErrorForPostBundle ?? getMarketplaceQualityErrorForPostBundle,
+    publishGenerationPostWithResourceBundleAtomically:
+      dependencies?.publishGenerationPostWithResourceBundleAtomically ?? publishGenerationPostWithResourceBundleAtomically,
+    deriveTitleFromBody: dependencies?.deriveTitleFromBody ?? deriveTitleFromBody,
+    isMissingPostsSchemaError: dependencies?.isMissingPostsSchemaError ?? isMissingPostsSchemaError,
+    isMissingPostResourceBundlesSchemaError:
+      dependencies?.isMissingPostResourceBundlesSchemaError ?? isMissingPostResourceBundlesSchemaError,
+    listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
+  };
+}
+
+function detectCategoryFromModel(model: string): ShowcaseCategory {
+  if (model.includes('banana')) return 'image';
+  if (model === 'kling-3.0/video' || model.includes('/video')) return 'video';
+  if (model.startsWith('kling-')) return 'video';
+  return 'image';
+}
+
+function normalizePublishableShowcaseCategory(value: string | null | undefined): ShowcaseCategory | undefined {
+  if (value === 'motion' || value === 'ugc-ad') return 'video';
+  return value === 'image' || value === 'video' ? value : undefined;
+}
+
+function inferExtension(sourceName: string, category: ShowcaseCategory): string {
+  const candidate = sourceName.split('.').pop();
+  if (candidate && candidate.length <= 5) {
+    return candidate;
+  }
+
+  if (category === 'image') return 'jpg';
+  return 'mp4';
+}
+
+function normalizeTextValue(value: unknown): string | null {
+  return typeof value === 'string' ? value.trim() : null;
+}
+
+function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean): 'public' | 'unlisted' | 'private' {
+  if (value === 'public' || value === 'unlisted' || value === 'private') {
+    return value;
+  }
+
+  return legacyIsPublic ? 'public' : 'private';
+}
+
+async function createShowcaseDerivative({
+  adminSupabase,
+  category,
+  dependencies,
+  generationId,
+  outputUrl,
+}: {
+  adminSupabase: SupabaseClient;
+  category: ShowcaseCategory;
+  dependencies: ShowcasePublishServiceDependencies;
+  generationId: string;
+  outputUrl: string;
+}) {
+  const storedLocation = dependencies.getStoredMediaLocation(outputUrl);
+  let fileBlob: Blob;
+  let sourceName: string;
+  let contentType: string | null = null;
+
+  if (storedLocation) {
+    sourceName = storedLocation.filePath.split('/').pop() || `${generationId}.${inferExtension(outputUrl, category)}`;
+    const { data, error } = await adminSupabase.storage
+      .from(storedLocation.bucket)
+      .download(storedLocation.filePath);
+
+    if (error || !data) {
+      throw new Error(`Failed to load source media from ${storedLocation.bucket}/${storedLocation.filePath}`);
+    }
+
+    fileBlob = data;
+    contentType = data.type || null;
+  } else if (outputUrl.startsWith('http')) {
+    const response = await dependencies.fetchWithProviderTimeout(
+      outputUrl,
+      {},
+      PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+      fetch,
+      'Showcase source media download',
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch source media from ${outputUrl}`);
+    }
+
+    const url = new URL(outputUrl);
+    sourceName = path.basename(url.pathname) || `${generationId}.${inferExtension(outputUrl, category)}`;
+    fileBlob = await response.blob();
+    contentType = response.headers.get('content-type');
+  } else {
+    throw new Error('Unsupported media source for showcase publishing');
+  }
+
+  const baseName = path.basename(sourceName, path.extname(sourceName)) || generationId;
+  const showcaseAssetPath = `showcase/${generationId}/${baseName}.${inferExtension(sourceName, category)}`;
+
+  const { error: uploadError } = await adminSupabase.storage
+    .from(SHOWCASE_MEDIA_BUCKET)
+    .upload(showcaseAssetPath, fileBlob, {
+      cacheControl: '3600',
+      contentType: contentType || (category === 'image' ? 'image/jpeg' : 'video/mp4'),
+      upsert: true,
+    });
+
+  if (uploadError) {
+    throw new Error(`Failed to upload showcase derivative: ${uploadError.message}`);
+  }
+
+  return showcaseAssetPath;
+}
+
+async function loadOwnedGeneration({
+  generationId,
+  supabase,
+}: {
+  generationId: string;
+  supabase: SupabaseClient;
+}): Promise<{
+  generation: GenerationRow | null;
+  error: unknown;
+  hasShowcaseAssetColumn: boolean;
+}> {
+  let generationQuery = await supabase
+    .from('generations')
+    .select(GENERATION_SELECT_WITH_SHOWCASE_ASSET)
+    .eq('id', generationId)
+    .single();
+
+  let hasShowcaseAssetColumn = true;
+  if (generationQuery.error?.code === '42703') {
+    hasShowcaseAssetColumn = false;
+    generationQuery = await supabase
+      .from('generations')
+      .select(GENERATION_SELECT_WITHOUT_SHOWCASE_ASSET)
+      .eq('id', generationId)
+      .single();
+  }
+
+  return {
+    generation: generationQuery.data as GenerationRow | null,
+    error: generationQuery.error,
+    hasShowcaseAssetColumn,
+  };
+}
+
+export async function publishGenerationToShowcaseForRoute({
+  adminSupabase,
+  body: requestBody,
+  dependencies,
+  supabase,
+  userId,
+}: {
+  adminSupabase: SupabaseClient;
+  body: ShowcasePublishRequestBody;
+  dependencies?: Partial<ShowcasePublishServiceDependencies>;
+  supabase: SupabaseClient;
+  userId: string;
+}): Promise<ShowcasePublishServiceResult> {
+  const resolvedDependencies = resolveDependencies(dependencies);
+  const { generationId, isPublic, title, description, prompt, body, category, workflowSettings } = requestBody;
+
+  const { generation, error: fetchError, hasShowcaseAssetColumn } = await loadOwnedGeneration({
+    generationId,
+    supabase,
+  });
+
+  if (fetchError || !generation) {
+    return { ok: false, status: 404, body: { error: 'Generation not found' } };
+  }
+
+  if (generation.user_id !== userId) {
+    return { ok: false, status: 403, body: { error: 'Unauthorized: You do not own this creation' } };
+  }
+
+  if (generation.status !== 'succeeded') {
+    return { ok: false, status: 400, body: { error: 'Cannot publish a generation that has not succeeded' } };
+  }
+
+  const requestedVisibility = normalizeRequestedVisibility(requestBody.visibility, isPublic);
+  const effectiveVisibility = requestedVisibility;
+  const shouldExposePost = effectiveVisibility !== 'private';
+  const effectiveIsPublic = effectiveVisibility === 'public';
+  const effectiveShareInputMediaForRemix = effectiveIsPublic && requestBody.shareInputMediaForRemix === true;
+  const hasRequestedResourceBundlePayload = Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
+  const requestedResourceBundle = requestBody.resourceBundle ?? null;
+  const requestedAccessMode = requestedResourceBundle?.accessMode ?? 'none';
+  const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
+  let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
+  let effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
+
+  if (
+    shouldIncludeGenerationReferences &&
+    (requestedAccessMode !== 'none' || effectiveVisibility === 'public')
+  ) {
+    const referenceItems = await resolvedDependencies.buildGenerationReferenceResourceItems({
+      supabase: adminSupabase,
+      ownerUserId: userId,
+      generationId,
+    });
+
+    if (referenceItems.length > 0) {
+      if (requestedAccessMode === 'none') {
+        if (effectiveVisibility === 'public') {
+          effectiveResourceBundle = resolvedDependencies.buildFreeGenerationReferenceBundle(referenceItems);
+          effectiveHasResourceBundlePayload = true;
+        }
+      } else if (effectiveResourceBundle) {
+        effectiveResourceBundle = resolvedDependencies.mergeGenerationReferenceItemsIntoBundle(
+          effectiveResourceBundle,
+          referenceItems,
+        );
+        effectiveHasResourceBundlePayload = true;
+      }
+    }
+  }
+
+  const resourceBundleValidationError = effectiveHasResourceBundlePayload
+    ? resolvedDependencies.validatePostResourceBundleInput(effectiveResourceBundle ?? null, { ownerUserId: userId })
+    : null;
+  if (resourceBundleValidationError) {
+    return { ok: false, status: 400, body: { error: resourceBundleValidationError } };
+  }
+  const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !effectiveHasResourceBundlePayload;
+
+  if (shouldExposePost && (generation.category === 'audio' || isAudioModel(generation.model))) {
+    return { ok: false, status: 400, body: { error: 'Audio generations are not publishable to the showcase yet' } };
+  }
+
+  let detectedCategory = normalizePublishableShowcaseCategory(category)
+    ?? normalizePublishableShowcaseCategory(generation.category);
+  if (!detectedCategory && shouldExposePost) {
+    detectedCategory = detectCategoryFromModel(generation.model);
+  }
+
+  const normalizedBody = normalizeTextValue(body);
+  const resolvedTitle =
+    normalizeTextValue(title)
+    ?? generation.title?.trim()
+    ?? resolvedDependencies.deriveTitleFromBody(normalizedBody)
+    ?? null;
+
+  const marketplaceQualityError = effectiveVisibility === 'public'
+    ? await resolvedDependencies.getMarketplaceQualityErrorForPostBundle({
+        supabase: adminSupabase,
+        ownerUserId: userId,
+        post: {
+          title: resolvedTitle,
+          body: normalizedBody,
+          visibility: effectiveVisibility,
+          archivedAt: null,
+          reviewStatus: 'visible',
+          outputUrl: generation.output_url,
+          hasMedia: Boolean(generation.output_url),
+        },
+        bundle: effectiveHasResourceBundlePayload ? effectiveResourceBundle : null,
+      })
+    : null;
+
+  if (marketplaceQualityError) {
+    return { ok: false, status: 400, body: { error: marketplaceQualityError } };
+  }
+
+  const updatePayload: { is_public: boolean; [key: string]: unknown } = {
+    is_public: effectiveIsPublic,
+    share_input_media_for_remix: effectiveShareInputMediaForRemix,
+  };
+
+  let nextShowcaseAssetPath = hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null;
+  let nextOutputUrl = generation.output_url;
+  let createdPrivateMediaLocation: CreatedGenerationMediaLocation | null = null;
+
+  if (shouldExposePost) {
+    if (!generation.output_url) {
+      return { ok: false, status: 400, body: { error: 'This creation has no media to publish yet' } };
+    }
+
+    if (hasShowcaseAssetColumn) {
+      nextShowcaseAssetPath = await createShowcaseDerivative({
+        adminSupabase,
+        generationId,
+        outputUrl: generation.output_url,
+        category: detectedCategory ?? 'image',
+        dependencies: resolvedDependencies,
+      });
+      updatePayload.showcase_asset_path = nextShowcaseAssetPath;
+    }
+
+    if (title !== undefined) updatePayload.title = title;
+    if (description !== undefined) updatePayload.description = description;
+    if (prompt !== undefined) updatePayload.prompt = prompt;
+    if (detectedCategory !== undefined) updatePayload.category = detectedCategory;
+    if (workflowSettings !== undefined) updatePayload.workflow_settings = workflowSettings;
+  } else {
+    if (generation.output_url || generation.showcase_asset_path) {
+      try {
+        const durableMedia = await resolvedDependencies.ensureDurableGenerationMedia({
+          supabase: adminSupabase,
+          generation: {
+            id: generation.id,
+            userId: generation.user_id,
+            model: generation.model,
+            category: generation.category,
+            outputUrl: generation.output_url,
+            showcaseAssetPath: hasShowcaseAssetColumn ? generation.showcase_asset_path ?? null : null,
+          },
+        });
+        nextOutputUrl = durableMedia.outputUrl;
+        createdPrivateMediaLocation = durableMedia.createdLocation;
+        if (nextOutputUrl !== generation.output_url) {
+          updatePayload.output_url = nextOutputUrl;
+        }
+      } catch (mediaError) {
+        console.error('Failed to secure private generation media:', mediaError);
+        return {
+          ok: false,
+          status: 500,
+          body: {
+            error: 'This post could not be made private because its preview could not be secured. The current visibility was kept.',
+          },
+        };
+      }
+    }
+
+    if (hasShowcaseAssetColumn) {
+      updatePayload.showcase_asset_path = null;
+      nextShowcaseAssetPath = null;
+    }
+  }
+
+  let postId: string | null = null;
+  let resourceBundleStatus: 'draft' | 'published' | null = null;
+  const sourceToolCatalog = await resolvedDependencies.listSourceToolsCatalog();
+  const normalizedAppSourceTool = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
+    slug: 'magicbooklet',
+  });
+  const postPayload = {
+    user_id: generation.user_id,
+    visibility: effectiveVisibility,
+    category: detectedCategory ?? 'image',
+    title: resolvedTitle,
+    description: normalizeTextValue(description) ?? generation.description?.trim() ?? null,
+    prompt: shouldExposePromptPublic ? normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null : null,
+    body: normalizedBody,
+    post_format: normalizedBody ? 'mixed' : 'media',
+    source_kind: MAGICBOOKLET_SOURCE_KIND,
+    source_tool: normalizedAppSourceTool.label ?? 'magicbooklet',
+    source_tool_slug: normalizedAppSourceTool.slug ?? 'magicbooklet',
+    generation_id: generation.id,
+    creation_mode: generation.creation_mode ?? (generation.category === 'motion' ? 'motion' : null),
+    showcase_asset_path: nextShowcaseAssetPath,
+    output_url: nextOutputUrl,
+  };
+
+  try {
+    const publishResult = await resolvedDependencies.publishGenerationPostWithResourceBundleAtomically({
+      supabase: adminSupabase,
+      generationId,
+      ownerUserId: userId,
+      generationUpdate: updatePayload,
+      post: postPayload,
+      bundle: effectiveResourceBundle,
+      hasBundlePayload: effectiveHasResourceBundlePayload,
+    });
+    postId = publishResult.postId;
+    resourceBundleStatus = publishResult.bundleStatus;
+  } catch (postError) {
+    if (hasShowcaseAssetColumn && nextShowcaseAssetPath && nextShowcaseAssetPath !== generation.showcase_asset_path) {
+      void adminSupabase.storage
+        .from(SHOWCASE_MEDIA_BUCKET)
+        .remove([nextShowcaseAssetPath])
+        .catch((storageError) => {
+          console.error('Failed to delete showcase derivative after publish failure:', storageError);
+        });
+    }
+
+    if (createdPrivateMediaLocation) {
+      const cleanupResult = await adminSupabase.storage
+        .from(createdPrivateMediaLocation.bucket)
+        .remove([createdPrivateMediaLocation.filePath]);
+      if (cleanupResult.error) {
+        console.error('Failed to delete private generation media after publish failure:', cleanupResult.error);
+      }
+    }
+
+    if (resolvedDependencies.isMissingPostsSchemaError(postError)) {
+      return { ok: false, status: 500, body: { error: 'Failed to sync showcase post' } };
+    }
+
+    console.error('Failed to sync generation post:', postError);
+    if (resolvedDependencies.isMissingPostResourceBundlesSchemaError(postError)) {
+      return { ok: false, status: 500, body: { error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR } };
+    }
+    return { ok: false, status: 500, body: { error: 'Failed to sync showcase post' } };
+  }
+
+  if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
+    const removalResult = await adminSupabase.storage
+      .from(SHOWCASE_MEDIA_BUCKET)
+      .remove([generation.showcase_asset_path]);
+    if (removalResult.error) {
+      console.error('Failed to delete showcase derivative after unpublish:', removalResult.error);
+    }
+  }
+
+  return {
+    ok: true,
+    body: {
+      success: true,
+      isPublic: effectiveIsPublic,
+      visibility: effectiveVisibility,
+      postId,
+      showcasePath: postId && effectiveVisibility !== 'private' ? `/showcase/${postId}` : null,
+      ownerPath: postId ? `/post/${postId}/edit` : null,
+      resourceBundlePath: postId
+        ? resourceBundleStatus === 'draft' || effectiveVisibility === 'private'
+          ? `/post/${postId}/edit#resources`
+          : `/showcase/${postId}#resources`
+        : null,
+      resourceBundleStatus,
+      message:
+        effectiveVisibility === 'public'
+          ? 'Successfully published to showcase'
+          : effectiveVisibility === 'unlisted'
+            ? 'Saved as an unlisted post'
+            : 'Saved as a private post',
+    },
+  };
+}

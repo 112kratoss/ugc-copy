@@ -5,6 +5,8 @@ import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
+const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
+const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const uploadMock = vi.fn(async () => ({ error: null }));
 const createSignedUrlMock = vi.fn(async () => ({
   data: { signedUrl: 'https://signed.example.com/uploads/user-1/kling-ref.mp4' },
@@ -100,6 +102,49 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
+vi.mock('@/lib/temporary-media-upload', () => ({
+  uploadMediaToTemporaryStorage: temporaryUploadMock,
+}));
+
+vi.mock('@/lib/generation-model-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/generation-model-client')>('@/lib/generation-model-client');
+  return {
+    ...actual,
+    useWebGenerationModelCatalog: () => ({
+      catalog: {
+        revision: 'test-catalog-rev',
+        schemaVersion: 1,
+        defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-3.0' },
+        models: [
+          {
+            id: 'kling-3.0-video',
+            kind: 'video',
+            displayName: 'Kling 3.0 Cinematic',
+            description: 'Test video model',
+            controls: [],
+            capabilities: {},
+            inputs: {},
+          },
+        ],
+      },
+      error: null,
+      isLoading: false,
+      revision: 'test-catalog-rev',
+      refetch: generationCatalogRefetchMock,
+    }),
+    useWebGenerationModelQuote: () => ({
+      status: 'ready',
+      quote: {
+        modelId: 'kling-3.0-video',
+        catalogRevision: 'test-catalog-rev',
+        normalizedSettings: {},
+        costCredits: 12,
+      },
+      error: null,
+    }),
+  };
+});
+
 describe('CreateVideoClient Kling video elements', () => {
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -109,6 +154,12 @@ describe('CreateVideoClient Kling video elements', () => {
   beforeEach(() => {
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
+    generationCatalogRefetchMock.mockClear();
+    temporaryUploadMock.mockReset();
+    temporaryUploadMock.mockImplementation(async (file: File) => ({
+      signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`,
+      storagePath: `uploads/user-1/${file.name}`,
+    }));
     uploadMock.mockClear();
     createSignedUrlMock.mockClear();
     maybeSingleMock.mockClear();
@@ -201,6 +252,8 @@ describe('CreateVideoClient Kling video elements', () => {
       },
     });
     fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+    expect(temporaryUploadMock).toHaveBeenCalledWith(file);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

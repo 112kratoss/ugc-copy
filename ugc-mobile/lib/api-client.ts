@@ -1,9 +1,12 @@
 import type {
+  AppVersionResponse,
   CreatePostResponse,
   GenerationListItem,
   GenerationStartResponse,
   GenerationStatusResponse,
   ImageGenerationRequest,
+  MediaReadUrlRequest,
+  MediaReadUrlResponse,
   MediaUploadIntentRequest,
   MediaUploadIntentResponse,
   MarketplaceResourceList,
@@ -38,7 +41,9 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
-    public details?: unknown
+    public details?: unknown,
+    public requestId?: string,
+    public code?: string
   ) {
     super(message);
     this.name = 'ApiError';
@@ -48,7 +53,14 @@ export class ApiError extends Error {
 export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
+  clientInfo?: MobileClientInfo;
   fetcher?: typeof fetch;
+}
+
+export interface MobileClientInfo {
+  appVersion: string;
+  apiVersion: number;
+  catalogSchemaVersion: number;
 }
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -71,6 +83,7 @@ export interface SaveShowcasePostResponse {
 }
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const REQUEST_ID_HEADER = 'x-request-id';
 
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/$/, '');
@@ -148,6 +161,10 @@ function createGenerationIdempotencyKey(prefix: string): string {
   return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
 }
 
+function createMobileRequestId(): string {
+  return createGenerationIdempotencyKey('mobile');
+}
+
 function generationStartInit(body: unknown, prefix: string, idempotencyKey?: string): RequestInit {
   return {
     method: 'POST',
@@ -170,7 +187,7 @@ async function parseResponse(response: Response) {
   return response.text();
 }
 
-export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: ApiClientOptions) {
+export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher = fetch }: ApiClientOptions) {
   const root = normalizeBaseUrl(baseUrl);
   const responseCache = new Map<string, {
     expiresAt: number;
@@ -204,6 +221,18 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       if (!headers.has('Content-Type') && init.body && !isFormDataBody) {
         headers.set('Content-Type', 'application/json');
       }
+      if (!headers.has(REQUEST_ID_HEADER)) {
+        headers.set(REQUEST_ID_HEADER, createMobileRequestId());
+      }
+      if (clientInfo) {
+        if (!headers.has('x-magicbooklet-client')) headers.set('x-magicbooklet-client', 'mobile');
+        if (!headers.has('x-magicbooklet-app-version')) headers.set('x-magicbooklet-app-version', clientInfo.appVersion);
+        if (!headers.has('x-magicbooklet-api-version')) headers.set('x-magicbooklet-api-version', String(clientInfo.apiVersion));
+        if (!headers.has('x-magicbooklet-catalog-schema-version')) {
+          headers.set('x-magicbooklet-catalog-schema-version', String(clientInfo.catalogSchemaVersion));
+        }
+      }
+      const requestId = headers.get(REQUEST_ID_HEADER) ?? undefined;
 
       if (options.auth !== false) {
         const token = await getAccessToken();
@@ -223,16 +252,20 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
         throw new ApiError(networkFailureMessage(root), 0, {
           url,
           cause: error instanceof Error ? error.message : String(error),
-        });
+        }, requestId);
       }
       const body = await parseResponse(response);
+      const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;
 
       if (!response.ok) {
         const message =
           typeof body === 'object' && body && 'error' in body
             ? String((body as { error?: unknown }).error)
             : `Request failed with status ${response.status}`;
-        throw new ApiError(message, response.status, body);
+        const code = typeof body === 'object' && body && 'code' in body && typeof body.code === 'string'
+          ? body.code
+          : undefined;
+        throw new ApiError(message, response.status, body, responseRequestId, code);
       }
 
       return body as T;
@@ -265,6 +298,7 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
 
   return {
     request,
+    getAppVersion: () => request<AppVersionResponse>('/api/app-version', {}, { auth: false }),
     getProfile: () => request<ProfileResponse>('/api/profile'),
     updateProfile: (body: Partial<ProfileResponse>) =>
       request<ProfileResponse>('/api/profile', { method: 'PATCH', body: JSON.stringify(body) }),
@@ -367,6 +401,11 @@ export function createApiClient({ baseUrl, getAccessToken, fetcher = fetch }: Ap
       }),
     createMediaUpload: (body: MediaUploadIntentRequest) =>
       request<MediaUploadIntentResponse>('/api/uploads/media/sign', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    createMediaReadUrl: (body: MediaReadUrlRequest) =>
+      request<MediaReadUrlResponse>('/api/uploads/media/read-url', {
         method: 'POST',
         body: JSON.stringify(body),
       }),

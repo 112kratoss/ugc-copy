@@ -111,12 +111,15 @@ describe('/api/source-tools route', () => {
     });
 
     const { GET } = await import('@/app/api/source-tools/route');
-    const response = await GET(new NextRequest('http://localhost/api/source-tools'));
+    const response = await GET(new NextRequest('http://localhost/api/source-tools', {
+      headers: { 'x-request-id': 'source-tools-1' },
+    }));
     const payload = await response.json();
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
     expect(response.headers.get('ETag')).toMatch(/^"[a-f0-9]{16}"$/);
+    expect(response.headers.get('x-request-id')).toBe('source-tools-1');
     expect(payload.tools).toHaveLength(1);
   });
 
@@ -149,12 +152,13 @@ describe('/api/source-tools route', () => {
     const initial = await GET(new NextRequest('http://localhost/api/source-tools'));
     const etag = initial.headers.get('ETag')!;
     const response = await GET(new NextRequest('http://localhost/api/source-tools', {
-      headers: { 'If-None-Match': etag },
+      headers: { 'If-None-Match': etag, 'x-request-id': 'source-tools-304' },
     }));
 
     expect(response.status).toBe(304);
     expect(response.headers.get('ETag')).toBe(etag);
     expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('x-request-id')).toBe('source-tools-304');
   });
 
   it('falls back to bundled tools when the catalog tables are missing', async () => {

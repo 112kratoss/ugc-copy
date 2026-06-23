@@ -103,7 +103,7 @@ export async function pickResourceDocument() {
 export async function uploadPickedMedia(
   uri: string,
   options: {
-    api?: Pick<MagicbookletApiClient, 'createMediaUpload'>;
+    api?: Pick<MagicbookletApiClient, 'createMediaUpload' | 'createMediaReadUrl'>;
     bucket?: string;
     fileName?: string | null;
     mimeType?: string | null;
@@ -149,13 +149,12 @@ export async function uploadPickedMedia(
     throw new Error(uploadError.message);
   }
 
-  const { data, error } = await supabase.storage.from(uploadIntent.bucket).createSignedUrl(uploadIntent.path, 3600);
-  if (error || !data?.signedUrl) {
-    throw new Error(error?.message ?? 'Could not create signed media URL.');
-  }
+  const readUrl = await options.api.createMediaReadUrl({
+    storagePath: uploadIntent.storagePath,
+  });
 
   return {
-    signedUrl: data.signedUrl,
+    signedUrl: readUrl.signedUrl,
     storagePath: uploadIntent.storagePath,
     mimeType,
     fileName,

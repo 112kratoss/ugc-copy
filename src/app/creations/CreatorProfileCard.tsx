@@ -489,14 +489,32 @@ export default function CreatorProfileCard({
     setFormError(null);
     setSuccessMessage(null);
     const uploadedStoragePaths: string[] = [];
+    let cleanupAccessToken: string | null = null;
 
     const cleanupUploadedMedia = async () => {
       if (uploadedStoragePaths.length === 0) {
         return;
       }
 
-      const { error: cleanupError } = await supabase.storage.from('profiles').remove(uploadedStoragePaths);
-      if (cleanupError) {
+      if (!cleanupAccessToken) {
+        return;
+      }
+
+      try {
+        const cleanupResponse = await fetch('/api/profile/media/cleanup', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cleanupAccessToken}`,
+          },
+          body: JSON.stringify({ paths: uploadedStoragePaths }),
+        });
+
+        if (!cleanupResponse.ok) {
+          const cleanupData = await cleanupResponse.json().catch(() => null) as { error?: string } | null;
+          throw new Error(cleanupData?.error || 'Profile media cleanup failed.');
+        }
+      } catch (cleanupError) {
         console.error('Failed to clean up uploaded profile media:', cleanupError);
       }
     };
@@ -510,6 +528,7 @@ export default function CreatorProfileCard({
         setFormError('Please log in again to update your profile.');
         return;
       }
+      cleanupAccessToken = session.access_token;
 
       const validationResponse = await fetch('/api/profile/validate', {
         method: 'POST',

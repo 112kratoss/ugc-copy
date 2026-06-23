@@ -45,10 +45,12 @@ import {
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
+import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import {
     applyGenerationModelCatalogToRegistries,
     getActiveRegistryModels,
     resolveCatalogModelId,
+    resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
@@ -260,29 +262,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setReferenceVideoDescriptor(null);
         setDuration(0); setVideoError(null);
         await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
-    };
-
-    const uploadToSupabase = async (file: File, bucket: string): Promise<{ signedUrl: string; storagePath: string }> => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Please log in to upload files.');
-
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${user.id}/${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from(bucket).upload(fileName, file);
-        if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
-
-        const { data: signedData, error: signedUrlError } = await supabase.storage
-            .from(bucket)
-            .createSignedUrl(fileName, 3600);
-
-        if (signedUrlError || !signedData?.signedUrl) {
-            throw new Error(`Signed URL generation failed: ${signedUrlError?.message || 'Unknown error'}`);
-        }
-
-        return {
-            signedUrl: signedData.signedUrl,
-            storagePath: `${bucket}/${fileName}`,
-        };
     };
 
     // Handle Remix Pre-fill
@@ -558,7 +537,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (!referenceVideoFile && !referenceVideo) { alert('Please upload a reference video'); return; }
         const effectiveDuration = Math.ceil(duration);
         if (effectiveDuration <= 0) { alert('Invalid video duration'); return; }
-        if (quotePending) { setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.'); return; }
+        if (quotePending) { setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.'); return; }
         if (insufficientCredits) { setError(`Insufficient credits. This costs ${estimatedCost} credits.`); return; }
 
         const idempotencyKey = createGenerationIdempotencyKey('motion');
@@ -587,7 +566,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const upload = await uploadToSupabase(characterImageFile, 'uploads');
+                const upload = await uploadMediaToTemporaryStorage(characterImageFile);
                 imageUrl = upload.signedUrl;
                 nextCharacterImageDescriptor = {
                     kind: 'image',
@@ -604,7 +583,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const upload = await uploadToSupabase(referenceVideoFile, 'uploads');
+                const upload = await uploadMediaToTemporaryStorage(referenceVideoFile);
                 videoUrl = upload.signedUrl;
                 nextReferenceVideoDescriptor = {
                     kind: 'video',
@@ -679,10 +658,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         }
     };
 
-    const creditsPerSecond = selectedModel === 'kling-3.0'
-        ? (mode === '1080p' ? 20 : 12)
-        : (mode === '1080p' ? 9 : 6);
-    const fallbackEstimatedCost = duration > 0 ? Math.ceil(duration * creditsPerSecond) : 0;
     const quoteRequest = useMemo(() => modelCatalog.catalog ? {
         kind: 'motion' as const,
         modelId: selectedModel,
@@ -696,9 +671,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         modelCatalog.refetch();
     }, [modelCatalog.refetch, quoteState.error?.code]);
-    const estimatedCost = quoteState.quote?.costCredits ?? fallbackEstimatedCost;
-    const quotePending = Boolean(modelCatalog.catalog && quoteState.status !== 'ready');
-    const insufficientCredits = userCredits !== null && estimatedCost > 0 && userCredits < estimatedCost;
+    const quoteUi = resolveWebGenerationQuoteUi({
+        hasCatalog: Boolean(modelCatalog.catalog),
+        quoteStatus: quoteState.status,
+        quotedCost: quoteState.quote?.costCredits,
+        quoteErrorMessage: quoteState.error?.message,
+    });
+    const estimatedCost = quoteUi.costCredits;
+    const quotePending = quoteUi.blocksGenerate;
+    const insufficientCredits = userCredits !== null && estimatedCost !== null && estimatedCost > 0 && userCredits < estimatedCost;
     const canGenerate = Boolean(characterImage || characterImageFile)
         && Boolean(referenceVideo || referenceVideoFile)
         && duration > 0
@@ -1089,7 +1070,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     </div>
                                     <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{quotePending ? 'Calculating...' : `${estimatedCost} credits`}</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{quoteUi.costLabel}</div>
                                     </div>
                                 </div>
                             }

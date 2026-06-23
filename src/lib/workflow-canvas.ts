@@ -18,10 +18,11 @@ import {
   type ImageModelId,
   type ImageResolution,
   type MotionModelId,
-  type SoundEffectModelId,
   type VideoModelId,
-  type VoiceoverModelId,
-} from '@/lib/models';
+} from '@/lib/client-generation-models';
+
+type VoiceoverModelId = 'text-to-speech-turbo-2-5' | 'text-to-speech-multilingual-v2' | 'text-to-dialogue-v3';
+type SoundEffectModelId = 'sound-effect-v2';
 
 const WORKFLOW_GRAPH_VERSION = 1;
 

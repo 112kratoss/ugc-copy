@@ -20,10 +20,11 @@ import {
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { clampVideoDuration, getDefaultVideoDuration, getVideoCost, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/models';
+import { clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import {
     getActiveRegistryModels,
     resolveCatalogModelId,
+    resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
@@ -85,6 +86,7 @@ import {
     inspectPromptQuality,
     type PromptEnhancementWarning,
 } from '@/lib/prompt-quality';
+import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 
 interface MultiShot {
     id: string;
@@ -660,15 +662,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const activeReferenceMode = isSeedance2Family ? 'elements' : (canUseVideoElements ? referenceMode : 'frames');
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
-        : (videoModel.provider === 'veo' ? videoModel.durations[0] : currentDuration);
+        : (selectedModel === 'veo-3.1' ? videoModel.durations[0] : currentDuration);
     const hasReferenceVideoForRun = referenceVideos.length > 0 || (isKlingVideoModel && klingVideoElements.length > 0);
-    const fallbackEstimatedCost = getVideoCost(selectedModel, {
-        mode: currentMode,
-        sound: currentSound,
-        durationSeconds: totalDuration,
-        resolution: currentResolution,
-        hasReferenceVideo: hasReferenceVideoForRun,
-    });
     const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (isGrokVideoModel ? 0 : Number(Boolean(endImageUrl || endImageFile)));
     const estimatedReferenceCount =
         activeReferenceMode === 'elements'
@@ -699,8 +694,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         modelCatalog.refetch();
     }, [modelCatalog.refetch, quoteState.error?.code]);
-    const estimatedCost = quoteState.quote?.costCredits ?? fallbackEstimatedCost;
-    const quotePending = Boolean(modelCatalog.catalog && quoteState.status !== 'ready');
+    const quoteUi = resolveWebGenerationQuoteUi({
+        hasCatalog: Boolean(modelCatalog.catalog),
+        quoteStatus: quoteState.status,
+        quotedCost: quoteState.quote?.costCredits,
+        quoteErrorMessage: quoteState.error?.message,
+    });
+    const estimatedCost = quoteUi.costCredits;
+    const quotePending = quoteUi.blocksGenerate;
     const estimatedGenerationTotalMs = estimateGenerationDurationMs({
         kind: 'video',
         model: selectedModel,
@@ -713,7 +714,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         hasSound: currentSound,
         hasReferenceVideo: hasReferenceVideoForRun,
     });
-    const insufficientCredits = userCredits !== null && userCredits < estimatedCost;
+    const insufficientCredits = userCredits !== null && estimatedCost !== null && userCredits < estimatedCost;
     const elementHandles = elements.map((element) => element.handle);
     const klingVideoHandles = isKlingVideoModel ? klingVideoElements.map((element) => element.handle) : [];
     const knownPromptHandles = [...elementHandles, ...klingVideoHandles];
@@ -1764,29 +1765,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         });
     };
 
-    const uploadToSupabase = async (file: File): Promise<{ signedUrl: string; storagePath: string }> => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Please log in to upload files.');
-
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${user.id}/${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('uploads').upload(fileName, file);
-        if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
-
-        const { data: signedData, error: signedUrlError } = await supabase.storage
-            .from('uploads')
-            .createSignedUrl(fileName, 3600);
-
-        if (signedUrlError || !signedData?.signedUrl) {
-            throw new Error(`Signed URL generation failed: ${signedUrlError?.message || 'Unknown error'}`);
-        }
-
-        return {
-            signedUrl: signedData.signedUrl,
-            storagePath: `uploads/${fileName}`,
-        };
-    };
-
     const createSeedanceAssetKey = (kind: 'image' | 'video' | 'audio', id: string) => `${kind}:${id}`;
 
     const requestSeedanceAsset = async (
@@ -1837,7 +1815,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return element;
         }
 
-        const upload = await uploadToSupabase(element.file);
+        const upload = await uploadMediaToTemporaryStorage(element.file);
         return {
             ...element,
             providerUrl: upload.signedUrl,
@@ -1858,7 +1836,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return reference;
         }
 
-        const upload = await uploadToSupabase(reference.file);
+        const upload = await uploadMediaToTemporaryStorage(reference.file);
         return {
             ...reference,
             providerUrl: upload.signedUrl,
@@ -1878,7 +1856,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return element;
         }
 
-        const upload = await uploadToSupabase(element.file);
+        const upload = await uploadMediaToTemporaryStorage(element.file);
         return {
             ...element,
             providerUrl: upload.signedUrl,
@@ -2300,7 +2278,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             const nextWarnings = multiPrompts.reduce<Record<string, PromptEnhancementWarning[]>>((acc, shot, index) => {
                 const inspection = inspectPromptQuality({
                     medium: 'video',
-                    selectedModel: videoModel.enhancerModelId,
+                    selectedModel,
                     prompt: shot.prompt,
                     context: buildShotPromptQualityContext(shot, index),
                 });
@@ -2319,7 +2297,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         } else {
             const inspection = inspectPromptQuality({
                 medium: 'video',
-                selectedModel: videoModel.enhancerModelId,
+                selectedModel,
                 prompt,
                 context: buildSinglePromptQualityContext(),
             });
@@ -2337,7 +2315,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
         if (quotePending) {
-            setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.');
+            setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.');
             return;
         }
 
@@ -2520,7 +2498,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const upload = await uploadToSupabase(startImageFile);
+                const upload = await uploadMediaToTemporaryStorage(startImageFile);
                 startUrl = upload.signedUrl;
                 nextStartFrameDescriptor = {
                     kind: 'image',
@@ -2537,7 +2515,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const upload = await uploadToSupabase(endImageFile);
+                const upload = await uploadMediaToTemporaryStorage(endImageFile);
                 endUrl = upload.signedUrl;
                 nextEndFrameDescriptor = {
                     kind: 'image',
@@ -2835,7 +2813,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         }}
                                         onCreditsUpdate={updateCredits}
                                         medium="video"
-                                        selectedModel={videoModel.enhancerModelId}
+                                        selectedModel={selectedModel}
                                         helperText={
                                             activeReferenceMode === 'elements' && elements.length > 0
                                                 ? 'Named elements keep their @handles. This enhances the scene while preserving those references.'
@@ -3013,7 +2991,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                     }}
                                                     onCreditsUpdate={updateCredits}
                                                     medium="video"
-                                                    selectedModel={videoModel.enhancerModelId}
+                                                    selectedModel={selectedModel}
                                                     context={buildShotPromptQualityContext(shot, index)}
                                                     disabled={isGenerating}
                                                     showWarnings={false}
@@ -3903,7 +3881,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                     <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{quotePending ? 'Calculating...' : `${estimatedCost} credits`}</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{quoteUi.costLabel}</div>
                                     </div>
                                 </div>
                             }

@@ -1,8 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
+import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { getStoredMediaLocation } from '@/lib/server-helpers';
+import {
+  fetchWithProviderTimeout,
+  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+} from '@/lib/provider-fetch';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
@@ -78,7 +82,13 @@ async function downloadMedia(supabase: SupabaseClient, source: string): Promise<
     return result.data;
   }
 
-  const response = await fetch(source);
+  const response = await fetchWithProviderTimeout(
+    source,
+    {},
+    PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+    fetch,
+    'Media preview source download'
+  );
   if (!response.ok) throw new Error(`External media download failed (${response.status}).`);
   return response.blob();
 }

@@ -32,6 +32,11 @@ vi.mock('@/lib/mobile-commerce', () => ({
   unlockMarketplaceAssetWithCredits: (...args: unknown[]) => unlockMarketplaceAssetWithCreditsMock(...args),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('marketplace admin route auth gates', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -69,12 +74,55 @@ describe('marketplace admin route auth gates', () => {
     const response = await POST(
       new Request('http://localhost/api/marketplace/assets/asset-1/import', {
         method: 'POST',
+        headers: { 'x-request-id': 'asset-import-auth-1' },
       }) as never,
       { params: Promise.resolve({ assetId: 'asset-1' }) }
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'asset-import-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
+  });
+
+  it('rate limits marketplace workflow imports before asset lookup or canvas creation', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    rpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 30,
+        remaining: 0,
+        retryAfterSeconds: 43,
+        resetAt: '2026-06-21T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/marketplace/assets/[assetId]/import/route');
+    const response = await POST(
+      new Request('http://localhost/api/marketplace/assets/asset-1/import', {
+        method: 'POST',
+        headers: { 'x-request-id': 'asset-import-rate-limit-1' },
+      }) as never,
+      { params: Promise.resolve({ assetId: 'asset-1' }) }
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('43');
+    expectPrivateNoStoreTraceHeaders(response, 'asset-import-rate-limit-1');
+    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'marketplace-asset:import',
+      p_subject_key: 'buyer-1',
+      p_limit: 30,
+      p_window_seconds: 600,
+    });
   });
 
   it('does not create an admin client before asset credit unlock authentication succeeds', async () => {
@@ -82,11 +130,18 @@ describe('marketplace admin route auth gates', () => {
     const response = await POST(
       new Request('http://localhost/api/marketplace/assets/asset-1/unlock-with-credits', {
         method: 'POST',
+        headers: {
+          authorization: 'Bearer private-token',
+          'x-request-id': 'asset-credit-auth-1',
+        },
       }) as never,
       { params: Promise.resolve({ assetId: 'asset-1' }) }
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'asset-credit-auth-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(unlockMarketplaceAssetWithCreditsMock).not.toHaveBeenCalled();
   });
@@ -115,12 +170,14 @@ describe('marketplace admin route auth gates', () => {
     const response = await POST(
       new Request('http://localhost/api/marketplace/assets/asset-1/unlock-with-credits', {
         method: 'POST',
+        headers: { 'x-request-id': 'asset-credit-rate-limit-1' },
       }) as never,
       { params: Promise.resolve({ assetId: 'asset-1' }) }
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('37');
+    expectPrivateNoStoreTraceHeaders(response, 'asset-credit-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'credit-unlock:spend',
@@ -145,11 +202,13 @@ describe('marketplace admin route auth gates', () => {
     const response = await POST(
       new Request('http://localhost/api/marketplace/assets/asset-1/unlock-with-credits', {
         method: 'POST',
+        headers: { 'x-request-id': 'asset-credit-success-1' },
       }) as never,
       { params: Promise.resolve({ assetId: 'asset-1' }) }
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'asset-credit-success-1');
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'credit-unlock:spend',
       p_subject_key: 'buyer-1',

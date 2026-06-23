@@ -1,38 +1,98 @@
 import { supabase } from '@/lib/supabase';
 
-function inferUploadExtension(file: File): string {
-  const extension = file.name.split('.').pop()?.trim().toLowerCase();
-  if (extension) {
-    return extension;
-  }
+type TemporaryMediaUploadIntent = {
+  success: boolean;
+  bucket: 'uploads';
+  path: string;
+  storagePath: string;
+  token: string;
+  signedUploadUrl: string | null;
+  expiresInSeconds: number;
+};
 
-  if (file.type.startsWith('image/')) {
-    return file.type.split('/')[1] || 'jpg';
-  }
+type TemporaryMediaReadUrlResponse = {
+  success: boolean;
+  signedUrl: string;
+  expiresInSeconds: number;
+};
 
+function inferUploadKind(file: File): 'image' | 'video' | 'audio' {
   if (file.type.startsWith('video/')) {
-    return file.type.split('/')[1] || 'mp4';
+    return 'video';
   }
-
-  return 'bin';
+  if (file.type.startsWith('audio/')) {
+    return 'audio';
+  }
+  return 'image';
 }
 
 export async function uploadMediaToTemporaryStorage(
   file: File,
-  ownerUserId: string
-): Promise<{ storagePath: string }> {
-  const fileName = `${ownerUserId}/${Math.random().toString(36).slice(2)}.${inferUploadExtension(file)}`;
-  const { error } = await supabase.storage.from('uploads').upload(fileName, file, {
-    cacheControl: '3600',
-    contentType: file.type || undefined,
-    upsert: false,
+  _ownerUserId = ''
+): Promise<{ signedUrl: string; storagePath: string }> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error('Please log in to upload files.');
+  }
+
+  const mimeType = file.type || 'application/octet-stream';
+  const response = await fetch('/api/uploads/media/sign', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      fileName: file.name || 'media.bin',
+      mimeType,
+      kind: inferUploadKind(file),
+      sizeBytes: file.size,
+    }),
   });
 
-  if (error) {
-    throw new Error(`Upload failed: ${error.message}`);
+  const uploadIntent = await response.json() as Partial<TemporaryMediaUploadIntent> & { error?: string };
+  if (!response.ok) {
+    throw new Error(uploadIntent.error || 'Failed to prepare media upload.');
+  }
+
+  if (
+    uploadIntent.bucket !== 'uploads'
+    || !uploadIntent.path
+    || !uploadIntent.storagePath
+    || !uploadIntent.token
+  ) {
+    throw new Error('Media upload response was invalid.');
+  }
+
+  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(
+    uploadIntent.path,
+    uploadIntent.token,
+    file,
+    { contentType: mimeType }
+  );
+
+  if (uploadError) {
+    throw new Error(`Upload failed: ${uploadError.message}`);
+  }
+
+  const readUrlResponse = await fetch('/api/uploads/media/read-url', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      storagePath: uploadIntent.storagePath,
+    }),
+  });
+
+  const readUrl = await readUrlResponse.json() as Partial<TemporaryMediaReadUrlResponse> & { error?: string };
+  if (!readUrlResponse.ok || !readUrl.signedUrl) {
+    throw new Error(readUrl.error || 'Failed to prepare media preview.');
   }
 
   return {
-    storagePath: `uploads/${fileName}`,
+    signedUrl: readUrl.signedUrl,
+    storagePath: uploadIntent.storagePath,
   };
 }

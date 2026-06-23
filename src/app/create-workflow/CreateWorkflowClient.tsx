@@ -39,7 +39,10 @@ import {
   resolveCatalogModelId,
   useWebGenerationModelCatalog,
 } from '@/lib/generation-model-client';
-import { supabase } from '@/lib/supabase';
+import {
+  uploadWorkflowAssetWithSignedIntent,
+  type WorkflowAssetUploadBucket,
+} from '@/lib/workflow-asset-upload';
 import { WorkflowCanvasChrome } from './WorkflowCanvasChrome';
 import { WorkflowCanvasLeftRail } from './WorkflowCanvasPanels';
 import { WorkflowCanvasShareActions } from './WorkflowCanvasShareActions';
@@ -65,7 +68,7 @@ import type {
   WorkflowInspectorPanel,
 } from './workflowCanvasUiTypes';
 import { getNodeAnchoredPopupPosition, getNodeRunAffordance } from './workflowCanvasUiUtils';
-import { WORKFLOW_ASSISTANT_COST } from '@/lib/workflow-assistant';
+import { WORKFLOW_ASSISTANT_COST } from '@/lib/workflow-assistant-client';
 
 function areViewportsEqual(
   left: { x: number; y: number; zoom: number },
@@ -868,6 +871,7 @@ export default function CreateWorkflowClient({
         body: JSON.stringify({
           startNodeId: nodeId,
           mode,
+          catalogRevision: modelCatalog.catalog?.revision ?? null,
         }),
       });
       const data = await response.json();
@@ -889,6 +893,7 @@ export default function CreateWorkflowClient({
     closeContextMenu,
     graph,
     hasUnsavedChanges,
+    modelCatalog.catalog?.revision,
     persistCanvas,
     saveState,
     setManualSelection,
@@ -1223,36 +1228,10 @@ export default function CreateWorkflowClient({
 
   const uploadAssetToBucket = useCallback(async (
     file: File,
-    bucket: 'generated_images' | 'generated_videos' | 'generated_audio'
+    bucket: WorkflowAssetUploadBucket
   ) => {
-    const user = effectiveSession?.user ?? null;
-    if (!user) {
-      throw new Error('Please log in to upload media.');
-    }
-
-    const extension = file.name.split('.').pop() || (
-      bucket === 'generated_images'
-        ? 'jpg'
-        : bucket === 'generated_audio'
-          ? 'mp3'
-          : 'mp4'
-    );
-    const filePath = `${user.id}/workflow-input-${crypto.randomUUID()}.${extension}`;
-    const { error: uploadError } = await supabase.storage.from(bucket).upload(filePath, file, { upsert: true });
-    if (uploadError) {
-      throw new Error(uploadError.message);
-    }
-
-    const { data: signed, error: signedError } = await supabase.storage.from(bucket).createSignedUrl(filePath, 3600);
-    if (signedError || !signed?.signedUrl) {
-      throw new Error(signedError?.message || 'Failed to sign upload');
-    }
-
-    return {
-      signedUrl: signed.signedUrl,
-      storagePath: `${bucket}/${filePath}`,
-    };
-  }, [effectiveSession]);
+    return uploadWorkflowAssetWithSignedIntent(file, bucket);
+  }, []);
 
   const handlePaneClick = useCallback(() => {
     clearSelection();

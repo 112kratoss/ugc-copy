@@ -172,12 +172,18 @@ function testKeyHash(userId: string, feature: string, key: string) {
     .digest('hex');
 }
 
-function createBlueprintRequest() {
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
+function createBlueprintRequest(requestId = 'workflow-blueprint-request-1') {
   return new Request('http://localhost/api/workflow-blueprint', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: 'Bearer token',
+      'x-request-id': requestId,
     },
     body: JSON.stringify({
       brandName: 'Magic Booklet',
@@ -269,6 +275,7 @@ describe('/api/workflow-blueprint route', () => {
     const response = await POST(createBlueprintRequest());
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-blueprint-request-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(currentAdminClient.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
       p_scope: 'workflow-blueprint',
@@ -280,10 +287,13 @@ describe('/api/workflow-blueprint route', () => {
   });
 
   it('creates a blueprint after charging credits when within the limit', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const { POST } = await import('@/app/api/workflow-blueprint/route');
-    const response = await POST(createBlueprintRequest());
+    const response = await POST(createBlueprintRequest('workflow-blueprint-success-1'));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-blueprint-success-1');
     await expect(response.json()).resolves.toMatchObject({
       remainingCredits: 94,
       blueprint: {
@@ -299,6 +309,11 @@ describe('/api/workflow-blueprint route', () => {
     }));
     expect(currentAdminClient.inserts).toHaveLength(0);
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.kie.ai/gemini-3-flash/v1/chat/completions',
+      expect.objectContaining({ signal: timeoutSignal })
+    );
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
   });

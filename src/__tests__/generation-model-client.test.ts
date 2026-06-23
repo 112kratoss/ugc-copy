@@ -8,12 +8,35 @@ import {
   parseClientGenerationModelCatalog,
   requestWebGenerationQuote,
   resolveCatalogModelId,
+  resolveWebGenerationQuoteUi,
 } from '@/lib/generation-model-client';
 
 describe('web generation model catalog client', () => {
   it('parses the shared schema-v1 fixture', () => {
     const catalog = parseClientGenerationModelCatalog(contractFixture);
     expect(catalog.models[0]).toMatchObject({ id: 'fixture-image', kind: 'image' });
+  });
+
+  it('rejects malformed web catalog controls and defaults', () => {
+    expect(() => parseClientGenerationModelCatalog({
+      ...contractFixture,
+      defaults: { ...contractFixture.defaults, image: 'missing-image' },
+    })).toThrow('Invalid generation model catalog');
+
+    expect(() => parseClientGenerationModelCatalog({
+      ...contractFixture,
+      models: [{
+        ...contractFixture.models[0],
+        controls: [{
+          key: 'aspectRatio',
+          label: 'Aspect ratio',
+          type: 'choice',
+          presentation: 'chips',
+          defaultValue: '1:1',
+          options: [],
+        }],
+      }],
+    })).toThrow('Invalid generation model catalog');
   });
 
   it('adapts a remote-only model into the legacy web registry shape', () => {
@@ -101,5 +124,45 @@ describe('web generation model catalog client', () => {
       method: 'POST',
       headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
     }));
+  });
+
+  it('does not expose a fallback cost when the catalog is unavailable', () => {
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: false,
+      quoteStatus: 'idle',
+      quotedCost: null,
+      quoteErrorMessage: null,
+    })).toMatchObject({
+      costCredits: null,
+      costLabel: 'Unavailable',
+      blocksGenerate: true,
+      message: 'Model settings are unavailable. Retry before generating.',
+    });
+  });
+
+  it('requires an authoritative server quote before showing a cost', () => {
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: true,
+      quoteStatus: 'pending',
+      quotedCost: null,
+      quoteErrorMessage: null,
+    })).toMatchObject({
+      costCredits: null,
+      costLabel: 'Calculating...',
+      blocksGenerate: true,
+      message: 'Wait for the current generation cost before continuing.',
+    });
+
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: true,
+      quoteStatus: 'ready',
+      quotedCost: 42,
+      quoteErrorMessage: null,
+    })).toMatchObject({
+      costCredits: 42,
+      costLabel: '42 credits',
+      blocksGenerate: false,
+      message: null,
+    });
   });
 });

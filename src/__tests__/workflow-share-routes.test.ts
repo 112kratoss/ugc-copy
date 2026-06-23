@@ -13,6 +13,7 @@ let allowCanvasLookup = true;
 let insertedSharePayloads: Array<Record<string, unknown>> = [];
 let insertedCanvasPayloads: Array<Record<string, unknown>> = [];
 let shareImportCountUpdates: Array<Record<string, unknown>> = [];
+const rateLimitRpcMock = vi.fn();
 
 const sourceCanvas = {
   id: 'canvas-1',
@@ -41,6 +42,7 @@ const shareRow = {
 
 function createServiceSupabaseMock() {
   return {
+    rpc: rateLimitRpcMock,
     from(table: string) {
       if (table !== 'workflow_shares') {
         throw new Error(`Unexpected service table: ${table}`);
@@ -200,6 +202,17 @@ describe('workflow share routes', () => {
     insertedSharePayloads = [];
     insertedCanvasPayloads = [];
     shareImportCountUpdates = [];
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 240,
+        remaining: 239,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
   });
 
   afterEach(() => {

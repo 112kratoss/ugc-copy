@@ -5,7 +5,7 @@ import NewPostClient from '@/app/post/new/NewPostClient';
 
 const mockPush = vi.fn();
 const fetchMock = vi.fn();
-const storageUploadMock = vi.hoisted(() => vi.fn());
+const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const searchParamsState = vi.hoisted(() => ({
   value: new URLSearchParams(),
 }));
@@ -26,14 +26,8 @@ vi.mock('@/app/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/lib/supabase', () => ({
-  supabase: {
-    storage: {
-      from: () => ({
-        upload: storageUploadMock,
-      }),
-    },
-  },
+vi.mock('@/lib/temporary-media-upload', () => ({
+  uploadMediaToTemporaryStorage: temporaryUploadMock,
 }));
 
 const SOURCE_TOOLS_RESPONSE = {
@@ -60,8 +54,11 @@ describe('NewPostClient', () => {
   beforeEach(() => {
     mockPush.mockReset();
     fetchMock.mockReset();
-    storageUploadMock.mockReset();
-    storageUploadMock.mockResolvedValue({ error: null });
+    temporaryUploadMock.mockReset();
+    temporaryUploadMock.mockImplementation(async (file: File) => ({
+      signedUrl: `https://storage.example.test/signed/${file.name}`,
+      storagePath: `uploads/user-1/${file.name}`,
+    }));
     searchParamsState.value = new URLSearchParams();
     queuedResponses = [];
     fetchMock.mockImplementation(async (url: string | Request, init?: RequestInit) => {
@@ -566,7 +563,7 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
-      expect(storageUploadMock).toHaveBeenCalledTimes(1);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
@@ -612,7 +609,7 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
-      expect(storageUploadMock).toHaveBeenCalledTimes(2);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 

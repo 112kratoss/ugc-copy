@@ -20,6 +20,11 @@ vi.mock('@/app/api/workflow-canvases/[id]/route', () => ({
   PATCH: (...args: unknown[]) => mocks.patchWorkflowCanvas(...args),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 type AssistantMessageRow = {
   id: string;
   canvas_id: string;
@@ -516,7 +521,10 @@ describe('workflow assistant routes', () => {
     const response = await POST(
       new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-assistant-setup-required-1',
+        },
         body: JSON.stringify({
           content: 'Create a before and after transformation using Seedance 2.0.',
         }),
@@ -526,6 +534,7 @@ describe('workflow assistant routes', () => {
 
     const data = await response.json();
     expect(response.status).toBe(503);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-assistant-setup-required-1');
     expect(data.code).toBe('assistant_schema_missing');
     expect(data.error).toBe('Workflow assistant database tables are missing. Run migration 20260416120000_workflow_canvas_assistant.sql.');
     expect(adminRpcCalls).not.toContain('start_ai_usage_event');
@@ -539,7 +548,10 @@ describe('workflow assistant routes', () => {
     const response = await POST(
       new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-assistant-rate-limit-1',
+        },
         body: JSON.stringify({
           content: 'Create a before and after transformation using Seedance 2.0.',
         }),
@@ -548,6 +560,7 @@ describe('workflow assistant routes', () => {
     );
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-assistant-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(adminRpcCalls).toContain('check_backend_rate_limit');
     expect(adminRpcCalls).not.toContain('start_ai_usage_event');
@@ -556,11 +569,16 @@ describe('workflow assistant routes', () => {
   });
 
   it('creates a new assistant proposal from a chat message', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const { POST } = await import('@/app/api/workflow-canvases/[id]/assistant/messages/route');
     const response = await POST(
       new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-assistant-success-1',
+        },
         body: JSON.stringify({
           content: 'Create a before and after lightning transformation workflow.',
         }),
@@ -570,6 +588,7 @@ describe('workflow assistant routes', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-assistant-success-1');
     expect(data.remainingCredits).toBe(94);
     expect(data.messages).toHaveLength(2);
     expect(data.messages[0].role).toBe('user');
@@ -578,6 +597,11 @@ describe('workflow assistant routes', () => {
     expect(data.proposal.proposed_graph.nodes.some((node: { data: { managed?: boolean } }) => node.data.managed)).toBe(true);
     expect(assistantProposals[0].status).toBe('ready');
     expect(usageEventUpdates.some((update) => update.status === 'succeeded')).toBe(true);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      'https://api.kie.ai/gemini-3-flash/v1/chat/completions',
+      expect.objectContaining({ signal: timeoutSignal })
+    );
   });
 
   it('replays a completed idempotent assistant response without charging credits or persisting duplicate messages', async () => {

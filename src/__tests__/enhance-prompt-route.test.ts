@@ -176,6 +176,11 @@ function testKeyHash(userId: string, feature: string, key: string) {
     .digest('hex');
 }
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 vi.mock('@supabase/supabase-js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@supabase/supabase-js')>();
 
@@ -249,6 +254,7 @@ describe('/api/enhance-prompt route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'enhance-prompt-success-1',
         },
         body: JSON.stringify({
           medium: 'image',
@@ -260,6 +266,7 @@ describe('/api/enhance-prompt route', () => {
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'enhance-prompt-success-1');
     expect(buildEnhancerSystemPromptMock).toHaveBeenCalledWith(
       'image',
       'nano-banana-pro',
@@ -347,6 +354,7 @@ describe('/api/enhance-prompt route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'enhance-prompt-invalid-model-1',
         },
         body: JSON.stringify({
           medium: 'image',
@@ -357,6 +365,7 @@ describe('/api/enhance-prompt route', () => {
     );
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'enhance-prompt-invalid-model-1');
     expect(buildEnhancerSystemPromptMock).not.toHaveBeenCalled();
     expect(callPromptEnhancerMock).not.toHaveBeenCalled();
   });
@@ -371,6 +380,7 @@ describe('/api/enhance-prompt route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'enhance-prompt-rate-limit-1',
         },
         body: JSON.stringify({
           medium: 'image',
@@ -381,6 +391,7 @@ describe('/api/enhance-prompt route', () => {
     );
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'enhance-prompt-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(currentAdminClient.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
       p_scope: 'prompt-enhancement',

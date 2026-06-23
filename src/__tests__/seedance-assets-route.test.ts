@@ -43,6 +43,11 @@ vi.mock('@/lib/server-helpers', () => ({
   resolveStoredMediaUrl: resolveStoredMediaUrlMock,
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/seedance-assets route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -58,6 +63,8 @@ describe('/api/seedance-assets route', () => {
   });
 
   it('creates Seedance assets using the official playground endpoint', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({
       ok: true,
@@ -77,6 +84,7 @@ describe('/api/seedance-assets route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'seedance-assets-success-1',
         },
         body: JSON.stringify({
           url: 'uploads/user-1/reference.mp4',
@@ -86,6 +94,7 @@ describe('/api/seedance-assets route', () => {
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'seedance-assets-success-1');
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.kie.ai/api/v1/playground/createAsset',
       expect.objectContaining({
@@ -93,12 +102,14 @@ describe('/api/seedance-assets route', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer test-key',
         }),
+        signal: timeoutSignal,
         body: JSON.stringify({
           assetType: 'Video',
           url: 'https://signed.example.com/uploads/user-1/reference.mp4',
         }),
       })
     );
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
     expect(await response.json()).toMatchObject({
       success: true,
       assetId: 'asset-123',
@@ -108,6 +119,8 @@ describe('/api/seedance-assets route', () => {
   });
 
   it('normalizes getAsset responses into app-friendly statuses', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({
       ok: true,
@@ -138,8 +151,10 @@ describe('/api/seedance-assets route', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer test-key',
         }),
+        signal: timeoutSignal,
       })
     );
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
     expect(await response.json()).toMatchObject({
       success: true,
       assetId: 'asset-456',
@@ -170,6 +185,7 @@ describe('/api/seedance-assets route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'seedance-assets-rate-limit-1',
         },
         body: JSON.stringify({
           url: 'uploads/user-1/reference.mp4',
@@ -179,6 +195,7 @@ describe('/api/seedance-assets route', () => {
     );
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'seedance-assets-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(serviceRpcCalls).toHaveLength(1);
     expect(serviceRpcCalls[0]).toMatchObject({

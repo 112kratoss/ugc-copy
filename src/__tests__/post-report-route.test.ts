@@ -93,6 +93,11 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientFactory(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/posts/[postId]/report route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -137,13 +142,20 @@ describe('/api/posts/[postId]/report route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer private-token',
+          'x-request-id': 'post-report-auth-1',
+        },
         body: JSON.stringify({ reason: 'spam' }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'post-report-auth-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(insertedReports).toEqual([]);
   });
@@ -153,13 +165,17 @@ describe('/api/posts/[postId]/report route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'post-report-invalid-1',
+        },
         body: JSON.stringify({ reason: 'not-a-real-reason' }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'post-report-invalid-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(insertedReports).toEqual([]);
   });
@@ -169,13 +185,17 @@ describe('/api/posts/[postId]/report route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'post-report-success-1',
+        },
         body: JSON.stringify({ reason: 'spam' }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'post-report-success-1');
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'post-report:submit',
       p_subject_key: 'reporter-1',
@@ -209,7 +229,10 @@ describe('/api/posts/[postId]/report route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'post-report-rate-limit-1',
+        },
         body: JSON.stringify({ reason: 'spam' }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
@@ -217,6 +240,7 @@ describe('/api/posts/[postId]/report route', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('55');
+    expectPrivateNoStoreTraceHeaders(response, 'post-report-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'post-report:submit',

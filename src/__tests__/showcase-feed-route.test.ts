@@ -59,10 +59,14 @@ describe('/api/showcase/feed route', () => {
 
   it('returns a public cache header for anonymous feed requests', async () => {
     const { GET } = await import('@/app/api/showcase/feed/route');
-    const response = await GET(new NextRequest('http://localhost/api/showcase/feed'));
+    const response = await GET(new NextRequest('http://localhost/api/showcase/feed', {
+      headers: { 'x-request-id': 'feed-anon-1' },
+    }));
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    expect(response.headers.get('x-request-id')).toBe('feed-anon-1');
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
       category: 'all',
       sort: 'recent',
@@ -102,12 +106,16 @@ describe('/api/showcase/feed route', () => {
       new NextRequest('http://localhost/api/showcase/feed', {
         headers: {
           Authorization: 'Bearer test-token',
+          'x-request-id': 'feed-auth-1',
         },
       })
     );
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    expect(response.headers.get('x-request-id')).toBe('feed-auth-1');
+    expect(response.headers.get('Authorization')).toBeNull();
     expect(getUserMock).toHaveBeenCalledTimes(1);
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
       category: 'all',

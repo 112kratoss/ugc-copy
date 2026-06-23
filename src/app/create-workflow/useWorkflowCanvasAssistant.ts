@@ -10,7 +10,7 @@ import {
   type WorkflowCanvasAssistantProposalRecord,
   type WorkflowAssistantAvailability,
   type WorkflowCanvasAssistantState,
-} from '@/lib/workflow-assistant';
+} from '@/lib/workflow-assistant-client';
 
 type PersistCanvasResult = {
   status: 'saved' | 'noop' | 'conflict' | 'failed';

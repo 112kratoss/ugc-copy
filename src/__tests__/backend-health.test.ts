@@ -34,6 +34,7 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
       { error: null, data: [] },
     ],
     generation_completion_jobs: { error: null, data: [] },
+    provider_dependency_events: { error: null, data: [] },
     ...results,
   };
   const builders: Record<string, FakeQueryBuilder[]> = {};
@@ -56,6 +57,21 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
   };
 }
 
+const COMPLETE_BACKEND_ENVIRONMENT = {
+  NEXT_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key',
+  SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+  NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.com',
+  CRON_SECRET: 'cron-secret',
+  KIE_AI_API_KEY: 'kie-key',
+  KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
+  NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp-key',
+  RAZORPAY_KEY_SECRET: 'rzp-secret',
+  RAZORPAY_WEBHOOK_SECRET: 'rzp-webhook-secret',
+  REVENUECAT_SECRET_API_KEY: 'revenuecat-key',
+  REVENUECAT_WEBHOOK_AUTH_TOKEN: 'Bearer revenuecat-webhook-secret',
+} satisfies NodeJS.ProcessEnv;
+
 describe('collectBackendHealth', () => {
   it('returns ok when scheduled jobs recently succeeded and no generations are stalled', async () => {
     const now = new Date('2026-06-21T10:00:00.000Z');
@@ -75,8 +91,8 @@ describe('collectBackendHealth', () => {
           {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
-            started_at: '2026-06-21T00:15:00.000Z',
-            finished_at: '2026-06-21T00:15:01.000Z',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: null,
             error_message: null,
@@ -105,17 +121,52 @@ describe('collectBackendHealth', () => {
       ],
     });
 
-    const health = await collectBackendHealth(db.client as never, now);
+    const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
 
     expect(health.status).toBe('ok');
+    expect(health.environment).toEqual({
+      status: 'ok',
+      configuredRequirementCount: 12,
+      totalRequirementCount: 12,
+      missing: [],
+    });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
+    expect(health.scheduler).toMatchObject({
+      status: 'ok',
+      route: '/api/cron/backend-jobs',
+      schedule: '*/10 * * * *',
+      cadenceMinutes: 10,
+      dailyInvocations: 144,
+      dailyInvocationBudget: 180,
+      logicalDailyInvocations: 312,
+      coveredJobCount: 3,
+      coveredJobs: expect.arrayContaining([
+        expect.objectContaining({
+          name: 'generation-completions',
+          cadenceMinutes: 10,
+          dailyInvocations: 144,
+        }),
+        expect.objectContaining({
+          name: 'media-preview-repair',
+          cadenceMinutes: 60,
+          dailyInvocations: 24,
+        }),
+        expect.objectContaining({
+          name: 'mobile-push-receipts',
+          cadenceMinutes: 10,
+          dailyInvocations: 144,
+        }),
+      ]),
+    });
     expect(health.jobs).toHaveLength(3);
     expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
       status: 'ok',
+      dailyInvocations: 144,
       expectedMaxAgeMinutes: 30,
     });
     expect(health.jobs.find((job) => job.name === 'media-preview-repair')).toMatchObject({
       status: 'ok',
+      dailyInvocations: 24,
       expectedMaxAgeMinutes: 120,
     });
     expect(health.generations).toMatchObject({
@@ -159,8 +210,8 @@ describe('collectBackendHealth', () => {
           {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
-            started_at: '2026-06-21T00:15:00.000Z',
-            finished_at: '2026-06-21T00:15:01.000Z',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: null,
             error_message: null,
@@ -261,6 +312,139 @@ describe('collectBackendHealth', () => {
     );
   });
 
+  it('summarizes durable provider dependency failures and slow calls for ops alerts', async () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+      provider_dependency_events: {
+        error: null,
+        data: [
+          {
+            service_name: 'KIE task status',
+            outcome: 'http_error',
+            duration_ms: 2400,
+            timeout_ms: 10_000,
+            status: 502,
+            created_at: '2026-06-21T09:55:00.000Z',
+          },
+          {
+            service_name: 'KIE task status',
+            outcome: 'timeout',
+            duration_ms: 10_000,
+            timeout_ms: 10_000,
+            status: null,
+            created_at: '2026-06-21T09:50:00.000Z',
+          },
+          {
+            service_name: 'Razorpay order API',
+            outcome: 'network_error',
+            duration_ms: 700,
+            timeout_ms: 5000,
+            status: null,
+            created_at: '2026-06-21T09:45:00.000Z',
+          },
+          {
+            service_name: 'KIE media download',
+            outcome: 'success',
+            duration_ms: 18_000,
+            timeout_ms: 60_000,
+            status: 200,
+            created_at: '2026-06-21T09:40:00.000Z',
+          },
+        ],
+      },
+    });
+
+    const health = await collectBackendHealth(db.client as never, now);
+
+    expect(health.status).toBe('warning');
+    expect(health.providerDependencies).toMatchObject({
+      status: 'warning',
+      recentWindowMinutes: 60,
+      slowAfterMs: 15_000,
+      recentEventCount: 4,
+      failedEventCount: 3,
+      timeoutCount: 1,
+      networkErrorCount: 1,
+      slowCount: 1,
+      averageDurationMs: 7775,
+      maxDurationMs: 18_000,
+      countsByOutcome: {
+        http_error: 1,
+        timeout: 1,
+        network_error: 1,
+        success: 1,
+      },
+      countsByService: {
+        'KIE task status': 2,
+        'Razorpay order API': 1,
+        'KIE media download': 1,
+      },
+      failedByService: {
+        'KIE task status': 2,
+        'Razorpay order API': 1,
+      },
+      slowByService: {
+        'KIE media download': 1,
+      },
+      oldestRecentEventAt: '2026-06-21T09:40:00.000Z',
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'PROVIDER_DEPENDENCY_FAILURES',
+        severity: 'warning',
+      }),
+      expect.objectContaining({
+        code: 'PROVIDER_DEPENDENCY_SLOW_CALLS',
+        severity: 'warning',
+      }),
+    ]));
+    expect(db.from).toHaveBeenCalledWith('provider_dependency_events');
+    expect(db.builders.provider_dependency_events[0].select).toHaveBeenCalledWith(
+      'service_name,outcome,duration_ms,timeout_ms,status,created_at',
+    );
+    expect(db.builders.provider_dependency_events[0].gte).toHaveBeenCalledWith(
+      'created_at',
+      '2026-06-21T09:00:00.000Z',
+    );
+  });
+
   it('warns when a scheduled job has no recent run records', async () => {
     const db = createClient({
       backend_job_runs: { error: null, data: [] },
@@ -296,8 +480,8 @@ describe('collectBackendHealth', () => {
           {
             job_name: 'mobile-push-receipts',
             status: 'skipped',
-            started_at: '2026-06-21T00:15:00.000Z',
-            finished_at: '2026-06-21T00:15:01.000Z',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: 'no_pending_receipts',
             error_message: null,
@@ -324,13 +508,193 @@ describe('collectBackendHealth', () => {
 
     expect(health.status).toBe('ok');
     expect(health.jobs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'media-preview-repair', status: 'ok', recentSkips: 1 }),
-      expect.objectContaining({ name: 'mobile-push-receipts', status: 'ok', recentSkips: 1 }),
-      expect.objectContaining({ name: 'generation-completions', status: 'ok', recentSkips: 1 }),
+      expect.objectContaining({
+        name: 'media-preview-repair',
+        status: 'ok',
+        route: '/api/cron/media-preview-repair',
+        schedule: '0 * * * *',
+        cadenceMinutes: 60,
+        dailyInvocations: 24,
+        maxMissedRunsBeforeDegraded: 2,
+        lastHealthyAt: '2026-06-21T09:55:00.000Z',
+        lastSuccessAt: null,
+        recentSkips: 1,
+      }),
+      expect.objectContaining({
+        name: 'mobile-push-receipts',
+        status: 'ok',
+        route: '/api/cron/mobile-push-receipts',
+        schedule: '*/10 * * * *',
+        cadenceMinutes: 10,
+        dailyInvocations: 144,
+        maxMissedRunsBeforeDegraded: 4,
+        lastHealthyAt: '2026-06-21T09:50:00.000Z',
+        lastSuccessAt: null,
+        recentSkips: 1,
+      }),
+      expect.objectContaining({
+        name: 'generation-completions',
+        status: 'ok',
+        route: '/api/cron/generation-completions',
+        schedule: '*/10 * * * *',
+        cadenceMinutes: 10,
+        dailyInvocations: 144,
+        maxMissedRunsBeforeDegraded: 3,
+        lastHealthyAt: '2026-06-21T09:58:00.000Z',
+        lastSuccessAt: null,
+        recentSkips: 1,
+      }),
     ]));
     expect(health.issues).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'JOB_NO_RECENT_SUCCESS' }),
       expect.objectContaining({ code: 'JOB_STALE_SUCCESS' }),
+    ]));
+  });
+
+  it('degrades when the mobile receipt job has no healthy liveness within its expected window', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'skipped',
+            started_at: '2026-06-21T08:45:00.000Z',
+            finished_at: '2026-06-21T08:45:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_pending_receipts',
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.status).toBe('degraded');
+    expect(health.jobs.find((job) => job.name === 'mobile-push-receipts')).toMatchObject({
+      status: 'degraded',
+      expectedMaxAgeMinutes: 40,
+      latestRun: expect.objectContaining({
+        skipReason: 'no_pending_receipts',
+      }),
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'JOB_STALE_SUCCESS',
+        severity: 'degraded',
+        message: expect.stringContaining('mobile-push-receipts'),
+      }),
+    ]));
+  });
+
+  it('warns when a scheduled job has repeated recent failures even after recovery', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'failed',
+            started_at: '2026-06-21T09:40:00.000Z',
+            finished_at: '2026-06-21T09:40:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'provider timeout',
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'failed',
+            started_at: '2026-06-21T09:30:00.000Z',
+            finished_at: '2026-06-21T09:30:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'provider timeout',
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'failed',
+            started_at: '2026-06-21T09:20:00.000Z',
+            finished_at: '2026-06-21T09:20:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'provider timeout',
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.status).toBe('warning');
+    expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
+      status: 'warning',
+      recentFailures: 3,
+      latestRun: expect.objectContaining({
+        status: 'succeeded',
+      }),
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'JOB_RECENT_FAILURES',
+        severity: 'warning',
+        message: expect.stringContaining('generation-completions'),
+      }),
     ]));
   });
 
@@ -351,8 +715,8 @@ describe('collectBackendHealth', () => {
           {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
-            started_at: '2026-06-21T00:15:00.000Z',
-            finished_at: '2026-06-21T00:15:01.000Z',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: null,
             error_message: null,
@@ -399,8 +763,8 @@ describe('collectBackendHealth', () => {
           {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
-            started_at: '2026-06-21T00:15:00.000Z',
-            finished_at: '2026-06-21T00:15:01.000Z',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: null,
             error_message: null,
@@ -448,6 +812,7 @@ describe('collectBackendHealth', () => {
       pendingCount: 1,
       failedCount: 1,
       oldestDuePendingNextAttemptAt: '2026-06-21T09:30:00.000Z',
+      oldestFailedCreatedAt: '2026-06-21T09:40:00.000Z',
     });
     expect(health.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'GENERATION_COMPLETION_QUEUE_FAILED', severity: 'degraded' }),
@@ -472,8 +837,8 @@ describe('collectBackendHealth', () => {
           {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
-            started_at: '2026-06-21T00:15:00.000Z',
-            finished_at: '2026-06-21T00:15:01.000Z',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: null,
             error_message: null,

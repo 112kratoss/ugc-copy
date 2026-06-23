@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { createGenerationOutputPreview } from '@/lib/generation-media-preview';
+import { createGenerationImagePreview } from '@/lib/generation-media-preview';
 
 describe('generation media previews', () => {
   it('creates an immutable image derivative with ThumbHash metadata', async () => {
@@ -22,10 +22,8 @@ describe('generation media previews', () => {
       },
     };
 
-    const result = await createGenerationOutputPreview({
+    const result = await createGenerationImagePreview({
       body: new Blob([Uint8Array.from(input)], { type: 'image/jpeg' }),
-      category: 'image',
-      contentType: 'image/jpeg',
       storagePath: 'generated_images/user-1/output.jpg',
       supabase: supabase as never,
     });

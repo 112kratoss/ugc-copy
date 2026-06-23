@@ -1,5 +1,24 @@
 export type CreatorToolId = 'image' | 'video' | 'motion';
 
+export interface MobileCompatibilityPolicy {
+  currentApiVersion: number;
+  minimumApiVersion: number;
+  minimumAppVersion: string;
+  supportedCatalogSchemaVersions: number[];
+  unversionedClientsUseApiVersion: number;
+}
+
+export interface AppVersionResponse {
+  buildId: string;
+  mobileCompatibility: MobileCompatibilityPolicy;
+}
+
+export interface MobileCompatibilityErrorResponse {
+  code: 'MOBILE_UPDATE_REQUIRED' | 'MOBILE_SERVER_UPDATE_REQUIRED';
+  error: string;
+  compatibility: MobileCompatibilityPolicy;
+}
+
 export type MediaPreviewStatus = 'pending' | 'processing' | 'ready' | 'failed';
 
 export interface VisualMediaDescriptor {
@@ -84,6 +103,16 @@ export interface MediaUploadIntentResponse {
   storagePath: string;
   token: string;
   signedUploadUrl: string | null;
+  expiresInSeconds: number;
+}
+
+export interface MediaReadUrlRequest {
+  storagePath: string;
+}
+
+export interface MediaReadUrlResponse {
+  success: boolean;
+  signedUrl: string;
   expiresInSeconds: number;
 }
 

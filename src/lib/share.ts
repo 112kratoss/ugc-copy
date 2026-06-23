@@ -1,4 +1,4 @@
-import { isAudioModel } from '@/lib/models';
+import { isAudioModel } from '@/lib/client-generation-models';
 
 const SHARE_SOURCE_SURFACES = [
   'create-image',

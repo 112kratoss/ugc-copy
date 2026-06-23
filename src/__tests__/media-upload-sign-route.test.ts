@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn(async () => ({
   data: {
@@ -76,10 +78,18 @@ describe('/api/uploads/media/sign route', () => {
     const response = await POST(
       new Request('http://localhost/api/uploads/media/sign', {
         method: 'POST',
+        headers: {
+          authorization: 'Bearer private-token',
+          'x-request-id': 'media-sign-auth-1',
+        },
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('media-sign-auth-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
   });
 
@@ -97,7 +107,10 @@ describe('/api/uploads/media/sign route', () => {
     const response = await POST(
       new Request('http://localhost/api/uploads/media/sign', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'media-sign-success-1',
+        },
         body: JSON.stringify({
           fileName: '../Launch Reference?.png',
           mimeType: 'image/png',
@@ -108,14 +121,17 @@ describe('/api/uploads/media/sign route', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      success: true,
-      bucket: 'uploads',
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('media-sign-success-1');
+    const body = await response.json();
+    expect(body).toMatchObject({
+      success: mobileApiContract.endpoints.mediaUploadIntent.response.success,
+      bucket: mobileApiContract.endpoints.mediaUploadIntent.response.bucket,
       path: expect.stringMatching(/^user-1\/[0-9a-f-]+-launch-reference\.png$/),
       storagePath: expect.stringMatching(/^uploads\/user-1\/[0-9a-f-]+-launch-reference\.png$/),
-      token: 'upload-token',
-      signedUploadUrl: 'https://storage.example.test/signed-upload',
-      expiresInSeconds: 7200,
+      token: mobileApiContract.endpoints.mediaUploadIntent.response.token,
+      signedUploadUrl: mobileApiContract.endpoints.mediaUploadIntent.response.signedUploadUrl,
+      expiresInSeconds: mobileApiContract.endpoints.mediaUploadIntent.response.expiresInSeconds,
     });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'temporary-media-upload:sign',
@@ -153,7 +169,10 @@ describe('/api/uploads/media/sign route', () => {
     const response = await POST(
       new Request('http://localhost/api/uploads/media/sign', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'media-sign-rate-limit-1',
+        },
         body: JSON.stringify({
           fileName: 'reference.mp4',
           mimeType: 'video/mp4',
@@ -165,6 +184,8 @@ describe('/api/uploads/media/sign route', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('44');
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('media-sign-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(storageFromMock).not.toHaveBeenCalled();
     expect(createSignedUploadUrlMock).not.toHaveBeenCalled();

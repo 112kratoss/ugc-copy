@@ -2,11 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   attachGenerationProviderTask,
+  settleGenerationFailed,
   syncGenerationStatusByPredictionId,
 } from '@/lib/generation-services';
 
 const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
+const MAX_RETRY_DELAY_SECONDS = 15 * 60;
+const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_PRUNE_LIMIT = 500;
 const DEFAULT_PRUNE_WINDOW_MINUTES = 5;
@@ -121,6 +124,14 @@ export async function finishGenerationCompletionJob(
   return typeof data === 'string' ? data : null;
 }
 
+export function getGenerationCompletionRetryDelaySeconds(attemptCount: number): number {
+  const normalizedAttempt = Number.isFinite(attemptCount)
+    ? Math.max(1, Math.floor(attemptCount))
+    : 1;
+  const retryDelay = DEFAULT_RETRY_DELAY_SECONDS * (2 ** (normalizedAttempt - 1));
+  return Math.min(MAX_RETRY_DELAY_SECONDS, retryDelay);
+}
+
 export async function pruneGenerationCompletionJobs(
   client: RpcClient,
   params: GenerationCompletionPruneOptions = {},
@@ -228,6 +239,35 @@ function retryReason(result: GenerationSyncResult): string {
   return `Generation is still ${result.status}.`;
 }
 
+function retryDelayForJob(job: GenerationCompletionJob, explicitDelaySeconds?: number): number {
+  return explicitDelaySeconds ?? getGenerationCompletionRetryDelaySeconds(job.attempt_count);
+}
+
+function isExhaustedCompletionAttempt(job: GenerationCompletionJob): boolean {
+  return job.attempt_count >= MAX_COMPLETION_ATTEMPTS;
+}
+
+async function finishUnsuccessfulCompletionJob(params: {
+  supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
+  job: GenerationCompletionJob;
+  lockedBy: string;
+  error: string;
+  retryDelaySeconds?: number;
+}): Promise<string | null> {
+  if (isExhaustedCompletionAttempt(params.job)) {
+    await settleGenerationFailed(params.creditSupabase, params.job.prediction_id);
+  }
+
+  return finishGenerationCompletionJob(params.supabase, {
+    id: params.job.id,
+    lockedBy: params.lockedBy,
+    succeeded: false,
+    error: params.error,
+    retryDelaySeconds: retryDelayForJob(params.job, params.retryDelaySeconds),
+  });
+}
+
 async function reattachProviderTaskFromCallbackId(
   client: SupabaseClient,
   params: { generationId: string; predictionId: string },
@@ -290,42 +330,53 @@ export async function processGenerationCompletionJobs(params: {
   };
 
   for (const job of jobs) {
+    let result: GenerationSyncResult | null = null;
+    let failureReason: string | null = null;
+
     try {
-      const result = await syncCompletionJobGenerationStatus({
+      result = await syncCompletionJobGenerationStatus({
         supabase: params.supabase,
         creditSupabase: params.creditSupabase,
         job,
       });
-
-      if (isTerminalGenerationSync(result)) {
-        await finishGenerationCompletionJob(params.supabase, {
-          id: job.id,
-          lockedBy: params.lockedBy,
-          succeeded: true,
-        });
-        summary.completed += 1;
-      } else {
-        const status = await finishGenerationCompletionJob(params.supabase, {
-          id: job.id,
-          lockedBy: params.lockedBy,
-          succeeded: false,
-          error: retryReason(result),
-          retryDelaySeconds: params.retryDelaySeconds,
-        });
-        if (status === 'failed') summary.failed += 1;
-        else summary.retried += 1;
-      }
     } catch (error) {
-      const status = await finishGenerationCompletionJob(params.supabase, {
-        id: job.id,
+      failureReason = errorMessage(error);
+    }
+
+    if (failureReason) {
+      const status = await finishUnsuccessfulCompletionJob({
+        supabase: params.supabase,
+        creditSupabase: params.creditSupabase,
+        job,
         lockedBy: params.lockedBy,
-        succeeded: false,
-        error: errorMessage(error),
+        error: failureReason,
         retryDelaySeconds: params.retryDelaySeconds,
       });
       if (status === 'failed') summary.failed += 1;
       else summary.retried += 1;
+      continue;
     }
+
+    if (result && isTerminalGenerationSync(result)) {
+      await finishGenerationCompletionJob(params.supabase, {
+        id: job.id,
+        lockedBy: params.lockedBy,
+        succeeded: true,
+      });
+      summary.completed += 1;
+      continue;
+    }
+
+    const status = await finishUnsuccessfulCompletionJob({
+      supabase: params.supabase,
+      creditSupabase: params.creditSupabase,
+      job,
+      lockedBy: params.lockedBy,
+      error: result ? retryReason(result) : 'Generation completion status could not be determined.',
+      retryDelaySeconds: params.retryDelaySeconds,
+    });
+    if (status === 'failed') summary.failed += 1;
+    else summary.retried += 1;
   }
 
   return summary;

@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { BACKEND_JOBS_BY_NAME } from '@/lib/backend-jobs';
+
 const migration = fs.readFileSync(path.resolve(
   process.cwd(),
   'supabase/migrations/20260619133531_media_preview_pipeline.sql'
@@ -25,11 +27,16 @@ describe('media preview pipeline migration', () => {
     expect(migration).toContain("posts_category_check CHECK (category IN ('image', 'video', 'text'))");
   });
 
-  it('schedules repair hourly as a low-cost fallback', () => {
+  it('keeps repair covered by the shared low-cost backend job orchestrator', () => {
     const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
     expect(vercel.crons).toContainEqual({
-      path: '/api/cron/media-preview-repair',
-      schedule: '7 * * * *',
+      path: '/api/cron/backend-jobs',
+      schedule: '*/10 * * * *',
+    });
+    expect(BACKEND_JOBS_BY_NAME['media-preview-repair']).toMatchObject({
+      route: '/api/cron/media-preview-repair',
+      schedule: '0 * * * *',
+      cadenceMinutes: 60,
     });
   });
 });

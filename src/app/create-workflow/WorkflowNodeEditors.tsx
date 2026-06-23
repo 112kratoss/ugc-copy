@@ -15,7 +15,7 @@ import {
 } from '@/lib/image-elements';
 import { getActiveRegistryModels } from '@/lib/generation-model-client';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/models';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/client-generation-models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type {
   AudioInputNodeData,
@@ -1182,7 +1182,7 @@ function buildPromptEnhancementRequest(
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     return {
       medium: 'video',
-      selectedModel: VIDEO_MODELS[data.model].enhancerModelId,
+      selectedModel: data.model,
       context: {
         modelId: data.model,
         aspectRatio: data.aspectRatio,
@@ -2283,7 +2283,7 @@ function NodeEditorContent({
                 shots={videoGenerateNode.multiPrompts}
                 onChange={(multiPrompts) => onUpdateNode(node.id, { ...node.data, multiPrompts } as Partial<WorkflowNodeData>)}
                 onCreditsUpdate={onCreditsUpdate}
-                selectedModel={videoModel.enhancerModelId}
+                selectedModel={videoGenerateNode.model}
                 modelId={videoGenerateNode.model}
                 mode={videoGenerateNode.mode}
                 aspectRatio={videoGenerateNode.aspectRatio}

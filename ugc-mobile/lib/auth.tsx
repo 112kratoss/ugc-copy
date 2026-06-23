@@ -1,4 +1,5 @@
 import type { Session, User } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
@@ -6,6 +7,7 @@ import { Platform } from 'react-native';
 import { env, getMissingMobileEnvKeys } from './env';
 import { signInWithNativeApple } from './apple-auth';
 import { createApiClient, type MagicbookletApiClient } from './api-client';
+import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { getProfileCreditsOrNull } from './auth-profile';
 import {
   registerForMobilePushNotifications,
@@ -75,7 +77,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const api = useMemo(
-    () => createApiClient({ baseUrl: env.apiBaseUrl, getAccessToken }),
+    () => createApiClient({
+      baseUrl: env.apiBaseUrl,
+      getAccessToken,
+      clientInfo: {
+        appVersion: Constants.expoConfig?.version ?? '0.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+      },
+    }),
     [getAccessToken]
   );
 

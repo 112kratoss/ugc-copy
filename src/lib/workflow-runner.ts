@@ -43,6 +43,7 @@ import {
   type SeedanceAssetCollections,
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
+import { quoteGenerationModel } from '@/lib/generation-model-catalog';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -70,6 +71,7 @@ interface WorkflowRunRow {
   status: 'processing' | 'succeeded' | 'failed';
   created_at: string;
   finished_at: string | null;
+  catalog_revision: string | null;
 }
 
 interface GenerationStatusSnapshot {
@@ -438,7 +440,7 @@ async function loadWorkflowRunState(params: {
   const { supabase, canvasId, runId } = params;
   const { data: run, error } = await supabase
     .from('workflow_canvas_runs')
-    .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at')
+    .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at, catalog_revision')
     .eq('canvas_id', canvasId)
     .eq('id', runId)
     .single();
@@ -558,8 +560,9 @@ async function executeRunnableNode(params: {
   userId: string;
   node: WorkflowCanvasNode;
   graph: WorkflowCanvasGraph;
+  catalogRevision?: string | null;
 }): Promise<RunnableExecutionResult> {
-  const { supabase, userId, node, graph } = params;
+  const { supabase, userId, node, graph, catalogRevision = null } = params;
   const creditSupabase = createServiceClient();
   const inputs = resolveNodeInputs(graph, node.id);
 
@@ -567,6 +570,18 @@ async function executeRunnableNode(params: {
     if (!inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
     const data = normalizeNodeData('image-generate', node.data as Partial<ImageGenerateNodeData>) as ImageGenerateNodeData;
     const elementPayload = getRunnableElementPayload(graph, node.id);
+    const quote = quoteGenerationModel({
+      kind: 'image',
+      modelId: data.model,
+      settings: {
+        aspectRatio: data.aspectRatio,
+        resolution: data.resolution,
+        outputFormat: data.outputFormat,
+        googleSearch: data.googleSearch,
+      },
+      inputCounts: { images: elementPayload.references.length, videos: 0, audios: 0 },
+      catalogRevision,
+    });
     const result = await startImageGeneration({
       supabase,
       creditSupabase,
@@ -579,6 +594,7 @@ async function executeRunnableNode(params: {
       resolution: data.resolution,
       outputFormat: data.outputFormat,
       googleSearch: data.googleSearch,
+      quotedCostCredits: quote.costCredits,
     });
 
     return {
@@ -611,6 +627,28 @@ async function executeRunnableNode(params: {
     const klingVideoElements = isKlingVideoModel
       ? getKlingVideoElementPayload(graph, node.id)
       : [];
+    const quotedDuration = data.isMultiShot
+      ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
+      : data.duration;
+    const quote = quoteGenerationModel({
+      kind: 'video',
+      modelId: data.model,
+      settings: {
+        mode: data.mode,
+        aspectRatio: data.aspectRatio,
+        sound: data.sound,
+        duration: quotedDuration,
+        resolution: data.resolution,
+        fixedLens: data.fixedLens,
+        isMultiShot: data.isMultiShot,
+      },
+      inputCounts: {
+        images: elementPayload.references.length + Number(Boolean(inputs.startFrameUrl)) + Number(Boolean(inputs.endFrameUrl)),
+        videos: elementPayload.referenceVideoUrls.length + klingVideoElements.length,
+        audios: elementPayload.referenceAudioUrls.length,
+      },
+      catalogRevision,
+    });
     const result = await startVideoGeneration({
       supabase,
       creditSupabase,
@@ -633,6 +671,7 @@ async function executeRunnableNode(params: {
       resolution: data.resolution,
       fixedLens: data.fixedLens,
       seedanceAssets: elementPayload.seedanceAssets,
+      quotedCostCredits: quote.costCredits,
     });
 
     return {
@@ -668,6 +707,17 @@ async function executeRunnableNode(params: {
       duration: 10,
       characterOrientation: data.characterOrientation,
       mode: data.mode,
+      quotedCostCredits: quoteGenerationModel({
+        kind: 'motion',
+        modelId: data.model,
+        settings: {
+          resolution: data.mode,
+          characterOrientation: data.characterOrientation,
+          duration: 10,
+        },
+        inputCounts: { images: 1, videos: 1, audios: 0 },
+        catalogRevision,
+      }).costCredits,
     });
 
     return {
@@ -765,8 +815,9 @@ export async function executeWorkflowRun(params: {
   graph: WorkflowCanvasGraph;
   startNodeId: string;
   mode: 'node' | 'branch';
+  catalogRevision?: string | null;
 }): Promise<WorkflowRunExecutionResult> {
-  const { supabase, userId, canvasId, graph, startNodeId, mode } = params;
+  const { supabase, userId, canvasId, graph, startNodeId, mode, catalogRevision = null } = params;
   const executionOrder = getExecutionOrder(graph, startNodeId, mode);
 
   const runInsert = await supabase
@@ -777,6 +828,7 @@ export async function executeWorkflowRun(params: {
       start_node_id: startNodeId,
       mode,
       status: 'processing',
+      catalog_revision: catalogRevision,
     })
     .select('id')
     .single();
@@ -845,7 +897,7 @@ export async function executeWorkflowRun(params: {
     }
 
     try {
-      const result = await executeRunnableNode({ supabase, userId, node, graph: workingGraph });
+      const result = await executeRunnableNode({ supabase, userId, node, graph: workingGraph, catalogRevision });
       const nextRunState: Partial<Record<'status' | 'generationId' | 'error' | 'updatedAt' | 'cost', unknown>> = {
         status: result.status,
         generationId: result.generation_id,
@@ -995,6 +1047,7 @@ async function advanceWorkflowRunProgress(params: {
         userId: run.user_id,
         node,
         graph: workingGraph,
+        catalogRevision: run.catalog_revision,
       });
 
       const resumedStep: HydratedRunStep = {

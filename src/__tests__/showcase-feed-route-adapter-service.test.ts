@@ -1,0 +1,167 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+import { getShowcaseFeedRouteResponse } from '@/lib/showcase-feed-route-adapter-service';
+import type { getShowcaseFeedPage } from '@/lib/showcase-feed';
+
+function createFeedPage(overrides: Record<string, unknown> = {}) {
+  return {
+    items: [],
+    pageInfo: {
+      hasMore: false,
+      nextOffset: null,
+      limit: 12,
+      offset: 0,
+    },
+    ...overrides,
+  };
+}
+
+function createUserClient(userId: string | null = 'user-1') {
+  return {
+    auth: {
+      getUser: vi.fn(async () => ({
+        data: { user: userId ? { id: userId } : null },
+        error: null,
+      })),
+    },
+  } as unknown as SupabaseClient;
+}
+
+describe('showcase feed route adapter service', () => {
+  it('wraps anonymous feed requests in provider request context and keeps them publicly cacheable', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+    const createUserClientDependency = vi.fn();
+    const withProviderFetchRequestId = vi.fn((_requestId: string, operation: () => Promise<Response>) => operation());
+
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed?limit=99&tool=all&offset=12', {
+        headers: {
+          'x-request-id': 'feed-adapter-anon-1',
+          'x-vercel-ip-country': 'IN',
+        },
+      }),
+      dependencies: {
+        createUserClient: createUserClientDependency,
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+        withProviderFetchRequestId,
+      },
+    });
+
+    expect(withProviderFetchRequestId).toHaveBeenCalledWith('feed-adapter-anon-1', expect.any(Function));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    expect(response.headers.get('x-request-id')).toBe('feed-adapter-anon-1');
+    await expect(response.json()).resolves.toMatchObject({
+      pageInfo: { limit: 12, offset: 0 },
+    });
+    expect(createUserClientDependency).not.toHaveBeenCalled();
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
+      category: 'all',
+      sort: 'recent',
+      offset: 12,
+      limit: 24,
+      viewerUserId: null,
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
+      countryCode: 'IN',
+      bypassCache: false,
+    });
+  });
+
+  it('uses viewer auth for personalized feed requests and disables shared caching', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed?category=video&sort=top-sales&unlock=paid&resource=prompt', {
+        headers: {
+          Authorization: 'Bearer private-token',
+          'x-request-id': 'feed-adapter-auth-1',
+        },
+      }),
+      dependencies: {
+        createUserClient: vi.fn(() => createUserClient('viewer-1')),
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    expect(response.headers.get('x-request-id')).toBe('feed-adapter-auth-1');
+    expect(response.headers.has('Authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      bypassCache: true,
+      category: 'video',
+      resource: 'prompt',
+      sort: 'top-sales',
+      unlock: 'paid',
+      viewerUserId: 'viewer-1',
+    }));
+  });
+
+  it('sanitizes raw unlock resources before responding', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage({
+      items: [{
+        id: 'post-1',
+        mediaUrl: 'https://example.com/image.jpg',
+        mediaKind: 'image',
+        model: 'nano-banana-2',
+        title: 'Paid post',
+        prompt: 'Public post prompt',
+        body: 'Public post body',
+        category: 'image',
+        postFormat: 'media',
+        saveCount: 0,
+        remixCount: 0,
+        createdAt: '2026-04-02T10:00:00.000Z',
+        creator: {
+          id: 'creator-1',
+          username: 'creator',
+          name: 'Creator',
+          avatar: null,
+        },
+        sourceKind: 'magicbooklet',
+        sourceTool: null,
+        generationId: 'gen-1',
+        canRemix: false,
+        asset: {
+          id: 'bundle-1',
+          postId: 'post-1',
+          title: 'Prompt pack',
+          accessMode: 'paid',
+          priceUsdCents: 900,
+          previewText: 'Safe preview text.',
+          allowRemix: false,
+          resourceItems: [{
+            type: 'prompt',
+            title: 'Prompt',
+            textContent: 'SECRET_ROUTE_PROMPT',
+            externalUrl: 'https://secret.example/prompt',
+            storagePath: 'creator/private/prompt.txt',
+          }],
+          resourceSections: [{ id: 'secret-section', title: 'Secret section' }],
+        },
+      }],
+    }));
+
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed'),
+      dependencies: {
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+    const responseBody = await response.text();
+    const data = JSON.parse(responseBody);
+
+    expect(response.status).toBe(200);
+    expect(data.items[0].asset).not.toHaveProperty('resourceItems');
+    expect(data.items[0].asset).not.toHaveProperty('resourceSections');
+    expect(responseBody).not.toContain('SECRET_ROUTE_PROMPT');
+    expect(responseBody).not.toContain('https://secret.example');
+    expect(responseBody).not.toContain('creator/private');
+  });
+});

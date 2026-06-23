@@ -179,6 +179,11 @@ vi.mock('@/lib/source-tools-server', () => ({
   listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/showcase/publish route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -391,6 +396,7 @@ describe('/api/showcase/publish route', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-request-id': 'showcase-publish-auth-1',
       },
       body: JSON.stringify({
         generationId: 'gen-1',
@@ -399,6 +405,7 @@ describe('/api/showcase/publish route', () => {
     }) as NextRequest);
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-publish-auth-1');
     expect(createServiceClientMock).not.toHaveBeenCalled();
     expect(ensureDurableGenerationMediaMock).not.toHaveBeenCalled();
   });
@@ -418,6 +425,7 @@ describe('/api/showcase/publish route', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
+        'x-request-id': 'showcase-publish-rate-limit-1',
       },
       body: JSON.stringify({
         generationId: 'gen-1',
@@ -427,6 +435,7 @@ describe('/api/showcase/publish route', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('51');
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-publish-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rateLimitRpcCalls).toContainEqual({
       p_scope: 'showcase:publish',
@@ -447,6 +456,7 @@ describe('/api/showcase/publish route', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
+        'x-request-id': 'showcase-publish-success-1',
       },
       body: JSON.stringify({
         generationId: 'gen-1',
@@ -457,6 +467,7 @@ describe('/api/showcase/publish route', () => {
     const data = await response.json();
 
     expect(response.status, JSON.stringify(data)).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-publish-success-1');
     expect(rateLimitRpcCalls).toContainEqual({
       p_scope: 'showcase:publish',
       p_subject_key: 'user-1',
@@ -614,6 +625,9 @@ describe('/api/showcase/publish route', () => {
   });
 
   it('persists input-media remix sharing only for public publishes', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let requestInit: RequestInit | undefined;
     generationState = {
       ...generationState!,
       output_url: 'https://cdn.example.com/generated.jpg',
@@ -621,11 +635,14 @@ describe('/api/showcase/publish route', () => {
     };
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        headers: new Headers({ 'content-type': 'image/jpeg' }),
-        blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
-      }))
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requestInit = init;
+        return {
+          ok: true,
+          headers: new Headers({ 'content-type': 'image/jpeg' }),
+          blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
+        } as Response;
+      })
     );
 
     const { POST } = await import('@/app/api/showcase/publish/route');
@@ -653,10 +670,12 @@ describe('/api/showcase/publish route', () => {
       share_input_media_for_remix: true,
       title: 'Shared remix source',
     });
-  expect(postUpserts[0]).toMatchObject({
+    expect(postUpserts[0]).toMatchObject({
       generation_id: 'gen-1',
       visibility: 'public',
     });
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
+    expect(requestInit?.signal).toBe(timeoutSignal);
   });
 
   it('saves generated paid unlocks as private drafts when requested', async () => {

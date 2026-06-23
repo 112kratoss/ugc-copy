@@ -12,6 +12,8 @@ describe('/api/fx route', () => {
   });
 
   it('subsets supported rates and returns cache headers', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({
       ok: true,
@@ -32,12 +34,15 @@ describe('/api/fx route', () => {
     } as Response);
 
     const { GET } = await import('@/app/api/fx/route');
-    const response = await GET(new Request('http://localhost/api/fx') as never);
+    const response = await GET(new Request('http://localhost/api/fx', {
+      headers: { 'x-request-id': 'fx-1' },
+    }) as never);
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe(
       'public, s-maxage=3600, stale-while-revalidate=86400'
     );
+    expect(response.headers.get('x-request-id')).toBe('fx-1');
 
     const data = await response.json();
     expect(data).toEqual({
@@ -59,25 +64,38 @@ describe('/api/fx route', () => {
         headers: expect.objectContaining({
           Accept: 'application/json',
         }),
+        signal: timeoutSignal,
       })
     );
+    expect(timeoutSpy).toHaveBeenCalledWith(5_000);
   });
 
   it('returns 503 when upstream fails', async () => {
     const fetchMock = vi.mocked(fetch);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fetchMock.mockResolvedValue({ ok: false, status: 500 } as Response);
 
     const { GET } = await import('@/app/api/fx/route');
-    const response = await GET(new Request('http://localhost/api/fx') as never);
+    const response = await GET(new Request('http://localhost/api/fx', {
+      headers: { 'x-request-id': 'fx-error-1' },
+    }) as never);
 
     expect(response.status).toBe(503);
     expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('x-request-id')).toBe('fx-error-1');
     expect(await response.json()).toEqual({ error: 'fx_unavailable' });
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://open.er-api.com/v6/latest/INR',
       expect.any(Object)
     );
+    const [, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(new Headers(init.headers).get('x-request-id')).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith('[provider-fetch]', expect.objectContaining({
+      serviceName: 'FX rates',
+      outcome: 'http_error',
+      status: 500,
+      requestId: 'fx-error-1',
+    }));
   });
 });
-

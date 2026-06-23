@@ -7,6 +7,10 @@ import {
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
 import { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket } from '@/lib/media-urls';
+import {
+  fetchWithProviderTimeout,
+  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+} from '@/lib/provider-fetch';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
 
@@ -193,7 +197,13 @@ async function downloadCandidateBlob(
     return null;
   }
 
-  const response = await fetch(candidate.sourceUrl);
+  const response = await fetchWithProviderTimeout(
+    candidate.sourceUrl,
+    {},
+    PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+    fetch,
+    'Generation input media download'
+  );
   if (!response.ok) {
     throw new Error(`Failed to download input media: ${response.status}`);
   }

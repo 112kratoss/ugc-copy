@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -5,7 +8,6 @@ import {
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
-  getCreditEstimate,
   getCreationReadiness,
   getCreationSectionOrder,
   getCreationSectionSummary,
@@ -14,6 +16,8 @@ import {
   validateCreationDraft,
   type MediaDraft,
 } from '../lib/media-creation-view-model';
+
+const repoRoot = process.cwd();
 
 function imageReference(overrides: Partial<MediaDraft> = {}): MediaDraft {
   return createMediaDraftFromUpload(
@@ -63,6 +67,28 @@ function audioReference(overrides: Partial<MediaDraft> = {}): MediaDraft {
 }
 
 describe('media creation view model', () => {
+  it('keeps authoritative generation pricing out of the mobile view model', () => {
+    const source = readFileSync(join(repoRoot, 'lib/media-creation-view-model.ts'), 'utf8');
+
+    expect(source).not.toMatch(/\bpricing\s*:/);
+    expect(source).not.toMatch(/\bprovider\s*:/);
+    expect(source).not.toContain('qualityPricing');
+    expect(source).not.toContain('getCreditEstimate');
+  });
+
+  it('does not locally calculate credit costs without a server quote', () => {
+    const draft = {
+      ...createDefaultCreationDraft('image'),
+      prompt: 'Create a cinematic product photo on a marble counter.',
+    };
+
+    const validation = validateCreationDraft(draft, { credits: 0 });
+
+    expect(validation.cost).toBe(0);
+    expect(validation.canGenerate).toBe(false);
+    expect(validation.errors.some((error) => error.startsWith('Insufficient credits.'))).toBe(false);
+  });
+
   it('renames media references and refreshes image handles', () => {
     expect(renameMediaDraft(imageReference(), 'Logo Sheet')).toMatchObject({
       displayName: 'Logo Sheet',
@@ -152,9 +178,8 @@ describe('media creation view model', () => {
       }),
       expect.objectContaining({
         id: 'cost',
-        label: 'Cost ready',
-        body: '8 credits available for this generation.',
-        state: 'ready',
+        label: 'Model settings unavailable',
+        state: 'warning',
       }),
     ]);
   });
@@ -202,8 +227,8 @@ describe('media creation view model', () => {
       }),
       expect.objectContaining({
         id: 'cost',
-        label: 'Cost ready',
-        state: 'ready',
+        label: 'Model settings unavailable',
+        state: 'warning',
       }),
     ]);
   });
@@ -228,7 +253,8 @@ describe('media creation view model', () => {
 
     const validation = validateCreationDraft(ready, { credits: 999 });
     expect(validation.errors).toEqual([]);
-    expect(validation.cost).toBe(16);
+    expect(validation.cost).toBe(0);
+    expect(validation.canGenerate).toBe(false);
 
     const unknownValidation = validateCreationDraft({ ...ready, prompt: 'Use @missing beside @product_1.' });
     expect(unknownValidation.errors).toContain('Unknown element mention: @missing');
@@ -333,7 +359,7 @@ describe('media creation view model', () => {
     };
 
     expect(validateCreationDraft(ready, { credits: 999 }).errors).toEqual([]);
-    expect(getCreditEstimate(ready)).toBe(240);
+    expect(validateCreationDraft(ready, { credits: 999 })).toMatchObject({ cost: 0, canGenerate: false });
     expect(buildGenerationPayload(ready)).toMatchObject({
       model: 'seedance-2-fast',
       prompt: ready.prompt,
@@ -375,7 +401,7 @@ describe('media creation view model', () => {
     };
 
     expect(validateCreationDraft(ready, { credits: 999 }).errors).toEqual([]);
-    expect(getCreditEstimate(ready)).toBe(200);
+    expect(validateCreationDraft(ready, { credits: 999 })).toMatchObject({ cost: 0, canGenerate: false });
     expect(buildGenerationPayload(ready)).toMatchObject({
       model: 'kling-3.0',
       prompt: '',
@@ -400,9 +426,8 @@ describe('media creation view model', () => {
       duration: 10,
     };
 
-    expect(validateCreationDraft(draft, { credits: 10 }).errors).toContain(
-      'Insufficient credits. This generation costs 250 credits.'
-    );
+    expect(validateCreationDraft(draft, { credits: 10 }).errors.some((error) => error.startsWith('Insufficient credits.'))).toBe(false);
+    expect(validateCreationDraft(draft, { credits: 10 })).toMatchObject({ cost: 0, canGenerate: false });
     expect(buildPromptEnhancementRequest(draft)).toMatchObject({
       medium: 'video',
       selectedModel: 'seedance-2',

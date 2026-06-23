@@ -83,6 +83,11 @@ vi.mock('@/lib/server-helpers', () => ({
   }),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('workflow run routes', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -109,7 +114,10 @@ describe('workflow run routes', () => {
     const response = await POST(
       new Request('http://localhost/api/workflow-canvases/canvas-1/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-run-rate-limit-1',
+        },
         body: JSON.stringify({
           startNodeId: 'node-1',
           mode: 'branch',
@@ -119,6 +127,7 @@ describe('workflow run routes', () => {
     );
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-run-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(runAdminRpcCalls).toHaveLength(1);
     expect(runAdminRpcCalls[0]).toMatchObject({
@@ -143,22 +152,30 @@ describe('workflow run routes', () => {
     const response = await POST(
       new Request('http://localhost/api/workflow-canvases/canvas-1/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'workflow-run-success-1',
+        },
         body: JSON.stringify({
           startNodeId: 'node-1',
           mode: 'branch',
+          catalogRevision: 'catalog-rev-1',
         }),
       }) as never,
       { params: Promise.resolve({ id: 'canvas-1' }) }
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-run-success-1');
     expect(afterMock).toHaveBeenCalledTimes(1);
     expect(monitorWorkflowRunMock).toHaveBeenCalledTimes(1);
     expect(monitorWorkflowRunMock).toHaveBeenCalledWith({
       canvasId: 'canvas-1',
       runId: 'run-1',
     });
+    expect(executeWorkflowRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      catalogRevision: 'catalog-rev-1',
+    }));
   });
 
   it('GET /runs/[runId] returns runner-managed recovery state without scheduling monitoring', async () => {

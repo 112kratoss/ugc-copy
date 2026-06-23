@@ -61,22 +61,23 @@ import {
 } from '@/lib/generation-timing';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 import {
-    getImageCost,
     getImageResolutionOptions,
     IMAGE_MODELS,
     supportsImageResolutionControl,
     type ImageModelId,
     type ImageQualityMode,
     type ImageResolution,
-} from '@/lib/models';
+} from '@/lib/client-generation-models';
 import {
     getActiveRegistryModels,
     resolveCatalogModelId,
+    resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
+import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 
 type ModelId = ImageModelId;
 
@@ -683,29 +684,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         void persistUploadedImageElements(nextElements);
     };
 
-    const uploadToSupabase = async (file: File): Promise<{ signedUrl: string; storagePath: string }> => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Please log in to upload files.');
-
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${user.id}/${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('uploads').upload(fileName, file);
-        if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
-
-        const { data: signedData, error: signedUrlError } = await supabase.storage
-            .from('uploads')
-            .createSignedUrl(fileName, 3600);
-
-        if (signedUrlError || !signedData?.signedUrl) {
-            throw new Error(`Signed URL generation failed: ${signedUrlError?.message || 'Unknown error'}`);
-        }
-
-        return {
-            signedUrl: signedData.signedUrl,
-            storagePath: `uploads/${fileName}`,
-        };
-    };
-
     const handoffToBackgroundProcessing = (startedAtMs: number) => {
         setError(BACKGROUND_PROCESSING_ERROR);
         setGenerationTiming((current) => freezeGenerationTiming(
@@ -775,12 +753,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
-    const calculateFallbackCost = () => {
-        return getImageCost(selectedModel, resolution, {
-            qualityMode,
-            referenceCount: elements.length,
-        });
-    };
     const quoteRequest = useMemo(() => modelCatalog.catalog ? {
         kind: 'image' as const,
         modelId: selectedModel,
@@ -794,12 +766,18 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         modelCatalog.refetch();
     }, [modelCatalog.refetch, quoteState.error?.code]);
-    const currentCost = quoteState.quote?.costCredits ?? calculateFallbackCost();
+    const quoteUi = resolveWebGenerationQuoteUi({
+        hasCatalog: Boolean(modelCatalog.catalog),
+        quoteStatus: quoteState.status,
+        quotedCost: quoteState.quote?.costCredits,
+        quoteErrorMessage: quoteState.error?.message,
+    });
+    const currentCost = quoteUi.costCredits;
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
     const showResolutionControl = supportsImageResolutionControl(selectedModel);
     const isGrokImageModel = selectedModel === 'grok-imagine-image';
-    const insufficientCredits = userCredits !== null && userCredits < currentCost;
-    const quotePending = Boolean(modelCatalog.catalog && quoteState.status !== 'ready');
+    const insufficientCredits = userCredits !== null && currentCost !== null && userCredits < currentCost;
+    const quotePending = quoteUi.blocksGenerate;
     const elementHandles = elements.map((element) => element.handle);
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
@@ -874,12 +852,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
         if (!prompt.trim()) { setError('Please enter a prompt'); return; }
-        if (quotePending) { setError(quoteState.error?.message ?? 'Wait for the current generation cost before continuing.'); return; }
+        if (quotePending) { setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.'); return; }
         if (staleElementMentions.length > 0) {
             setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
             return;
         }
-        if (userCredits !== null && userCredits < currentCost) { setError(`Insufficient credits. Image generation costs ${currentCost} credits.`); return; }
+        if (userCredits !== null && currentCost !== null && userCredits < currentCost) { setError(`Insufficient credits. Image generation costs ${currentCost} credits.`); return; }
 
         const idempotencyKey = createGenerationIdempotencyKey('image');
         activeGenerationRequestKeyRef.current = idempotencyKey;
@@ -920,7 +898,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
                 const uploadedElements = await Promise.all(elements.map(async (element) => {
                     if (element.file) {
-                        const upload = await uploadToSupabase(element.file);
+                        const upload = await uploadMediaToTemporaryStorage(element.file);
                         return {
                             descriptor: {
                                 id: element.id,
@@ -1629,7 +1607,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </div>
                                     <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{quotePending ? 'Calculating...' : `${currentCost} credits`}</div>
+                                        <div className="mt-2 text-sm font-semibold text-white">{quoteUi.costLabel}</div>
                                     </div>
                                 </div>
                             }

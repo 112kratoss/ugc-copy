@@ -1,0 +1,73 @@
+import 'server-only';
+
+import { NextResponse } from 'next/server';
+
+import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import {
+  uploadPostResourceFileForRoute,
+  type PostResourceFileUploadClient,
+  type PostResourceFileUploadResult,
+} from '@/lib/post-resource-file-upload-service';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+
+type PostResourceFileUploadRouteDependencies = {
+  createServiceClient?: () => PostResourceFileUploadClient;
+  createUserClient?: typeof createUserClient;
+  uploadPostResourceFileForRoute?: typeof uploadPostResourceFileForRoute;
+};
+
+function resolveDependencies(dependencies: PostResourceFileUploadRouteDependencies | undefined) {
+  return {
+    createServiceClient: dependencies?.createServiceClient ?? (createServiceClient as () => PostResourceFileUploadClient),
+    createUserClient: dependencies?.createUserClient ?? createUserClient,
+    uploadPostResourceFileForRoute:
+      dependencies?.uploadPostResourceFileForRoute ?? uploadPostResourceFileForRoute,
+  };
+}
+
+function toJsonResponse(result: PostResourceFileUploadResult) {
+  if (!result.ok && result.rateLimitError) {
+    return createBackendRateLimitResponse(result.rateLimitError);
+  }
+
+  if (!result.ok) {
+    return NextResponse.json(result.body, { status: result.status });
+  }
+
+  return NextResponse.json(result.body);
+}
+
+async function handlePostResourceFileUploadPOST(
+  request: Request,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  const supabase = dependencies.createUserClient(request);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  return toJsonResponse(await dependencies.uploadPostResourceFileForRoute({
+    client: dependencies.createServiceClient(),
+    userId: user.id,
+    readFormData: () => request.formData(),
+  }));
+}
+
+export async function postPostResourceFileUploadRouteResponse({
+  dependencies,
+  request,
+}: {
+  dependencies?: PostResourceFileUploadRouteDependencies;
+  request: Request;
+}) {
+  return applyPrivateNoStoreApiResponseHeaders(
+    await handlePostResourceFileUploadPOST(request, resolveDependencies(dependencies)),
+    request,
+  );
+}

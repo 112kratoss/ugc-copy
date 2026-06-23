@@ -2,6 +2,10 @@ import {
   inspectPromptQuality,
   type PromptEnhancementWarning,
 } from '@/lib/prompt-quality';
+import {
+  fetchWithProviderTimeout,
+  PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS,
+} from '@/lib/provider-fetch';
 
 export type Medium = 'image' | 'video' | 'motion';
 
@@ -1653,7 +1657,7 @@ export async function callPromptEnhancer(
     throw new Error('KIE_AI_API_KEY is not configured');
   }
 
-  const response = await fetch(PROMPT_ENHANCER_ENDPOINT, {
+  const response = await fetchWithProviderTimeout(PROMPT_ENHANCER_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1674,7 +1678,7 @@ export async function callPromptEnhancer(
       include_thoughts: false,
       reasoning_effort: 'low',
     }),
-  });
+  }, PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS, fetch, 'KIE prompt enhancer');
 
   if (!response.ok) {
     const errorBody = await response.text();

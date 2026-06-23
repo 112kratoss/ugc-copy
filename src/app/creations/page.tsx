@@ -19,7 +19,7 @@ import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { getStoredMediaLocation } from '@/lib/media-urls';
-import { isAudioModel, isImageModel } from '@/lib/models';
+import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
 import type { ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';

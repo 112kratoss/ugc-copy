@@ -69,8 +69,12 @@ describe('media preview repair cron', () => {
   it('requires the cron secret', async () => {
     vi.stubEnv('CRON_SECRET', 'secret');
     const { GET } = await import('@/app/api/cron/media-preview-repair/route');
-    const response = await GET(new Request('http://localhost/api/cron/media-preview-repair'));
+    const response = await GET(new Request('http://localhost/api/cron/media-preview-repair', {
+      headers: { 'x-request-id': 'repair-reject-1' },
+    }));
     expect(response.status).toBe(401);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('repair-reject-1');
     expect(repairState.repair).not.toHaveBeenCalled();
     expect(jobRunState.start).not.toHaveBeenCalled();
   });
@@ -91,9 +95,14 @@ describe('media preview repair cron', () => {
     vi.stubEnv('CRON_SECRET', 'secret');
     const { GET } = await import('@/app/api/cron/media-preview-repair/route');
     const response = await GET(new Request('http://localhost/api/cron/media-preview-repair', {
-      headers: { authorization: 'Bearer secret' },
+      headers: {
+        authorization: 'Bearer secret',
+        'x-request-id': 'repair-run-1',
+      },
     }));
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('repair-run-1');
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       summary: { attempted: 2, completed: 2, failed: 0 },
@@ -103,6 +112,7 @@ describe('media preview repair cron', () => {
       expect.objectContaining({
         name: 'media-preview-repair',
         route: '/api/cron/media-preview-repair',
+        requestId: 'repair-run-1',
       }),
     );
     expect(lockState.withLock).toHaveBeenCalledWith(
@@ -198,6 +208,7 @@ describe('media preview repair cron', () => {
 
   it('records failed repair attempts before returning a retryable error', async () => {
     vi.stubEnv('CRON_SECRET', 'secret');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     repairState.repair.mockRejectedValueOnce(new Error('repair failed'));
 
     const { GET } = await import('@/app/api/cron/media-preview-repair/route');
@@ -218,5 +229,6 @@ describe('media preview repair cron', () => {
       { service: true },
       expect.objectContaining({ nowMs: expect.any(Number) }),
     );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('media_preview_repair_failed'));
   });
 });

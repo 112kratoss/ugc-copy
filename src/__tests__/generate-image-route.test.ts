@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { hashGenerationStartIdempotencyKey } from '@/lib/generation-start-idempotency';
+
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
 const createUserClientMock = vi.hoisted(() => vi.fn());
 
@@ -279,6 +281,11 @@ vi.mock('@/lib/server-helpers', () => ({
   resolveStoredMediaUrl: vi.fn(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/generate-image route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -314,6 +321,7 @@ describe('/api/generate-image route', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-request-id': 'image-post-auth-1',
         },
         body: JSON.stringify({
           prompt: 'A product hero image',
@@ -323,6 +331,7 @@ describe('/api/generate-image route', () => {
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'image-post-auth-1');
     expect(await response.json()).toEqual({
       error: 'Unauthorized: Please log in to generate images',
     });
@@ -343,6 +352,7 @@ describe('/api/generate-image route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'image-stale-catalog-1',
         },
         body: JSON.stringify({
           prompt: 'A product hero image',
@@ -353,6 +363,9 @@ describe('/api/generate-image route', () => {
     );
 
     expect(response.status).toBe(409);
+    expectPrivateNoStoreTraceHeaders(response, 'image-stale-catalog-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('Bearer token');
     expect(await response.json()).toMatchObject({ code: 'CATALOG_CHANGED' });
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
@@ -372,6 +385,7 @@ describe('/api/generate-image route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'image-route-fallback-1',
         },
         body: JSON.stringify({
           prompt: 'A product hero image',
@@ -386,6 +400,8 @@ describe('/api/generate-image route', () => {
     expect(data.success).toBe(true);
     expect(data.generationId).toBe('gen-logged-1');
     expect(currentSupabaseMock.inserts[0].source_generation_id).toBe('source-1');
+    expect(currentSupabaseMock.inserts[0].client_request_key_hash)
+      .toBe(hashGenerationStartIdempotencyKey('user-1', 'image-route-fallback-1'));
   });
 
   it('rejects inaccessible sourceGenerationId values before inserting', async () => {
@@ -456,6 +472,7 @@ describe('/api/generate-image route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'image-rate-limit-1',
         },
         body: JSON.stringify({
           prompt: 'A product hero image',
@@ -465,6 +482,8 @@ describe('/api/generate-image route', () => {
     );
 
     expect(response.status).toBe(429);
+    expectPrivateNoStoreTraceHeaders(response, 'image-rate-limit-1');
+    expect(response.headers.get('Retry-After')).toBe('42');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
       p_scope: 'media-generation:start',
@@ -521,6 +540,9 @@ describe('/api/generate-image route', () => {
   });
 
   it('returns provider-backed timing for waiting image generations', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let providerInit: RequestInit | undefined;
     currentSupabaseMock = createSupabaseMock(null, {
       id: 'gen-image-1',
       prediction_id: 'task-image-status-1',
@@ -539,17 +561,20 @@ describe('/api/generate-image route', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          code: 200,
-          data: {
-            state: 'waiting',
-            createTime: '2026-04-15T10:00:00.000Z',
-            updateTime: '2026-04-15T10:00:05.000Z',
-          },
-        }),
-      }))
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerInit = init;
+        return {
+          ok: true,
+          json: async () => ({
+            code: 200,
+            data: {
+              state: 'waiting',
+              createTime: '2026-04-15T10:00:00.000Z',
+              updateTime: '2026-04-15T10:00:05.000Z',
+            },
+          }),
+        } as Response;
+      })
     );
 
     const { GET } = await import('@/app/api/generate-image/route');
@@ -557,12 +582,14 @@ describe('/api/generate-image route', () => {
       new Request('http://localhost/api/generate-image?id=task-image-status-1', {
         headers: {
           Authorization: 'Bearer token',
+          'x-request-id': 'image-status-1',
         },
       }) as never
     );
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'image-status-1');
     expect(data.status).toBe('waiting');
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
@@ -579,6 +606,8 @@ describe('/api/generate-image route', () => {
       { column: 'prediction_id', value: 'task-image-status-1' },
       { column: 'user_id', value: 'user-1' },
     ]));
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(providerInit?.signal).toBe(timeoutSignal);
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

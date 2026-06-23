@@ -40,6 +40,11 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientFactory(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/profile/media/sign route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -86,10 +91,12 @@ describe('/api/profile/media/sign route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/media/sign', {
         method: 'POST',
+        headers: { 'x-request-id': 'profile-media-sign-auth-1' },
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-media-sign-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
   });
 
@@ -107,7 +114,10 @@ describe('/api/profile/media/sign route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/media/sign', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-media-sign-success-1',
+        },
         body: JSON.stringify({
           role: 'avatar',
           fileName: '../Avatar Photo?.png',
@@ -118,6 +128,7 @@ describe('/api/profile/media/sign route', () => {
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-media-sign-success-1');
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       bucket: 'profiles',
@@ -163,7 +174,10 @@ describe('/api/profile/media/sign route', () => {
     const response = await POST(
       new Request('http://localhost/api/profile/media/sign', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-media-sign-rate-limit-1',
+        },
         body: JSON.stringify({
           role: 'cover',
           fileName: 'cover.jpg',
@@ -175,6 +189,7 @@ describe('/api/profile/media/sign route', () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('45');
+    expectPrivateNoStoreTraceHeaders(response, 'profile-media-sign-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(storageFromMock).not.toHaveBeenCalled();
     expect(createSignedUploadUrlMock).not.toHaveBeenCalled();

@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { attachGenerationProviderTask, syncGenerationStatusByPredictionId } from '@/lib/generation-services';
+import {
+  attachGenerationProviderTask,
+  settleGenerationFailed,
+  syncGenerationStatusByPredictionId,
+} from '@/lib/generation-services';
 import {
   claimGenerationCompletionJobs,
   enqueueGenerationCompletionJob,
   finishGenerationCompletionJob,
+  getGenerationCompletionRetryDelaySeconds,
   hasDueGenerationCompletionJobs,
   maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
@@ -14,6 +19,7 @@ import {
 
 vi.mock('@/lib/generation-services', () => ({
   attachGenerationProviderTask: vi.fn(),
+  settleGenerationFailed: vi.fn(),
   syncGenerationStatusByPredictionId: vi.fn(),
 }));
 
@@ -66,6 +72,8 @@ describe('generation completion jobs', () => {
   beforeEach(() => {
     vi.mocked(attachGenerationProviderTask).mockReset();
     vi.mocked(attachGenerationProviderTask).mockResolvedValue('attached');
+    vi.mocked(settleGenerationFailed).mockReset();
+    vi.mocked(settleGenerationFailed).mockResolvedValue('failed');
     vi.mocked(syncGenerationStatusByPredictionId).mockReset();
   });
 
@@ -125,6 +133,16 @@ describe('generation completion jobs', () => {
       p_retention_days: 30,
       p_limit: 500,
     });
+  });
+
+  it('calculates bounded exponential retry delays from claimed attempt counts', () => {
+    expect(getGenerationCompletionRetryDelaySeconds(0)).toBe(60);
+    expect(getGenerationCompletionRetryDelaySeconds(1)).toBe(60);
+    expect(getGenerationCompletionRetryDelaySeconds(2)).toBe(120);
+    expect(getGenerationCompletionRetryDelaySeconds(3)).toBe(240);
+    expect(getGenerationCompletionRetryDelaySeconds(4)).toBe(480);
+    expect(getGenerationCompletionRetryDelaySeconds(5)).toBe(900);
+    expect(getGenerationCompletionRetryDelaySeconds(99)).toBe(900);
   });
 
   it('limits automatic completion queue pruning to the top of each hour', () => {
@@ -364,6 +382,117 @@ describe('generation completion jobs', () => {
       p_succeeded: false,
       p_error: 'Generation row not found for provider task.',
       p_retry_delay_seconds: 60,
+    });
+  });
+
+  it('backs off non-terminal completion retries using the claimed attempt count', async () => {
+    const webhookPayload = { data: { taskId: 'task-1', state: 'generating' } };
+    const client = createRpcClient([
+      {
+        data: [{
+          id: 'job-1',
+          prediction_id: 'task-1',
+          payload: webhookPayload,
+          status: 'processing',
+          attempt_count: 3,
+          locked_by: 'worker-1',
+        }],
+        error: null,
+      },
+      { data: 'pending', error: null },
+    ]);
+    vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValue({
+      found: true,
+      status: 'processing',
+      generation: {
+        id: 'generation-1',
+        user_id: 'user-1',
+        prediction_id: 'task-1',
+        status: 'processing',
+        output_url: null,
+        category: 'image',
+        model: 'nanobanana',
+        workflow_settings: null,
+        created_at: '2026-06-21T10:00:00.000Z',
+        completed_at: null,
+      },
+    });
+
+    await expect(processGenerationCompletionJobs({
+      supabase: client as never,
+      creditSupabase: client as never,
+      lockedBy: 'worker-1',
+      limit: 5,
+    })).resolves.toEqual({
+      claimed: 1,
+      completed: 0,
+      retried: 1,
+      failed: 0,
+    });
+
+    expect(client.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
+      p_id: 'job-1',
+      p_locked_by: 'worker-1',
+      p_succeeded: false,
+      p_error: 'Generation is still processing.',
+      p_retry_delay_seconds: 240,
+    });
+    expect(settleGenerationFailed).not.toHaveBeenCalled();
+  });
+
+  it('settles and refunds the generation before marking an exhausted completion job failed', async () => {
+    const webhookPayload = { data: { taskId: 'task-1', state: 'generating' } };
+    const supabase = createRpcClient([
+      {
+        data: [{
+          id: 'job-1',
+          prediction_id: 'task-1',
+          payload: webhookPayload,
+          status: 'processing',
+          attempt_count: 5,
+          locked_by: 'worker-1',
+        }],
+        error: null,
+      },
+      { data: 'failed', error: null },
+    ]);
+    const creditSupabase = createRpcClient([]);
+    vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValue({
+      found: true,
+      status: 'processing',
+      generation: {
+        id: 'generation-1',
+        user_id: 'user-1',
+        prediction_id: 'task-1',
+        status: 'processing',
+        output_url: null,
+        category: 'image',
+        model: 'nanobanana',
+        workflow_settings: null,
+        created_at: '2026-06-21T10:00:00.000Z',
+        completed_at: null,
+      },
+    });
+
+    await expect(processGenerationCompletionJobs({
+      supabase: supabase as never,
+      creditSupabase: creditSupabase as never,
+      lockedBy: 'worker-1',
+      limit: 5,
+    })).resolves.toEqual({
+      claimed: 1,
+      completed: 0,
+      retried: 0,
+      failed: 1,
+    });
+
+    expect(settleGenerationFailed).toHaveBeenCalledWith(creditSupabase, 'task-1');
+    expect(supabase.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
+      p_id: 'job-1',
+      p_locked_by: 'worker-1',
+      p_succeeded: false,
+      p_error: 'Generation is still processing.',
+      p_retry_delay_seconds: 900,
     });
   });
 });

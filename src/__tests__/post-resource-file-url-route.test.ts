@@ -5,6 +5,7 @@ const getPostResourceBundleDetailByPostIdMock = vi.hoisted(() => vi.fn());
 const createSignedUrlMock = vi.hoisted(() => vi.fn());
 const storageFromMock = vi.hoisted(() => vi.fn());
 const createServiceClientMock = vi.hoisted(() => vi.fn());
+const rpcMock = vi.hoisted(() => vi.fn());
 const authState = vi.hoisted(() => ({
   user: { id: 'buyer-1' } as { id: string } | null,
 }));
@@ -25,12 +26,18 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
 }));
 
-function buildRequest(storagePath: string) {
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
+function buildRequest(storagePath: string, requestId = 'resource-file-url-1') {
   return new Request('http://localhost/api/posts/post-1/resource-bundle/file-url', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: 'Bearer token',
+      'x-request-id': requestId,
     },
     body: JSON.stringify({ storagePath }),
   }) as NextRequest;
@@ -44,7 +51,19 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     createSignedUrlMock.mockReset();
     storageFromMock.mockReset();
     createServiceClientMock.mockReset();
+    rpcMock.mockReset();
+    rpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 120,
+        remaining: 119,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     createServiceClientMock.mockReturnValue({
+      rpc: rpcMock,
       storage: {
         from: storageFromMock.mockImplementation(() => ({
           createSignedUrl: createSignedUrlMock,
@@ -64,7 +83,10 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/resource-bundle/file-url', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'resource-file-missing-path-1',
+        },
         body: JSON.stringify({}),
       }) as NextRequest,
       { params: Promise.resolve({ postId: 'post-1' }) }
@@ -72,6 +94,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'resource-file-missing-path-1');
     expect(data.error).toBe('Missing resource file path.');
     expect(createServiceClientMock).not.toHaveBeenCalled();
     expect(getPostResourceBundleDetailByPostIdMock).not.toHaveBeenCalled();
@@ -99,10 +122,17 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'resource-file-url-1');
     expect(data.signedUrl).toBe('https://signed.example.com/reference.png');
     expect(getPostResourceBundleDetailByPostIdMock).toHaveBeenCalledWith('post-1', expect.objectContaining({
       viewerUserId: null,
     }));
+    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'post-resource-file:read-url',
+      p_subject_key: '127.0.0.1',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
     expect(storageFromMock).toHaveBeenCalledWith('post_resource_files');
   });
 
@@ -180,6 +210,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(403);
+    expectPrivateNoStoreTraceHeaders(response, 'resource-file-url-1');
     expect(data.error).toBe('Unlock this resource before downloading files.');
     expect(createSignedUrlMock).not.toHaveBeenCalled();
   });
@@ -208,6 +239,12 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     expect(getPostResourceBundleDetailByPostIdMock).toHaveBeenCalledWith('post-1', expect.objectContaining({
       viewerUserId: 'buyer-1',
     }));
+    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'post-resource-file:read-url',
+      p_subject_key: 'buyer-1',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
     expect(createSignedUrlMock).toHaveBeenCalledWith(
       'user-1/generation-references/gen-1/00-reference-image-input-1.png',
       600,
@@ -215,5 +252,44 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
         download: 'Hero reference',
       })
     );
+  });
+
+  it('rate limits resource file URL signing before minting a storage URL', async () => {
+    rpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 120,
+        remaining: 0,
+        retryAfterSeconds: 18,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+    getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
+      viewerCanAccess: true,
+      resources: {
+        attachments: [],
+        items: [{
+          title: 'Hero reference',
+          storagePath: 'user-1/generation-references/gen-1/00-reference-image-input-1.png',
+        }],
+      },
+    });
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/file-url/route');
+    const response = await POST(
+      buildRequest('user-1/generation-references/gen-1/00-reference-image-input-1.png'),
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('18');
+    expectPrivateNoStoreTraceHeaders(response, 'resource-file-url-1');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 18,
+    });
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
   });
 });

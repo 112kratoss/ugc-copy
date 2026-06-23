@@ -1,12 +1,8 @@
 import { isValidElementHandle, normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
 import {
-  IMAGE_MODELS,
-  MOTION_MODELS,
-  VIDEO_MODELS,
-  type ImageModelId,
-  type MotionModelId,
-  type VideoModelId,
-} from '@/lib/models';
+  getGenerationModelChoiceOptionLabel,
+  getGenerationModelDisplayName,
+} from '@/lib/generation-model-catalog';
 import {
   getPostResourceKinds,
   type PostResourceItem,
@@ -201,61 +197,22 @@ function formatListCount(value: number, singular: string, plural: string): strin
 }
 
 function formatModeLabel(modelId: string | null, mode: string | null): string | null {
-  if (!modelId || !mode || !(modelId in VIDEO_MODELS)) {
-    return mode;
-  }
-
-  const option = VIDEO_MODELS[modelId as VideoModelId].modeOptions.find((candidate) => candidate.value === mode);
-  return option?.label ?? mode;
+  if (!modelId || !mode) return mode;
+  return getGenerationModelChoiceOptionLabel(modelId, 'mode', mode) ?? mode;
 }
 
-function getModelDisplayName(category: string | null | undefined, workflowSettings: Record<string, unknown>, model: string | null | undefined): string | null {
+function getModelDisplayName(workflowSettings: Record<string, unknown>, model: string | null | undefined): string | null {
   const workflowModel = typeof workflowSettings.model === 'string' ? workflowSettings.model : null;
-  const isMotionWorkflow = category === 'motion' || workflowSettings.creationMode === 'motion';
 
   if (workflowModel) {
-    if (workflowModel in IMAGE_MODELS) {
-      return IMAGE_MODELS[workflowModel as ImageModelId].displayName;
-    }
-    if (workflowModel in VIDEO_MODELS) {
-      return VIDEO_MODELS[workflowModel as VideoModelId].displayName;
-    }
-    if (workflowModel in MOTION_MODELS) {
-      return MOTION_MODELS[workflowModel as MotionModelId].displayName;
-    }
-    return workflowModel;
+    return getGenerationModelDisplayName(workflowModel) ?? workflowModel;
   }
 
   if (!model) {
     return null;
   }
 
-  if (category === 'image') {
-    const imageModel = Object.values(IMAGE_MODELS).find((candidate) => candidate.id === model);
-    if (imageModel) {
-      return imageModel.displayName;
-    }
-  }
-
-  if ((category === 'video' && !isMotionWorkflow) || category === 'ugc-ad') {
-    const videoModel = Object.values(VIDEO_MODELS).find(
-      (candidate) => candidate.id === model || candidate.apiModelId === model
-    );
-    if (videoModel) {
-      return videoModel.displayName;
-    }
-  }
-
-  if (isMotionWorkflow) {
-    const motionModel = Object.values(MOTION_MODELS).find(
-      (candidate) => candidate.id === model || candidate.apiModelId === model
-    );
-    if (motionModel) {
-      return motionModel.displayName;
-    }
-  }
-
-  return model;
+  return getGenerationModelDisplayName(model) ?? model;
 }
 
 function hasRecoverableDescriptor(value: unknown, expectedKind: 'image' | 'video'): boolean {
@@ -456,7 +413,7 @@ function buildMotionNotes(modelLabel: string | null, workflowSettings: Record<st
 export function buildGenerationPaywallNotes(source: GenerationPaywallPrefillSource): string | null {
   const workflowSettings =
     source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
-  const modelLabel = getModelDisplayName(source.category, workflowSettings, source.model);
+  const modelLabel = getModelDisplayName(workflowSettings, source.model);
   const isMotionWorkflow = source.category === 'motion' || workflowSettings.creationMode === 'motion';
 
   const details =

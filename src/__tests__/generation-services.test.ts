@@ -1986,6 +1986,33 @@ describe('generation services', () => {
     });
   });
 
+  it('bounds provider task creation calls with a timeout signal', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let providerInit: RequestInit | undefined;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerInit = init;
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-timeout-1' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A compact product render.',
+      model: 'nano-banana-2',
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(providerInit?.signal).toBe(timeoutSignal);
+  });
+
   it('sends Seedance 2 generations with image, video, and audio references', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -2054,24 +2081,37 @@ describe('generation services', () => {
 
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-services');
+    const statusSignal = AbortSignal.abort();
+    const mediaSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+      .mockReturnValueOnce(statusSignal)
+      .mockReturnValueOnce(mediaSignal);
+    let statusInit: RequestInit | undefined;
+    let mediaInit: RequestInit | undefined;
     const fetchMock = vi.mocked(fetch);
     fetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          code: 200,
-        data: {
-          state: 'success',
-          createTime: '2026-04-15T10:00:00.000Z',
-          completeTime: '2026-04-15T10:00:12.000Z',
-          resultJson: JSON.stringify({ resultUrls: ['https://cdn.example.com/audio.mp3'] }),
-        },
-        }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        blob: async () => new Blob(['audio'], { type: 'audio/mpeg' }),
-      } as Response);
+      .mockImplementationOnce(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        statusInit = init;
+        return {
+          ok: true,
+          json: async () => ({
+            code: 200,
+            data: {
+              state: 'success',
+              createTime: '2026-04-15T10:00:00.000Z',
+              completeTime: '2026-04-15T10:00:12.000Z',
+              resultJson: JSON.stringify({ resultUrls: ['https://cdn.example.com/audio.mp3'] }),
+            },
+          }),
+        } as Response;
+      })
+      .mockImplementationOnce(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        mediaInit = init;
+        return {
+          ok: true,
+          blob: async () => new Blob(['audio'], { type: 'audio/mpeg' }),
+        } as Response;
+      });
 
     const { supabase, generations, uploads, rpcCalls } = createSupabaseMock([{
       id: 'gen-audio-1',
@@ -2094,6 +2134,10 @@ describe('generation services', () => {
     expect(generations[0].status).toBe('succeeded');
     expect(generations[0].output_url).toBe('generated_audio/user-1/generated_task-audio-1.mp3');
     expect(generations[0].completed_at).toBe('2026-04-15T10:00:12.000Z');
+    expect(timeoutSpy).toHaveBeenNthCalledWith(1, 10_000);
+    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 60_000);
+    expect(statusInit?.signal).toBe(statusSignal);
+    expect(mediaInit?.signal).toBe(mediaSignal);
     expect(uploads[0]).toEqual({
       bucket: 'generated_audio',
       filePath: 'user-1/generated_task-audio-1.mp3',
@@ -2106,6 +2150,48 @@ describe('generation services', () => {
         p_completed_at: '2026-04-15T10:00:12.000Z',
       }),
     });
+  });
+
+  it('bounds provider status polling calls with a timeout signal', async () => {
+    const { syncGenerationStatuses } = await import('@/lib/generation-services');
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let providerInit: RequestInit | undefined;
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerInit = init;
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          data: {
+            state: 'waiting',
+            createTime: '2026-04-15T10:00:00.000Z',
+          },
+        }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock([{
+      id: 'gen-status-timeout-1',
+      user_id: 'user-1',
+      prediction_id: 'task-status-timeout-1',
+      status: 'processing',
+      output_url: null,
+      model: 'elevenlabs/sound-effect-v2',
+      category: 'audio',
+      workflow_settings: { model: 'sound-effect-v2' },
+      created_at: '2026-04-15T10:00:00.000Z',
+    }]);
+
+    await syncGenerationStatuses({
+      supabase,
+      creditSupabase: supabase,
+      generationIds: ['gen-status-timeout-1'],
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(providerInit?.signal).toBe(timeoutSignal);
   });
 
   it('settles failed async generations with one atomic backend RPC', async () => {

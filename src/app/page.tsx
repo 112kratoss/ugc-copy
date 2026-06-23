@@ -9,7 +9,7 @@ import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowca
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
 import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import {
   buildOrganizationSchema,

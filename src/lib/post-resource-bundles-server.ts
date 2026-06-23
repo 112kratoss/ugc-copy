@@ -5,6 +5,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { convertFromUsd, formatMoney } from '@/lib/currency';
 import {
+  EXTERNAL_API_REQUEST_TIMEOUT_MS,
+  fetchWithProviderTimeout,
+} from '@/lib/provider-fetch';
+import {
   deriveTitleFromBody,
   getPostMediaKind,
   isMissingMarketplaceSchemaError,
@@ -296,14 +300,14 @@ const FX_UPSTREAM_URL = 'https://open.er-api.com/v6/latest/INR';
 
 const getInrFxRates = cache(async (): Promise<Record<string, number> | null> => {
   try {
-    const response = await fetch(FX_UPSTREAM_URL, {
+    const response = await fetchWithProviderTimeout(FX_UPSTREAM_URL, {
       headers: {
         Accept: 'application/json',
       },
       next: {
         revalidate: 3600,
       },
-    });
+    }, EXTERNAL_API_REQUEST_TIMEOUT_MS, fetch, 'FX rates');
 
     if (!response.ok) {
       throw new Error(`FX upstream error: ${response.status}`);

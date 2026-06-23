@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {
   CatalogControl,
   GenerationModelCatalog,
@@ -23,15 +23,82 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function parseControl(value: unknown): CatalogControl | null {
+  if (!isRecord(value) || !isString(value.key) || !isString(value.label)) return null;
+  if (value.type === 'choice') {
+    if ((value.presentation !== 'chips' && value.presentation !== 'select') || !isString(value.defaultValue) || !Array.isArray(value.options)) return null;
+    const options = value.options.filter((option): option is { value: string; label: string } => (
+      isRecord(option) && isString(option.value) && isString(option.label)
+    ));
+    if (options.length !== value.options.length || options.length === 0) return null;
+    if (!options.some((option) => option.value === value.defaultValue)) return null;
+    return { key: value.key, label: value.label, type: 'choice', presentation: value.presentation, defaultValue: value.defaultValue, options };
+  }
+  if (value.type === 'boolean') {
+    if (value.presentation !== 'toggle' || typeof value.defaultValue !== 'boolean') return null;
+    return { key: value.key, label: value.label, type: 'boolean', presentation: 'toggle', defaultValue: value.defaultValue };
+  }
+  if (value.type === 'integer') {
+    if (value.presentation !== 'stepper' || typeof value.defaultValue !== 'number' || typeof value.min !== 'number' || typeof value.max !== 'number' || typeof value.step !== 'number') return null;
+    if (!Number.isFinite(value.defaultValue) || !Number.isFinite(value.min) || !Number.isFinite(value.max) || !Number.isFinite(value.step)) return null;
+    if (value.step <= 0 || value.min > value.max || value.defaultValue < value.min || value.defaultValue > value.max) return null;
+    return {
+      key: value.key,
+      label: value.label,
+      type: 'integer',
+      presentation: 'stepper',
+      defaultValue: value.defaultValue,
+      min: value.min,
+      max: value.max,
+      step: value.step,
+      ...(typeof value.unit === 'string' ? { unit: value.unit } : {}),
+    };
+  }
+  return null;
+}
+
+function parseReferenceLimit(value: unknown, includeNaming: boolean) {
+  if (value === null) return null;
+  if (!isRecord(value) || !Number.isInteger(value.max) || (value.max as number) < 0) return undefined;
+  if (includeNaming && typeof value.supportsNaming !== 'boolean') return undefined;
+  return includeNaming
+    ? { max: value.max as number, supportsNaming: value.supportsNaming as boolean }
+    : { max: value.max as number };
+}
+
 function isDescriptor(value: unknown): value is GenerationModelDescriptor {
-  return isRecord(value)
-    && typeof value.id === 'string'
-    && (value.kind === 'image' || value.kind === 'video' || value.kind === 'motion')
-    && typeof value.displayName === 'string'
-    && typeof value.description === 'string'
-    && Array.isArray(value.controls)
-    && isRecord(value.capabilities)
-    && isRecord(value.inputs);
+  if (!isRecord(value) || !isString(value.id) || (value.kind !== 'image' && value.kind !== 'video' && value.kind !== 'motion')) return false;
+  if (!isString(value.displayName) || typeof value.description !== 'string' || !isNullableString(value.badge)) return false;
+  if (typeof value.recommended !== 'boolean' || typeof value.sortOrder !== 'number' || typeof value.minClientSchemaVersion !== 'number') return false;
+  if (!Array.isArray(value.controls) || !isRecord(value.capabilities) || !isRecord(value.inputs)) return false;
+  const controls = value.controls.map(parseControl);
+  if (controls.some((control) => !control)) return false;
+  const capabilityKeys = ['multiShot', 'sound', 'fixedLens', 'googleSearch', 'outputFormat'];
+  if (capabilityKeys.some((key) => typeof (value.capabilities as Record<string, unknown>)[key] !== 'boolean')) return false;
+  const imageReferences = parseReferenceLimit(value.inputs.imageReferences, true);
+  const videoReferences = parseReferenceLimit(value.inputs.videoReferences, false);
+  const audioReferences = parseReferenceLimit(value.inputs.audioReferences, false);
+  return imageReferences !== undefined
+    && videoReferences !== undefined
+    && audioReferences !== undefined
+    && typeof value.inputs.startFrame === 'boolean'
+    && typeof value.inputs.endFrame === 'boolean';
+}
+
+function defaultMatchesCatalog(
+  models: GenerationModelDescriptor[],
+  kind: GenerationModelDescriptor['kind'],
+  modelId: unknown
+) {
+  return modelId === null || (typeof modelId === 'string' && models.some((model) => model.kind === kind && model.id === modelId));
 }
 
 export function parseClientGenerationModelCatalog(value: unknown): GenerationModelCatalog {
@@ -39,7 +106,15 @@ export function parseClientGenerationModelCatalog(value: unknown): GenerationMod
     throw new Error('Invalid generation model catalog.');
   }
   if (!value.models.every(isDescriptor)) throw new Error('Invalid generation model catalog.');
-  return value as unknown as GenerationModelCatalog;
+  const catalog = value as unknown as GenerationModelCatalog;
+  if (
+    !defaultMatchesCatalog(catalog.models, 'image', catalog.defaults.image)
+    || !defaultMatchesCatalog(catalog.models, 'video', catalog.defaults.video)
+    || !defaultMatchesCatalog(catalog.models, 'motion', catalog.defaults.motion)
+  ) {
+    throw new Error('Invalid generation model catalog.');
+  }
+  return catalog;
 }
 
 function choiceControl(model: GenerationModelDescriptor, key: string) {
@@ -94,8 +169,6 @@ export function applyGenerationModelCatalogToRegistries(
         aspectRatios: choiceValues(model, 'aspectRatio'),
         resolutions,
         outputFormats: choiceValues(model, 'outputFormat').length > 0 ? choiceValues(model, 'outputFormat') : ['jpg'],
-        pricing: existing.pricing ?? Object.fromEntries(resolutions.map((resolution) => [resolution, 0])),
-        qualityPricing: existing.qualityPricing ?? { standard: 0, quality: 0, imageToImage: 0 },
         catalogManaged: true,
         catalogActive: true,
         catalogInputs: model.inputs,
@@ -116,9 +189,6 @@ export function applyGenerationModelCatalogToRegistries(
         id: model.id,
         displayName: model.displayName,
         description: model.description,
-        provider: existing.provider ?? 'catalog',
-        apiModelId: existing.apiModelId ?? '',
-        enhancerModelId: existing.enhancerModelId ?? model.id,
         supportsMultiShot: model.capabilities.multiShot,
         supportsSound: model.capabilities.sound,
         supportsFixedLens: model.capabilities.fixedLens,
@@ -127,7 +197,6 @@ export function applyGenerationModelCatalogToRegistries(
         ...(durationInteger ? { singleShotDurationRange: { min: durationInteger.min, max: durationInteger.max, default: durationInteger.defaultValue } } : {}),
         resolutions: choiceValues(model, 'resolution'),
         modeOptions: modeControl?.options ?? [],
-        pricing: existing.pricing ?? {},
         catalogManaged: true,
         catalogActive: true,
         catalogInputs: model.inputs,
@@ -145,12 +214,10 @@ export function applyGenerationModelCatalogToRegistries(
       description: model.description,
       badge: model.badge ?? '',
       badgeColor: existing.badgeColor ?? 'from-violet-500 to-indigo-500',
-      apiModelId: existing.apiModelId ?? '',
       maxDuration: duration?.max ?? 30,
       maxVideoDuration: duration?.max ?? 30,
       characterOrientations: choiceValues(model, 'characterOrientation'),
       resolutions,
-      pricing: existing.pricing ?? Object.fromEntries(resolutions.map((resolution) => [resolution, 0])),
       catalogManaged: true,
       catalogActive: true,
       catalogInputs: model.inputs,
@@ -251,6 +318,54 @@ export class WebCatalogRequestError extends Error {
     super(message);
     this.name = 'WebCatalogRequestError';
   }
+}
+
+export type WebGenerationQuoteStatus = 'idle' | 'pending' | 'ready' | 'error';
+
+export function resolveWebGenerationQuoteUi({
+  hasCatalog,
+  quoteStatus,
+  quotedCost,
+  quoteErrorMessage,
+}: {
+  hasCatalog: boolean;
+  quoteStatus: WebGenerationQuoteStatus;
+  quotedCost: number | null | undefined;
+  quoteErrorMessage: string | null | undefined;
+}) {
+  if (!hasCatalog) {
+    return {
+      costCredits: null,
+      costLabel: 'Unavailable',
+      blocksGenerate: true,
+      message: 'Model settings are unavailable. Retry before generating.',
+    };
+  }
+
+  if (quoteStatus === 'ready' && typeof quotedCost === 'number') {
+    return {
+      costCredits: quotedCost,
+      costLabel: `${quotedCost} credits`,
+      blocksGenerate: false,
+      message: null,
+    };
+  }
+
+  if (quoteStatus === 'error') {
+    return {
+      costCredits: null,
+      costLabel: 'Unavailable',
+      blocksGenerate: true,
+      message: quoteErrorMessage ?? 'Could not calculate generation cost.',
+    };
+  }
+
+  return {
+    costCredits: null,
+    costLabel: 'Calculating...',
+    blocksGenerate: true,
+    message: 'Wait for the current generation cost before continuing.',
+  };
 }
 
 export async function requestWebGenerationQuote(

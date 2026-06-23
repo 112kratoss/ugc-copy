@@ -49,6 +49,11 @@ function buildContactRequest(body: Record<string, unknown>, headers: Record<stri
   });
 }
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/contact route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -77,9 +82,12 @@ describe('/api/contact route', () => {
     const response = await POST(buildContactRequest({
       name: 'Athul',
       email: 'athul@example.com',
+    }, {
+      'x-request-id': 'contact-invalid-1',
     }));
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'contact-invalid-1');
     expect(await response.json()).toEqual({
       error: 'Name, email, and message are required',
     });
@@ -94,9 +102,12 @@ describe('/api/contact route', () => {
       email: ' ATHUL@EXAMPLE.COM ',
       subject: '',
       message: ' Hello ',
+    }, {
+      'x-request-id': 'contact-success-1',
     }));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'contact-success-1');
     expect(await response.json()).toEqual({ success: true });
     expect(mocks.createClient).not.toHaveBeenCalled();
     expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
@@ -134,10 +145,12 @@ describe('/api/contact route', () => {
       message: 'Hello',
     }, {
       'x-forwarded-for': '203.0.113.10, 10.0.0.5',
+      'x-request-id': 'contact-rate-limit-1',
     }));
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('42');
+    expectPrivateNoStoreTraceHeaders(response, 'contact-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(mocks.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'contact:submit',

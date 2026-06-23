@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 
 const getUserMock = vi.fn();
 const createServiceClientMock = vi.fn();
+const rateLimitRpcMock = vi.fn();
 const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const downloadMock = vi.fn();
@@ -13,6 +14,11 @@ const sourceToolRpcCalls: Array<{ name: string; args: Record<string, unknown> }>
 let bundleUpsertError: { code?: string; message?: string } | null = null;
 let postMediaInsertError: { code?: string; message?: string } | null = null;
 let sourceToolInsertError: { code?: string; message?: string } | null = null;
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
 
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -79,6 +85,10 @@ function createServiceClientTestDouble() {
       throw new Error(`Unexpected service table access: ${table}`);
     },
     rpc(name: string, args: Record<string, unknown>) {
+      if (name === 'check_backend_rate_limit') {
+        return rateLimitRpcMock(name, args);
+      }
+
       if (name === 'save_post_source_tools_with_catalog') {
         sourceToolRpcCalls.push({ name, args });
         const sourceTools = Array.isArray(args.p_source_tools)
@@ -129,10 +139,11 @@ function createServiceClientTestDouble() {
   };
 }
 
-function createRouteRequest(formData: FormData) {
+function createRouteRequest(formData: FormData, requestId = 'posts-route-test') {
   return {
     headers: new Headers({
       Authorization: 'Bearer test-token',
+      'x-request-id': requestId,
     }),
     formData: async () => formData,
   } as unknown as NextRequest;
@@ -219,6 +230,17 @@ describe('/api/posts route', () => {
     });
     createServiceClientMock.mockReset();
     createServiceClientMock.mockImplementation(createServiceClientTestDouble);
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 60,
+        remaining: 59,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     uploadMock.mockReset();
     uploadMock.mockResolvedValue({ error: null });
     removeMock.mockReset();
@@ -247,7 +269,49 @@ describe('/api/posts route', () => {
     const response = await POST(createRouteRequest(new FormData()));
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'posts-route-test');
     expect(createServiceClientMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 429 before parsing a post creation body when mutation capacity is exhausted', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 60,
+        remaining: 0,
+        retryAfterSeconds: 37,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+    const formDataMock = vi.fn(async () => new FormData());
+
+    const { POST } = await import('@/app/api/posts/route');
+    const response = await POST({
+      headers: new Headers({
+        Authorization: 'Bearer test-token',
+        'x-request-id': 'post-create-rate-limit',
+      }),
+      formData: formDataMock,
+    } as unknown as NextRequest);
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('37');
+    expectPrivateNoStoreTraceHeaders(response, 'post-create-rate-limit');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 37,
+    });
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'post:mutate',
+      p_subject_key: 'user-1',
+      p_limit: 60,
+      p_window_seconds: 600,
+    });
+    expect(formDataMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(insertPayloads).toEqual([]);
   });
 
   it('creates text-only posts without uploading media', async () => {
@@ -262,11 +326,13 @@ describe('/api/posts route', () => {
       body: formData,
       headers: {
         Authorization: 'Bearer test-token',
+        'x-request-id': 'post-create-success',
       },
     }) as NextRequest);
     const payload = await response.json();
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'post-create-success');
     expect(uploadMock).not.toHaveBeenCalled();
     expect(insertPayloads).toHaveLength(1);
     expect(insertPayloads[0]).toMatchObject({

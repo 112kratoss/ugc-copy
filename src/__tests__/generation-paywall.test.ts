@@ -75,6 +75,21 @@ describe('generation paywall helpers', () => {
     expect(notes).not.toContain('"referenceVideoUrls"');
   });
 
+  it('maps provider model ids to public catalog labels in saved generation notes', () => {
+    const notes = buildGenerationPaywallNotes({
+      category: 'video',
+      model: 'bytedance/seedance-2-fast',
+      prompt: 'Recreate this video setup.',
+      workflowSettings: {
+        aspectRatio: '16:9',
+        duration: 8,
+      },
+    });
+
+    expect(notes).toContain('Model: Seedance 2 Fast');
+    expect(notes).not.toContain('bytedance/seedance-2-fast');
+  });
+
   it('prefers the named element handle for public recipe reference labels when available', () => {
     const items = buildGenerationRecipeResourceItems({
       promptText: 'Match @alisa in the final frame.',

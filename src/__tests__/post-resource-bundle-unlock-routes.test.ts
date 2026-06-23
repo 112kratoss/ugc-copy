@@ -42,6 +42,11 @@ vi.mock('@/lib/mobile-commerce', () => ({
   unlockPostResourceBundleWithCredits: (...args: unknown[]) => unlockPostResourceBundleWithCreditsMock(...args),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -81,11 +86,13 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-free', {
         method: 'POST',
+        headers: { 'x-request-id': 'post-free-auth-1' },
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'post-free-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(getBundleForOrderByPostIdMock).not.toHaveBeenCalled();
     expect(notifyPostResourceUnlockCompletedMock).not.toHaveBeenCalled();
@@ -96,11 +103,18 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits', {
         method: 'POST',
+        headers: {
+          authorization: 'Bearer private-token',
+          'x-request-id': 'post-credit-auth-1',
+        },
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'post-credit-auth-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
     expect(unlockPostResourceBundleWithCreditsMock).not.toHaveBeenCalled();
   });
@@ -129,12 +143,14 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits', {
         method: 'POST',
+        headers: { 'x-request-id': 'post-credit-rate-limit-1' },
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('41');
+    expectPrivateNoStoreTraceHeaders(response, 'post-credit-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'credit-unlock:spend',
@@ -159,11 +175,13 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits', {
         method: 'POST',
+        headers: { 'x-request-id': 'post-credit-success-1' },
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'post-credit-success-1');
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'credit-unlock:spend',
       p_subject_key: 'buyer-1',
@@ -182,12 +200,16 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     const response = await POST(
       new Request('http://localhost/api/posts/post-1/resource-bundle/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'post-verify-auth-1',
+        },
         body: JSON.stringify({}),
       }) as never
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'post-verify-auth-1');
     expect(createServiceClientFactory).not.toHaveBeenCalled();
   });
 });

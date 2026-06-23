@@ -6,6 +6,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getStoredMediaLocation, type MediaBucket } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/models';
+import {
+  fetchWithProviderTimeout,
+  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+} from '@/lib/provider-fetch';
 
 export type GeneratedMediaBucket = Extract<MediaBucket, 'generated_images' | 'generated_videos' | 'generated_audio'>;
 export type GenerationMediaKind = 'image' | 'video' | 'audio';
@@ -166,7 +170,13 @@ async function loadOutputSource(
     return null;
   }
 
-  const response = await fetch(outputUrl);
+  const response = await fetchWithProviderTimeout(
+    outputUrl,
+    {},
+    PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+    fetch,
+    'Generation media download'
+  );
   if (!response.ok) {
     return null;
   }

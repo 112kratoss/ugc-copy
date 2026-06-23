@@ -30,20 +30,27 @@ import {
   type WorkflowNodeData,
   type WorkflowNodeKind,
 } from '@/lib/workflow-canvas';
-import {
-  WORKFLOW_BLUEPRINT_COST,
-  type WorkflowAspectRatio,
-} from '@/lib/workflow-blueprint';
+import type { WorkflowAspectRatio } from '@/lib/workflow-blueprint';
+import type {
+  WorkflowAssistantProposalDiff,
+  WorkflowCanvasAssistantMessageRecord,
+} from '@/lib/workflow-assistant-client';
+export {
+  WORKFLOW_ASSISTANT_COST,
+  WORKFLOW_ASSISTANT_SETUP_ERROR_CODE,
+  WORKFLOW_ASSISTANT_SETUP_MESSAGE,
+  getWorkflowAssistantPreviewNodeStates,
+} from '@/lib/workflow-assistant-client';
+export type {
+  WorkflowAssistantAvailability,
+  WorkflowAssistantPreviewState,
+  WorkflowAssistantProposalDiff,
+  WorkflowCanvasAssistantMessageRecord,
+  WorkflowCanvasAssistantProposalRecord,
+  WorkflowCanvasAssistantState,
+} from '@/lib/workflow-assistant-client';
 
-type WorkflowAssistantMessageRole = 'user' | 'assistant';
-type WorkflowAssistantProposalStatus = 'ready' | 'applied' | 'discarded';
 type WorkflowAssistantAssetKind = 'image' | 'video' | 'audio';
-export type WorkflowAssistantPreviewState = 'added' | 'changed' | 'removed';
-export type WorkflowAssistantAvailability = 'ready' | 'setup_required';
-
-export const WORKFLOW_ASSISTANT_SETUP_ERROR_CODE = 'assistant_schema_missing';
-const WORKFLOW_ASSISTANT_SETUP_MIGRATION = '20260416120000_workflow_canvas_assistant.sql';
-export const WORKFLOW_ASSISTANT_SETUP_MESSAGE = `Workflow assistant database tables are missing. Run migration ${WORKFLOW_ASSISTANT_SETUP_MIGRATION}.`;
 
 export interface WorkflowAssistantAssetSlot {
   slotKey: string;
@@ -94,48 +101,6 @@ interface WorkflowAssistantDiffNode {
   slotKey: string | null;
 }
 
-export interface WorkflowAssistantProposalDiff {
-  regionId: string;
-  nodes: {
-    added: WorkflowAssistantDiffNode[];
-    changed: WorkflowAssistantDiffNode[];
-    removed: WorkflowAssistantDiffNode[];
-  };
-  edges: {
-    added: number;
-    removed: number;
-  };
-}
-
-export interface WorkflowCanvasAssistantMessageRecord {
-  id: string;
-  canvas_id: string;
-  role: WorkflowAssistantMessageRole;
-  content: string;
-  proposal_id: string | null;
-  created_at: string;
-}
-
-export interface WorkflowCanvasAssistantProposalRecord {
-  id: string;
-  canvas_id: string;
-  base_revision: number;
-  status: WorkflowAssistantProposalStatus;
-  summary: string;
-  diff: WorkflowAssistantProposalDiff;
-  proposed_graph: WorkflowCanvasGraph;
-  created_at: string;
-  applied_at: string | null;
-  discarded_at: string | null;
-}
-
-export interface WorkflowCanvasAssistantState {
-  messages: WorkflowCanvasAssistantMessageRecord[];
-  proposal: WorkflowCanvasAssistantProposalRecord | null;
-  availability: WorkflowAssistantAvailability;
-  setupMessage: string | null;
-}
-
 export interface WorkflowAssistantPromptContext {
   currentCanvasSummary: string;
   assistantRegionSummary: string;
@@ -170,8 +135,6 @@ const SLOT_KIND_ORDER: Record<WorkflowAssistantAssetKind, number> = {
   video: 1,
   audio: 2,
 };
-
-export const WORKFLOW_ASSISTANT_COST = WORKFLOW_BLUEPRINT_COST;
 
 export const DEFAULT_WORKFLOW_ASSISTANT_BLUEPRINT: WorkflowAssistantBlueprint = {
   title: 'AI workflow draft',
@@ -870,27 +833,6 @@ function computeWorkflowAssistantDiff(
       removed: removedEdges,
     },
   };
-}
-
-export function getWorkflowAssistantPreviewNodeStates(
-  diff: WorkflowAssistantProposalDiff | null | undefined
-) {
-  const previewStateByNodeId: Record<string, WorkflowAssistantPreviewState> = {};
-
-  if (!diff) {
-    return previewStateByNodeId;
-  }
-
-  diff.nodes.added.forEach((node) => {
-    previewStateByNodeId[node.id] = 'added';
-  });
-  diff.nodes.changed.forEach((node) => {
-    if (!previewStateByNodeId[node.id]) {
-      previewStateByNodeId[node.id] = 'changed';
-    }
-  });
-
-  return previewStateByNodeId;
 }
 
 export function createWorkflowAssistantGraphProposal({

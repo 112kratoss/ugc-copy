@@ -16,6 +16,12 @@ const resolveStoredMediaUrlMock = vi.fn(
   async (_adminClient: unknown, outputUrl: string) =>
     `https://signed.example.com/${encodeURIComponent(outputUrl)}`
 );
+const quoteGenerationModelMock = vi.fn((input: { modelId: string; catalogRevision?: string | null }) => ({
+  modelId: input.modelId,
+  catalogRevision: input.catalogRevision ?? 'current-revision',
+  normalizedSettings: {},
+  costCredits: 77,
+}));
 type StartVideoGenerationResult = {
   predictionId: string;
   remainingCredits: number;
@@ -51,6 +57,11 @@ vi.mock('@/lib/generation-services', () => ({
     syncGenerationStatusesMock(...args),
 }));
 
+vi.mock('@/lib/generation-model-catalog', () => ({
+  quoteGenerationModel: (...args: Parameters<typeof quoteGenerationModelMock>) =>
+    quoteGenerationModelMock(...args),
+}));
+
 type RunnerTestState = {
   run: {
     id: string;
@@ -61,6 +72,7 @@ type RunnerTestState = {
     status: 'processing' | 'succeeded' | 'failed';
     created_at: string;
     finished_at: string | null;
+    catalog_revision: string | null;
   };
   graph: WorkflowCanvasGraph;
   steps: WorkflowCanvasRunStepRecord[];
@@ -109,6 +121,7 @@ function createQueuedWorkflowState(): RunnerTestState & {
       status: 'processing',
       created_at: '2026-04-01T10:00:00.000Z',
       finished_at: null,
+      catalog_revision: 'catalog-rev-1',
     },
     graph,
     steps: [
@@ -293,6 +306,7 @@ describe('workflow-runner recovery', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    quoteGenerationModelMock.mockClear();
   });
 
   afterEach(() => {
@@ -389,6 +403,27 @@ describe('workflow-runner recovery', () => {
         ],
       })
     );
+  });
+
+  it('quotes queued media nodes with the workflow run catalog revision before charging', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    await getWorkflowRunDetails({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'video',
+      modelId: 'kling-3.0-video',
+      catalogRevision: 'catalog-rev-1',
+    }));
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      quotedCostCredits: 77,
+    }));
   });
 
   it('dedupes concurrent recovery polls for the same run', async () => {

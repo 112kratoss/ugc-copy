@@ -76,6 +76,48 @@ describe('catalog-backed mobile creation drafts', () => {
     );
   });
 
+  it('does not mark a catalog draft generatable until an authoritative server quote is available', () => {
+    const draft = {
+      ...createDefaultCreationDraft('image'),
+      model: remoteImageModel.id as 'nano-banana-2',
+      prompt: 'A remote model test',
+      aspectRatio: '2:3',
+      resolution: '2K' as '1K',
+    };
+
+    expect(validateCatalogCreationDraft(draft, remoteImageModel, { credits: 10 })).toMatchObject({
+      errors: [],
+      cost: 0,
+      canGenerate: false,
+    });
+  });
+
+  it('rejects references that the catalog model does not support', () => {
+    const textOnlyImageModel = {
+      ...remoteImageModel,
+      inputs: { ...remoteImageModel.inputs, imageReferences: null },
+    };
+    const draft = {
+      ...createDefaultCreationDraft('image'),
+      model: remoteImageModel.id as 'nano-banana-2',
+      prompt: 'A text-only model test',
+      aspectRatio: '2:3',
+      resolution: '2K' as '1K',
+      references: [{
+        id: 'ref-1',
+        url: 'https://example.com/ref.jpg',
+        kind: 'image' as const,
+        fileName: 'ref.jpg',
+        displayName: 'Reference',
+        handle: '@reference',
+      }],
+    };
+
+    expect(validateCatalogCreationDraft(draft, textOnlyImageModel).errors).toContain(
+      'Remote Image V1 does not support image references.'
+    );
+  });
+
   it('selects the catalog default when a retired model is absent', () => {
     const catalog = createTestGenerationModelCatalog();
     expect(catalog.models.some((model) => model.id === 'retired-image')).toBe(false);

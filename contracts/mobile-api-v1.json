@@ -1,0 +1,1218 @@
+{
+  "schemaVersion": 1,
+  "endpoints": {
+    "appVersion": {
+      "method": "GET",
+      "path": "/api/app-version",
+      "auth": "none",
+      "cacheControl": "no-store, no-cache, must-revalidate",
+      "response": {
+        "buildId": "build-123",
+        "mobileCompatibility": {
+          "currentApiVersion": 1,
+          "minimumApiVersion": 1,
+          "minimumAppVersion": "1.0.0",
+          "supportedCatalogSchemaVersions": [1],
+          "unversionedClientsUseApiVersion": 1
+        }
+      }
+    },
+    "mobileUpdateRequired": {
+      "method": "GET",
+      "path": "/api/profile",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "status": 426,
+      "response": {
+        "code": "MOBILE_UPDATE_REQUIRED",
+        "error": "Update Magicbooklet to continue using this service.",
+        "compatibility": {
+          "currentApiVersion": 1,
+          "minimumApiVersion": 1,
+          "minimumAppVersion": "1.0.0",
+          "supportedCatalogSchemaVersions": [1],
+          "unversionedClientsUseApiVersion": 1
+        }
+      }
+    },
+    "getProfile": {
+      "method": "GET",
+      "path": "/api/profile",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "id": "user-1",
+        "username": "creator",
+        "suggestedUsername": null,
+        "displayName": "Creator One",
+        "bio": "Short creator bio.",
+        "avatarUrl": "https://cdn.example.test/avatar.png",
+        "coverUrl": "https://cdn.example.test/cover.png",
+        "websiteUrl": "https://creator.example.test",
+        "twitterHandle": "creator",
+        "instagramHandle": "creator",
+        "tiktokHandle": "creator",
+        "location": "Bengaluru",
+        "credits": 120
+      }
+    },
+    "updateProfile": {
+      "method": "PATCH",
+      "path": "/api/profile",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "id": "user-1",
+        "username": "creator",
+        "suggestedUsername": null,
+        "displayName": "Creator One",
+        "bio": "Updated creator bio.",
+        "avatarUrl": "https://cdn.example.test/avatar.png",
+        "coverUrl": "https://cdn.example.test/cover.png",
+        "websiteUrl": "https://creator.example.test",
+        "twitterHandle": "creator",
+        "instagramHandle": "creator",
+        "tiktokHandle": "creator",
+        "location": "Bengaluru",
+        "credits": 120
+      }
+    },
+    "listGenerations": {
+      "method": "GET",
+      "path": "/api/generations",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "generations": [
+          {
+            "id": "generation-1",
+            "output_url": "https://cdn.example.test/generation-1.png",
+            "output_urls": ["https://cdn.example.test/generation-1.png"],
+            "preview_url": "https://cdn.example.test/generation-1-preview.png",
+            "previewUrl": "https://cdn.example.test/generation-1-preview.png",
+            "media": {
+              "id": "media-1",
+              "kind": "image",
+              "url": "https://cdn.example.test/generation-1.png",
+              "previewUrl": "https://cdn.example.test/generation-1-preview.png",
+              "thumbhash": null,
+              "cacheKey": "media:generation-1",
+              "expiresAt": null,
+              "width": 1024,
+              "height": 1024,
+              "durationSeconds": null,
+              "status": "ready",
+              "gridReady": true
+            },
+            "creationMode": null,
+            "status": "succeeded",
+            "created_at": "2026-06-22T06:00:00.000Z",
+            "completed_at": "2026-06-22T06:01:00.000Z",
+            "duration": null,
+            "cost": 8,
+            "model": "Nano Banana 2.0",
+            "category": "image",
+            "title": "Launch frame",
+            "description": "A clean launch visual.",
+            "prompt": "Create a bright launch visual.",
+            "input_media": [
+              {
+                "url": "https://cdn.example.test/reference.png",
+                "kind": "image"
+              }
+            ],
+            "linked_post_id": "post-1",
+            "linked_post_title": "Launch frame",
+            "linked_post_visibility": "public",
+            "linked_post_archived_at": null,
+            "archived_at": null
+          }
+        ]
+      }
+    },
+    "archiveGeneration": {
+      "method": "POST",
+      "path": "/api/generations/:generationId/archive",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "archived": true
+      }
+    },
+    "restoreGeneration": {
+      "method": "POST",
+      "path": "/api/generations/:generationId/restore",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "restored": true
+      }
+    },
+    "startImageGeneration": {
+      "method": "POST",
+      "path": "/api/generate-image",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "predictionId": "prediction-image-1",
+        "generationId": "generation-1",
+        "status": "processing",
+        "remainingCredits": 112,
+        "cost": 8
+      }
+    },
+    "getImageGeneration": {
+      "method": "GET",
+      "path": "/api/generate-image",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "status": "succeeded",
+        "output": "https://cdn.example.test/generation-1.png",
+        "outputs": ["https://cdn.example.test/generation-1.png"],
+        "error": null,
+        "timing": {
+          "completedAt": "2026-06-22T06:01:00.000Z"
+        }
+      }
+    },
+    "startVideoGeneration": {
+      "method": "POST",
+      "path": "/api/generate-video",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "predictionId": "prediction-video-1",
+        "generationId": "generation-2",
+        "status": "processing",
+        "remainingCredits": 96,
+        "cost": 24
+      }
+    },
+    "getVideoGeneration": {
+      "method": "GET",
+      "path": "/api/generate-video",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "status": "succeeded",
+        "output": "https://cdn.example.test/generation-2.mp4",
+        "outputs": ["https://cdn.example.test/generation-2.mp4"],
+        "error": null,
+        "timing": {
+          "completedAt": "2026-06-22T06:03:00.000Z"
+        }
+      }
+    },
+    "startMotionGeneration": {
+      "method": "POST",
+      "path": "/api/generate",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "predictionId": "prediction-motion-1",
+        "generationId": "generation-3",
+        "status": "processing",
+        "remainingCredits": 84,
+        "cost": 12
+      }
+    },
+    "getMotionGeneration": {
+      "method": "GET",
+      "path": "/api/generate",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "status": "succeeded",
+        "output": "https://cdn.example.test/generation-3.mp4",
+        "outputs": ["https://cdn.example.test/generation-3.mp4"],
+        "error": null,
+        "timing": {
+          "completedAt": "2026-06-22T06:05:00.000Z"
+        }
+      }
+    },
+    "enhancePrompt": {
+      "method": "POST",
+      "path": "/api/enhance-prompt",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "enhancedPrompt": "A premium, high-detail product launch frame with clean lighting.",
+        "remainingCredits": 119,
+        "agentId": "prompt-enhancer-v1",
+        "qualityScore": 87,
+        "warnings": [
+          {
+            "code": "LOW_CONTEXT",
+            "severity": "info",
+            "message": "Add a product material for stronger output.",
+            "fixHint": "Mention glass, metal, fabric, or packaging texture."
+          }
+        ],
+        "appliedSafeguards": [
+          {
+            "code": "BRAND_SAFETY",
+            "message": "Kept prompt brand-safe."
+          }
+        ]
+      }
+    },
+    "getShowcaseFeed": {
+      "method": "GET",
+      "path": "/api/showcase/feed",
+      "auth": "optional",
+      "cacheControl": "public, max-age=300, stale-while-revalidate=300",
+      "response": {
+        "items": [
+          {
+            "id": "post-1",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [
+              {
+                "id": "post-media-1",
+                "url": "https://cdn.example.test/post-1.png",
+                "previewUrl": "https://cdn.example.test/post-1-preview.png",
+                "previewThumbhash": null,
+                "previewStatus": "ready",
+                "previewCacheKey": "post-media:1",
+                "gridReady": true,
+                "mediaKind": "image",
+                "contentType": "image/png",
+                "originalName": "launch.png",
+                "width": 1024,
+                "height": 1024,
+                "durationSeconds": null,
+                "sortOrder": 0
+              }
+            ],
+            "model": "Nano Banana 2.0",
+            "title": "Launch frame",
+            "prompt": "Create a bright launch visual.",
+            "body": "Reusable launch notes.",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 3,
+            "remixCount": 1,
+            "createdAt": "2026-06-22T06:00:00.000Z",
+            "creator": {
+              "id": "user-1",
+              "username": "creator",
+              "name": "Creator One",
+              "avatar": "https://cdn.example.test/avatar.png"
+            },
+            "isSaved": false,
+            "generationId": "generation-1",
+            "asset": {
+              "id": "resource-1",
+              "postId": "post-1",
+              "title": "Launch prompt pack",
+              "accessMode": "free",
+              "priceUsdCents": 0,
+              "previewText": "Prompt and notes for the launch frame.",
+              "allowRemix": true,
+              "resourceKinds": ["prompt", "notes"],
+              "priceQuote": {
+                "formatted": "Free",
+                "amountSubunits": 0,
+                "currency": "USD"
+              }
+            },
+            "canRemix": true
+          }
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "limit": 10,
+          "nextOffset": null,
+          "offset": 0
+        }
+      }
+    },
+    "getSavedMedia": {
+      "method": "GET",
+      "path": "/api/showcase/saved-media",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "items": [
+          {
+            "id": "post-1",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "Nano Banana 2.0",
+            "title": "Launch frame",
+            "prompt": "Create a bright launch visual.",
+            "body": "Reusable launch notes.",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 3,
+            "remixCount": 1,
+            "createdAt": "2026-06-22T06:00:00.000Z",
+            "creator": {
+              "id": "user-1",
+              "username": "creator",
+              "name": "Creator One",
+              "avatar": "https://cdn.example.test/avatar.png"
+            },
+            "isSaved": true,
+            "generationId": "generation-1",
+            "asset": null,
+            "canRemix": true,
+            "savedAt": "2026-06-22T06:10:00.000Z"
+          }
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "limit": 10,
+          "nextOffset": null,
+          "offset": 0
+        }
+      }
+    },
+    "getShowcasePost": {
+      "method": "GET",
+      "path": "/api/showcase/posts/:postId",
+      "auth": "optional",
+      "cacheControl": "public, max-age=300, stale-while-revalidate=300",
+      "response": {
+        "success": true,
+        "item": {
+          "id": "post-1",
+          "mediaUrl": "https://cdn.example.test/post-1.png",
+          "mediaKind": "image",
+          "mediaItems": [],
+          "model": "Nano Banana 2.0",
+          "title": "Launch frame",
+          "prompt": "Create a bright launch visual.",
+          "body": "Reusable launch notes.",
+          "category": "image",
+          "creationMode": null,
+          "postFormat": "media",
+          "saveCount": 3,
+          "remixCount": 1,
+          "createdAt": "2026-06-22T06:00:00.000Z",
+          "creator": {
+            "id": "user-1",
+            "username": "creator",
+            "name": "Creator One",
+            "avatar": "https://cdn.example.test/avatar.png"
+          },
+          "isSaved": false,
+          "generationId": "generation-1",
+          "asset": null,
+          "canRemix": true
+        }
+      }
+    },
+    "saveShowcasePost": {
+      "method": "POST",
+      "path": "/api/showcase/save",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "isSaved": true,
+        "saveCount": 4,
+        "changed": true,
+        "message": "Saved."
+      }
+    },
+    "remixShowcasePost": {
+      "method": "POST",
+      "path": "/api/showcase/remix",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "redirectTo": "/create-image?remix=post-1",
+        "prefill": {
+          "prompt": "Create a bright launch visual.",
+          "settings": {
+            "model": "nano-banana"
+          }
+        }
+      }
+    },
+    "shareShowcasePost": {
+      "method": "POST",
+      "path": "/api/showcase/share",
+      "auth": "none",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true
+      }
+    },
+    "publishGeneration": {
+      "method": "POST",
+      "path": "/api/showcase/publish",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "postId": "post-1",
+        "visibility": "public",
+        "showcasePath": "/showcase/post-1",
+        "ownerPath": "/posts/post-1",
+        "resourceBundlePath": "/marketplace/resources/resource-1",
+        "message": "Published."
+      }
+    },
+    "createPost": {
+      "method": "POST",
+      "path": "/api/posts",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "postId": "post-1",
+        "visibility": "public",
+        "showcasePath": "/showcase/post-1",
+        "ownerPath": "/posts/post-1",
+        "resourceBundlePath": "/marketplace/resources/resource-1",
+        "message": "Post created."
+      }
+    },
+    "listSourceTools": {
+      "method": "GET",
+      "path": "/api/source-tools",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "tools": [
+          {
+            "slug": "magicbooklet",
+            "label": "Magicbooklet",
+            "models": [
+              {
+                "slug": "nano-banana",
+                "label": "Nano Banana 2.0"
+              }
+            ],
+            "supportedMediaKinds": ["image", "video"]
+          }
+        ]
+      }
+    },
+    "listGenerationModels": {
+      "method": "GET",
+      "path": "/api/generation-models",
+      "auth": "none",
+      "cacheControl": "public, max-age=300, stale-while-revalidate=300",
+      "response": {
+        "schemaVersion": 1,
+        "revision": "catalog-rev-1",
+        "defaults": {
+          "image": "nano-banana",
+          "video": "seedance-lite",
+          "motion": "motion-basic"
+        },
+        "models": [
+          {
+            "id": "nano-banana",
+            "kind": "image",
+            "displayName": "Nano Banana 2.0",
+            "description": "Versatile image generation with reference support.",
+            "badge": "Recommended",
+            "recommended": true,
+            "sortOrder": 10,
+            "minClientSchemaVersion": 1,
+            "controls": [
+              {
+                "key": "aspectRatio",
+                "label": "Aspect ratio",
+                "type": "choice",
+                "presentation": "chips",
+                "defaultValue": "1:1",
+                "options": [
+                  { "value": "1:1", "label": "1:1" },
+                  { "value": "4:5", "label": "4:5" }
+                ]
+              },
+              {
+                "key": "resolution",
+                "label": "Resolution",
+                "type": "choice",
+                "presentation": "chips",
+                "defaultValue": "1K",
+                "options": [
+                  { "value": "1K", "label": "1K" },
+                  { "value": "2K", "label": "2K" }
+                ]
+              }
+            ],
+            "capabilities": {
+              "multiShot": false,
+              "sound": false,
+              "fixedLens": false,
+              "googleSearch": true,
+              "outputFormat": true
+            },
+            "inputs": {
+              "imageReferences": {
+                "max": 4,
+                "supportsNaming": true
+              },
+              "videoReferences": null,
+              "audioReferences": null,
+              "startFrame": false,
+              "endFrame": false
+            }
+          },
+          {
+            "id": "seedance-lite",
+            "kind": "video",
+            "displayName": "Seedance Lite",
+            "description": "Fast short-form video generation.",
+            "badge": null,
+            "recommended": true,
+            "sortOrder": 20,
+            "minClientSchemaVersion": 1,
+            "controls": [
+              {
+                "key": "duration",
+                "label": "Duration",
+                "type": "integer",
+                "presentation": "stepper",
+                "defaultValue": 5,
+                "min": 5,
+                "max": 10,
+                "step": 1,
+                "unit": "s"
+              }
+            ],
+            "capabilities": {
+              "multiShot": true,
+              "sound": true,
+              "fixedLens": false,
+              "googleSearch": false,
+              "outputFormat": false
+            },
+            "inputs": {
+              "imageReferences": {
+                "max": 2,
+                "supportsNaming": true
+              },
+              "videoReferences": null,
+              "audioReferences": null,
+              "startFrame": true,
+              "endFrame": true
+            }
+          },
+          {
+            "id": "motion-basic",
+            "kind": "motion",
+            "displayName": "Motion Basic",
+            "description": "Animate a character image from a reference video.",
+            "badge": null,
+            "recommended": true,
+            "sortOrder": 30,
+            "minClientSchemaVersion": 1,
+            "controls": [
+              {
+                "key": "mode",
+                "label": "Mode",
+                "type": "choice",
+                "presentation": "chips",
+                "defaultValue": "720p",
+                "options": [
+                  { "value": "720p", "label": "720p" },
+                  { "value": "1080p", "label": "1080p" }
+                ]
+              }
+            ],
+            "capabilities": {
+              "multiShot": false,
+              "sound": false,
+              "fixedLens": false,
+              "googleSearch": false,
+              "outputFormat": false
+            },
+            "inputs": {
+              "imageReferences": {
+                "max": 1,
+                "supportsNaming": true
+              },
+              "videoReferences": {
+                "max": 1
+              },
+              "audioReferences": null,
+              "startFrame": false,
+              "endFrame": false
+            }
+          }
+        ]
+      }
+    },
+    "quoteGenerationModel": {
+      "method": "POST",
+      "path": "/api/generation-models/quote",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "modelId": "nano-banana",
+        "catalogRevision": "catalog-rev-1",
+        "normalizedSettings": {
+          "aspectRatio": "1:1",
+          "resolution": "1K"
+        },
+        "costCredits": 8
+      }
+    },
+    "uploadPostResourceFile": {
+      "method": "POST",
+      "path": "/api/posts/resource-files",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "attachment": {
+          "label": "Prompt file",
+          "kind": "file",
+          "storagePath": "bundles/post-1/prompt.txt",
+          "contentType": "text/plain",
+          "sizeBytes": 256,
+          "resourceType": "prompt",
+          "role": "primary",
+          "remixUse": "text_template"
+        }
+      }
+    },
+    "mediaUploadIntent": {
+      "method": "POST",
+      "path": "/api/uploads/media/sign",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "bucket": "uploads",
+        "path": "user-1/reference.png",
+        "storagePath": "uploads/user-1/reference.png",
+        "token": "upload-token",
+        "signedUploadUrl": "https://storage.example.test/signed-upload",
+        "expiresInSeconds": 7200
+      }
+    },
+    "mediaReadUrl": {
+      "method": "POST",
+      "path": "/api/uploads/media/read-url",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "signedUrl": "https://storage.example.test/signed/reference.png",
+        "expiresInSeconds": 3600
+      }
+    },
+    "createProfileMediaUpload": {
+      "method": "POST",
+      "path": "/api/profile/media/sign",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "bucket": "profiles",
+        "path": "user-1/avatar.png",
+        "token": "profile-upload-token",
+        "signedUploadUrl": "https://storage.example.test/profile-upload",
+        "publicUrl": "https://cdn.example.test/avatar.png",
+        "expiresInSeconds": 7200
+      }
+    },
+    "listPosts": {
+      "method": "GET",
+      "path": "/api/posts",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "posts": [
+          {
+            "id": "post-1",
+            "title": "Launch frame",
+            "createdAt": "2026-06-22T06:00:00.000Z",
+            "visibility": "public",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "description": "Launch post.",
+            "prompt": "Create a bright launch visual.",
+            "body": "Reusable launch notes.",
+            "category": "image",
+            "postFormat": "media",
+            "sourceLabel": "Nano Banana 2.0",
+            "publicPath": "/showcase/post-1",
+            "ownerPath": "/posts/post-1",
+            "bundle": {
+              "id": "bundle-1",
+              "accessMode": "free",
+              "status": "published",
+              "priceUsdCents": 0,
+              "salesCount": 0,
+              "earningsUsdCents": 0,
+              "resourceKinds": ["prompt", "notes"]
+            },
+            "archivedAt": null,
+            "generationId": "generation-1",
+            "sourceTool": "Magicbooklet",
+            "sourceToolSlug": "magicbooklet",
+            "sourceTools": []
+          }
+        ]
+      }
+    },
+    "listOwnerPosts": {
+      "method": "GET",
+      "path": "/api/posts",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "posts": [
+          {
+            "id": "post-1",
+            "title": "Launch frame",
+            "createdAt": "2026-06-22T06:00:00.000Z",
+            "visibility": "public",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "description": "Launch post.",
+            "prompt": "Create a bright launch visual.",
+            "body": "Reusable launch notes.",
+            "category": "image",
+            "postFormat": "media",
+            "sourceLabel": "Nano Banana 2.0",
+            "publicPath": "/showcase/post-1",
+            "ownerPath": "/posts/post-1",
+            "bundle": {
+              "id": "bundle-1",
+              "accessMode": "free",
+              "status": "published",
+              "priceUsdCents": 0,
+              "salesCount": 0,
+              "earningsUsdCents": 0,
+              "resourceKinds": ["prompt", "notes"]
+            },
+            "archivedAt": null,
+            "generationId": "generation-1",
+            "sourceTool": "Magicbooklet",
+            "sourceToolSlug": "magicbooklet",
+            "sourceTools": []
+          }
+        ]
+      }
+    },
+    "getOwnerPost": {
+      "method": "GET",
+      "path": "/api/posts/:postId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "post": {
+          "id": "post-1",
+          "title": "Launch frame",
+          "createdAt": "2026-06-22T06:00:00.000Z",
+          "visibility": "public",
+          "mediaUrl": "https://cdn.example.test/post-1.png",
+          "mediaKind": "image",
+          "mediaItems": [],
+          "description": "Launch post.",
+          "prompt": "Create a bright launch visual.",
+          "body": "Reusable launch notes.",
+          "category": "image",
+          "postFormat": "media",
+          "sourceLabel": "Nano Banana 2.0",
+          "publicPath": "/showcase/post-1",
+          "ownerPath": "/posts/post-1",
+          "bundle": {
+            "id": "bundle-1",
+            "accessMode": "free",
+            "status": "published",
+            "priceUsdCents": 0,
+            "salesCount": 0,
+            "earningsUsdCents": 0,
+            "resourceKinds": ["prompt", "notes"]
+          },
+          "archivedAt": null,
+          "generationId": "generation-1",
+          "sourceTool": "Magicbooklet",
+          "sourceToolSlug": "magicbooklet",
+          "sourceTools": [],
+          "resourceBundleInput": {
+            "accessMode": "free",
+            "summary": "Reusable launch setup.",
+            "previewText": "Prompt and notes preview.",
+            "priceUsdCents": 0,
+            "resources": {
+              "promptText": "Create a bright launch visual.",
+              "notesMarkdown": "Use soft shadows.",
+              "workflowShareUrl": null,
+              "workflowSnapshot": null,
+              "attachments": [],
+              "allowRemix": true
+            }
+          }
+        }
+      }
+    },
+    "updatePost": {
+      "method": "PATCH",
+      "path": "/api/posts/:postId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "postId": "post-1",
+        "visibility": "public"
+      }
+    },
+    "archivePost": {
+      "method": "POST",
+      "path": "/api/posts/:postId/archive",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "archived": true
+      }
+    },
+    "restorePost": {
+      "method": "POST",
+      "path": "/api/posts/:postId/restore",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "restored": true
+      }
+    },
+    "deletePost": {
+      "method": "DELETE",
+      "path": "/api/posts/:postId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "deleted": true
+      }
+    },
+    "listMarketplaceResources": {
+      "method": "GET",
+      "path": "/api/marketplace/resources",
+      "auth": "none",
+      "cacheControl": "public, max-age=300, stale-while-revalidate=300",
+      "response": {
+        "items": [
+          {
+            "id": "resource-1",
+            "postId": "post-1",
+            "legacyAssetId": null,
+            "title": "Launch prompt pack",
+            "summary": "Prompt, notes, and remix guidance.",
+            "description": "Reusable launch resource bundle.",
+            "previewText": "Prompt and notes preview.",
+            "accessMode": "free",
+            "priceUsdCents": 0,
+            "salesCount": 0,
+            "allowRemix": true,
+            "priceQuote": {
+              "formatted": "Free",
+              "amountSubunits": 0,
+              "currency": "USD",
+              "note": null
+            },
+            "resourceKinds": ["prompt", "notes"],
+            "creator": {
+              "id": "user-1",
+              "username": "creator",
+              "name": "Creator One",
+              "avatar": "https://cdn.example.test/avatar.png"
+            },
+            "mediaUrl": "https://cdn.example.test/post-1.png"
+          }
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "nextOffset": null
+        }
+      }
+    },
+    "getMarketplaceResourceDetail": {
+      "method": "GET",
+      "path": "/api/marketplace/resources/:resourceId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "bundle": {
+          "id": "resource-1",
+          "postId": "post-1",
+          "legacyAssetId": null,
+          "title": "Launch prompt pack",
+          "summary": "Prompt, notes, and remix guidance.",
+          "description": "Reusable launch resource bundle.",
+          "previewText": "Prompt and notes preview.",
+          "accessMode": "free",
+          "priceUsdCents": 0,
+          "salesCount": 0,
+          "allowRemix": true,
+          "priceQuote": {
+            "formatted": "Free",
+            "amountSubunits": 0,
+            "currency": "USD",
+            "note": null
+          },
+          "resourceKinds": ["prompt", "notes"],
+          "creator": {
+            "id": "user-1",
+            "username": "creator",
+            "name": "Creator One",
+            "avatar": "https://cdn.example.test/avatar.png"
+          },
+          "mediaUrl": "https://cdn.example.test/post-1.png",
+          "status": "published",
+          "resources": {
+            "promptText": "Create a bright launch visual.",
+            "notesMarkdown": "Use soft shadows.",
+            "workflowShareUrl": null,
+            "workflowSnapshot": null,
+            "attachments": [
+              {
+                "label": "Prompt file",
+                "kind": "file",
+                "storagePath": "bundles/post-1/prompt.txt",
+                "contentType": "text/plain",
+                "sizeBytes": 256,
+                "resourceType": "prompt",
+                "role": "primary",
+                "remixUse": "text_template"
+              }
+            ],
+            "allowRemix": true,
+            "sections": [],
+            "items": []
+          },
+          "lockedPreview": null,
+          "viewerIsOwner": false,
+          "viewerHasPurchased": true,
+          "viewerCanAccess": true
+        }
+      }
+    },
+    "getPostResourceBundle": {
+      "method": "GET",
+      "path": "/api/posts/:postId/resource-bundle",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "bundle": {
+          "id": "resource-1",
+          "postId": "post-1",
+          "legacyAssetId": null,
+          "title": "Launch prompt pack",
+          "summary": "Prompt, notes, and remix guidance.",
+          "description": "Reusable launch resource bundle.",
+          "previewText": "Prompt and notes preview.",
+          "accessMode": "free",
+          "priceUsdCents": 0,
+          "salesCount": 0,
+          "allowRemix": true,
+          "priceQuote": {
+            "formatted": "Free",
+            "amountSubunits": 0,
+            "currency": "USD",
+            "note": null
+          },
+          "resourceKinds": ["prompt", "notes"],
+          "creator": {
+            "id": "user-1",
+            "username": "creator",
+            "name": "Creator One",
+            "avatar": "https://cdn.example.test/avatar.png"
+          },
+          "mediaUrl": "https://cdn.example.test/post-1.png",
+          "status": "published",
+          "resources": {
+            "promptText": "Create a bright launch visual.",
+            "notesMarkdown": "Use soft shadows.",
+            "workflowShareUrl": null,
+            "workflowSnapshot": null,
+            "attachments": [],
+            "allowRemix": true,
+            "sections": [],
+            "items": []
+          },
+          "lockedPreview": null,
+          "viewerIsOwner": false,
+          "viewerHasPurchased": true,
+          "viewerCanAccess": true
+        }
+      }
+    },
+    "unlockFreeBundle": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/unlock-free",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "alreadyProcessed": false
+      }
+    },
+    "unlockBundleWithCredits": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/unlock-with-credits",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "entitlement": "post_resource_unlock",
+        "credits": 96,
+        "alreadyProcessed": false,
+        "postId": "post-1",
+        "message": "Unlocked."
+      }
+    },
+    "getPostResourceFileUrl": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/file-url",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "signedUrl": "https://storage.example.test/signed/bundles/post-1/prompt.txt"
+      }
+    },
+    "mobileCommerceSync": {
+      "method": "POST",
+      "path": "/api/mobile/commerce/sync",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "entitlement": "credits",
+        "credits": 120
+      }
+    },
+    "mobileCommerceRestore": {
+      "method": "POST",
+      "path": "/api/mobile/commerce/restore",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "entitlements": [
+          {
+            "success": true,
+            "entitlement": "credits",
+            "credits": 120
+          }
+        ]
+      }
+    },
+    "registerMobilePushToken": {
+      "method": "POST",
+      "path": "/api/mobile/notifications/register",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true
+      }
+    },
+    "unregisterMobilePushToken": {
+      "method": "POST",
+      "path": "/api/mobile/notifications/unregister",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true
+      }
+    },
+    "mobileNotifications": {
+      "method": "GET",
+      "path": "/api/mobile/notifications",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "notifications": [
+          {
+            "id": "notification-1",
+            "type": "credits_purchased",
+            "category": "commerce",
+            "title": "Credits added",
+            "body": "Your credits are ready.",
+            "deepLink": "/pricing",
+            "objectType": "transaction",
+            "objectId": "txn-1",
+            "eventCount": 1,
+            "isRead": false,
+            "createdAt": "2026-06-22T06:00:00.000Z",
+            "updatedAt": "2026-06-22T06:01:00.000Z"
+          }
+        ],
+        "unreadCount": 7
+      }
+    },
+    "markMobileNotificationsRead": {
+      "method": "POST",
+      "path": "/api/mobile/notifications/read",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true
+      }
+    },
+    "markAllMobileNotificationsRead": {
+      "method": "POST",
+      "path": "/api/mobile/notifications/read-all",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true
+      }
+    },
+    "getMobileNotificationPreferences": {
+      "method": "GET",
+      "path": "/api/mobile/notifications/preferences",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "preferences": {
+          "pushEnabled": true,
+          "generationEnabled": true,
+          "commerceEnabled": true,
+          "socialEnabled": true
+        }
+      }
+    },
+    "updateMobileNotificationPreferences": {
+      "method": "PATCH",
+      "path": "/api/mobile/notifications/preferences",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "preferences": {
+          "pushEnabled": false,
+          "generationEnabled": true,
+          "commerceEnabled": true,
+          "socialEnabled": true
+        }
+      }
+    }
+  }
+}

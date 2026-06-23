@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createApiClient } from '../lib/api-client';
+import { ApiError, createApiClient } from '../lib/api-client';
 
 function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -12,6 +12,151 @@ function jsonResponse(body: unknown) {
 }
 
 describe('mobile api client caching', () => {
+  it('sends a request id with backend calls', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getProfile();
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect((init.headers as Headers).get('x-request-id')).toMatch(/^mobile:/);
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('advertises the mobile app, API, and catalog contract versions', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      clientInfo: {
+        appVersion: '1.2.3',
+        apiVersion: 1,
+        catalogSchemaVersion: 1,
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getProfile();
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const headers = init.headers as Headers;
+    expect(headers.get('x-magicbooklet-client')).toBe('mobile');
+    expect(headers.get('x-magicbooklet-app-version')).toBe('1.2.3');
+    expect(headers.get('x-magicbooklet-api-version')).toBe('1');
+    expect(headers.get('x-magicbooklet-catalog-schema-version')).toBe('1');
+  });
+
+  it('exposes stable compatibility error codes to update handling', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      code: 'MOBILE_UPDATE_REQUIRED',
+      error: 'Update Magicbooklet to continue.',
+      compatibility: {
+        currentApiVersion: 1,
+        minimumApiVersion: 1,
+        minimumAppVersion: '1.1.0',
+        supportedCatalogSchemaVersions: [1],
+      },
+    }), {
+      status: 426,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 1,
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.getProfile()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 426,
+      code: 'MOBILE_UPDATE_REQUIRED',
+      message: 'Update Magicbooklet to continue.',
+    });
+  });
+
+  it('preserves explicit request ids for advanced callers', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ ok: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.request('/api/profile', {
+      headers: {
+        'x-request-id': 'mobile-custom-trace-1',
+      },
+    });
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect((init.headers as Headers).get('x-request-id')).toBe('mobile-custom-trace-1');
+  });
+
+  it('attaches the server request id to HTTP API errors without leaking auth headers', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: 'Backend unavailable' }), {
+      status: 503,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-request-id': 'server-trace-1',
+      },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-secret',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    let capturedError: unknown;
+    try {
+      await api.getProfile();
+    } catch (error) {
+      capturedError = error;
+    }
+
+    expect(capturedError).toBeInstanceOf(ApiError);
+    expect(capturedError).toMatchObject({
+      status: 503,
+      message: 'Backend unavailable',
+      requestId: 'server-trace-1',
+      details: { error: 'Backend unavailable' },
+    });
+    expect(JSON.stringify((capturedError as ApiError).details)).not.toContain('token-secret');
+  });
+
+  it('attaches the outgoing request id to network errors', async () => {
+    const fetcher = vi.fn(async () => {
+      throw new TypeError('Network request failed');
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    let capturedError: unknown;
+    try {
+      await api.getProfile();
+    } catch (error) {
+      capturedError = error;
+    }
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const outgoingRequestId = (init.headers as Headers).get('x-request-id');
+    expect(outgoingRequestId).toMatch(/^mobile:/);
+    expect(capturedError).toBeInstanceOf(ApiError);
+    expect((capturedError as ApiError).requestId).toBe(outgoingRequestId);
+    expect(JSON.stringify((capturedError as ApiError).details)).not.toContain('token-1');
+  });
+
   it('turns local network failures into actionable API errors', async () => {
     const api = createApiClient({
       baseUrl: 'http://10.0.2.2:3000',
@@ -197,6 +342,32 @@ describe('mobile api client caching', () => {
       mimeType: 'image/png',
       kind: 'image',
       sizeBytes: 1234,
+    });
+    expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('requests server-issued temporary media read URLs with JSON metadata', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      signedUrl: 'https://storage.magicbooklet.test/signed/reference.png',
+      expiresInSeconds: 3600,
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.createMediaReadUrl({
+      storagePath: 'uploads/user-1/reference.png',
+    });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/uploads/media/read-url');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      storagePath: 'uploads/user-1/reference.png',
     });
     expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');

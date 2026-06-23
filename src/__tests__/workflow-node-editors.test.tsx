@@ -999,7 +999,7 @@ describe('WorkflowNodeEditors', () => {
     await waitFor(() => {
       expect(requestPromptEnhancementMock).toHaveBeenCalledWith(expect.objectContaining({
         medium: 'video',
-        selectedModel: 'kling-3.0/video',
+        selectedModel: 'kling-3.0-video',
         context: expect.objectContaining({
           modelId: 'kling-3.0-video',
           aspectRatio: '9:16',

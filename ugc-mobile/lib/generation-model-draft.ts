@@ -148,6 +148,21 @@ function validateControls(draft: CreationDraft, model: GenerationModelDescriptor
   }
 }
 
+function validateCatalogInputLimit(
+  count: number,
+  limit: { max: number } | null,
+  unsupportedMessage: string,
+  limitMessage: (max: number) => string,
+  errors: string[]
+) {
+  if (count <= 0) return;
+  if (!limit) {
+    errors.push(unsupportedMessage);
+    return;
+  }
+  if (count > limit.max) errors.push(limitMessage(limit.max));
+}
+
 export function validateCatalogCreationDraft(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
@@ -163,16 +178,40 @@ export function validateCatalogCreationDraft(
   }
 
   validateControls(draft, model, errors);
-  if (draft.tool === 'image' && model.inputs.imageReferences && draft.references.length > model.inputs.imageReferences.max) {
-    errors.push(`${model.displayName} supports up to ${model.inputs.imageReferences.max} total reference images.`);
+  if (draft.tool === 'image') {
+    validateCatalogInputLimit(
+      draft.references.length,
+      model.inputs.imageReferences,
+      `${model.displayName} does not support image references.`,
+      (max) => `${model.displayName} supports up to ${max} total reference images.`,
+      errors
+    );
   }
   if (draft.tool === 'video') {
     if (!model.capabilities.multiShot && draft.isMultiShot) errors.push(`${model.displayName} does not support multi-shot video generation.`);
     if (!model.inputs.startFrame && draft.startFrame) errors.push(`${model.displayName} does not support a start frame.`);
     if (!model.inputs.endFrame && draft.endFrame) errors.push(`${model.displayName} does not support an end frame.`);
-    if (model.inputs.imageReferences && draft.references.length > model.inputs.imageReferences.max) errors.push(`${model.displayName} supports up to ${model.inputs.imageReferences.max} image references.`);
-    if (model.inputs.videoReferences && draft.referenceVideos.length > model.inputs.videoReferences.max) errors.push(`${model.displayName} supports up to ${model.inputs.videoReferences.max} video references.`);
-    if (model.inputs.audioReferences && draft.referenceAudios.length > model.inputs.audioReferences.max) errors.push(`${model.displayName} supports up to ${model.inputs.audioReferences.max} audio references.`);
+    validateCatalogInputLimit(
+      draft.references.length,
+      model.inputs.imageReferences,
+      `${model.displayName} does not support image references.`,
+      (max) => `${model.displayName} supports up to ${max} image references.`,
+      errors
+    );
+    validateCatalogInputLimit(
+      draft.referenceVideos.length,
+      model.inputs.videoReferences,
+      `${model.displayName} does not support reference videos.`,
+      (max) => `${model.displayName} supports up to ${max} video references.`,
+      errors
+    );
+    validateCatalogInputLimit(
+      draft.referenceAudios.length,
+      model.inputs.audioReferences,
+      `${model.displayName} does not support reference audio.`,
+      (max) => `${model.displayName} supports up to ${max} audio references.`,
+      errors
+    );
   }
 
   const references = draft.tool === 'image' ? draft.references : draft.tool === 'video' ? draft.references : [];
@@ -180,11 +219,12 @@ export function validateCatalogCreationDraft(
   const unknownHandles = extractHandles(draft.prompt).filter((handle) => !knownHandles.includes(handle));
   if (unknownHandles.length > 0) errors.push(`Unknown element mention${unknownHandles.length === 1 ? '' : 's'}: ${unknownHandles.join(', ')}`);
 
-  const cost = options.quotedCost ?? 0;
-  if (typeof options.credits === 'number' && options.quotedCost !== null && options.quotedCost !== undefined && options.credits < cost) {
+  const hasServerQuote = typeof options.quotedCost === 'number' && Number.isFinite(options.quotedCost);
+  const cost = hasServerQuote ? options.quotedCost as number : 0;
+  if (typeof options.credits === 'number' && hasServerQuote && options.credits < cost) {
     errors.push(`Insufficient credits. This generation costs ${cost} credits.`);
   }
-  return { errors, warnings: [], cost, canGenerate: errors.length === 0 && options.quotedCost !== null };
+  return { errors, warnings: [], cost, canGenerate: errors.length === 0 && hasServerQuote };
 }
 
 export function buildCatalogQuoteRequest(

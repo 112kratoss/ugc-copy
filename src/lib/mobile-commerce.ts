@@ -6,6 +6,11 @@ import {
   notifyMobilePurchasesRestored,
   notifyPostResourceUnlockCompleted,
 } from '@/lib/mobile-notifications';
+import {
+  EXTERNAL_API_REQUEST_TIMEOUT_MS,
+  fetchWithProviderTimeout,
+  isExternalServiceTimeoutError,
+} from '@/lib/provider-fetch';
 import { PRICING_PLAN_MAP, type PricingPlan } from '@/lib/pricing';
 
 export type MobilePurchaseProvider = 'app_store' | 'play_store' | 'revenuecat' | 'sandbox';
@@ -163,6 +168,18 @@ function providerStoreMatches(provider: MobilePurchaseProvider, store: string | 
   return store === provider;
 }
 
+function isProviderTimeoutError(error: unknown) {
+  if (isExternalServiceTimeoutError(error)) {
+    return true;
+  }
+
+  if (!isRecord(error)) {
+    return false;
+  }
+
+  return error.name === 'TimeoutError' || error.name === 'AbortError';
+}
+
 function latestPurchase(purchases: RevenueCatPurchase[]) {
   return [...purchases].sort((first, second) => {
     const firstTime = Date.parse(first.purchase_date ?? '') || 0;
@@ -211,12 +228,27 @@ async function fetchRevenueCatSubscriber({
     throw new MobileCommerceError('Mobile receipt verification is not configured.', 500);
   }
 
-  const response = await fetcher(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`, {
-    headers: {
-      Authorization: `Bearer ${revenueCatApiKey}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetchWithProviderTimeout(
+      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${revenueCatApiKey}`,
+          'Content-Type': 'application/json',
+        },
+      },
+      EXTERNAL_API_REQUEST_TIMEOUT_MS,
+      fetcher,
+      'RevenueCat'
+    );
+  } catch (error) {
+    if (isProviderTimeoutError(error)) {
+      throw new MobileCommerceError('Mobile purchase verification timed out.', 504);
+    }
+
+    throw error;
+  }
 
   if (!response.ok) {
     throw new MobileCommerceError('Unable to verify mobile purchase.', 502);

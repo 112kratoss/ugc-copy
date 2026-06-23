@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createUserClientMock = vi.fn();
+const createServiceClientMock = vi.fn();
+const rateLimitRpcMock = vi.fn();
 const ensureMobileNotificationPreferencesMock = vi.fn();
 const upsertCalls: Array<{ values: Record<string, unknown>; options: Record<string, unknown> | undefined }> = [];
 const deactivateCalls: Array<{
@@ -11,6 +13,7 @@ const deactivateCalls: Array<{
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
+  createServiceClient: () => createServiceClientMock(),
 }));
 
 vi.mock('@/lib/mobile-notifications', async () => {
@@ -20,6 +23,11 @@ vi.mock('@/lib/mobile-notifications', async () => {
     ensureMobileNotificationPreferences: (...args: unknown[]) => ensureMobileNotificationPreferencesMock(...args),
   };
 });
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
 
 function createUserSupabaseMock() {
   return {
@@ -71,8 +79,21 @@ describe('/api/mobile/notifications/register route', () => {
     upsertCalls.length = 0;
     deactivateCalls.length = 0;
     createUserClientMock.mockReset();
+    createServiceClientMock.mockReset();
+    rateLimitRpcMock.mockReset();
     ensureMobileNotificationPreferencesMock.mockReset();
     createUserClientMock.mockReturnValue(createUserSupabaseMock());
+    createServiceClientMock.mockReturnValue({ rpc: rateLimitRpcMock });
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 20,
+        remaining: 19,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     ensureMobileNotificationPreferencesMock.mockResolvedValue({
       pushEnabled: true,
       generationEnabled: true,
@@ -90,7 +111,10 @@ describe('/api/mobile/notifications/register route', () => {
     const response = await POST(
       new Request('http://localhost/api/mobile/notifications/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-push-register-success-1',
+        },
         body: JSON.stringify({
           expoPushToken: 'ExponentPushToken[new123]',
           platform: 'android',
@@ -102,6 +126,7 @@ describe('/api/mobile/notifications/register route', () => {
 
     await expect(response.json()).resolves.toEqual({ success: true });
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-push-register-success-1');
     expect(upsertCalls).toEqual([
       {
         values: {
@@ -136,6 +161,61 @@ describe('/api/mobile/notifications/register route', () => {
         neq: expect.any(Function),
       },
     ]);
+    expect(createServiceClientMock).toHaveBeenCalledTimes(1);
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'mobile-push-token:register',
+      p_subject_key: 'user-1',
+      p_limit: 20,
+      p_window_seconds: 600,
+    });
     expect(ensureMobileNotificationPreferencesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rate limits push token registration before token and preference writes', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 20,
+        remaining: 0,
+        retryAfterSeconds: 35,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/mobile/notifications/register/route');
+    const response = await POST(
+      new Request('http://localhost/api/mobile/notifications/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-push-register-rate-limit-1',
+        },
+        body: JSON.stringify({
+          expoPushToken: 'ExponentPushToken[new123]',
+          platform: 'android',
+          deviceId: 'device-1',
+          appVersion: '1.0.0',
+        }),
+      }) as never
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('35');
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-push-register-rate-limit-1');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 35,
+    });
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'mobile-push-token:register',
+      p_subject_key: 'user-1',
+      p_limit: 20,
+      p_window_seconds: 600,
+    });
+    expect(upsertCalls).toEqual([]);
+    expect(deactivateCalls).toEqual([]);
+    expect(ensureMobileNotificationPreferencesMock).not.toHaveBeenCalled();
   });
 });

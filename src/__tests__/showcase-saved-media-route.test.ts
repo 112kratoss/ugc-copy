@@ -246,10 +246,14 @@ describe('/api/showcase/saved-media route', () => {
 
     const { GET } = await import('@/app/api/showcase/saved-media/route');
     const response = await GET(
-      new NextRequest('http://localhost/api/showcase/saved-media?limit=24')
+      new NextRequest('http://localhost/api/showcase/saved-media?limit=24', {
+        headers: { 'x-request-id': 'saved-media-1' },
+      })
     );
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('saved-media-1');
     const body = await response.json();
 
     // Items should be in save-row order: post-3 (saved most recently), post-1, post-2.
@@ -510,6 +514,7 @@ describe('/api/showcase/saved-media route', () => {
     );
 
     expect(response.status).toBe(401);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   });
 
   it('returns paginated results with correct hasMore', async () => {

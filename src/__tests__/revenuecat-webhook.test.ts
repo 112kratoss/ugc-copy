@@ -6,15 +6,25 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({ rpc: rpcMock }),
 }));
 
-function webhookRequest(event: Record<string, unknown>, authorization = 'Bearer revenuecat-webhook-secret') {
+function webhookRequest(
+  event: Record<string, unknown>,
+  authorization = 'Bearer revenuecat-webhook-secret',
+  headers: Record<string, string> = {},
+) {
   return new Request('http://localhost/api/mobile/commerce/revenuecat-webhook', {
     method: 'POST',
     headers: {
       Authorization: authorization,
       'Content-Type': 'application/json',
+      ...headers,
     },
     body: JSON.stringify({ api_version: '1.0', event }),
   });
+}
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
 }
 
 const refundEvent = {
@@ -40,43 +50,70 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
 
   it('rejects requests without the configured authorization header', async () => {
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
-    const response = await POST(webhookRequest(refundEvent, ''));
+    const response = await POST(webhookRequest(refundEvent, '', {
+      'x-request-id': 'revenuecat-webhook-auth-1',
+    }));
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-auth-1');
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('fails closed when webhook authorization is not configured', async () => {
     delete process.env.REVENUECAT_WEBHOOK_AUTH_TOKEN;
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
-    const response = await POST(webhookRequest(refundEvent));
+    const response = await POST(webhookRequest(refundEvent, 'Bearer revenuecat-webhook-secret', {
+      'x-request-id': 'revenuecat-webhook-config-1',
+    }));
 
     expect(response.status).toBe(503);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-config-1');
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('ignores events that cannot change a credit top-up', async () => {
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
-    const response = await POST(webhookRequest({ ...refundEvent, type: 'TEST' }));
+    const response = await POST(webhookRequest({ ...refundEvent, type: 'TEST' }, 'Bearer revenuecat-webhook-secret', {
+      'x-request-id': 'revenuecat-webhook-ignored-1',
+    }));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-ignored-1');
     expect(await response.json()).toEqual({ received: true, ignored: true });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized payloads before refund reconciliation work', async () => {
+    const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
+    const response = await POST(webhookRequest(refundEvent, 'Bearer revenuecat-webhook-secret', {
+      'content-length': '262145',
+      'x-request-id': 'revenuecat-webhook-oversized-1',
+    }));
+
+    expect(response.status).toBe(413);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-oversized-1');
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('ignores cancellation events for products outside the credit catalog', async () => {
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
-    const response = await POST(webhookRequest({ ...refundEvent, product_id: 'monthly.subscription' }));
+    const response = await POST(webhookRequest({ ...refundEvent, product_id: 'monthly.subscription' }, 'Bearer revenuecat-webhook-secret', {
+      'x-request-id': 'revenuecat-webhook-noncatalog-1',
+    }));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-noncatalog-1');
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('reconciles a refunded Play Store credit purchase', async () => {
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
-    const response = await POST(webhookRequest(refundEvent));
+    const response = await POST(webhookRequest(refundEvent, 'Bearer revenuecat-webhook-secret', {
+      'x-request-id': 'revenuecat-webhook-success-1',
+    }));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-success-1');
     expect(await response.json()).toEqual({ received: true, result: 'refunded' });
     expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_refund', {
       p_action: 'refund',
@@ -124,8 +161,11 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
   it('returns a retryable error when database reconciliation fails', async () => {
     rpcMock.mockResolvedValue({ data: null, error: { message: 'database unavailable' } });
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
-    const response = await POST(webhookRequest(refundEvent));
+    const response = await POST(webhookRequest(refundEvent, 'Bearer revenuecat-webhook-secret', {
+      'x-request-id': 'revenuecat-webhook-retryable-1',
+    }));
 
     expect(response.status).toBe(503);
+    expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-retryable-1');
   });
 });

@@ -66,6 +66,8 @@ import {
   renameMediaDraft,
   type CreationSectionId,
   type CreationDraft,
+  type CreationReadinessCostStatus,
+  type CreationValidationResult,
   type ImageCreationDraft,
   type ImageModelId,
   type MediaDraft,
@@ -73,7 +75,6 @@ import {
   type MotionModelId,
   type VideoCreationDraft,
   type VideoModelId,
-  validateCreationDraft,
 } from '@/lib/media-creation-view-model';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -280,9 +281,26 @@ export function MediaCreationScreen({
             cost: 0,
             canGenerate: false,
           }
-        : validateCreationDraft(currentDraft, { credits }),
-    [activeQuote.cost, catalog, currentCatalogModel, currentDraft, credits]
+        : {
+            errors: catalogQuery.error ? ['Model settings unavailable. Retry before generating.'] : [],
+            warnings: [],
+            cost: 0,
+            canGenerate: false,
+          },
+    [activeQuote.cost, catalog, catalogQuery.error, currentCatalogModel, currentDraft, credits]
   );
+  const costReadinessStatus: CreationReadinessCostStatus = currentCatalogModel
+    ? activeQuote.status === 'ready'
+      ? 'ready'
+      : activeQuote.status === 'error'
+        ? 'unavailable'
+        : 'pending'
+    : catalog || catalogQuery.error
+      ? 'unavailable'
+      : 'pending';
+  const costUnavailableMessage = activeQuote.status === 'error'
+    ? activeQuote.error ?? 'Could not calculate generation cost.'
+    : 'Retry model settings before generating.';
   const sectionOrder = useMemo(() => getCreationSectionOrder(currentDraft), [currentDraft]);
   const sectionSummary = useMemo(
     () => currentCatalogModel
@@ -296,7 +314,13 @@ export function MediaCreationScreen({
         : getCreationSectionSummary(currentDraft),
     [catalog, currentCatalogModel, currentDraft]
   );
-  const readiness = useMemo(() => getCreationReadiness(currentDraft, validation, sectionSummary), [currentDraft, sectionSummary, validation]);
+  const readiness = useMemo(
+    () => getCreationReadiness(currentDraft, validation, sectionSummary, {
+      costStatus: costReadinessStatus,
+      costUnavailableMessage,
+    }),
+    [costReadinessStatus, costUnavailableMessage, currentDraft, sectionSummary, validation]
+  );
   const outputUrl = useMemo(() => (status ? getGenerationOutput(status) : null), [status]);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -766,7 +790,7 @@ export function MediaCreationScreen({
           accent={meta.accent}
           bottom={contentBottomReserve + 8}
           credits={credits ?? 0}
-          cost={validation.cost}
+          cost={activeQuote.status === 'ready' ? activeQuote.cost : null}
           disabled={generateDisabled}
           isGenerating={isGenerating}
           issueCount={issueCount}
@@ -815,7 +839,7 @@ function FloatingGenerateReviewBar({
   accent: ToolAccent;
   bottom: number;
   credits: number;
-  cost: number;
+  cost: number | null;
   disabled: boolean;
   isGenerating: boolean;
   issueCount: number;
@@ -823,6 +847,7 @@ function FloatingGenerateReviewBar({
   onGenerate: () => void;
 }) {
   const status = issueCount > 0 ? `${issueCount} issue${issueCount === 1 ? '' : 's'}` : 'Ready';
+  const costLabel = typeof cost === 'number' ? String(cost) : '...';
 
   return (
     <View
@@ -853,7 +878,7 @@ function FloatingGenerateReviewBar({
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
           <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '900' }}>Review and generate</Text>
           <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>
-            {credits} credits · {cost} cost · {status}
+            {credits} credits · {costLabel} cost · {status}
           </Text>
         </View>
         <Pressable
@@ -2031,7 +2056,7 @@ function ReviewIssuesPanel({
   validation,
   message,
 }: {
-  validation: ReturnType<typeof validateCreationDraft>;
+  validation: CreationValidationResult;
   message: string | null;
 }) {
   const visible = getVisibleGenerationCheckMessages(validation, message);

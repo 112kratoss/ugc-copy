@@ -4,7 +4,8 @@ const recordPostShareEventMock = vi.fn(async (_payload?: unknown) => undefined);
 const notifyPostSocialActivityMock = vi.fn(async (_client?: unknown, _payload?: unknown) => undefined);
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const createUserClientMock = vi.fn();
-const createServiceClientMock = vi.fn(() => ({ service: true }));
+const rpcMock = vi.fn();
+const createServiceClientMock = vi.fn(() => ({ service: true, rpc: rpcMock }));
 
 vi.mock('@/lib/post-share-events', () => ({
   recordPostShareEvent: (payload: unknown) => recordPostShareEventMock(payload),
@@ -24,6 +25,11 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
 }));
 
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
 describe('/api/showcase/share route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -32,6 +38,17 @@ describe('/api/showcase/share route', () => {
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     createUserClientMock.mockReset();
     createServiceClientMock.mockClear();
+    rpcMock.mockReset();
+    rpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 120,
+        remaining: 119,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -63,6 +80,7 @@ describe('/api/showcase/share route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'x-request-id': 'showcase-share-success-1',
         },
         body: JSON.stringify({
           generationId: 'gen-1',
@@ -74,6 +92,7 @@ describe('/api/showcase/share route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-share-success-1');
     expect(data.success).toBe(true);
     expect(recordPostShareEventMock).toHaveBeenCalledWith({
       postId: 'post-1',
@@ -82,7 +101,13 @@ describe('/api/showcase/share route', () => {
       channel: 'copy-link',
       actorUserId: 'user-1',
     });
-    expect(notifyPostSocialActivityMock).toHaveBeenCalledWith({ service: true }, {
+    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'showcase:share',
+      p_subject_key: 'user-1',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
+    expect(notifyPostSocialActivityMock).toHaveBeenCalledWith({ service: true, rpc: rpcMock }, {
       type: 'post_shared',
       recipientUserId: 'creator-1',
       actorUserId: 'user-1',
@@ -99,6 +124,7 @@ describe('/api/showcase/share route', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-request-id': 'showcase-share-missing-1',
         },
         body: JSON.stringify({
           postId: 'post-2',
@@ -110,7 +136,64 @@ describe('/api/showcase/share route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(404);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-share-missing-1');
     expect(data.error).toContain('public creations');
     expect(recordPostShareEventMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limits anonymous share tracking before public lookup or event recording', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: null },
+          error: null,
+        })),
+      },
+    });
+    rpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 120,
+        remaining: 0,
+        retryAfterSeconds: 30,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/showcase/share/route');
+    const response = await POST(
+      new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': '203.0.113.55, 10.0.0.1',
+          'x-request-id': 'showcase-share-rate-limit-1',
+        },
+        body: JSON.stringify({
+          postId: 'post-2',
+          sourceSurface: 'showcase',
+          channel: 'copy-link',
+        }),
+      }) as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('30');
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-share-rate-limit-1');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 30,
+    });
+    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'showcase:share',
+      p_subject_key: '203.0.113.55',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
+    expect(findPublicPostReferenceByIdOrGenerationIdMock).not.toHaveBeenCalled();
+    expect(recordPostShareEventMock).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 });

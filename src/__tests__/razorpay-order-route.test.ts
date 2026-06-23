@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   type UserResult = {
@@ -8,12 +8,10 @@ const mocks = vi.hoisted(() => {
     error: Error | null;
   };
 
-  const ordersCreate = vi.fn(async () => ({ id: 'order_123' }));
-  const Razorpay = vi.fn(function RazorpayMock(this: { orders: { create: typeof ordersCreate } }) {
-    this.orders = {
-      create: ordersCreate,
-    };
-  });
+  const providerFetch = vi.fn(async () => new Response(JSON.stringify({ id: 'order_123' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  }));
 
   const userGetUser = vi.fn(async (): Promise<UserResult> => ({
     data: { user: null },
@@ -65,21 +63,16 @@ const mocks = vi.hoisted(() => {
     createClient,
     createServiceClient,
     createUserClient,
+    providerFetch,
     from,
     insert,
-    ordersCreate,
     rawGetUser,
     rpc,
-    Razorpay,
     select,
     single,
     userGetUser,
   };
 });
-
-vi.mock('razorpay', () => ({
-  default: mocks.Razorpay,
-}));
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (url: string, key: string, options?: unknown) => mocks.createClient(url, key, options),
@@ -90,18 +83,29 @@ vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => mocks.createUserClient(request),
 }));
 
-function buildOrderRequest(body: Record<string, unknown>) {
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
+function buildOrderRequest(body: Record<string, unknown>, headers: Record<string, string> = {}) {
   return new Request('http://localhost/api/razorpay/order', {
     method: 'POST',
     headers: {
       Authorization: 'Bearer user-token',
       'Content-Type': 'application/json',
+      ...headers,
     },
     body: JSON.stringify(body),
   });
 }
 
 describe('/api/razorpay/order route', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.resetModules();
     mocks.createClient.mockClear();
@@ -109,7 +113,11 @@ describe('/api/razorpay/order route', () => {
     mocks.createUserClient.mockClear();
     mocks.from.mockClear();
     mocks.insert.mockClear();
-    mocks.ordersCreate.mockClear();
+    mocks.providerFetch.mockClear();
+    mocks.providerFetch.mockResolvedValue(new Response(JSON.stringify({ id: 'order_123' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
     mocks.rawGetUser.mockClear();
     mocks.rpc.mockClear();
     mocks.rpc.mockResolvedValue({
@@ -122,7 +130,6 @@ describe('/api/razorpay/order route', () => {
       },
       error: null,
     });
-    mocks.Razorpay.mockClear();
     mocks.select.mockClear();
     mocks.single.mockClear();
     mocks.userGetUser.mockReset();
@@ -132,15 +139,19 @@ describe('/api/razorpay/order route', () => {
     });
     process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID = 'rzp_test_key';
     process.env.RAZORPAY_KEY_SECRET = 'razorpay-secret';
+    vi.stubGlobal('fetch', mocks.providerFetch);
   });
 
   it('rejects missing plan IDs before creating Razorpay or Supabase clients', async () => {
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({}));
+    const response = await POST(buildOrderRequest({}, {
+      'x-request-id': 'credit-order-validation-1',
+    }));
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'credit-order-validation-1');
     expect(await response.json()).toEqual({ error: 'Missing planId' });
-    expect(mocks.Razorpay).not.toHaveBeenCalled();
+    expect(mocks.providerFetch).not.toHaveBeenCalled();
     expect(mocks.createClient).not.toHaveBeenCalled();
     expect(mocks.createUserClient).not.toHaveBeenCalled();
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
@@ -148,15 +159,21 @@ describe('/api/razorpay/order route', () => {
 
   it('authenticates through the shared user client before creating Razorpay orders', async () => {
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({ planId: 'starter' }));
+    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+      Authorization: 'Bearer private-token',
+      'x-request-id': 'credit-order-auth-1',
+    }));
 
     expect(response.status).toBe(401);
+    expectPrivateNoStoreTraceHeaders(response, 'credit-order-auth-1');
+    expect(response.headers.has('authorization')).toBe(false);
+    expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(await response.json()).toEqual({
       error: 'Unauthorized: Please log in to purchase credits.',
     });
     expect(mocks.createUserClient).toHaveBeenCalledTimes(1);
     expect(mocks.createClient).not.toHaveBeenCalled();
-    expect(mocks.Razorpay).not.toHaveBeenCalled();
+    expect(mocks.providerFetch).not.toHaveBeenCalled();
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
   });
 
@@ -167,9 +184,12 @@ describe('/api/razorpay/order route', () => {
     });
 
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({ planId: 'starter' }));
+    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+      'x-request-id': 'credit-order-success-1',
+    }));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'credit-order-success-1');
     expect(await response.json()).toEqual({
       amount: 41500,
       currency: 'INR',
@@ -183,12 +203,15 @@ describe('/api/razorpay/order route', () => {
       p_limit: 10,
       p_window_seconds: 600,
     });
-    expect(mocks.Razorpay).toHaveBeenCalledTimes(1);
-    expect(mocks.ordersCreate).toHaveBeenCalledWith({
-      amount: 41500,
-      currency: 'INR',
-      receipt: expect.stringMatching(/^rcpt_user_123_\d+$/),
-    });
+    expect(mocks.providerFetch).toHaveBeenCalledWith('https://api.razorpay.com/v1/orders', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: `Basic ${Buffer.from('rzp_test_key:razorpay-secret').toString('base64')}`,
+        'Content-Type': 'application/json',
+      }),
+      body: expect.stringMatching(/"amount":41500/),
+      signal: expect.any(AbortSignal),
+    }));
     expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
     expect(mocks.from).toHaveBeenCalledWith('transactions');
     expect(mocks.insert).toHaveBeenCalledWith({
@@ -217,10 +240,13 @@ describe('/api/razorpay/order route', () => {
     });
 
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({ planId: 'starter' }));
+    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+      'x-request-id': 'credit-order-rate-limit-1',
+    }));
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('48');
+    expectPrivateNoStoreTraceHeaders(response, 'credit-order-rate-limit-1');
     await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
     expect(mocks.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'credit-order:create',
@@ -228,9 +254,34 @@ describe('/api/razorpay/order route', () => {
       p_limit: 10,
       p_window_seconds: 600,
     });
-    expect(mocks.Razorpay).not.toHaveBeenCalled();
-    expect(mocks.ordersCreate).not.toHaveBeenCalled();
+    expect(mocks.providerFetch).not.toHaveBeenCalled();
     expect(mocks.from).not.toHaveBeenCalled();
     expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 504 when Razorpay order creation times out before recording a transaction', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.userGetUser.mockResolvedValue({
+      data: { user: { id: 'user_123456789' } },
+      error: null,
+    });
+    mocks.providerFetch.mockRejectedValueOnce(new DOMException('Timed out', 'TimeoutError'));
+
+    const { POST } = await import('@/app/api/razorpay/order/route');
+    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+      'x-request-id': 'credit-order-timeout-1',
+    }));
+
+    expect(response.status).toBe(504);
+    expectPrivateNoStoreTraceHeaders(response, 'credit-order-timeout-1');
+    await expect(response.json()).resolves.toEqual({
+      error: 'Payment provider timed out. Please try again.',
+    });
+    expect(mocks.providerFetch).toHaveBeenCalledOnce();
+    expect(mocks.from).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('Razorpay Order Error:', expect.objectContaining({
+      name: 'ExternalServiceTimeoutError',
+    }));
   });
 });

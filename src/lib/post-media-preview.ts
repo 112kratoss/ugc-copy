@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
-import { createVideoPosterBuffer } from '@/lib/generation-media-preview';
 import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
@@ -100,6 +99,7 @@ export async function createPostMediaPreview({
     return null;
   }
 
+  const { createVideoPosterBuffer } = await import('@/lib/video-poster');
   const poster = await createVideoPosterBuffer(body);
   const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(poster));
   const upload = await supabase.storage

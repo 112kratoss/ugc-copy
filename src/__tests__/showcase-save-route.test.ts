@@ -10,6 +10,8 @@ const notifyPostSocialActivityMock = vi.fn();
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn();
 const isMissingPostsSchemaErrorMock = vi.fn<(error: unknown) => boolean>(() => false);
 const createServiceClientMock = vi.fn();
+let rateLimitAllowed = true;
+let businessRpcResults: Array<{ data: unknown; error: unknown }> = [];
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (...args: unknown[]) => rawCreateClientMock(...args),
@@ -102,7 +104,16 @@ function saveRpcResult({
   };
 }
 
-async function postSave(body: Record<string, unknown>) {
+function queueBusinessRpcResult(result: { data: unknown; error: unknown }) {
+  businessRpcResults.push(result);
+}
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
+async function postSave(body: Record<string, unknown>, requestId = 'showcase-save-success-1') {
   const { POST } = await import('@/app/api/showcase/save/route');
   return POST(
     new Request('http://localhost/api/showcase/save', {
@@ -110,6 +121,7 @@ async function postSave(body: Record<string, unknown>) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
+        'x-request-id': requestId,
       },
       body: JSON.stringify(body),
     }) as never
@@ -133,6 +145,24 @@ describe('/api/showcase/save route', () => {
     createUserClientMock.mockReset();
     createUserClientMock.mockReturnValue(userClient);
     rpcMock.mockReset();
+    rateLimitAllowed = true;
+    businessRpcResults = [];
+    rpcMock.mockImplementation((fn: string) => {
+      if (fn === 'check_backend_rate_limit') {
+        return Promise.resolve({
+          data: {
+            allowed: rateLimitAllowed,
+            limit: 120,
+            remaining: rateLimitAllowed ? 119 : 0,
+            retryAfterSeconds: rateLimitAllowed ? 0 : 34,
+            resetAt: '2026-06-22T06:30:00.000Z',
+          },
+          error: null,
+        });
+      }
+
+      return Promise.resolve(businessRpcResults.shift() ?? { data: null, error: null });
+    });
     eventInsertMock.mockReset();
     notifyPostSocialActivityMock.mockReset();
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
@@ -155,7 +185,7 @@ describe('/api/showcase/save route', () => {
   });
 
   it('idempotently saves a post, records analytics, and notifies only when state changes to saved', async () => {
-    rpcMock.mockResolvedValueOnce(saveRpcResult({ isSaved: true, saveCount: 5, changed: true }));
+    queueBusinessRpcResult(saveRpcResult({ isSaved: true, saveCount: 5, changed: true }));
 
     const response = await postSave({
       postId: 'post-1',
@@ -171,6 +201,7 @@ describe('/api/showcase/save route', () => {
       message: 'Saved to bookmarks',
     });
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-save-success-1');
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(rpcMock).toHaveBeenCalledWith('set_post_save_state', {
@@ -195,8 +226,38 @@ describe('/api/showcase/save route', () => {
     });
   });
 
+  it('returns 429 before parsing the save body when save capacity is exhausted', async () => {
+    rateLimitAllowed = false;
+    const jsonMock = vi.fn(async () => ({
+      postId: 'post-1',
+      shouldSave: true,
+    }));
+
+    const { POST } = await import('@/app/api/showcase/save/route');
+    const response = await POST({
+      headers: new Headers({
+        Authorization: 'Bearer token',
+        'x-request-id': 'showcase-save-rate-limit-1',
+      }),
+      json: jsonMock,
+    } as never);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('34');
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-save-rate-limit-1');
+    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'showcase:save',
+      p_subject_key: 'user-1',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
+    expect(jsonMock).not.toHaveBeenCalled();
+    expect(findPublicPostReferenceByIdOrGenerationIdMock).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
+  });
+
   it('does not notify when saving an already saved post is a no-op', async () => {
-    rpcMock.mockResolvedValueOnce(saveRpcResult({ isSaved: true, saveCount: 5, changed: false }));
+    queueBusinessRpcResult(saveRpcResult({ isSaved: true, saveCount: 5, changed: false }));
 
     const response = await postSave({
       postId: 'post-1',
@@ -220,7 +281,7 @@ describe('/api/showcase/save route', () => {
   });
 
   it('idempotently unsaves without notifying creators', async () => {
-    rpcMock.mockResolvedValueOnce(saveRpcResult({ isSaved: false, saveCount: 4, changed: true }));
+    queueBusinessRpcResult(saveRpcResult({ isSaved: false, saveCount: 4, changed: true }));
 
     const response = await postSave({
       postId: 'post-1',
@@ -245,7 +306,7 @@ describe('/api/showcase/save route', () => {
   });
 
   it('supports generation id lookup with the idempotent contract', async () => {
-    rpcMock.mockResolvedValueOnce(saveRpcResult({ isSaved: true, saveCount: 9, changed: false }));
+    queueBusinessRpcResult(saveRpcResult({ isSaved: true, saveCount: 9, changed: false }));
 
     const response = await postSave({
       generationId: 'gen-1',
@@ -263,7 +324,7 @@ describe('/api/showcase/save route', () => {
   });
 
   it('falls back to a no-op save when set_post_save_state is missing and the post is already saved', async () => {
-    rpcMock.mockResolvedValueOnce({ data: null, error: missingSetPostSaveStateError });
+    queueBusinessRpcResult({ data: null, error: missingSetPostSaveStateError });
     mockLegacySaveState({ isCurrentlySaved: true, saveCount: 12 });
 
     const response = await postSave({
@@ -280,7 +341,12 @@ describe('/api/showcase/save route', () => {
       changed: false,
       message: 'Saved to bookmarks',
     });
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledWith('set_post_save_state', expect.objectContaining({
+      p_post_id: 'post-1',
+      p_user_id: 'user-1',
+      p_should_save: true,
+    }));
+    expect(rpcMock).not.toHaveBeenCalledWith('toggle_post_save', expect.anything());
     expect(eventInsertMock).toHaveBeenCalledWith(expect.objectContaining({
       requested_state: true,
       result_state: true,
@@ -290,9 +356,8 @@ describe('/api/showcase/save route', () => {
   });
 
   it('falls back to toggle_post_save once when set_post_save_state is missing and save needs to change state', async () => {
-    rpcMock
-      .mockResolvedValueOnce({ data: null, error: missingSetPostSaveStateError })
-      .mockResolvedValueOnce({ data: true, error: null });
+    queueBusinessRpcResult({ data: null, error: missingSetPostSaveStateError });
+    queueBusinessRpcResult({ data: true, error: null });
     mockLegacySaveState({ isCurrentlySaved: false, saveCount: 13 });
 
     const response = await postSave({
@@ -325,9 +390,8 @@ describe('/api/showcase/save route', () => {
   });
 
   it('falls back to toggle_post_save once when set_post_save_state is missing and unsave needs to change state', async () => {
-    rpcMock
-      .mockResolvedValueOnce({ data: null, error: missingSetPostSaveStateError })
-      .mockResolvedValueOnce({ data: false, error: null });
+    queueBusinessRpcResult({ data: null, error: missingSetPostSaveStateError });
+    queueBusinessRpcResult({ data: false, error: null });
     mockLegacySaveState({ isCurrentlySaved: true, saveCount: 4 });
 
     const response = await postSave({

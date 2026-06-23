@@ -24,6 +24,7 @@ import {
   type WorkflowCanvasGraph,
   type WorkflowCanvasNode,
 } from '@/lib/workflow-canvas';
+export { WORKFLOW_BLUEPRINT_COST } from '@/lib/workflow-costs';
 
 export type WorkflowAspectRatio = '9:16' | '16:9' | '1:1';
 type WorkflowObjective = 'ugc-ad' | 'product-video' | 'social-campaign';
@@ -71,8 +72,6 @@ export interface WorkflowBlueprint {
     recommendedSequence: string[];
   };
 }
-
-export const WORKFLOW_BLUEPRINT_COST = 6;
 
 export const DEFAULT_BLUEPRINT: WorkflowBlueprint = {
   title: 'High-converting ad workflow',

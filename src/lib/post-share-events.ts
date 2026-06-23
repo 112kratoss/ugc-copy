@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { recordGenerationShareEvent } from '@/lib/generation-share-events';
 import { isMissingPostsSchemaError } from '@/lib/posts-server';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -21,8 +23,8 @@ export async function recordPostShareEvent({
   sourceSurface: GenerationShareSourceSurface;
   channel?: GenerationShareChannel;
   actorUserId?: string | null;
-}) {
-  const adminSupabase = createServiceClient();
+}, serviceClient?: SupabaseClient) {
+  const adminSupabase = serviceClient ?? createServiceClient();
 
   try {
     const { error } = await adminSupabase.rpc('record_post_share_event', {

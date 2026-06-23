@@ -16,7 +16,7 @@ vi.mock('@/lib/post-media-preview', () => ({
   createPostMediaPreview: previewMocks.createPostMediaPreview,
 }));
 
-vi.mock('@/lib/generation-media-preview', () => ({
+vi.mock('@/lib/generation-output-preview', () => ({
   createGenerationOutputPreview: vi.fn(),
 }));
 
@@ -58,6 +58,7 @@ function createRepairableProbeClient(results: Array<{ data: unknown[] | null; er
 
 describe('media preview repair retries', () => {
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     previewMocks.createPostMediaPreview.mockClear();
   });
@@ -130,6 +131,62 @@ describe('media preview repair retries', () => {
     expect(updates).toEqual(expect.arrayContaining([
       expect.objectContaining({
         table: 'post_media',
+        payload: expect.objectContaining({ preview_status: 'ready' }),
+      }),
+    ]));
+  });
+
+  it('bounds external generation media downloads with a timeout signal', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');
+    vi.mocked(createGenerationOutputPreview).mockResolvedValue({
+      previewStoragePath: 'generated/user/output.preview.webp',
+      previewThumbhash: 'thumbhash',
+      previewStatus: 'ready',
+    } as never);
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+      return {
+        ok: true,
+        blob: async () => new Blob(['image'], { type: 'image/png' }),
+      } as Response;
+    }));
+    const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'generations'
+            ? [{
+                id: 'gen-1',
+                output_url: 'https://provider.example.com/output.png',
+                category: 'image',
+                preview_attempt_count: 0,
+              }]
+            : [],
+          error: null,
+        })),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          updates.push({ table, payload });
+          return { eq: vi.fn(async () => ({ error: null })) };
+        }),
+      })),
+      storage: { from: vi.fn() },
+    };
+
+    const summary = await repairMediaPreviews(supabase as never, { batchSize: 10 });
+
+    expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
+    expect(requestInit?.signal).toBe(timeoutSignal);
+    expect(createGenerationOutputPreview).toHaveBeenCalledWith(expect.objectContaining({
+      storagePath: 'https://provider.example.com/output.png',
+    }));
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'generations',
         payload: expect.objectContaining({ preview_status: 'ready' }),
       }),
     ]));

@@ -76,21 +76,52 @@ describe('credit mutation security boundary', () => {
   it('routes privileged mutations through service clients', () => {
     const razorpayOrder = readFileSync(join(projectRoot, 'src/app/api/razorpay/order/route.ts'), 'utf8');
     const razorpayVerify = readFileSync(join(projectRoot, 'src/app/api/razorpay/verify/route.ts'), 'utf8');
+    const razorpayOrderAdapter = readFileSync(
+      join(projectRoot, 'src/lib/razorpay-credit-order-route-adapter-service.ts'),
+      'utf8',
+    );
+    const razorpayVerifyAdapter = readFileSync(
+      join(projectRoot, 'src/lib/razorpay-credit-verify-route-adapter-service.ts'),
+      'utf8',
+    );
+    const razorpayOrderService = readFileSync(join(projectRoot, 'src/lib/razorpay-credit-order-service.ts'), 'utf8');
+    const razorpayVerifyService = readFileSync(join(projectRoot, 'src/lib/razorpay-credit-verify-service.ts'), 'utf8');
     const generate = readFileSync(join(projectRoot, 'src/app/api/generate/route.ts'), 'utf8');
     const generateImage = readFileSync(join(projectRoot, 'src/app/api/generate-image/route.ts'), 'utf8');
     const generateVideo = readFileSync(join(projectRoot, 'src/app/api/generate-video/route.ts'), 'utf8');
+    const generationRouteAdapter = readFileSync(
+      join(projectRoot, 'src/lib/generation-route-adapter-service.ts'),
+      'utf8',
+    );
+    const motionStartService = readFileSync(join(projectRoot, 'src/lib/motion-generation-start-service.ts'), 'utf8');
+    const motionStatusService = readFileSync(join(projectRoot, 'src/lib/motion-generation-status-service.ts'), 'utf8');
+    const imageStartService = readFileSync(join(projectRoot, 'src/lib/image-generation-start-service.ts'), 'utf8');
+    const imageStatusService = readFileSync(join(projectRoot, 'src/lib/image-generation-status-service.ts'), 'utf8');
+    const videoStartService = readFileSync(join(projectRoot, 'src/lib/video-generation-start-service.ts'), 'utf8');
+    const videoStatusService = readFileSync(join(projectRoot, 'src/lib/video-generation-status-service.ts'), 'utf8');
     const generationServices = readFileSync(join(projectRoot, 'src/lib/generation-services.ts'), 'utf8');
 
-    expect(razorpayOrder).toMatch(/adminSupabase\s*=\s*createServiceClient\(\)/);
-    expect(razorpayOrder).toMatch(/adminSupabase\s*\.from\('transactions'\)/);
-    expect(razorpayVerify).toContain("adminSupabase.rpc('add_credits'");
-    expect(generate).toContain('startMotionGeneration');
-    expect(generate).toContain('creditSupabase: adminSupabase');
-    expect(generate).toContain('settleGenerationFailed');
-    expect(generate).toContain('settleGenerationSucceeded');
-    expect(generateImage).toContain('settleGenerationFailed');
-    expect(generateVideo).toContain('settleGenerationFailed');
-    expect(generateVideo).toContain('settleGenerationSucceeded');
+    expect(razorpayOrder).toContain('postRazorpayCreditOrderRouteResponse');
+    expect(razorpayOrderAdapter).toMatch(/adminSupabase:\s*dependencies\.createServiceClient\(\)/);
+    expect(razorpayOrderAdapter).toContain('createCreditRazorpayOrderForRoute');
+    expect(razorpayOrderService).toMatch(/adminSupabase\s*\.from\('transactions'\)/);
+    expect(razorpayVerify).toContain('postRazorpayCreditVerifyRouteResponse');
+    expect(razorpayVerifyAdapter).toMatch(/createAdminSupabase:\s*\(\)\s*=>\s*dependencies\.createServiceClient\(\)/);
+    expect(razorpayVerifyAdapter).toContain('verifyCreditRazorpayPaymentForRoute');
+    expect(razorpayVerifyService).toContain("adminSupabase.rpc('add_credits'");
+    expect(generate).toContain('postMotionGenerationForRoute');
+    expect(generateImage).toContain('postImageGenerationForRoute');
+    expect(generateVideo).toContain('postVideoGenerationForRoute');
+    expect(generationRouteAdapter).toContain('createAdminSupabase: dependencies.createServiceClient');
+    expect(motionStartService).toContain('startMotionGeneration');
+    expect(motionStartService).toContain('creditSupabase: adminSupabase');
+    expect(motionStatusService).toContain('settleGenerationFailed');
+    expect(motionStatusService).toContain('settleGenerationSucceeded');
+    expect(imageStartService).toContain('creditSupabase: adminSupabase');
+    expect(imageStatusService).toContain('settleGenerationFailed');
+    expect(videoStartService).toContain('creditSupabase: adminSupabase');
+    expect(videoStatusService).toContain('settleGenerationFailed');
+    expect(videoStatusService).toContain('settleGenerationSucceeded');
     expect(generationServices).toContain("supabase.rpc('start_generation'");
     expect(generationServices).toContain("supabase.rpc('attach_generation_provider_task'");
     expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");

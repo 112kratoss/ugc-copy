@@ -8,6 +8,7 @@ const serviceRpcMock = vi.fn();
 const createServiceClientMock = vi.fn();
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn();
 const notifyPostSocialActivityMock = vi.fn();
+let rateLimitAllowed = true;
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (...args: unknown[]) => rawCreateClientMock(...args),
@@ -28,7 +29,12 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
 }));
 
-async function postRemix(body: Record<string, unknown>) {
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
+async function postRemix(body: Record<string, unknown>, requestId = 'showcase-remix-success-1') {
   const { POST } = await import('@/app/api/showcase/remix/route');
   return POST(
     new Request('http://localhost/api/showcase/remix', {
@@ -36,6 +42,7 @@ async function postRemix(body: Record<string, unknown>) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
+        'x-request-id': requestId,
       },
       body: JSON.stringify(body),
     }) as never
@@ -49,6 +56,7 @@ describe('/api/showcase/remix route', () => {
       data: { user: { id: 'user-1' } },
       error: null,
     });
+    userFromMock.mockReset();
     userFromMock.mockImplementation((table: string) => {
       if (table !== 'generations') {
         throw new Error(`Unexpected table: ${table}`);
@@ -84,7 +92,23 @@ describe('/api/showcase/remix route', () => {
     createUserClientMock.mockReset();
     createUserClientMock.mockReturnValue(userClient);
     serviceRpcMock.mockReset();
-    serviceRpcMock.mockResolvedValue({ data: true, error: null });
+    rateLimitAllowed = true;
+    serviceRpcMock.mockImplementation((fn: string) => {
+      if (fn === 'check_backend_rate_limit') {
+        return Promise.resolve({
+          data: {
+            allowed: rateLimitAllowed,
+            limit: 60,
+            remaining: rateLimitAllowed ? 59 : 0,
+            retryAfterSeconds: rateLimitAllowed ? 0 : 28,
+            resetAt: '2026-06-22T06:30:00.000Z',
+          },
+          error: null,
+        });
+      }
+
+      return Promise.resolve({ data: true, error: null });
+    });
     createServiceClientMock.mockReset();
     createServiceClientMock.mockReturnValue({ rpc: serviceRpcMock });
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
@@ -113,6 +137,7 @@ describe('/api/showcase/remix route', () => {
       },
     });
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-remix-success-1');
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(serviceRpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
@@ -124,5 +149,33 @@ describe('/api/showcase/remix route', () => {
       actorUserId: 'user-1',
       postId: 'post-1',
     });
+  });
+
+  it('returns 429 before parsing the remix body when remix capacity is exhausted', async () => {
+    rateLimitAllowed = false;
+    const jsonMock = vi.fn(async () => ({ postId: 'post-1' }));
+
+    const { POST } = await import('@/app/api/showcase/remix/route');
+    const response = await POST({
+      headers: new Headers({
+        Authorization: 'Bearer token',
+        'x-request-id': 'showcase-remix-rate-limit-1',
+      }),
+      json: jsonMock,
+    } as never);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('28');
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-remix-rate-limit-1');
+    expect(serviceRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'showcase:remix',
+      p_subject_key: 'user-1',
+      p_limit: 60,
+      p_window_seconds: 600,
+    });
+    expect(jsonMock).not.toHaveBeenCalled();
+    expect(findPublicPostReferenceByIdOrGenerationIdMock).not.toHaveBeenCalled();
+    expect(userFromMock).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 });

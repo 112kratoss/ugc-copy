@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { BACKEND_JOBS_BY_NAME } from '@/lib/backend-jobs';
+
 const migrationsDirectory = path.resolve(process.cwd(), 'supabase/migrations');
 const migrationName = fs.readdirSync(migrationsDirectory)
   .find((name) => name.endsWith('_generation_completion_jobs.sql'));
@@ -53,11 +55,16 @@ describe('generation completion jobs migration', () => {
     expect(migration).toContain('make_interval(secs => p_retry_delay_seconds)');
   });
 
-  it('schedules a balanced Vercel cron fallback for missed callbacks', () => {
+  it('keeps missed-callback draining covered by the shared Vercel cron orchestrator', () => {
     const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
     expect(vercel.crons).toContainEqual({
-      path: '/api/cron/generation-completions',
+      path: '/api/cron/backend-jobs',
       schedule: '*/10 * * * *',
+    });
+    expect(BACKEND_JOBS_BY_NAME['generation-completions']).toMatchObject({
+      route: '/api/cron/generation-completions',
+      schedule: '*/10 * * * *',
+      cadenceMinutes: 10,
     });
   });
 });

@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { withBackendJobLock } from '@/lib/backend-job-lock';
 
 const HEADER_NAME = 'idempotency-key';
+const REQUEST_ID_HEADER_NAME = 'x-request-id';
 const MAX_KEY_LENGTH = 256;
 const LOCK_TTL_SECONDS = 120;
 const ACTIVE_START_STATUSES = new Set(['pending', 'waiting', 'processing']);
@@ -48,6 +49,12 @@ function readBodyKey(body: Record<string, unknown>): string | null {
   return typeof requestId === 'string' ? requestId : null;
 }
 
+function readRequestIdFallback(request: Request): string | null {
+  const requestId = request.headers.get(REQUEST_ID_HEADER_NAME)?.trim();
+  if (!requestId || requestId.length > MAX_KEY_LENGTH) return null;
+  return requestId;
+}
+
 function normalizeKey(value: string, source: string): string {
   const key = value.trim();
   if (!key) {
@@ -87,7 +94,7 @@ export function getGenerationStartIdempotencyKey(
     );
   }
 
-  return headerKey ?? bodyKey;
+  return headerKey ?? bodyKey ?? readRequestIdFallback(request);
 }
 
 export function getGenerationStartLockOwner(request: Request): string {

@@ -27,6 +27,7 @@ const generationUpdates: Array<Record<string, unknown>> = [];
 const postUpdates: Array<Record<string, unknown>> = [];
 const storageRemoveCalls: Array<{ bucket: string; paths: string[] }> = [];
 const downloadMock = vi.fn();
+const rateLimitRpcMock = vi.fn();
 const persistGenerationMediaBlobMock = vi.fn();
 const isCompatibleGenerationMediaTypeMock = vi.fn();
 
@@ -72,6 +73,7 @@ vi.mock('@/lib/server-helpers', () => ({
     },
   }),
   createServiceClient: () => ({
+    rpc: rateLimitRpcMock,
     from(table: string) {
       if (table === 'generations') {
         return {
@@ -113,12 +115,18 @@ vi.mock('@/lib/server-helpers', () => ({
   }),
 }));
 
-function makeRequest(body: Record<string, unknown>) {
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
+}
+
+function makeRequest(body: Record<string, unknown>, requestId = 'generation-restore-media-1') {
   return new Request('http://localhost/api/generations/gen-1/restore-media', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: 'Bearer token',
+      'x-request-id': requestId,
     },
     body: JSON.stringify(body),
   }) as NextRequest;
@@ -153,6 +161,17 @@ describe('/api/generations/[id]/restore-media route', () => {
     postUpdates.length = 0;
     storageRemoveCalls.length = 0;
     downloadMock.mockReset();
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 60,
+        remaining: 59,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
     downloadMock.mockResolvedValue({
       data: new Blob(['replacement-image'], { type: 'image/png' }),
       error: null,
@@ -179,6 +198,7 @@ describe('/api/generations/[id]/restore-media route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
     expect(downloadMock).toHaveBeenCalledWith('user-1/replacement.png');
     expect(persistGenerationMediaBlobMock).toHaveBeenCalledWith(expect.objectContaining({
       generation: expect.objectContaining({
@@ -206,6 +226,44 @@ describe('/api/generations/[id]/restore-media route', () => {
     });
   });
 
+  it('returns 429 before downloading an upload when lifecycle mutation capacity is exhausted', async () => {
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: false,
+        limit: 60,
+        remaining: 0,
+        retryAfterSeconds: 21,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/generations/[id]/restore-media/route');
+    const response = await POST(makeRequest({
+      storagePath: 'uploads/user-1/replacement.png',
+      originalName: 'replacement.png',
+      contentType: 'image/png',
+    }), routeContext);
+    const data = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('21');
+    expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
+    expect(data).toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 21,
+    });
+    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'generation-lifecycle:mutate',
+      p_subject_key: 'user-1',
+      p_limit: 60,
+      p_window_seconds: 600,
+    });
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(persistGenerationMediaBlobMock).not.toHaveBeenCalled();
+    expect(storageRemoveCalls).toEqual([]);
+  });
+
   it('rejects uploads outside the authenticated user folder', async () => {
     const { POST } = await import('@/app/api/generations/[id]/restore-media/route');
     const response = await POST(makeRequest({
@@ -215,6 +273,7 @@ describe('/api/generations/[id]/restore-media route', () => {
     }), routeContext);
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
     expect(downloadMock).not.toHaveBeenCalled();
     expect(persistGenerationMediaBlobMock).not.toHaveBeenCalled();
   });
@@ -231,6 +290,7 @@ describe('/api/generations/[id]/restore-media route', () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
     expect(data.error).toMatch(/does not match/i);
     expect(persistGenerationMediaBlobMock).not.toHaveBeenCalled();
     expect(storageRemoveCalls).toContainEqual({
@@ -250,6 +310,7 @@ describe('/api/generations/[id]/restore-media route', () => {
     }), routeContext);
 
     expect(response.status).toBe(500);
+    expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
     expect(generationUpdates).toEqual([
       expect.objectContaining({
         output_url: 'generated_images/user-1/restored-gen-1.png',
@@ -276,6 +337,7 @@ describe('/api/generations/[id]/restore-media route', () => {
     }), routeContext);
 
     expect(response.status).toBe(500);
+    expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
     expect(storageRemoveCalls).not.toContainEqual({
       bucket: 'generated_images',
       paths: ['user-1/restored-gen-1.png'],

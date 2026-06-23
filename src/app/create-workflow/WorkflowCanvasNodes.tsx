@@ -35,8 +35,8 @@ import {
 } from 'lucide-react';
 
 import { getDisplayMediaUrl } from '@/lib/media-urls';
-import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/models';
-import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant';
+import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
+import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant-client';
 import type {
   AudioInputNodeData,
   ImageGenerateNodeData,

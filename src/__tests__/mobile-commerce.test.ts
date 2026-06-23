@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MobileCommerceError,
@@ -11,8 +11,13 @@ import {
   restoreMobileEntitlements,
   verifyMobilePurchase,
 } from '@/lib/mobile-commerce';
+import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
 const userId = '11111111-1111-1111-1111-111111111111';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createCreditSupabase(options: {
   credits?: number;
@@ -254,6 +259,8 @@ describe('mobile commerce helpers', () => {
   });
 
   it('verifies RevenueCat non-subscription purchases', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
         non_subscriptions: {
@@ -282,6 +289,13 @@ describe('mobile commerce helpers', () => {
       provider: 'app_store',
       transactionId: '1000000123456789',
     });
+    expect(timeoutSpy).toHaveBeenCalledWith(EXTERNAL_API_REQUEST_TIMEOUT_MS);
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://api.revenuecat.com/v1/subscribers/11111111-1111-1111-1111-111111111111',
+      expect.objectContaining({
+        signal: timeoutSignal,
+      })
+    );
   });
 
   it('rejects invalid RevenueCat receipts', async () => {
@@ -302,6 +316,23 @@ describe('mobile commerce helpers', () => {
       revenueCatApiKey: 'rc-secret',
     })).rejects.toMatchObject({
       status: 400,
+    });
+  });
+
+  it('returns a retryable timeout error when RevenueCat verification stalls', async () => {
+    const fetcher = vi.fn(async () => {
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    });
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).rejects.toMatchObject({
+      status: 504,
+      message: 'Mobile purchase verification timed out.',
     });
   });
 

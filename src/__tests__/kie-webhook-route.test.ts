@@ -48,6 +48,7 @@ function signedKieRequest(
   payload: Record<string, unknown>,
   timestamp = '1782039000',
   path = 'http://localhost/api/webhooks/kie',
+  headers: Record<string, string> = {},
 ) {
   const signature = createHmac('sha256', 'hmac-key')
     .update(`task-1.${timestamp}`)
@@ -59,9 +60,15 @@ function signedKieRequest(
       'Content-Type': 'application/json',
       'x-webhook-timestamp': timestamp,
       'x-webhook-signature': signature,
+      ...headers,
     },
     body: JSON.stringify(payload),
   });
+}
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
 }
 
 describe('/api/webhooks/kie route', () => {
@@ -95,9 +102,12 @@ describe('/api/webhooks/kie route', () => {
   it('authenticates, enqueues, and schedules provider completion processing', async () => {
     const { POST } = await import('@/app/api/webhooks/kie/route');
     const payload = { data: { taskId: 'task-1', state: 'success' } };
-    const response = await POST(signedKieRequest(payload));
+    const response = await POST(signedKieRequest(payload, '1782039000', 'http://localhost/api/webhooks/kie', {
+      'x-request-id': 'kie-webhook-success-1',
+    }));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'kie-webhook-success-1');
     await expect(response.json()).resolves.toEqual({
       received: true,
       predictionId: 'task-1',
@@ -118,6 +128,26 @@ describe('/api/webhooks/kie route', () => {
       limit: 5,
       predictionId: 'task-1',
     });
+  });
+
+  it('rejects oversized signed payloads before service-role work', async () => {
+    const { POST } = await import('@/app/api/webhooks/kie/route');
+    const payload = { data: { taskId: 'task-1', state: 'success' } };
+    const response = await POST(signedKieRequest(
+      payload,
+      '1782039000',
+      'http://localhost/api/webhooks/kie',
+      {
+        'content-length': '262145',
+        'x-request-id': 'kie-webhook-too-large-1',
+      },
+    ));
+
+    expect(response.status).toBe(413);
+    expectPrivateNoStoreTraceHeaders(response, 'kie-webhook-too-large-1');
+    expect(mocks.createServiceClient).not.toHaveBeenCalled();
+    expect(mocks.enqueueGenerationCompletionJob).not.toHaveBeenCalled();
+    expect(mocks.after).not.toHaveBeenCalled();
   });
 
   it('reattaches provider task ids to callback generation ids before processing completion jobs', async () => {

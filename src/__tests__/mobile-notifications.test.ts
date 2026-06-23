@@ -9,6 +9,7 @@ import {
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
 } from '@/lib/mobile-notifications';
+import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
 function createPendingReceiptQuery(deliveryRows: Record<string, unknown>[]) {
   const limit = vi.fn(async () => ({ data: deliveryRows, error: null }));
@@ -22,6 +23,7 @@ function createPendingReceiptQuery(deliveryRows: Record<string, unknown>[]) {
 describe('mobile notifications', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('normalizes Expo push token registration payloads', () => {
@@ -46,6 +48,8 @@ describe('mobile notifications', () => {
   });
 
   it('sends push payloads through the Expo push API', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({
         data: {
@@ -76,7 +80,9 @@ describe('mobile notifications', () => {
 
     expect(fetcher).toHaveBeenCalledWith('https://exp.host/--/api/v2/push/send', expect.objectContaining({
       method: 'POST',
+      signal: timeoutSignal,
     }));
+    expect(timeoutSpy).toHaveBeenCalledWith(EXTERNAL_API_REQUEST_TIMEOUT_MS);
     const body = JSON.parse(String((fetcher.mock.calls[0]?.[1] as RequestInit).body));
     expect(body).toMatchObject({
       to: 'ExponentPushToken[abc123]',
@@ -122,6 +128,8 @@ describe('mobile notifications', () => {
   });
 
   it('processes Expo receipts and disables unregistered push tokens', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const deliveryRows = [
       {
         id: 'delivery-1',
@@ -204,7 +212,9 @@ describe('mobile notifications', () => {
 
     expect(fetcher).toHaveBeenCalledWith('https://exp.host/--/api/v2/push/getReceipts', expect.objectContaining({
       method: 'POST',
+      signal: timeoutSignal,
     }));
+    expect(timeoutSpy).toHaveBeenCalledWith(EXTERNAL_API_REQUEST_TIMEOUT_MS);
     expect(pendingQuery.lte).toHaveBeenCalledWith('sent_at', '2026-05-26T11:45:00.000Z');
     expect(pendingQuery.order).toHaveBeenCalledWith('sent_at', { ascending: true });
     expect(pendingQuery.limit).toHaveBeenCalledWith(1000);

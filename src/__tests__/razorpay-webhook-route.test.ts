@@ -132,7 +132,7 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: (...args: unknown[]) => createServiceClientMock(...args),
 }));
 
-function buildSignedWebhookRequest(body: Record<string, unknown>) {
+function buildSignedWebhookRequest(body: Record<string, unknown>, headers: Record<string, string> = {}) {
   const serializedBody = JSON.stringify(body);
   const signature = crypto
     .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET as string)
@@ -144,9 +144,15 @@ function buildSignedWebhookRequest(body: Record<string, unknown>) {
     headers: {
       'Content-Type': 'application/json',
       'x-razorpay-signature': signature,
+      ...headers,
     },
     body: serializedBody,
   });
+}
+
+function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  expect(response.headers.get('x-request-id')).toBe(requestId);
 }
 
 describe('/api/razorpay/webhook route', () => {
@@ -176,24 +182,54 @@ describe('/api/razorpay/webhook route', () => {
     };
 
     const { POST } = await import('@/app/api/razorpay/webhook/route');
-    const response = await POST(buildSignedWebhookRequest({
-      event: 'payment.captured',
-      payload: {
-        payment: {
-          entity: {
-            id: 'pay_123',
-            order_id: 'order_123',
+    const response = await POST(buildSignedWebhookRequest(
+      {
+        event: 'payment.captured',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_123',
+              order_id: 'order_123',
+            },
           },
         },
       },
-    }));
+      { 'x-request-id': 'razorpay-webhook-bundle-success-1' }
+    ));
 
     expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'razorpay-webhook-bundle-success-1');
     expect(bundleOrderState.status).toBe('paid');
     expect(rpcMock).toHaveBeenCalledWith('complete_post_resource_bundle_purchase', {
       p_razorpay_order_id: 'order_123',
       p_razorpay_payment_id: 'pay_123',
     });
+  });
+
+  it('rejects oversized signed payloads before creating a privileged Supabase client', async () => {
+    const { POST } = await import('@/app/api/razorpay/webhook/route');
+    const response = await POST(buildSignedWebhookRequest(
+      {
+        event: 'payment.captured',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_123',
+              order_id: 'order_123',
+            },
+          },
+        },
+      },
+      {
+        'content-length': '262145',
+        'x-request-id': 'razorpay-webhook-oversized-1',
+      }
+    ));
+
+    expect(response.status).toBe(413);
+    expectPrivateNoStoreTraceHeaders(response, 'razorpay-webhook-oversized-1');
+    expect(createServiceClientMock).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('treats already-paid post resource bundle orders as idempotent', async () => {
@@ -276,6 +312,7 @@ describe('/api/razorpay/webhook route', () => {
         headers: {
           'Content-Type': 'application/json',
           'x-razorpay-signature': 'invalid-signature',
+          'x-request-id': 'razorpay-webhook-invalid-signature-1',
         },
         body: JSON.stringify({
           event: 'payment.captured',
@@ -292,6 +329,7 @@ describe('/api/razorpay/webhook route', () => {
     );
 
     expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'razorpay-webhook-invalid-signature-1');
     expect(await response.text()).toBe('Invalid signature');
     expect(createClientMock).not.toHaveBeenCalled();
     expect(createServiceClientMock).not.toHaveBeenCalled();

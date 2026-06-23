@@ -16,6 +16,7 @@ const rows = [
 let shouldFallbackToLegacyList = false;
 let shouldFallbackToLegacyInsert = false;
 let insertedPayloads: Array<Record<string, unknown>> = [];
+const rateLimitRpcMock = vi.fn();
 
 function createSupabaseMock() {
   return {
@@ -126,6 +127,9 @@ const authenticateRequestMock = vi.fn(async () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   authenticateRequest: () => authenticateRequestMock(),
+  createServiceClient: () => ({
+    rpc: rateLimitRpcMock,
+  }),
 }));
 
 describe('/api/workflow-canvases routes', () => {
@@ -134,6 +138,17 @@ describe('/api/workflow-canvases routes', () => {
     shouldFallbackToLegacyList = false;
     shouldFallbackToLegacyInsert = false;
     insertedPayloads = [];
+    rateLimitRpcMock.mockReset();
+    rateLimitRpcMock.mockResolvedValue({
+      data: {
+        allowed: true,
+        limit: 240,
+        remaining: 239,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    });
   });
 
   afterEach(() => {

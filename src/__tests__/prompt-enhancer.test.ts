@@ -1,17 +1,50 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyPromptEnhancementSafeguards,
   buildEnhancerSystemPrompt,
   buildPromptEnhancementArtifacts,
   buildPromptStrategyGuidance,
   buildWorkflowPromptFieldGuidance,
+  callPromptEnhancer,
   resolvePromptEnhancementAgent,
   resolvePromptScenario,
 } from '@/lib/prompt-enhancer';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
 import { PROMPT_ENHANCER_FIXTURES } from '@/__tests__/fixtures/prompt-enhancer-fixtures';
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
 describe('prompt enhancer strategy', () => {
+  it('bounds KIE prompt enhancer requests with a timeout signal', async () => {
+    vi.stubEnv('KIE_AI_API_KEY', 'test-key');
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: 'Enhanced product prompt',
+            },
+          }],
+        }),
+      } as Response;
+    }));
+
+    await expect(callPromptEnhancer('system prompt', 'user prompt')).resolves.toEqual({
+      enhancedPrompt: 'Enhanced product prompt',
+    });
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(requestInit?.signal).toBe(timeoutSignal);
+  });
+
   it.each(PROMPT_ENHANCER_FIXTURES)('resolves scenario for $name', (fixture) => {
     expect(resolvePromptScenario(fixture.medium, fixture.selectedModel, fixture.context)).toBe(
       fixture.expectedScenario

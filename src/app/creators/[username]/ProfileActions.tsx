@@ -45,23 +45,6 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
   useEffect(() => clearFollowStatusTimer, []);
 
-  const notifyFollowCreated = (accessToken: string, followingId: string) => {
-    if (typeof fetch !== 'function') {
-      return;
-    }
-
-    void fetch('/api/profile/follow/notify', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ followingId }),
-    }).catch((error) => {
-      console.error('Failed to notify creator follow', error);
-    });
-  };
-
   useEffect(() => {
     let isActive = true;
 
@@ -81,24 +64,26 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
       if (!ownsProfile || !session?.access_token) {
         if (session?.user?.id) {
-          const { data: followRecord, error: followLookupError } = await supabase
-            .from('follows')
-            .select('follower_id')
-            .eq('follower_id', session.user.id)
-            .eq('following_id', profile.id)
-            .maybeSingle();
+          try {
+            const params = new URLSearchParams({ followingId: profile.id });
+            const response = await fetch(`/api/profile/follow?${params.toString()}`, {
+              headers: { Authorization: `Bearer ${session.access_token}` },
+            });
 
-          if (!isActive) {
-            return;
-          }
+            if (!isActive) {
+              return;
+            }
 
-          if (followLookupError) {
-            console.error('Failed to load follow state', followLookupError);
+            if (!response.ok) {
+              throw new Error('Failed to load follow state');
+            }
+
+            const data = await response.json();
+            setIsFollowing(Boolean(data.following));
+          } catch (error) {
+            console.error('Failed to load follow state', error);
             setFollowError('Failed to load follow state.');
-            return;
           }
-
-          setIsFollowing(Boolean(followRecord));
         } else {
           setIsFollowing(false);
         }
@@ -170,29 +155,23 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     setFollowStatusMessage(nextFollowing ? 'Following creator...' : 'Removing follow...');
 
     try {
-      if (nextFollowing) {
-        const { error } = await supabase.from('follows').insert({
-          follower_id: session.user.id,
-          following_id: profile.id,
-        });
+      const response = await fetch('/api/profile/follow', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ followingId: profile.id, following: nextFollowing }),
+      });
 
-        if (error) {
-          throw error;
-        }
-
-        notifyFollowCreated(session.access_token, profile.id);
-      } else {
-        const { error } = await supabase
-          .from('follows')
-          .delete()
-          .eq('follower_id', session.user.id)
-          .eq('following_id', profile.id);
-
-        if (error) {
-          throw error;
-        }
+      if (!response.ok) {
+        throw new Error('Failed to update follow state');
       }
-      showTemporaryFollowStatus(nextFollowing ? 'Following creator.' : 'Removed follow.');
+
+      const data = await response.json();
+      const confirmedFollowing = typeof data.following === 'boolean' ? data.following : nextFollowing;
+      setIsFollowing(confirmedFollowing);
+      showTemporaryFollowStatus(confirmedFollowing ? 'Following creator.' : 'Removed follow.');
     } catch (error) {
       console.error('Failed to update follow state', error);
       setIsFollowing(!nextFollowing);

@@ -40,12 +40,11 @@ vi.mock('@/lib/supabase', () => ({
     auth: {
       getSession: getSessionMock,
     },
-    storage: {
-      from: () => ({
-        upload: temporaryUploadMock,
-      }),
-    },
   },
+}));
+
+vi.mock('@/lib/temporary-media-upload', () => ({
+  uploadMediaToTemporaryStorage: temporaryUploadMock,
 }));
 
 vi.mock('framer-motion', () => ({
@@ -98,7 +97,10 @@ describe('CreationsPage', () => {
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     temporaryUploadMock.mockReset();
-    temporaryUploadMock.mockResolvedValue({ error: null });
+    temporaryUploadMock.mockResolvedValue({
+      signedUrl: 'https://storage.example.test/signed/replacement.png',
+      storagePath: 'uploads/user-1/replacement.png',
+    });
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -938,12 +940,8 @@ describe('CreationsPage', () => {
 
     await waitFor(() => {
       expect(temporaryUploadMock).toHaveBeenCalledWith(
-        expect.stringMatching(/^user-1\/.+\.png$/),
         replacement,
-        expect.objectContaining({
-          contentType: 'image/png',
-          upsert: false,
-        })
+        'user-1'
       );
     });
 
@@ -962,7 +960,7 @@ describe('CreationsPage', () => {
       | [RequestInfo | URL, RequestInit?]
       | undefined;
     expect(JSON.parse(String(restoreCall?.[1]?.body))).toMatchObject({
-      storagePath: expect.stringMatching(/^uploads\/user-1\/.+\.png$/),
+      storagePath: 'uploads/user-1/replacement.png',
       originalName: 'replacement.png',
       contentType: 'image/png',
     });

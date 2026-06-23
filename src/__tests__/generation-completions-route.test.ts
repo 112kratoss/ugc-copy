@@ -117,18 +117,54 @@ describe('/api/cron/generation-completions route', () => {
     process.env.CRON_SECRET = 'secret-123';
   });
 
+  it('rejects requests without the cron secret before touching Supabase', async () => {
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { 'x-request-id': 'completion-reject-1' },
+    }));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('completion-reject-1');
+    expect(mocks.createServiceClient).not.toHaveBeenCalled();
+    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
+    expect(mocks.processGenerationCompletionJobs).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the cron secret is missing', async () => {
+    delete process.env.CRON_SECRET;
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer undefined' },
+    }));
+
+    expect(response.status).toBe(401);
+    expect(mocks.createServiceClient).not.toHaveBeenCalled();
+    expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
+    expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
+    expect(mocks.processGenerationCompletionJobs).not.toHaveBeenCalled();
+  });
+
   it('runs the durable completion drain for authorized cron calls', async () => {
     const { GET } = await import('@/app/api/cron/generation-completions/route');
     const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
-      headers: { authorization: 'Bearer secret-123' },
+      headers: {
+        authorization: 'Bearer secret-123',
+        'x-request-id': 'completion-run-1',
+      },
     }));
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('completion-run-1');
     expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({
         name: 'generation-completions',
         route: '/api/cron/generation-completions',
+        requestId: 'completion-run-1',
       }),
     );
     expect(mocks.withBackendJobLock).toHaveBeenCalledWith(

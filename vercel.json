@@ -1,15 +1,10 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
+  "regions": ["bom1"],
   "crons": [
     {
-      "path": "/api/cron/mobile-push-receipts",
-      "schedule": "*/15 * * * *"
-    },
-    {
-      "path": "/api/cron/media-preview-repair",
-      "schedule": "7 * * * *"
-    },
-    {
-      "path": "/api/cron/generation-completions",
+      "path": "/api/cron/backend-jobs",
       "schedule": "*/10 * * * *"
     }
   ]

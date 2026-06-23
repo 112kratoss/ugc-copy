@@ -84,12 +84,18 @@ describe('durable generation media', () => {
   });
 
   it('fails without uploading when neither the showcase derivative nor provider URL can be loaded', async () => {
+    const timeoutSignal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    let requestInit: RequestInit | undefined;
     const download = vi.fn(async () => ({
       data: null,
       error: { message: 'missing' },
     }));
     const upload = vi.fn();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+      return new Response(null, { status: 404 });
+    }));
     const storageFrom = vi.fn((bucket: string) => {
       if (bucket === 'showcase_media') {
         return { download };
@@ -116,5 +122,7 @@ describe('durable generation media', () => {
     })).rejects.toThrow(/could not be loaded/i);
 
     expect(upload).not.toHaveBeenCalled();
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
+    expect(requestInit?.signal).toBe(timeoutSignal);
   });
 });

@@ -28,6 +28,7 @@ describe('/api/marketplace/resources route', () => {
       new NextRequest('http://localhost/api/marketplace/resources?limit=12', {
         headers: {
           'x-vercel-ip-country': 'IN',
+          'x-request-id': 'resources-list-1',
         },
       })
     );
@@ -35,6 +36,7 @@ describe('/api/marketplace/resources route', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
     expect(response.headers.get('Vary')).toContain('x-vercel-ip-country');
+    expect(response.headers.get('x-request-id')).toBe('resources-list-1');
     expect(getMarketplaceResourceListMock).toHaveBeenCalledWith(expect.objectContaining({
       offset: 0,
       limit: 12,

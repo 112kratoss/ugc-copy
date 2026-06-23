@@ -77,6 +77,33 @@ describe('generation start idempotency', () => {
     expect(getGenerationStartIdempotencyKey(request, { idempotencyKey: 'start-1' })).toBe('start-1');
   });
 
+  it('uses x-request-id as a backwards-compatible fallback key', () => {
+    const request = new Request('http://localhost/api/generate-image', {
+      headers: { 'x-request-id': ' mobile:retry-safe-1 ' },
+    });
+
+    expect(getGenerationStartIdempotencyKey(request, {})).toBe('mobile:retry-safe-1');
+  });
+
+  it('prefers explicit idempotency keys over x-request-id fallback keys', () => {
+    const request = new Request('http://localhost/api/generate-image', {
+      headers: {
+        'Idempotency-Key': 'start-explicit-1',
+        'x-request-id': 'mobile:trace-only-1',
+      },
+    });
+
+    expect(getGenerationStartIdempotencyKey(request, {})).toBe('start-explicit-1');
+  });
+
+  it('ignores unusable x-request-id fallback keys without rejecting the request', () => {
+    const request = new Request('http://localhost/api/generate-image', {
+      headers: { 'x-request-id': 'x'.repeat(257) },
+    });
+
+    expect(getGenerationStartIdempotencyKey(request, {})).toBeNull();
+  });
+
   it('replays an existing generation without running the start function', async () => {
     const keyHash = hashGenerationStartIdempotencyKey('user-1', 'start-1');
     const { client, rpc } = createClient({

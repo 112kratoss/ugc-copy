@@ -1,5 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  EXTERNAL_API_REQUEST_TIMEOUT_MS,
+  fetchWithProviderTimeout,
+} from '@/lib/provider-fetch';
+
 type MobilePushPlatform = 'ios' | 'android';
 export type MobileNotificationCategory = 'generation' | 'commerce' | 'social' | 'system';
 export type MobileNotificationType =
@@ -281,21 +286,27 @@ export async function sendExpoPushNotification({
   data: Record<string, string | number | boolean | null>;
   fetcher?: typeof fetch;
 }): Promise<ExpoPushSendResult> {
-  const response = await fetcher('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Accept-Encoding': 'gzip, deflate',
-      'Content-Type': 'application/json',
+  const response = await fetchWithProviderTimeout(
+    'https://exp.host/--/api/v2/push/send',
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: expoPushToken,
+        sound: 'default',
+        title,
+        body,
+        data,
+      }),
     },
-    body: JSON.stringify({
-      to: expoPushToken,
-      sound: 'default',
-      title,
-      body,
-      data,
-    }),
-  });
+    EXTERNAL_API_REQUEST_TIMEOUT_MS,
+    fetcher,
+    'Expo push send'
+  );
 
   const payload = await response.json().catch(() => null) as {
     data?: unknown;
@@ -502,15 +513,21 @@ async function fetchExpoPushReceipts(
   ticketIds: string[],
   fetcher: typeof fetch
 ): Promise<Record<string, ExpoReceipt>> {
-  const response = await fetcher('https://exp.host/--/api/v2/push/getReceipts', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Accept-Encoding': 'gzip, deflate',
-      'Content-Type': 'application/json',
+  const response = await fetchWithProviderTimeout(
+    'https://exp.host/--/api/v2/push/getReceipts',
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ids: ticketIds }),
     },
-    body: JSON.stringify({ ids: ticketIds }),
-  });
+    EXTERNAL_API_REQUEST_TIMEOUT_MS,
+    fetcher,
+    'Expo push receipts'
+  );
 
   const payload = await response.json().catch(() => null) as {
     data?: unknown;

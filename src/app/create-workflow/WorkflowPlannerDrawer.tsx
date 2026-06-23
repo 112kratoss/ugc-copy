@@ -20,7 +20,7 @@ import type {
   WorkflowAssistantAvailability,
   WorkflowCanvasAssistantMessageRecord,
   WorkflowCanvasAssistantProposalRecord,
-} from '@/lib/workflow-assistant';
+} from '@/lib/workflow-assistant-client';
 import type { WorkflowCanvasGraph, WorkflowCanvasNode } from '@/lib/workflow-canvas';
 
 function AssistantMessageBubble({

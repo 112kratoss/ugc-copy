@@ -22,7 +22,6 @@ export const IMAGE_MODELS = {
     aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'],
     resolutions: ['1K', '2K', '4K'],
     outputFormats: ['jpg', 'png'],
-    pricing: { '1K': 8, '2K': 12, '4K': 18 },
   },
   'nano-banana-pro': {
     id: 'nano-banana-pro',
@@ -35,7 +34,6 @@ export const IMAGE_MODELS = {
     aspectRatios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', 'auto'],
     resolutions: ['1K', '2K', '4K'],
     outputFormats: ['jpg', 'png'],
-    pricing: { '1K': 18, '2K': 18, '4K': 24 },
   },
   'gpt-image-2': {
     id: 'gpt-image-2',
@@ -48,7 +46,6 @@ export const IMAGE_MODELS = {
     aspectRatios: ['auto', '1:1', '5:4', '9:16', '21:9', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3'],
     resolutions: ['1K', '2K', '4K'],
     outputFormats: ['jpg'],
-    pricing: { '1K': 6, '2K': 10, '4K': 16 },
   },
   'grok-imagine-image': {
     id: 'grok-imagine-image',
@@ -61,8 +58,6 @@ export const IMAGE_MODELS = {
     aspectRatios: ['3:2', '2:3', '1:1', '9:16', '16:9'],
     resolutions: ['1K'],
     outputFormats: ['jpg'],
-    pricing: { '1K': 4, '2K': 4, '4K': 4 },
-    qualityPricing: { standard: 4, quality: 5, imageToImage: 4 },
   },
 } as const;
 
@@ -71,7 +66,6 @@ export const VIDEO_MODELS = {
     id: 'kling-3.0-video',
     displayName: 'Kling 3.0 Cinematic',
     description: 'Single-shot and multi-shot cinematic generation.',
-    provider: 'kling',
     supportsMultiShot: true,
     supportsSound: true,
     supportsFixedLens: false,
@@ -83,16 +77,11 @@ export const VIDEO_MODELS = {
       { value: 'std', label: 'Standard (720p)' },
       { value: 'pro', label: 'Pro (1080p)' },
     ],
-    pricing: {
-      std: { noSound: 20, withSound: 30 },
-      pro: { noSound: 27, withSound: 40 },
-    },
   },
   'seedance-1.5-pro': {
     id: 'seedance-1.5-pro',
     displayName: 'Seedance 1.5 Pro',
     description: 'Resolution, duration, image reference, and audio controls.',
-    provider: 'seedance',
     supportsMultiShot: false,
     supportsSound: true,
     supportsFixedLens: true,
@@ -100,17 +89,11 @@ export const VIDEO_MODELS = {
     durations: [4, 8, 12],
     resolutions: ['480p', '720p', '1080p'],
     modeOptions: [],
-    pricing: {
-      '480p': { noSound: { 4: 7, 8: 14, 12: 19 }, withSound: { 4: 14, 8: 28, 12: 38 } },
-      '720p': { noSound: { 4: 14, 8: 28, 12: 42 }, withSound: { 4: 28, 8: 56, 12: 84 } },
-      '1080p': { noSound: { 4: 30, 8: 60, 12: 90 }, withSound: { 4: 60, 8: 120, 12: 180 } },
-    },
   },
   'seedance-2': {
     id: 'seedance-2',
     displayName: 'Seedance 2',
     description: 'Image, video, audio references, and generated audio.',
-    provider: 'seedance',
     supportsMultiShot: false,
     supportsSound: true,
     supportsFixedLens: false,
@@ -119,16 +102,11 @@ export const VIDEO_MODELS = {
     singleShotDurationRange: { min: 4, max: 15, default: 15 },
     resolutions: ['480p', '720p'],
     modeOptions: [],
-    pricing: {
-      '480p': { noVideo: 19, withVideo: 11.5 },
-      '720p': { noVideo: 41, withVideo: 25 },
-    },
   },
   'seedance-2-fast': {
     id: 'seedance-2-fast',
     displayName: 'Seedance 2 Fast',
     description: 'Faster Seedance with image, video, and audio references.',
-    provider: 'seedance',
     supportsMultiShot: false,
     supportsSound: true,
     supportsFixedLens: false,
@@ -137,16 +115,11 @@ export const VIDEO_MODELS = {
     singleShotDurationRange: { min: 4, max: 15, default: 15 },
     resolutions: ['480p', '720p'],
     modeOptions: [],
-    pricing: {
-      '480p': { noVideo: 15.5, withVideo: 8 },
-      '720p': { noVideo: 33, withVideo: 20 },
-    },
   },
   'veo-3.1': {
     id: 'veo-3.1',
     displayName: 'Veo 3.1',
     description: 'Fast and quality Google-class video generation.',
-    provider: 'veo',
     supportsMultiShot: false,
     supportsSound: false,
     supportsFixedLens: false,
@@ -157,13 +130,11 @@ export const VIDEO_MODELS = {
       { value: 'veo3_fast', label: 'Fast' },
       { value: 'veo3', label: 'Quality' },
     ],
-    pricing: { veo3_fast: 60, veo3: 250 },
   },
   'grok-imagine-video': {
     id: 'grok-imagine-video',
     displayName: 'Grok Imagine Video',
     description: 'xAI video generation with normal, fun, and spicy modes.',
-    provider: 'grok',
     supportsMultiShot: false,
     supportsSound: false,
     supportsFixedLens: false,
@@ -176,7 +147,6 @@ export const VIDEO_MODELS = {
       { value: 'fun', label: 'Fun' },
       { value: 'spicy', label: 'Spicy' },
     ],
-    pricing: { '480p': 1.6, '720p': 3 },
   },
 } as const;
 
@@ -189,7 +159,6 @@ export const MOTION_MODELS = {
     maxDuration: 30,
     characterOrientations: ['video', 'image'],
     resolutions: ['720p', '1080p'],
-    pricing: { '720p': 6, '1080p': 9 },
   },
   'kling-3.0': {
     id: 'kling-3.0',
@@ -199,7 +168,6 @@ export const MOTION_MODELS = {
     maxDuration: 30,
     characterOrientations: ['video', 'image'],
     resolutions: ['720p', '1080p'],
-    pricing: { '720p': 12, '1080p': 20 },
   },
 } as const;
 
@@ -306,6 +274,8 @@ export interface CreationReadinessItem {
   body: string;
   state: CreationReadinessState;
 }
+
+export type CreationReadinessCostStatus = 'ready' | 'pending' | 'unavailable';
 
 export interface CreationSectionSummary {
   essentials: string;
@@ -575,88 +545,9 @@ export function getVideoElementSupport(model: VideoModelId, options: { mode?: st
   return { enabled: false, maxElements: 0, reason: 'Named elements are not available for this model yet.' };
 }
 
-export function getImageCost(model: ImageModelId, resolution: ImageResolution, options: { qualityMode?: ImageQualityMode; referenceCount?: number } = {}) {
-  if (model === 'grok-imagine-image') {
-    const pricing = IMAGE_MODELS[model].qualityPricing;
-    if ((options.referenceCount ?? 0) > 0) return pricing.imageToImage;
-    return options.qualityMode === 'quality' ? pricing.quality : pricing.standard;
-  }
-  return IMAGE_MODELS[model].pricing[resolution];
-}
-
-export function getVideoCost(
-  model: VideoModelId,
-  options: {
-    mode?: string;
-    sound?: boolean;
-    durationSeconds?: number;
-    resolution?: string;
-    hasReferenceVideo?: boolean;
-  }
-) {
-  if (model === 'kling-3.0-video') {
-    const mode = options.mode === 'pro' ? 'pro' : 'std';
-    const pricing = VIDEO_MODELS[model].pricing[mode];
-    const perSecond = options.sound ? pricing.withSound : pricing.noSound;
-    return Math.ceil((options.durationSeconds ?? 0) * perSecond);
-  }
-
-  if (model === 'seedance-1.5-pro') {
-    const resolution = options.resolution === '480p' || options.resolution === '1080p' ? options.resolution : '720p';
-    const duration = Math.round(options.durationSeconds ?? 8);
-    const durationKey = duration === 4 || duration === 12 ? duration : 8;
-    const pricing = VIDEO_MODELS[model].pricing[resolution];
-    return options.sound ? pricing.withSound[durationKey] : pricing.noSound[durationKey];
-  }
-
-  if (model === 'seedance-2' || model === 'seedance-2-fast') {
-    const resolution = options.resolution === '480p' ? '480p' : '720p';
-    const duration = options.durationSeconds ?? getDefaultVideoDuration(model);
-    const pricing = VIDEO_MODELS[model].pricing[resolution];
-    const perSecond = options.hasReferenceVideo ? pricing.withVideo : pricing.noVideo;
-    return Math.ceil(duration * perSecond);
-  }
-
-  if (model === 'grok-imagine-video') {
-    const resolution = options.resolution === '720p' ? '720p' : '480p';
-    const duration = options.durationSeconds ?? getDefaultVideoDuration(model);
-    return Math.ceil(duration * VIDEO_MODELS[model].pricing[resolution]);
-  }
-
-  return options.mode === 'veo3' ? VIDEO_MODELS['veo-3.1'].pricing.veo3 : VIDEO_MODELS['veo-3.1'].pricing.veo3_fast;
-}
-
 export function getMotionDuration(draft: MotionCreationDraft) {
   const sourceDuration = draft.referenceVideo?.durationSeconds ?? draft.duration;
   return Math.max(0, Math.ceil(sourceDuration || 0));
-}
-
-export function getMotionCost(model: MotionModelId, resolution: MotionResolution, durationSeconds: number) {
-  return Math.ceil(durationSeconds * MOTION_MODELS[model].pricing[resolution]);
-}
-
-export function getCreditEstimate(draft: CreationDraft): number {
-  if (draft.tool === 'image') {
-    return getImageCost(draft.model, draft.resolution, {
-      qualityMode: draft.qualityMode,
-      referenceCount: draft.references.length,
-    });
-  }
-
-  if (draft.tool === 'video') {
-    const totalDuration = draft.isMultiShot
-      ? draft.multiPrompts.reduce((sum, shot) => sum + Math.max(1, Math.round(shot.duration || 0)), 0)
-      : (VIDEO_MODELS[draft.model].provider === 'veo' ? VIDEO_MODELS[draft.model].durations[0] : draft.duration);
-    return getVideoCost(draft.model, {
-      mode: draft.mode,
-      sound: draft.sound && VIDEO_MODELS[draft.model].supportsSound,
-      durationSeconds: totalDuration,
-      resolution: draft.resolution,
-      hasReferenceVideo: draft.referenceVideos.length > 0,
-    });
-  }
-
-  return getMotionCost(draft.model, draft.mode, getMotionDuration(draft));
 }
 
 function inspectVideoPromptQuality(draft: VideoCreationDraft): PromptEnhancementWarning[] {
@@ -671,13 +562,14 @@ function inspectVideoPromptQuality(draft: VideoCreationDraft): PromptEnhancement
   return [];
 }
 
-function withCreditError(errors: string[], cost: number, credits?: number | null) {
-  if (typeof credits === 'number' && credits < cost) {
-    errors.push(`Insufficient credits. This generation costs ${cost} credits.`);
-  }
+function buildLocalValidationResult(
+  errors: string[],
+  warnings: PromptEnhancementWarning[] = []
+): CreationValidationResult {
+  return { errors, warnings, cost: 0, canGenerate: false };
 }
 
-function validateImageDraft(draft: ImageCreationDraft, credits?: number | null): CreationValidationResult {
+function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult {
   const errors: string[] = [];
   if (!draft.prompt.trim()) errors.push('Prompt is required.');
   if (!isImageModelId(draft.model)) errors.push(`Unsupported image model: ${draft.model}`);
@@ -703,12 +595,10 @@ function validateImageDraft(draft: ImageCreationDraft, credits?: number | null):
     errors.push(`Unknown element mention${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`);
   }
 
-  const cost = getCreditEstimate(draft);
-  withCreditError(errors, cost, credits);
-  return { errors, warnings: [], cost, canGenerate: errors.length === 0 };
+  return buildLocalValidationResult(errors);
 }
 
-function validateVideoDraft(draft: VideoCreationDraft, credits?: number | null): CreationValidationResult {
+function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult {
   const errors: string[] = [];
   const model = VIDEO_MODELS[draft.model];
 
@@ -784,19 +674,17 @@ function validateVideoDraft(draft: VideoCreationDraft, credits?: number | null):
   if (resolutions.length > 0 && !resolutions.includes(draft.resolution)) {
     errors.push(`Unsupported resolution for ${model.displayName}.`);
   }
-  if (!draft.isMultiShot && model.provider !== 'veo' && !isValidVideoDuration(draft.model, draft.duration)) {
+  if (!draft.isMultiShot && draft.model !== 'veo-3.1' && !isValidVideoDuration(draft.model, draft.duration)) {
     errors.push(`Unsupported duration for ${model.displayName}.`);
   }
 
   const warnings = inspectVideoPromptQuality(draft);
   warnings.filter((warning) => warning.severity === 'blocking').forEach((warning) => errors.push(warning.message));
 
-  const cost = getCreditEstimate(draft);
-  withCreditError(errors, cost, credits);
-  return { errors, warnings, cost, canGenerate: errors.length === 0 };
+  return buildLocalValidationResult(errors, warnings);
 }
 
-function validateMotionDraft(draft: MotionCreationDraft, credits?: number | null): CreationValidationResult {
+function validateMotionDraft(draft: MotionCreationDraft): CreationValidationResult {
   const errors: string[] = [];
   if (!isMotionModelId(draft.model)) errors.push(`Unsupported motion model: ${draft.model}`);
   if (!draft.characterImage) errors.push('Character image is required.');
@@ -814,15 +702,14 @@ function validateMotionDraft(draft: MotionCreationDraft, credits?: number | null
     errors.push(`Unsupported character orientation: ${draft.characterOrientation}.`);
   }
 
-  const cost = getCreditEstimate(draft);
-  withCreditError(errors, cost, credits);
-  return { errors, warnings: [], cost, canGenerate: errors.length === 0 };
+  return buildLocalValidationResult(errors);
 }
 
 export function validateCreationDraft(draft: CreationDraft, options: { credits?: number | null } = {}): CreationValidationResult {
-  if (draft.tool === 'image') return validateImageDraft(draft, options.credits);
-  if (draft.tool === 'video') return validateVideoDraft(draft, options.credits);
-  return validateMotionDraft(draft, options.credits);
+  void options;
+  if (draft.tool === 'image') return validateImageDraft(draft);
+  if (draft.tool === 'video') return validateVideoDraft(draft);
+  return validateMotionDraft(draft);
 }
 
 export function getCreationSectionOrder(draft: CreationDraft): CreationSectionId[] {
@@ -885,9 +772,43 @@ export function getCreationSectionSummary(draft: CreationDraft): CreationSection
 export function getCreationReadiness(
   draft: CreationDraft,
   validation: CreationValidationResult,
-  summaryOverride?: CreationSectionSummary
+  summaryOverride?: CreationSectionSummary,
+  options: {
+    costStatus?: CreationReadinessCostStatus;
+    costUnavailableMessage?: string;
+  } = {}
 ): CreationReadinessItem[] {
   const summary = summaryOverride ?? getCreationSectionSummary(draft);
+  const insufficientCreditsError = validation.errors.find((error) => error.startsWith('Insufficient credits.'));
+  const costStatus = options.costStatus ?? (validation.canGenerate ? 'ready' : 'unavailable');
+  const costReadiness: CreationReadinessItem = insufficientCreditsError
+    ? {
+        id: 'cost',
+        label: 'Credits needed',
+        body: insufficientCreditsError,
+        state: 'warning',
+      }
+    : costStatus === 'pending'
+      ? {
+          id: 'cost',
+          label: 'Cost pending',
+          body: 'Calculating the server quote before generation.',
+          state: 'neutral',
+        }
+      : costStatus === 'unavailable'
+        ? {
+            id: 'cost',
+            label: 'Model settings unavailable',
+            body: options.costUnavailableMessage ?? 'Retry model settings before generating.',
+            state: 'warning',
+          }
+        : {
+            id: 'cost',
+            label: 'Cost ready',
+            body: `${validation.cost} credits available for this generation.`,
+            state: 'ready',
+          };
+
   return [
     promptReadiness(draft),
     mediaReadiness(draft),
@@ -899,13 +820,7 @@ export function getCreationReadiness(
         : summary.essentials,
       state: settingsHasBlockingError(draft, validation) ? 'warning' : 'ready',
     },
-    {
-      id: 'cost',
-      label: validation.errors.some((error) => error.startsWith('Insufficient credits.')) ? 'Credits needed' : 'Cost ready',
-      body: validation.errors.find((error) => error.startsWith('Insufficient credits.'))
-        ?? `${validation.cost} credits available for this generation.`,
-      state: validation.errors.some((error) => error.startsWith('Insufficient credits.')) ? 'warning' : 'ready',
-    },
+    costReadiness,
   ];
 }
 

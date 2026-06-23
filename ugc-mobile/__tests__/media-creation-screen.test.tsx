@@ -130,9 +130,22 @@ vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof rend
 });
 
 function collectText(root: renderer.ReactTestInstance) {
+  const textFromChildren = (children: unknown): string | null => {
+    if (typeof children === 'string' || typeof children === 'number') return String(children);
+    if (Array.isArray(children)) {
+      const text = children
+        .map((child) => textFromChildren(child))
+        .filter((child): child is string => Boolean(child))
+        .join('');
+      return text || null;
+    }
+    return null;
+  };
+
   return root
-    .findAll((node) => String(node.type) === 'text' && typeof node.props.children === 'string')
-    .map((node) => node.props.children as string);
+    .findAll((node) => String(node.type) === 'text')
+    .map((node) => textFromChildren(node.props.children))
+    .filter((text): text is string => Boolean(text));
 }
 
 function findPressableByText(root: renderer.ReactTestInstance, text: string) {
@@ -409,6 +422,72 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       promptInput.props.onBlur();
     });
     expect(collectText(tree!.root)).toContain('Review and generate');
+  });
+
+  it('shows the authoritative server quote in the floating review bar', async () => {
+    vi.useFakeTimers();
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'nano-banana-2',
+      catalogRevision: 'test-catalog-rev',
+      normalizedSettings: { aspectRatio: '4:5', resolution: '1K' },
+      costCredits: 123,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+    });
+
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    renderer.act(() => {
+      promptInput.props.onChangeText('Create a glossy product hero shot.');
+    });
+
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(collectText(tree!.root)).toContain('999 credits · 123 cost · Ready');
+    vi.useRealTimers();
+  });
+
+  it('does not show bundled pricing in the floating review bar before a server quote exists', () => {
+    catalogState.catalog = null;
+    catalogState.isLoading = true;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+    });
+
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    renderer.act(() => {
+      promptInput.props.onChangeText('Create a glossy product hero shot.');
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('999 credits · ... cost · Ready');
+    expect(text).not.toContain('999 credits · 8 cost · Ready');
+  });
+
+  it('does not show bundled pricing in readiness when the catalog is unavailable', () => {
+    catalogState.catalog = null;
+    catalogState.error = new Error('Catalog unavailable');
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+    });
+
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    renderer.act(() => {
+      promptInput.props.onChangeText('Create a glossy product hero shot.');
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).not.toContain('Cost ready');
+    expect(text).not.toContain('8 credits available for this generation.');
+    expect(text).toContain('Model settings unavailable');
   });
 
   it('shows empty prompt enhancement feedback inside the prompt panel', () => {
