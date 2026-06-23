@@ -8,11 +8,11 @@ Make the shared backend for web and mobile production-ready, cost-efficient, per
 
 ## Overall Progress
 
-**Total completion: 96.4%**
+**Total completion: 97.7%**
 
-- Completed milestones: **212**
-- Open completion gates: **8**
-- Active workstreams: **1**
+- Completed milestones: **215**
+- Open completion gates: **5**
+- Active workstreams: **0**
 
 The percentage is `completed milestones / (completed milestones + open completion gates)`. Active workstreams are status-only and are excluded because they duplicate open completion gates. Update this block whenever a checklist item is added or completed; `src/__tests__/backend-idealization-progress.test.ts` verifies that the displayed counts and percentage match the checklist.
 
@@ -247,10 +247,13 @@ Use this convention:
 - [x] ~~Add a normalized backend alert delivery payload and tested production wiring instructions for monitoring `/api/ops/backend-health`, `/api/ops/backend-costs`, and `/api/ops/backend-alerts` after deployment.~~
 - [x] ~~Configure the RevenueCat production webhook authorization header and matching Vercel Production `REVENUECAT_WEBHOOK_AUTH_TOKEN` secret without exposing the generated token.~~
 - [x] ~~Redact tracked local Supabase service-role examples from agent workflow docs and add a regression test against shipping live-looking local secrets.~~
+- [x] ~~Deploy and verify the Vercel Pro production cutover with the `bom1` deployment, public catalog cache headers, private no-store protected routes, and the consolidated backend cron firing on production.~~
+- [x] ~~Verify the production release used one Git/Vercel deployment owner and did not create a competing manual production deployment for the pushed commit.~~
+- [x] ~~Commit, push, and production-smoke the shared backend hardening batch from `main`.~~
 
 ## In Progress
 
-- [ ] Complete the Vercel production cutover for the locally verified region, cron, cache, and environment changes.
+- [x] ~~Complete the Vercel production cutover for the locally verified region, cron, cache, and environment changes.~~
 - [x] ~~Continue thinning the largest high-traffic routes into domain services, especially notification, commerce, remaining workflow canvas-adjacent routes, and large media/resource handlers.~~
 
 ## Remaining Before We Can Call This Ideal
@@ -259,12 +262,12 @@ Use this convention:
 - [ ] Wire the protected backend health, cost report, and alert endpoints into production dashboarding or alert delivery after deployment.
 - [ ] Enable leaked-password protection in the Supabase Auth dashboard and verify the advisor warning clears.
 - [ ] Switch Supabase Auth database connections from a fixed count to percentage-based allocation before scaling database compute.
-- [ ] Redeploy with the new `REVENUECAT_WEBHOOK_AUTH_TOKEN` and verify a signed RevenueCat test webhook reaches `/api/mobile/commerce/revenuecat-webhook`.
-- [ ] Deploy and verify Vercel Pro settings: a single `bom1` Fluid deployment, consolidated cron, function max durations, complete environment health, and private no-store API responses.
-- [ ] Ensure one deployment owner per release; verify the next `main` push does not create a duplicate manual/Codex production deployment.
+- [ ] Trigger and verify a signed RevenueCat dashboard/provider test webhook reaches `/api/mobile/commerce/revenuecat-webhook`.
+- [x] ~~Deploy and verify Vercel Pro settings: a single `bom1` Fluid deployment, consolidated cron, function max durations, required production environment variables, and private no-store API responses.~~
+- [x] ~~Ensure one deployment owner per release; verify the next `main` push does not create a duplicate manual/Codex production deployment.~~
 - [x] ~~Decide whether any cron-polled jobs should graduate to a more durable queue/workflow pattern once volume justifies it.~~
 - [ ] Run full web and mobile test suites from a clean checkout after all backend hardening changes are finalized.
-- [ ] Commit, push, and verify the deployed production environment.
+- [x] ~~Commit, push, and verify the deployed production environment.~~
 
 ## Change History
 
@@ -564,9 +567,14 @@ Use this convention:
 | 2026-06-23 | Configured the RevenueCat production webhook authorization boundary. | completed in production config; deployment verification pending | Added `REVENUECAT_WEBHOOK_AUTH_TOKEN` as an encrypted Vercel Production variable, created RevenueCat production webhook integration `whintgr1689ecfb68` for `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook` with matching authorization header and event types `cancellation`, `non_renewing_purchase`, and `refund_reversed`, verified the temp local secret file was removed, and confirmed the Vercel env list now shows `REVENUECAT_WEBHOOK_AUTH_TOKEN`; tracker reached 211 completed milestones / 96.3% |
 | 2026-06-23 | Redacted a tracked local Supabase service-role example before release and added a package-security regression test for agent workflow docs. | completed locally | `.agent/workflows/local.md`, `src/__tests__/package-security-baseline.test.ts`; red test caught a live-looking `sb_secret_` value in the tracked workflow doc, green package-security test passed with 1 file / 8 tests, broader PCRE2 secret scan only found safe placeholders/test patterns, tracker reached 212 completed milestones / 96.4% |
 | 2026-06-23 | Re-ran the final pre-push verification sweep after RevenueCat production config and tracked-secret redaction. | verification refreshed | `git diff --check`, `npm test` passed 370 web test files / 1776 tests, `npm run lint` exited 0 with 25 existing warnings, `npm run build`, `cd ugc-mobile && npm test` passed 52 mobile test files / 379 tests, `cd ugc-mobile && npm run typecheck` |
+| 2026-06-23 | Committed and pushed the shared backend hardening batch to `main`. | completed in git | Commit `314b20a` (`Harden shared backend for production`) pushed to `origin/main`; pre-push verification in the same worktree passed `git diff --check`, PCRE2 secret filename scan only matched `.env.example` and the package-security regression test, `npm test` passed 370 web files / 1776 tests, `npm run lint` exited 0 with 25 existing warnings, `npm run build`, `cd ugc-mobile && npm test` passed 52 files / 379 tests, and `cd ugc-mobile && npm run typecheck` |
+| 2026-06-23 | Verified the Vercel production cutover for the pushed backend release. | completed in production | Deployment `dpl_6TBtthqXcALq4Q3uEugraHwAcs9M` for `https://ugc-f68mlzmz6-athuls-projects-2ab559ed.vercel.app` reached `READY`, was aliased to `magicbooklet.com`, `www.magicbooklet.com`, and the main-branch aliases, listed functions in `bom1`, and appeared as the single latest Production deployment from the Git push; `npx --yes vercel@latest env ls production` showed the required Supabase, KIE, Razorpay, cron, and RevenueCat variables present, including `REVENUECAT_WEBHOOK_AUTH_TOKEN` |
+| 2026-06-23 | Production-smoked the deployed backend boundary. | completed in production | `GET /api/generation-models?platform=web&schemaVersion=1` returned `200`, `cache-control: public, max-age=300`, deterministic `etag`, `x-vercel-id` from `bom1`, schema version `1`, defaults for image/video/motion, and 12 active models; unauthenticated `GET /api/ops/backend-health`, `/api/ops/backend-costs`, `/api/ops/backend-alerts`, and `/api/cron/backend-jobs` returned `401` with `cache-control: private, no-store`; unauthenticated `POST /api/mobile/commerce/revenuecat-webhook` returned `401` instead of an unconfigured response, proving the deployed function loaded the webhook authorization boundary |
+| 2026-06-23 | Verified the consolidated production cron fired on the new deployment. | completed in production | Vercel expanded logs for the immutable deployment showed the 13:20 IST `GET /api/cron/backend-jobs` production cron tick starting `generation-completions` and `mobile-push-receipts`, then skipping cleanly when no due generation jobs or pending push receipts existed; tracker reached 215 completed milestones / 97.7% |
 
 ## Next Working Order
 
-1. Commit, push once, and verify the Vercel production cutover: `bom1`, one consolidated cron, private no-store responses, complete health, and RevenueCat webhook auth loaded by the deployed function.
+1. Trigger a signed RevenueCat dashboard/provider test webhook and verify it reaches `/api/mobile/commerce/revenuecat-webhook`.
 2. Configure a production alert delivery destination against `/api/ops/backend-alerts` and verify it receives the normalized `delivery` payload.
 3. Enable the remaining Supabase Auth dashboard hardening settings and verify advisors clear.
+4. Run the clean-checkout web and mobile verification sweep for the finalized pushed state.
