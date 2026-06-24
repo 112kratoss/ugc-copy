@@ -64,4 +64,36 @@ describe('Android native network config', () => {
     expect(nextGradle).toContain('debug {\n            manifestPlaceholders = [usesCleartextTraffic: "true"]');
     expect(nextGradle).toContain('release {\n            manifestPlaceholders = [usesCleartextTraffic: "false"]');
   });
+
+  it('does not add manifest placeholders to signing config blocks', () => {
+    const gradle = `android {
+    defaultConfig {
+        applicationId 'com.magicbooklet.mobile'
+    }
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            signingConfig signingConfigs.debug
+        }
+    }
+}`;
+
+    const nextGradle = setGradleCleartextPlaceholders(gradle);
+
+    expect(nextGradle).toContain(`signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+        }
+    }`);
+    expect(nextGradle).toContain(`buildTypes {
+        debug {
+            manifestPlaceholders = [usesCleartextTraffic: "true"]`);
+  });
 });

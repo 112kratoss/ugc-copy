@@ -37,9 +37,53 @@ function setManifestCleartextPlaceholder(androidManifest) {
 
 function setGradleCleartextPlaceholders(contents) {
   let nextContents = setBlockCleartextPlaceholder(contents, 'defaultConfig', 'false', 8);
-  nextContents = setBlockCleartextPlaceholder(nextContents, 'debug', 'true', 12);
-  nextContents = setBlockCleartextPlaceholder(nextContents, 'release', 'false', 12);
+  nextContents = setNestedBlockCleartextPlaceholder(nextContents, 'buildTypes', 'debug', 'true', 12);
+  nextContents = setNestedBlockCleartextPlaceholder(nextContents, 'buildTypes', 'release', 'false', 12);
   return nextContents;
+}
+
+function setNestedBlockCleartextPlaceholder(contents, parentBlockName, blockName, value, indentSize) {
+  const parentBlock = findBlockRange(contents, parentBlockName);
+
+  if (!parentBlock) {
+    return contents;
+  }
+
+  const parentBody = contents.slice(parentBlock.bodyStart, parentBlock.closingStart);
+  const nextParentBody = setBlockCleartextPlaceholder(parentBody, blockName, value, indentSize);
+
+  return `${contents.slice(0, parentBlock.bodyStart)}${nextParentBody}${contents.slice(parentBlock.closingStart)}`;
+}
+
+function findBlockRange(contents, blockName) {
+  const blockPattern = new RegExp(`(^|\\n)\\s*${blockName}\\s*\\{`, 'g');
+  const blockMatch = blockPattern.exec(contents);
+
+  if (!blockMatch) {
+    return null;
+  }
+
+  const openingBrace = contents.indexOf('{', blockMatch.index);
+  let depth = 0;
+
+  for (let index = openingBrace; index < contents.length; index += 1) {
+    const character = contents[index];
+
+    if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return {
+          bodyStart: openingBrace + 1,
+          closingStart: index,
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 function setBlockCleartextPlaceholder(contents, blockName, value, indentSize) {
