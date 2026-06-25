@@ -73,9 +73,9 @@ export const siteConfig = {
         'Create AI images, videos, motion-transfer UGC ads, and reusable content workflows in one production-ready studio.',
     siteUrl: resolveSiteUrl(),
     ogImage: '/opengraph-image.png',
-    supportEmail: 'support@magicbooklet.com',
-    helloEmail: 'hello@magicbooklet.com',
-    privacyEmail: 'privacy@magicbooklet.com',
+    supportEmail: 'info@magicbooklet.com',
+    helloEmail: 'info@magicbooklet.com',
+    privacyEmail: 'info@magicbooklet.com',
     googleSiteVerification: process.env.GOOGLE_SITE_VERIFICATION || undefined,
 };
 
