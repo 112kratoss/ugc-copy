@@ -12,10 +12,12 @@ import {
   getCreationSectionOrder,
   getCreationSectionSummary,
   getVisibleGenerationCheckMessages,
+  hydrateCreationDraftFromRemixSource,
   renameMediaDraft,
   validateCreationDraft,
   type MediaDraft,
 } from '../lib/media-creation-view-model';
+import type { RemixSourceBundle } from '../lib/types';
 
 const repoRoot = process.cwd();
 
@@ -64,6 +66,46 @@ function audioReference(overrides: Partial<MediaDraft> = {}): MediaDraft {
       displayName: overrides.displayName ?? 'Voice Reference',
     }
   );
+}
+
+type RemixSourceBundleOverrides = Omit<Partial<RemixSourceBundle>, 'generation' | 'inputs' | 'workflowSettings'> & {
+  generation?: Partial<RemixSourceBundle['generation']>;
+  inputs?: Partial<RemixSourceBundle['inputs']>;
+  workflowSettings?: Record<string, unknown>;
+};
+
+function remixSourceBundle(overrides: RemixSourceBundleOverrides = {}): RemixSourceBundle {
+  const base: RemixSourceBundle = {
+    generation: {
+      id: 'gen-source',
+      title: 'Original source',
+      prompt: 'Create a premium tabletop product scene.',
+      category: 'image',
+      model: 'nano-banana-2',
+    },
+    result: null,
+    inputs: {},
+    workflowSettings: {},
+    restoreIssues: [],
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    generation: {
+      ...base.generation,
+      ...overrides.generation,
+    },
+    inputs: {
+      ...base.inputs,
+      ...overrides.inputs,
+    },
+    workflowSettings: {
+      ...base.workflowSettings,
+      ...overrides.workflowSettings,
+    },
+    restoreIssues: overrides.restoreIssues ?? base.restoreIssues,
+  };
 }
 
 describe('media creation view model', () => {
@@ -231,6 +273,251 @@ describe('media creation view model', () => {
         state: 'warning',
       }),
     ]);
+  });
+
+  it('hydrates image remix source prompt, compatible settings, and element references', () => {
+    const source = remixSourceBundle({
+      workflowSettings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        resolution: '4K',
+        qualityMode: 'quality',
+        outputFormat: 'png',
+        googleSearch: true,
+      },
+      inputs: {
+        image: {
+          elements: [
+            {
+              id: 'element-1',
+              displayName: 'Hero Product',
+              handle: '@hero_product',
+              url: 'https://cdn.example.com/hero.png',
+              storagePath: 'inputs/hero.png',
+              sourceGenerationId: 'gen-source',
+            },
+            {
+              id: 'element-2',
+              displayName: 'Logo Sheet',
+              handle: '@logo_sheet',
+              url: 'https://cdn.example.com/logo.png',
+              storagePath: 'inputs/logo.png',
+              sourceGenerationId: 'gen-source',
+            },
+          ],
+        },
+      },
+    });
+
+    const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), source);
+
+    expect(warning).toBeNull();
+    expect(draft).toMatchObject({
+      prompt: 'Create a premium tabletop product scene.',
+      sourceGenerationId: 'gen-source',
+      model: 'nano-banana-2',
+      aspectRatio: '9:16',
+      resolution: '4K',
+      qualityMode: 'quality',
+      outputFormat: 'png',
+      googleSearch: true,
+    });
+    expect(draft.references).toHaveLength(2);
+    expect(draft.references[0]).toMatchObject({
+      id: 'element-1',
+      displayName: 'Hero Product',
+      handle: '@hero_product',
+      url: 'https://cdn.example.com/hero.png',
+      storagePath: 'inputs/hero.png',
+      sourceGenerationId: 'gen-source',
+    });
+  });
+
+  it('hydrates video remix source start and end frames in frame mode', () => {
+    const source = remixSourceBundle({
+      generation: {
+        category: 'video',
+        model: 'seedance-2-fast',
+      },
+      workflowSettings: {
+        model: 'seedance-2-fast',
+        aspectRatio: '16:9',
+        duration: 12,
+        resolution: '720p',
+        sound: true,
+      },
+      inputs: {
+        video: {
+          referenceMode: 'frames',
+          startFrame: {
+            kind: 'image',
+            label: 'Start Frame',
+            url: 'https://cdn.example.com/start.jpg',
+            storagePath: 'inputs/start.jpg',
+            sourceGenerationId: 'gen-source',
+          },
+          endFrame: {
+            kind: 'image',
+            label: 'End Frame',
+            url: 'https://cdn.example.com/end.jpg',
+            storagePath: 'inputs/end.jpg',
+            sourceGenerationId: 'gen-source',
+          },
+          elements: [],
+          referenceVideos: [],
+          referenceAudios: [],
+        },
+      },
+    });
+
+    const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('video'), source);
+
+    expect(warning).toBeNull();
+    expect(draft).toMatchObject({
+      model: 'seedance-2-fast',
+      prompt: 'Create a premium tabletop product scene.',
+      referenceMode: 'frames',
+      aspectRatio: '16:9',
+      duration: 12,
+      resolution: '720p',
+      sound: true,
+      sourceGenerationId: 'gen-source',
+    });
+    expect(draft.startFrame).toMatchObject({ displayName: 'Start Frame', url: 'https://cdn.example.com/start.jpg' });
+    expect(draft.endFrame).toMatchObject({ displayName: 'End Frame', url: 'https://cdn.example.com/end.jpg' });
+    expect(draft.references).toEqual([]);
+  });
+
+  it('hydrates supported video image, video, and audio references', () => {
+    const source = remixSourceBundle({
+      generation: {
+        category: 'video',
+        model: 'seedance-2',
+      },
+      workflowSettings: {
+        model: 'seedance-2',
+        referenceMode: 'elements',
+        duration: 10,
+        resolution: '720p',
+      },
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [
+            {
+              id: 'element-1',
+              displayName: 'Hero Product',
+              handle: '@hero_product',
+              url: 'https://cdn.example.com/hero.png',
+              storagePath: 'inputs/hero.png',
+              sourceGenerationId: 'gen-source',
+            },
+          ],
+          referenceVideos: [
+            {
+              kind: 'video',
+              label: 'Motion Reference',
+              url: 'https://cdn.example.com/motion.mp4',
+              storagePath: 'inputs/motion.mp4',
+              sourceGenerationId: 'gen-source',
+            },
+          ],
+          referenceAudios: [
+            {
+              kind: 'audio',
+              label: 'Voice Reference',
+              url: 'https://cdn.example.com/voice.mp3',
+              storagePath: 'inputs/voice.mp3',
+              sourceGenerationId: 'gen-source',
+            },
+          ],
+        },
+      },
+    });
+
+    const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('video'), source);
+
+    expect(warning).toBeNull();
+    expect(draft.referenceMode).toBe('elements');
+    expect(draft.references).toHaveLength(1);
+    expect(draft.referenceVideos).toHaveLength(1);
+    expect(draft.referenceAudios).toHaveLength(1);
+    expect(draft.referenceVideos[0]).toMatchObject({ displayName: 'Motion Reference', kind: 'video' });
+    expect(draft.referenceAudios[0]).toMatchObject({ displayName: 'Voice Reference', kind: 'audio' });
+  });
+
+  it('hydrates motion remix source character image and reference video', () => {
+    const source = remixSourceBundle({
+      generation: {
+        category: 'video',
+        model: 'kling-2.6',
+      },
+      workflowSettings: {
+        model: 'kling-2.6',
+        mode: '1080p',
+        characterOrientation: 'image',
+        duration: 18,
+      },
+      inputs: {
+        motion: {
+          characterImage: {
+            kind: 'image',
+            label: 'Character Image',
+            url: 'https://cdn.example.com/character.png',
+            storagePath: 'inputs/character.png',
+            sourceGenerationId: 'gen-source',
+          },
+          referenceVideo: {
+            kind: 'video',
+            label: 'Reference Motion',
+            url: 'https://cdn.example.com/reference.mp4',
+            storagePath: 'inputs/reference.mp4',
+            sourceGenerationId: 'gen-source',
+          },
+        },
+      },
+    });
+
+    const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), source);
+
+    expect(warning).toBeNull();
+    expect(draft).toMatchObject({
+      model: 'kling-2.6',
+      prompt: 'Create a premium tabletop product scene.',
+      mode: '1080p',
+      characterOrientation: 'image',
+      duration: 18,
+      sourceGenerationId: 'gen-source',
+    });
+    expect(draft.characterImage).toMatchObject({ displayName: 'Character Image', kind: 'image' });
+    expect(draft.referenceVideo).toMatchObject({ displayName: 'Reference Motion', kind: 'video' });
+  });
+
+  it('skips missing remix media URLs and surfaces a restore warning', () => {
+    const source = remixSourceBundle({
+      inputs: {
+        image: {
+          elements: [
+            {
+              id: 'element-1',
+              displayName: 'Missing Product',
+              handle: '@missing_product',
+              url: null,
+              storagePath: 'inputs/missing.png',
+              sourceGenerationId: 'gen-source',
+            },
+          ],
+        },
+      },
+      restoreIssues: ['Image input media is no longer available.'],
+    });
+
+    const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), source);
+
+    expect(draft.references).toEqual([]);
+    expect(warning).toBe('Some source media could not be restored automatically, so you may need to re-add a few references.');
   });
 
   it('validates image prompts, unknown handles, max references, costs, and payload fields', () => {

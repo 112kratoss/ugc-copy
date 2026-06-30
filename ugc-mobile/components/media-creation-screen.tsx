@@ -63,6 +63,8 @@ import {
   getCreationSectionSummary,
   getMotionDuration,
   getVisibleGenerationCheckMessages,
+  hydrateCreationDraftFromRemixSource,
+  REMIX_RESTORE_WARNING_MESSAGE,
   renameMediaDraft,
   type CreationSectionId,
   type CreationDraft,
@@ -165,9 +167,16 @@ function createMobileGenerationIdempotencyKey(prefix: CreatorToolId) {
 export function MediaCreationScreen({
   initialTool = 'image',
   insideTab = false,
+  initialPrompt,
+  remixSource,
 }: {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
+  initialPrompt?: string | null;
+  remixSource?: {
+    generationId?: string | null;
+    postId?: string | null;
+  };
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -176,9 +185,18 @@ export function MediaCreationScreen({
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
-  const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => createDefaultCreationDraft('image'));
-  const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => createDefaultCreationDraft('video'));
-  const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => createDefaultCreationDraft('motion'));
+  const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
+    ...createDefaultCreationDraft('image'),
+    prompt: initialTool === 'image' ? initialPrompt ?? '' : '',
+  }));
+  const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => ({
+    ...createDefaultCreationDraft('video'),
+    prompt: initialTool === 'video' ? initialPrompt ?? '' : '',
+  }));
+  const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => ({
+    ...createDefaultCreationDraft('motion'),
+    prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
+  }));
   const [isUploading, setIsUploading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
@@ -189,6 +207,7 @@ export function MediaCreationScreen({
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [isPromptFocused, setIsPromptFocused] = useState(false);
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
+  const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
 
@@ -331,7 +350,7 @@ export function MediaCreationScreen({
   const contentBottomPadding = insideTab
     ? tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section + (showFloatingReviewBar ? FLOATING_REVIEW_BAR_HEIGHT + appTheme.spacing.gap : 0)
     : bottomInset + 36;
-  const issueCount = validation.errors.length + validation.warnings.length + (message ? 1 : 0);
+  const issueCount = validation.errors.length + validation.warnings.length + (message ? 1 : 0) + (remixRestoreWarning ? 1 : 0);
   const generateDisabled = isGenerating || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
 
   const changeTool = (tool: CreatorToolId) => {
@@ -369,6 +388,48 @@ export function MediaCreationScreen({
     const model = catalog ? getCatalogModel(catalog, draft.model) : null;
     return (model ? applyCatalogModelDefaults(draft, model) : applyModelDefaults(draft)) as T;
   };
+
+  useEffect(() => {
+    const generationId = remixSource?.generationId?.trim();
+    if (!generationId) return;
+    if (!user) {
+      setRemixRestoreWarning('Sign in to restore remix source media.');
+      return;
+    }
+
+    const targetTool = isTool(initialTool) ? initialTool : 'image';
+    let isCancelled = false;
+    setRemixRestoreWarning(null);
+    setMessage(null);
+    setPromptMessage(null);
+
+    void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
+      .then((bundle) => {
+        if (isCancelled) return;
+        setActiveTool(targetTool);
+        if (targetTool === 'image') {
+          const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), bundle);
+          setImageDraft(draft);
+          setRemixRestoreWarning(warning);
+        } else if (targetTool === 'video') {
+          const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('video'), bundle);
+          setVideoDraft(draft);
+          setRemixRestoreWarning(warning);
+        } else {
+          const { draft, warning } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), bundle);
+          setMotionDraft(draft);
+          setRemixRestoreWarning(warning);
+        }
+      })
+      .catch((error) => {
+        if (isCancelled) return;
+        setRemixRestoreWarning(error instanceof Error ? error.message : REMIX_RESTORE_WARNING_MESSAGE);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [api, initialTool, remixSource?.generationId, remixSource?.postId, user]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));
@@ -745,6 +806,12 @@ export function MediaCreationScreen({
         {catalogNotice ? (
           <SurfaceSection eyebrow="Catalog update" title="Model updated" body={catalogNotice} accent={meta.accent}>
             <SecondaryButton label="Dismiss" onPress={() => setCatalogNotice(null)} />
+          </SurfaceSection>
+        ) : null}
+
+        {remixRestoreWarning ? (
+          <SurfaceSection eyebrow="Remix source" title="Source partially restored" body={remixRestoreWarning} accent={meta.accent}>
+            <SecondaryButton label="Dismiss" onPress={() => setRemixRestoreWarning(null)} />
           </SurfaceSection>
         ) : null}
 

@@ -151,11 +151,73 @@ export interface GenerationElementDescriptor {
   sourceGenerationId?: string | null;
 }
 
+export type RemixAssetKind = 'image' | 'video' | 'audio';
+
 export interface RemixMediaAssetDescriptor {
-  url: string;
+  url?: string | null;
+  kind?: RemixAssetKind | null;
+  label?: string | null;
   storagePath?: string | null;
-  mediaType?: 'image' | 'video' | 'audio';
+  sourceGenerationId?: string | null;
+  mediaType?: RemixAssetKind;
   fileName?: string | null;
+}
+
+export interface RemixResolvedAsset extends RemixMediaAssetDescriptor {
+  kind: RemixAssetKind;
+  url: string | null;
+}
+
+export interface RemixResolvedImageElement extends GenerationElementDescriptor {
+  url: string | null;
+}
+
+export interface GenerationInputMediaItem {
+  id?: string;
+  generationId?: string;
+  url?: string | null;
+  storagePath?: string | null;
+  kind?: RemixAssetKind | string | null;
+  label?: string | null;
+  sourceGenerationId?: string | null;
+}
+
+export interface RemixSourceGeneration {
+  id: string;
+  title: string;
+  prompt: string;
+  category: 'image' | 'video' | 'text';
+  model: string;
+}
+
+export interface RemixSourceResult {
+  mediaType: 'image' | 'video';
+  url: string | null;
+}
+
+export interface RemixSourceBundle {
+  generation: RemixSourceGeneration;
+  result: RemixSourceResult | null;
+  inputs: {
+    image?: {
+      elements: RemixResolvedImageElement[];
+    };
+    video?: {
+      referenceMode: 'frames' | 'elements';
+      startFrame: RemixResolvedAsset | null;
+      endFrame: RemixResolvedAsset | null;
+      elements: RemixResolvedImageElement[];
+      referenceVideos?: RemixResolvedAsset[];
+      referenceAudios?: RemixResolvedAsset[];
+    };
+    motion?: {
+      characterImage: RemixResolvedAsset | null;
+      referenceVideo: RemixResolvedAsset | null;
+    };
+  };
+  inputMedia?: GenerationInputMediaItem[];
+  workflowSettings: Record<string, unknown>;
+  restoreIssues: string[];
 }
 
 export interface ImageGenerationRequest {

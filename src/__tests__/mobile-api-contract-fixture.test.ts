@@ -130,7 +130,7 @@ describe('shared mobile API v1 contract fixture', () => {
 
     expect(appVersion.mobileCompatibility).toMatchObject({
       currentApiVersion: 1,
-      minimumAppVersion: '1.0.0',
+      minimumAppVersion: '0.0.1',
     });
     expect(updateRequired).toMatchObject({
       code: 'MOBILE_UPDATE_REQUIRED',

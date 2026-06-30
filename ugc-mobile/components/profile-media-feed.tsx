@@ -42,6 +42,7 @@ import {
 } from '@/lib/showcase-save-cache';
 import { appTheme } from '@/lib/theme';
 import type { ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import { getNativeRemixCreateHref } from '@/lib/viewer-actions';
 
 type ProfileMediaFeedParams = {
   source?: string | string[];
@@ -234,9 +235,13 @@ export function ProfileMediaFeedScreen() {
 
     if (item.sourceType === 'showcase' && item.showcasePostId) {
       const response = await api.remixShowcasePost(item.showcasePostId);
-      const prompt = response.prefill?.prompt ?? item.recreatePrompt;
-      if (prompt) {
-        router.push(`/create/${item.recreateTool}?prompt=${encodeURIComponent(prompt)}` as never);
+      const nativeHref = getNativeRemixCreateHref({
+        redirectTo: response.redirectTo,
+        recreateTool: item.recreateTool,
+        prompt: response.prefill?.prompt ?? item.recreatePrompt,
+      });
+      if (nativeHref) {
+        router.push(nativeHref as never);
         return;
       }
       if (response.redirectTo) {
@@ -245,7 +250,11 @@ export function ProfileMediaFeedScreen() {
       }
     }
 
-    router.push(`/create/${item.recreateTool}?prompt=${encodeURIComponent(item.recreatePrompt)}` as never);
+    const fallbackHref = getNativeRemixCreateHref({
+      recreateTool: item.recreateTool,
+      prompt: item.recreatePrompt,
+    });
+    router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
   };
 
   const publishItem = (item: ImmersivePreviewItem) => {

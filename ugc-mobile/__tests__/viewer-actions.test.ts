@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getRailActionOpacity,
+  getNativeRemixCreateHref,
   getSaveHeartIconProps,
   getSaveHeartTapAnimationSpec,
   getViewerActionGroupLabel,
@@ -65,5 +66,31 @@ describe('immersive viewer actions', () => {
     const unsaveSpec = getSaveHeartTapAnimationSpec({ willSave: false });
     expect(unsaveSpec.peakScale).toBeLessThan(saveSpec.peakScale);
     expect(unsaveSpec.haloPeakOpacity).toBeLessThan(saveSpec.haloPeakOpacity);
+  });
+
+  it('prefers server remix redirect metadata for native create navigation', () => {
+    expect(getNativeRemixCreateHref({
+      redirectTo: '/create-video?remix=gen-1&remixPost=post-1',
+      recreateTool: 'image',
+      prompt: 'Fallback prompt',
+    })).toBe('/create/video?remix=gen-1&remixPost=post-1');
+
+    expect(getNativeRemixCreateHref({
+      redirectTo: 'https://magicbooklet.test/create-motion?remix=gen-2',
+      recreateTool: 'image',
+    })).toBe('/create/motion?remix=gen-2');
+  });
+
+  it('falls back to prompt-only native create navigation when remix metadata is unavailable', () => {
+    expect(getNativeRemixCreateHref({
+      redirectTo: '/create-image?post=post-1',
+      recreateTool: 'image',
+      prompt: 'A glossy product photo',
+    })).toBe('/create/image?prompt=A%20glossy%20product%20photo');
+
+    expect(getNativeRemixCreateHref({
+      recreateTool: 'video',
+      prompt: '',
+    })).toBeNull();
   });
 });

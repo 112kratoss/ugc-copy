@@ -25,6 +25,7 @@ import type {
   PromptEnhancementResponse,
   PostResourceAttachment,
   PostResourceBundleInput,
+  RemixSourceBundle,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
   SourceToolOption,
@@ -369,6 +370,8 @@ export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher =
         method: 'POST',
         body: JSON.stringify({ postId }),
       }),
+    getRemixSourceBundle: (generationId: string, options: { postId?: string | null } = {}) =>
+      request<RemixSourceBundle>(`/api/remix-source${buildQuery({ id: generationId, postId: options.postId })}`),
     shareShowcasePost: (postId: string, channel: 'native-share' | 'copy-link' = 'native-share') =>
       request<{ success: boolean }>('/api/showcase/share', {
         method: 'POST',

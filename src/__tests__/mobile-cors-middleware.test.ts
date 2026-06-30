@@ -48,7 +48,7 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-api-version')).toBe('1');
-    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('1.0.0');
+    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.1');
     expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('1');
   });
 
@@ -59,12 +59,26 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
   });
 
-  it('requires an update only when an identified mobile client is below policy', async () => {
+  it('allows the submitted 0.0.1 mobile client on the current contract', () => {
     const response = proxy(new NextRequest('http://localhost/api/profile', {
       headers: {
         'x-magicbooklet-client': 'mobile',
-        'x-magicbooklet-api-version': '0',
-        'x-magicbooklet-app-version': '0.9.0',
+        'x-magicbooklet-api-version': '1',
+        'x-magicbooklet-app-version': '0.0.1',
+        'x-magicbooklet-catalog-schema-version': '1',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.1');
+  });
+
+  it('requires an update when an identified mobile client is below policy', async () => {
+    const response = proxy(new NextRequest('http://localhost/api/profile', {
+      headers: {
+        'x-magicbooklet-client': 'mobile',
+        'x-magicbooklet-api-version': '1',
+        'x-magicbooklet-app-version': '0.0.0',
         'x-magicbooklet-catalog-schema-version': '1',
       },
     }));
@@ -75,7 +89,7 @@ describe('mobile API CORS proxy', () => {
       compatibility: {
         currentApiVersion: 1,
         minimumApiVersion: 1,
-        minimumAppVersion: '1.0.0',
+        minimumAppVersion: '0.0.1',
         supportedCatalogSchemaVersions: [1],
       },
     });

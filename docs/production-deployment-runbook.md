@@ -1,6 +1,6 @@
 # Production Deployment And Operations Runbook
 
-Last updated: 2026-06-23
+Last updated: 2026-06-27
 
 ## Production Topology
 
@@ -66,9 +66,13 @@ These settings are intentionally verified against the provider dashboards/adviso
 
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
+- Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
+- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
 - RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
+
+The web login code already redirects Google sign-in back to `https://magicbooklet.com/auth/callback`. If Google's account chooser still says it will continue to `ildfmhozpibwiopeavfg.supabase.co`, the fix is not a Next.js button change: complete Google Auth Platform branding and activate a Supabase custom domain. Once the custom domain is active, update production `NEXT_PUBLIC_SUPABASE_URL` to that branded Supabase URL and redeploy so new OAuth flows advertise the branded callback host.
 
 Use the repeatable production gate helper after each external change:
 

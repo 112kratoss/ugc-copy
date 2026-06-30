@@ -6,6 +6,9 @@ import type {
   PromptEnhancementRequest,
   PromptEnhancementWarning,
   RemixMediaAssetDescriptor,
+  RemixResolvedAsset,
+  RemixResolvedImageElement,
+  RemixSourceBundle,
   VideoGenerationRequest,
   VideoMultiPromptInput,
 } from './types';
@@ -291,6 +294,8 @@ export interface VisibleGenerationCheckMessages {
   warnings: PromptEnhancementWarning[];
 }
 
+export const REMIX_RESTORE_WARNING_MESSAGE = 'Some source media could not be restored automatically, so you may need to re-add a few references.';
+
 const HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
 function createDraftId(prefix: string, seed: string) {
@@ -325,6 +330,15 @@ function buildElementHandle(displayName: string, usedHandles: Set<string>, fallb
     suffix += 1;
   }
   handle = `@${base}_${suffix}`;
+  usedHandles.add(handle);
+  return handle;
+}
+
+function normalizeExistingHandle(value: string | undefined, usedHandles: Set<string>) {
+  const handle = value?.trim();
+  if (!handle || !/^@[a-z0-9_]+$/.test(handle) || usedHandles.has(handle)) {
+    return null;
+  }
   usedHandles.add(handle);
   return handle;
 }
@@ -405,10 +419,11 @@ function namedReferences(references: MediaDraft[]): MediaDraft[] {
   const used = new Set<string>();
   return references.map((reference, index) => {
     const displayName = normalizeDisplayName(reference.displayName, `Element ${index + 1}`);
+    const existingHandle = normalizeExistingHandle(reference.handle, used);
     return {
       ...reference,
       displayName,
-      handle: buildElementHandle(displayName, used, index + 1),
+      handle: existingHandle ?? buildElementHandle(displayName, used, index + 1),
     };
   });
 }
@@ -417,7 +432,10 @@ function mediaAssetDescriptor(media: MediaDraft | null): RemixMediaAssetDescript
   if (!media) return null;
   return {
     url: media.url,
+    kind: media.kind,
+    label: media.displayName,
     storagePath: media.storagePath ?? null,
+    sourceGenerationId: media.sourceGenerationId ?? null,
     mediaType: media.kind,
     fileName: media.fileName,
   };
@@ -460,6 +478,188 @@ export function createMediaDraftFromUpload(
     sizeBytes: upload.sizeBytes ?? null,
     sourceGenerationId: options.sourceGenerationId ?? null,
   };
+}
+
+function stringSetting(settings: Record<string, unknown>, key: string) {
+  const value = settings[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function booleanSetting(settings: Record<string, unknown>, key: string) {
+  const value = settings[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function numberSetting(settings: Record<string, unknown>, key: string) {
+  const value = settings[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isImageResolution(value: string | null): value is ImageResolution {
+  return value === '1K' || value === '2K' || value === '4K';
+}
+
+function isImageOutputFormat(value: string | null): value is ImageOutputFormat {
+  return value === 'jpg' || value === 'png';
+}
+
+function isImageQualityMode(value: string | null): value is ImageQualityMode {
+  return value === 'standard' || value === 'quality';
+}
+
+function isReferenceMode(value: string | null): value is ReferenceMode {
+  return value === 'frames' || value === 'elements';
+}
+
+function isMotionResolution(value: string | null): value is MotionResolution {
+  return value === '720p' || value === '1080p';
+}
+
+function isMotionCharacterOrientation(value: string | null): value is MotionCreationDraft['characterOrientation'] {
+  return value === 'video' || value === 'image';
+}
+
+function extensionForKind(kind: MediaKind) {
+  if (kind === 'video') return 'mp4';
+  if (kind === 'audio') return 'mp3';
+  return 'png';
+}
+
+function mimeTypeForKind(kind: MediaKind) {
+  if (kind === 'video') return 'video/mp4';
+  if (kind === 'audio') return 'audio/mpeg';
+  return 'image/png';
+}
+
+function fileNameFromPath(storagePath?: string | null) {
+  const fileName = storagePath?.split('/').filter(Boolean).at(-1);
+  return fileName && fileName.length > 0 ? fileName : null;
+}
+
+function fileNameFromLabel(label: string, kind: MediaKind) {
+  const base = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || `${kind}-reference`;
+  return `${base}.${extensionForKind(kind)}`;
+}
+
+function remixAssetFileName(
+  asset: Pick<RemixResolvedAsset, 'storagePath' | 'label' | 'kind'>,
+  fallbackDisplayName: string
+) {
+  return fileNameFromPath(asset.storagePath) ?? fileNameFromLabel(asset.label ?? fallbackDisplayName, asset.kind);
+}
+
+function remixImageElementFileName(element: RemixResolvedImageElement, fallbackDisplayName: string) {
+  return fileNameFromPath(element.storagePath) ?? fileNameFromLabel(fallbackDisplayName, 'image');
+}
+
+function createMediaDraftFromRemixAsset(
+  asset: RemixResolvedAsset | null | undefined,
+  fallbackDisplayName: string
+): MediaDraft | null {
+  if (!asset?.url) return null;
+  const displayName = normalizeDisplayName(asset.label ?? undefined, fallbackDisplayName);
+  const draft = createMediaDraftFromUpload(
+    {
+      signedUrl: asset.url,
+      storagePath: asset.storagePath ?? '',
+      mimeType: mimeTypeForKind(asset.kind),
+      fileName: remixAssetFileName(asset, displayName),
+      kind: asset.kind,
+    },
+    {
+      displayName,
+      kind: asset.kind,
+      sourceGenerationId: asset.sourceGenerationId ?? null,
+    }
+  );
+
+  return {
+    ...draft,
+    storagePath: asset.storagePath ?? null,
+    sourceGenerationId: asset.sourceGenerationId ?? null,
+  };
+}
+
+function createMediaDraftFromRemixImageElement(
+  element: RemixResolvedImageElement,
+  index: number
+): MediaDraft | null {
+  if (!element.url) return null;
+  const displayName = normalizeDisplayName(element.displayName, `Image reference ${index + 1}`);
+  const draft = createMediaDraftFromUpload(
+    {
+      signedUrl: element.url,
+      storagePath: element.storagePath ?? '',
+      mimeType: 'image/png',
+      fileName: remixImageElementFileName(element, displayName),
+      kind: 'image',
+    },
+    {
+      displayName,
+      kind: 'image',
+      sourceGenerationId: element.sourceGenerationId ?? null,
+    }
+  );
+
+  return {
+    ...draft,
+    id: element.id || draft.id,
+    displayName,
+    handle: element.handle || draft.handle,
+    storagePath: element.storagePath ?? null,
+    sourceGenerationId: element.sourceGenerationId ?? null,
+  };
+}
+
+function hydrateRemixImageElements(elements: RemixResolvedImageElement[] | undefined) {
+  let skipped = 0;
+  const drafts = (elements ?? []).flatMap((element, index) => {
+    const draft = createMediaDraftFromRemixImageElement(element, index);
+    if (!draft) skipped += 1;
+    return draft ? [draft] : [];
+  });
+  return { drafts, skipped };
+}
+
+function hydrateRemixAssets(
+  assets: RemixResolvedAsset[] | undefined,
+  labelPrefix: string
+) {
+  let skipped = 0;
+  const drafts = (assets ?? []).flatMap((asset, index) => {
+    const draft = createMediaDraftFromRemixAsset(asset, `${labelPrefix} ${index + 1}`);
+    if (!draft) skipped += 1;
+    return draft ? [draft] : [];
+  });
+  return { drafts, skipped };
+}
+
+function hydrateOptionalRemixAsset(
+  asset: RemixResolvedAsset | null | undefined,
+  fallbackDisplayName: string
+) {
+  if (!asset) return { draft: null, skipped: 0 };
+  const draft = createMediaDraftFromRemixAsset(asset, fallbackDisplayName);
+  return { draft, skipped: draft ? 0 : 1 };
+}
+
+function hydrateVideoMultiPrompts(value: unknown): VideoShotDraft[] | null {
+  if (!Array.isArray(value)) return null;
+  const shots = value.flatMap((item, index) => {
+    if (!item || typeof item !== 'object') return [];
+    const shot = item as Partial<VideoShotDraft>;
+    if (typeof shot.prompt !== 'string') return [];
+    return [{
+      id: typeof shot.id === 'string' && shot.id.trim() ? shot.id : `shot-${index + 1}`,
+      prompt: shot.prompt,
+      duration: typeof shot.duration === 'number' && Number.isFinite(shot.duration) ? shot.duration : 5,
+    }];
+  });
+  return shots.length > 0 ? shots : null;
 }
 
 export function renameMediaDraft(media: MediaDraft, displayName: string): MediaDraft {
@@ -527,6 +727,227 @@ export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
     duration: 10,
     sourceGenerationId: null,
   };
+}
+
+type RemixHydrationResult<T extends CreationDraft> = {
+  draft: T;
+  warning: string | null;
+};
+
+function remixRestoreWarning(restoreIssues: readonly string[] | undefined, skippedCount: number) {
+  return (restoreIssues?.length ?? 0) > 0 || skippedCount > 0 ? REMIX_RESTORE_WARNING_MESSAGE : null;
+}
+
+function hydrateImageDraftFromRemixSource(
+  baseDraft: ImageCreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<ImageCreationDraft> {
+  const settings = bundle.workflowSettings ?? {};
+  const modelSetting = stringSetting(settings, 'model');
+  const model = modelSetting && isImageModelId(modelSetting) ? modelSetting : baseDraft.model;
+  const config = IMAGE_MODELS[model];
+  const restoredReferences = hydrateRemixImageElements(bundle.inputs.image?.elements);
+
+  let nextDraft: ImageCreationDraft = {
+    ...baseDraft,
+    model,
+    prompt: bundle.generation.prompt,
+    references: restoredReferences.drafts,
+    sourceGenerationId: bundle.generation.id,
+  };
+
+  const aspectRatio = stringSetting(settings, 'aspectRatio');
+  if (aspectRatio && asStringList(config.aspectRatios).includes(aspectRatio)) {
+    nextDraft = { ...nextDraft, aspectRatio };
+  }
+
+  const resolution = stringSetting(settings, 'resolution');
+  if (isImageResolution(resolution) && getImageResolutionOptions(model, nextDraft.aspectRatio).includes(resolution)) {
+    nextDraft = { ...nextDraft, resolution };
+  }
+
+  const qualityMode = stringSetting(settings, 'qualityMode');
+  if (isImageQualityMode(qualityMode)) {
+    nextDraft = { ...nextDraft, qualityMode };
+  }
+
+  const outputFormat = stringSetting(settings, 'outputFormat');
+  if (isImageOutputFormat(outputFormat) && config.supportsOutputFormat && asStringList(config.outputFormats).includes(outputFormat)) {
+    nextDraft = { ...nextDraft, outputFormat };
+  }
+
+  const googleSearch = booleanSetting(settings, 'googleSearch');
+  if (typeof googleSearch === 'boolean' && config.supportsGoogleSearch) {
+    nextDraft = { ...nextDraft, googleSearch };
+  }
+
+  const normalizedDraft = applyModelDefaults(nextDraft) as ImageCreationDraft;
+  const droppedReferences = Math.max(0, nextDraft.references.length - normalizedDraft.references.length);
+
+  return {
+    draft: normalizedDraft,
+    warning: remixRestoreWarning(bundle.restoreIssues, restoredReferences.skipped + droppedReferences),
+  };
+}
+
+function hydrateVideoDraftFromRemixSource(
+  baseDraft: VideoCreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<VideoCreationDraft> {
+  const settings = bundle.workflowSettings ?? {};
+  const modelSetting = stringSetting(settings, 'model');
+  const model = modelSetting && isVideoModelId(modelSetting) ? modelSetting : baseDraft.model;
+  const config = VIDEO_MODELS[model];
+  const videoInputs = bundle.inputs.video;
+  const restoredElements = hydrateRemixImageElements(videoInputs?.elements);
+  const restoredStartFrame = hydrateOptionalRemixAsset(videoInputs?.startFrame, 'Start Frame');
+  const restoredEndFrame = hydrateOptionalRemixAsset(videoInputs?.endFrame, 'End Frame');
+  const restoredReferenceVideos = hydrateRemixAssets(videoInputs?.referenceVideos, 'Video reference');
+  const restoredReferenceAudios = hydrateRemixAssets(videoInputs?.referenceAudios, 'Audio reference');
+  const mode = stringSetting(settings, 'mode');
+  const isMultiShot = booleanSetting(settings, 'isMultiShot');
+  const multiPrompts = hydrateVideoMultiPrompts(settings.multiPrompts);
+  const referenceModeSetting = isReferenceMode(stringSetting(settings, 'referenceMode'))
+    ? stringSetting(settings, 'referenceMode') as ReferenceMode
+    : null;
+  const referenceMode = videoInputs?.referenceMode ?? referenceModeSetting ?? (
+    restoredElements.drafts.length > 0 ? 'elements' : baseDraft.referenceMode
+  );
+
+  let nextDraft: VideoCreationDraft = {
+    ...baseDraft,
+    model,
+    prompt: bundle.generation.prompt,
+    references: restoredElements.drafts,
+    referenceVideos: restoredReferenceVideos.drafts,
+    referenceAudios: restoredReferenceAudios.drafts,
+    startFrame: restoredStartFrame.draft,
+    endFrame: restoredEndFrame.draft,
+    referenceMode,
+    sourceGenerationId: bundle.generation.id,
+  };
+
+  if (typeof isMultiShot === 'boolean') {
+    nextDraft = { ...nextDraft, isMultiShot };
+  }
+  if (multiPrompts) {
+    nextDraft = { ...nextDraft, isMultiShot: true, multiPrompts };
+  }
+
+  if (mode) {
+    nextDraft = {
+      ...nextDraft,
+      mode: config.modeOptions.length === 0 || config.modeOptions.some((option) => option.value === mode)
+        ? mode
+        : nextDraft.mode,
+    };
+  }
+
+  const aspectRatio = stringSetting(settings, 'aspectRatio');
+  if (aspectRatio && asStringList(config.aspectRatios).includes(aspectRatio)) {
+    nextDraft = { ...nextDraft, aspectRatio };
+  }
+
+  const duration = numberSetting(settings, 'duration');
+  if (typeof duration === 'number' && (model === 'veo-3.1' || isValidVideoDuration(model, duration))) {
+    nextDraft = { ...nextDraft, duration };
+  }
+
+  const resolution = stringSetting(settings, 'resolution');
+  if (resolution && (config.resolutions.length === 0 || asStringList(config.resolutions).includes(resolution))) {
+    nextDraft = { ...nextDraft, resolution };
+  }
+
+  const sound = booleanSetting(settings, 'sound');
+  if (typeof sound === 'boolean' && config.supportsSound) {
+    nextDraft = { ...nextDraft, sound };
+  }
+
+  const fixedLens = booleanSetting(settings, 'fixedLens');
+  if (typeof fixedLens === 'boolean' && config.supportsFixedLens) {
+    nextDraft = { ...nextDraft, fixedLens };
+  }
+
+  const normalizedDraft = applyModelDefaults(nextDraft) as VideoCreationDraft;
+  const droppedReferences = Math.max(0, nextDraft.references.length - normalizedDraft.references.length)
+    + Math.max(0, nextDraft.referenceVideos.length - normalizedDraft.referenceVideos.length)
+    + Math.max(0, nextDraft.referenceAudios.length - normalizedDraft.referenceAudios.length);
+  const skipped = restoredElements.skipped
+    + restoredStartFrame.skipped
+    + restoredEndFrame.skipped
+    + restoredReferenceVideos.skipped
+    + restoredReferenceAudios.skipped
+    + droppedReferences;
+
+  return {
+    draft: normalizedDraft,
+    warning: remixRestoreWarning(bundle.restoreIssues, skipped),
+  };
+}
+
+function hydrateMotionDraftFromRemixSource(
+  baseDraft: MotionCreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<MotionCreationDraft> {
+  const settings = bundle.workflowSettings ?? {};
+  const modelSetting = stringSetting(settings, 'model');
+  const model = modelSetting && isMotionModelId(modelSetting) ? modelSetting : baseDraft.model;
+  const motionInputs = bundle.inputs.motion;
+  const restoredCharacterImage = hydrateOptionalRemixAsset(motionInputs?.characterImage, 'Character Image');
+  const restoredReferenceVideo = hydrateOptionalRemixAsset(motionInputs?.referenceVideo, 'Reference Motion');
+
+  let nextDraft: MotionCreationDraft = {
+    ...baseDraft,
+    model,
+    prompt: bundle.generation.prompt,
+    characterImage: restoredCharacterImage.draft,
+    referenceVideo: restoredReferenceVideo.draft,
+    sourceGenerationId: bundle.generation.id,
+  };
+
+  const mode = stringSetting(settings, 'mode');
+  if (isMotionResolution(mode)) {
+    nextDraft = { ...nextDraft, mode };
+  }
+
+  const characterOrientation = stringSetting(settings, 'characterOrientation');
+  if (isMotionCharacterOrientation(characterOrientation)) {
+    nextDraft = { ...nextDraft, characterOrientation };
+  }
+
+  const duration = numberSetting(settings, 'duration');
+  if (typeof duration === 'number' && duration > 0 && duration <= MOTION_MODELS[model].maxDuration) {
+    nextDraft = { ...nextDraft, duration: Math.ceil(duration) };
+  }
+
+  const normalizedDraft = applyModelDefaults(nextDraft) as MotionCreationDraft;
+  const skipped = restoredCharacterImage.skipped + restoredReferenceVideo.skipped;
+
+  return {
+    draft: normalizedDraft,
+    warning: remixRestoreWarning(bundle.restoreIssues, skipped),
+  };
+}
+
+export function hydrateCreationDraftFromRemixSource(
+  baseDraft: ImageCreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<ImageCreationDraft>;
+export function hydrateCreationDraftFromRemixSource(
+  baseDraft: VideoCreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<VideoCreationDraft>;
+export function hydrateCreationDraftFromRemixSource(
+  baseDraft: MotionCreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<MotionCreationDraft>;
+export function hydrateCreationDraftFromRemixSource(
+  baseDraft: CreationDraft,
+  bundle: RemixSourceBundle
+): RemixHydrationResult<CreationDraft> {
+  if (baseDraft.tool === 'image') return hydrateImageDraftFromRemixSource(baseDraft, bundle);
+  if (baseDraft.tool === 'video') return hydrateVideoDraftFromRemixSource(baseDraft, bundle);
+  return hydrateMotionDraftFromRemixSource(baseDraft, bundle);
 }
 
 export function getVideoElementSupport(model: VideoModelId, options: { mode?: string; isMultiShot?: boolean } = {}) {

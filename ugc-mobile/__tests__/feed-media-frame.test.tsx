@@ -112,6 +112,24 @@ describe('FeedMediaFrame', () => {
     expect(posters[0].props.source).toEqual({ uri: 'https://cdn.example.com/video-poster.jpg' });
   });
 
+  it('makes the native video frame touch-transparent to its parent press target', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedMediaFrame
+          kind="video"
+          player={{ id: 'player-touch' } as never}
+          radius={14}
+          style={{ height: 300 }}
+        />
+      );
+    });
+
+    const frame = tree!.root.findAll((node) => node.type === 'view')[0];
+    expect(frame.props.pointerEvents).toBe('none');
+  });
+
   it('can keep a sharp video poster above the native player until playback renders', () => {
     const player = { id: 'player-2' };
 

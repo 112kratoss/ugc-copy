@@ -1,7 +1,52 @@
+import type { CreatorToolId } from './types';
+
 const SAVE_HEART_COLOR = '#fb7185';
 const ENABLED_HEART_COLOR = '#ffffff';
 const DISABLED_HEART_COLOR = 'rgba(255,255,255,0.5)';
 const SAVE_HEART_HALO_COLOR = 'rgba(251,113,133,0.22)';
+
+const WEB_CREATE_PATH_TO_NATIVE_TOOL: Record<string, CreatorToolId> = {
+  '/create-image': 'image',
+  '/create-video': 'video',
+  '/create-motion': 'motion',
+  '/create/image': 'image',
+  '/create/video': 'video',
+  '/create/motion': 'motion',
+};
+
+function createPromptHref(tool: CreatorToolId, prompt?: string | null) {
+  const trimmedPrompt = prompt?.trim();
+  if (!trimmedPrompt) return null;
+  return `/create/${tool}?prompt=${encodeURIComponent(trimmedPrompt)}`;
+}
+
+export function getNativeRemixCreateHref({
+  redirectTo,
+  recreateTool,
+  prompt,
+}: {
+  redirectTo?: string | null;
+  recreateTool: CreatorToolId;
+  prompt?: string | null;
+}) {
+  if (redirectTo) {
+    try {
+      const url = new URL(redirectTo, 'https://magicbooklet.local');
+      const remixId = url.searchParams.get('remix');
+      const nativeTool = WEB_CREATE_PATH_TO_NATIVE_TOOL[url.pathname];
+      if (remixId && nativeTool) {
+        const params = new URLSearchParams({ remix: remixId });
+        const remixPost = url.searchParams.get('remixPost');
+        if (remixPost) params.set('remixPost', remixPost);
+        return `/create/${nativeTool}?${params.toString()}`;
+      }
+    } catch {
+      return createPromptHref(recreateTool, prompt);
+    }
+  }
+
+  return createPromptHref(recreateTool, prompt);
+}
 
 export function getSaveHeartIconProps({
   isSaved,

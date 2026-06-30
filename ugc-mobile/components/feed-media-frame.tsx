@@ -65,6 +65,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
 
   return (
     <View
+      pointerEvents={props.kind === 'video' ? 'none' : undefined}
       style={[
         {
           overflow: 'hidden',

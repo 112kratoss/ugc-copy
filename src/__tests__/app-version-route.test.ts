@@ -14,7 +14,7 @@ describe('/api/app-version route', () => {
       mobileCompatibility: {
         currentApiVersion: 1,
         minimumApiVersion: 1,
-        minimumAppVersion: '1.0.0',
+        minimumAppVersion: '0.0.1',
         supportedCatalogSchemaVersions: [1],
         unversionedClientsUseApiVersion: 1,
       },

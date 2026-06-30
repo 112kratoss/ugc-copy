@@ -199,6 +199,38 @@ describe('mobile api client caching', () => {
     expect((secondInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  it('loads authenticated remix source bundles with post context', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      generation: {
+        id: 'gen-1',
+        title: 'Original',
+        prompt: 'Use the same recipe.',
+        category: 'image',
+        model: 'nano-banana-2',
+      },
+      result: null,
+      inputs: {
+        image: {
+          elements: [],
+        },
+      },
+      workflowSettings: {},
+      restoreIssues: [],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const bundle = await api.getRemixSourceBundle('gen-1', { postId: 'post-1' });
+
+    expect(bundle.generation.id).toBe('gen-1');
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(String(url)).toBe('https://magicbooklet.test/api/remix-source?id=gen-1&postId=post-1');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
   it('deduplicates explicitly anonymous showcase feed requests inside the content cache window', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       items: [],

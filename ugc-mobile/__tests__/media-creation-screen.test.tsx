@@ -30,6 +30,7 @@ const authState = vi.hoisted(() => ({
     getVideoGeneration: vi.fn(),
     getMotionGeneration: vi.fn(),
     quoteGenerationModel: vi.fn(),
+    getRemixSourceBundle: vi.fn(),
   },
 }));
 
@@ -180,6 +181,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.startMotionGeneration.mockReset();
     authState.api.getMotionGeneration.mockReset();
     authState.api.quoteGenerationModel.mockReset();
+    authState.api.getRemixSourceBundle.mockReset();
     authState.api.quoteGenerationModel.mockResolvedValue({
       modelId: 'nano-banana-2',
       catalogRevision: 'test-catalog-rev',
@@ -330,6 +332,71 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(text).toContain('Optional: style, pose, product, or face guide.');
     expect(text).toContain('Add reference');
     expect(text).not.toContain('Reference images (0/1');
+  });
+
+  it('hydrates remix prompt and references from the remix-source bundle', async () => {
+    authState.api.getRemixSourceBundle.mockResolvedValue({
+      generation: {
+        id: 'gen-1',
+        title: 'Original source',
+        prompt: 'Restore this exact remix prompt.',
+        category: 'image',
+        model: 'nano-banana-2',
+      },
+      result: null,
+      inputs: {
+        image: {
+          elements: [
+            {
+              id: 'element-1',
+              displayName: 'Hero Product',
+              handle: '@hero_product',
+              url: 'https://cdn.example.com/hero.png',
+              storagePath: 'inputs/hero.png',
+              sourceGenerationId: 'gen-1',
+            },
+          ],
+        },
+      },
+      workflowSettings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        resolution: '2K',
+      },
+      restoreIssues: [],
+    });
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <MediaCreationScreen
+          initialTool="image"
+          remixSource={{ generationId: 'gen-1', postId: 'post-1' }}
+        />
+      );
+    });
+    await renderer.act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(authState.api.getRemixSourceBundle).toHaveBeenCalledWith('gen-1', { postId: 'post-1' });
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    expect(promptInput.props.value).toBe('Restore this exact remix prompt.');
+    const text = collectText(tree!.root);
+    expect(text).toContain('1 / 14');
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Reference name for Hero Product' }).props.value).toBe('Hero Product');
+  });
+
+  it('prefills prompt-only create deep links without remix hydration', async () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" initialPrompt="hello from a deep link" />);
+    });
+
+    expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    expect(promptInput.props.value).toBe('hello from a deep link');
   });
 
   it('opens a searchable model dropdown and selects a filtered model', () => {

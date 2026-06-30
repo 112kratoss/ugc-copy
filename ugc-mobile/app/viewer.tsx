@@ -55,7 +55,7 @@ import {
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
+import { getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
 
 type ViewerParams = {
   source?: string | string[];
@@ -241,9 +241,13 @@ export default function ImmersivePreviewViewerScreen() {
 
     if (item.sourceType === 'showcase' && item.showcasePostId) {
       const response = await api.remixShowcasePost(item.showcasePostId);
-      const prompt = response.prefill?.prompt ?? item.recreatePrompt;
-      if (prompt) {
-        router.push(`/create/${item.recreateTool}?prompt=${encodeURIComponent(prompt)}` as never);
+      const nativeHref = getNativeRemixCreateHref({
+        redirectTo: response.redirectTo,
+        recreateTool: item.recreateTool,
+        prompt: response.prefill?.prompt ?? item.recreatePrompt,
+      });
+      if (nativeHref) {
+        router.push(nativeHref as never);
         return;
       }
       if (response.redirectTo) {
@@ -252,7 +256,11 @@ export default function ImmersivePreviewViewerScreen() {
       }
     }
 
-    router.push(`/create/${item.recreateTool}?prompt=${encodeURIComponent(item.recreatePrompt)}` as never);
+    const fallbackHref = getNativeRemixCreateHref({
+      recreateTool: item.recreateTool,
+      prompt: item.recreatePrompt,
+    });
+    router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
   };
 
   if (!items.length && sourceQuery.isLoading) {
