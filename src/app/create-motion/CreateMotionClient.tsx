@@ -36,6 +36,7 @@ import {
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
+import { fetchGenerationStatus } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
@@ -101,13 +102,6 @@ interface UploadPreviewState {
     alt: string;
     title: string;
 }
-
-type GenerationStatusResponse = {
-    status: 'processing' | 'waiting' | 'succeeded' | 'failed';
-    output?: string | null;
-    error?: string | null;
-    timing?: GenerationTiming | null;
-};
 
 export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
     const router = useRouter();
@@ -494,10 +488,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         let attempts = 0;
 
         while (attempts < maxAttempts) {
-            const response = await fetch(`/api/generate?id=${predictionId}`, {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
+            const data = await fetchGenerationStatus({
+                url: `/api/generate?id=${predictionId}`,
+                accessToken,
             });
-            const data = await response.json() as GenerationStatusResponse;
 
             if (data.timing) {
                 setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {

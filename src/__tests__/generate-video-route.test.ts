@@ -718,6 +718,7 @@ describe('/api/generate-video route', () => {
       completed_at: null,
       model: 'kling-3.0-video',
       category: 'video',
+      creation_mode: null,
     });
 
     vi.stubGlobal(
@@ -757,7 +758,7 @@ describe('/api/generate-video route', () => {
       phaseLabel: 'Queued at provider',
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
     });
-    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration');
+    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration');
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-video-status-1' },
@@ -817,6 +818,7 @@ describe('/api/generate-video route', () => {
       completed_at: null,
       model: 'kling-3.0-video',
       category: 'video',
+      creation_mode: null,
     }, false);
 
     const providerFetch = vi.fn();
@@ -854,6 +856,7 @@ describe('/api/generate-video route', () => {
       completed_at: '2026-04-15T10:01:00.000Z',
       model: 'kling-3.0-video',
       category: 'video',
+      creation_mode: null,
     });
 
     const providerFetch = vi.fn();
@@ -897,6 +900,7 @@ describe('/api/generate-video route', () => {
       completed_at: null,
       model: 'kling-3.0-video',
       category: 'video',
+      creation_mode: null,
     });
 
     vi.stubGlobal('fetch', vi.fn(async () => ({
@@ -951,6 +955,7 @@ describe('/api/generate-video route', () => {
       completed_at: null,
       model: 'kling-3.0-video',
       category: 'video',
+      creation_mode: null,
     });
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1013,6 +1018,7 @@ describe('/api/generate-video route', () => {
       completed_at: null,
       model: 'kling-3.0-video',
       category: 'video',
+      creation_mode: null,
     }, (args) => !String(args.p_name).startsWith('generation-provider-status:'));
 
     const providerFetch = vi.fn();

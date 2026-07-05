@@ -490,7 +490,8 @@ describe('/api/generate route', () => {
       created_at: '2026-04-15T10:00:00.000Z',
       completed_at: null,
       model: 'kling-3.0',
-      category: 'motion',
+      category: 'video',
+      creation_mode: 'motion',
       duration: 6,
     });
 
@@ -531,7 +532,7 @@ describe('/api/generate route', () => {
       phaseLabel: 'Generating motion render',
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
     });
-    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration');
+    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration');
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-motion-status-1' },
@@ -590,7 +591,8 @@ describe('/api/generate route', () => {
       created_at: '2026-04-15T10:00:00.000Z',
       completed_at: null,
       model: 'kling-3.0',
-      category: 'motion',
+      category: 'video',
+      creation_mode: 'motion',
       duration: 6,
     }, false);
 
@@ -628,7 +630,8 @@ describe('/api/generate route', () => {
       created_at: '2026-04-15T10:00:00.000Z',
       completed_at: '2026-04-15T10:01:00.000Z',
       model: 'kling-3.0',
-      category: 'motion',
+      category: 'video',
+      creation_mode: 'motion',
       duration: 6,
     });
 
@@ -673,6 +676,7 @@ describe('/api/generate route', () => {
       completed_at: null,
       model: 'kling-3.0',
       category: 'video',
+      creation_mode: 'motion',
       duration: 6,
     });
 
@@ -728,6 +732,7 @@ describe('/api/generate route', () => {
       completed_at: null,
       model: 'kling-3.0',
       category: 'video',
+      creation_mode: 'motion',
       duration: 6,
     });
 
@@ -790,7 +795,8 @@ describe('/api/generate route', () => {
       created_at: '2026-04-15T10:00:00.000Z',
       completed_at: null,
       model: 'kling-3.0',
-      category: 'motion',
+      category: 'video',
+      creation_mode: 'motion',
       duration: 6,
     }, (args) => !String(args.p_name).startsWith('generation-provider-status:'));
 

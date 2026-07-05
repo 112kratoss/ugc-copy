@@ -35,7 +35,7 @@ import {
 } from '@/lib/provider-fetch';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
-const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration';
+const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration';
 
 type VideoStatusGenerationRow = {
   id: string;
@@ -47,6 +47,7 @@ type VideoStatusGenerationRow = {
   completed_at?: string | null;
   model: string | null;
   category: string | null;
+  creation_mode?: string | null;
   workflow_settings?: unknown;
   duration?: number | null;
 };
@@ -317,6 +318,10 @@ export async function getVideoGenerationStatusForRoute({
   const localGeneration = generationData as VideoStatusGenerationRow | null;
 
   if (!localGeneration || localGeneration.user_id !== userId) {
+    return { ok: false, status: 404, body: { error: 'Generation not found' } };
+  }
+
+  if (localGeneration.category !== 'video' || localGeneration.creation_mode !== null) {
     return { ok: false, status: 404, body: { error: 'Generation not found' } };
   }
 

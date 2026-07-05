@@ -6,7 +6,7 @@ import {
   type MotionGenerationStatusDependencies,
 } from '@/lib/motion-generation-status-service';
 
-function createStatusClientMock() {
+function createStatusClientMock(overrides: Record<string, unknown> = {}) {
   const selects: string[] = [];
   const eqs: Array<{ column: string; value: unknown }> = [];
   const generation = {
@@ -18,12 +18,14 @@ function createStatusClientMock() {
     created_at: '2026-04-15T10:00:00.000Z',
     completed_at: '2026-04-15T10:01:00.000Z',
     model: 'kling-3.0',
-    category: 'motion',
+    category: 'video',
+    creation_mode: 'motion',
     duration: 6,
     workflow_settings: {
       mode: '1080p',
       duration: 6,
     },
+    ...overrides,
   };
 
   const client = {
@@ -99,7 +101,7 @@ describe('getMotionGenerationStatusForRoute', () => {
       },
     });
     expect(userClient.selects).toEqual([
-      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, duration',
+      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration',
     ]);
     expect(userClient.eqs).toEqual([
       { column: 'prediction_id', value: 'task-motion-1' },
@@ -107,6 +109,34 @@ describe('getMotionGenerationStatusForRoute', () => {
     ]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveStoredMediaUrl).toHaveBeenCalledTimes(1);
+    expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
+  });
+
+  it('rejects a plain video generation before reading output or polling the provider', async () => {
+    const userClient = createStatusClientMock({ creation_mode: null });
+    const dependencies = {
+      resolveStoredMediaUrl: vi.fn(),
+      fetchWithProviderTimeout: vi.fn(),
+    } satisfies Partial<MotionGenerationStatusDependencies>;
+    const createAdminSupabase = vi.fn(() => ({} as SupabaseClient));
+
+    const result = await getMotionGenerationStatusForRoute({
+      request: new Request('http://localhost/api/generate?id=task-motion-1'),
+      predictionId: 'task-motion-1',
+      userId: 'user-1',
+      supabase: userClient.client,
+      createAdminSupabase,
+      kieApiKey: 'test-key',
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Generation not found' },
+    });
+    expect(createAdminSupabase).not.toHaveBeenCalled();
+    expect(dependencies.resolveStoredMediaUrl).not.toHaveBeenCalled();
     expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
   });
 });

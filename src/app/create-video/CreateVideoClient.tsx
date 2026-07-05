@@ -50,6 +50,7 @@ import {
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
+import { fetchGenerationStatus } from '@/lib/generation-status-client';
 import {
     buildElementHandle,
     createElementHandleReplacementMap,
@@ -125,13 +126,6 @@ interface UploadPreviewState {
     alt: string;
     title: string;
 }
-
-type GenerationStatusResponse = {
-    status: 'processing' | 'waiting' | 'succeeded' | 'failed';
-    output?: string | null;
-    error?: string | null;
-    timing?: GenerationTiming | null;
-};
 
 interface VideoWorkflowSettings {
     model?: VideoModelId;
@@ -2049,10 +2043,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         let attempts = 0;
 
         while (attempts < maxAttempts) {
-            const response = await fetch(`/api/generate-video?id=${predictionId}`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
+            const data = await fetchGenerationStatus({
+                url: `/api/generate-video?id=${predictionId}`,
+                accessToken,
             });
-            const data = await response.json() as GenerationStatusResponse;
 
             if (data.timing) {
                 setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
@@ -2178,6 +2172,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 .select('id, prediction_id, status, created_at')
                 .eq('user_id', session.user.id)
                 .eq('category', 'video')
+                .is('creation_mode', null)
                 .in('status', ['processing', 'waiting'])
                 .order('created_at', { ascending: false })
                 .limit(1)

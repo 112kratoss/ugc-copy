@@ -17,6 +17,7 @@ const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
 const queryBuilder = {
   select: vi.fn(() => queryBuilder),
   eq: vi.fn(() => queryBuilder),
+  is: vi.fn(() => queryBuilder),
   in: vi.fn(() => queryBuilder),
   order: vi.fn(() => queryBuilder),
   limit: vi.fn(() => queryBuilder),
@@ -163,6 +164,7 @@ describe('CreateVideoClient Kling video elements', () => {
     uploadMock.mockClear();
     createSignedUrlMock.mockClear();
     maybeSingleMock.mockClear();
+    queryBuilder.is.mockClear();
 
     URL.createObjectURL = vi.fn(() => 'blob:kling-video') as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
@@ -220,6 +222,14 @@ describe('CreateVideoClient Kling video elements', () => {
     URL.revokeObjectURL = originalRevokeObjectURL;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('excludes motion generations when resuming a pending video run', async () => {
+    render(<CreateVideoClient prefill={{}} />);
+
+    await waitFor(() => {
+      expect(queryBuilder.is).toHaveBeenCalledWith('creation_mode', null);
+    });
   });
 
   it('keeps the Kling video elements panel visible in single-shot and multi-shot modes', async () => {

@@ -52,6 +52,7 @@ import {
 } from '@/lib/image-elements';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
+import { fetchGenerationStatus } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
@@ -152,14 +153,6 @@ export interface CreateImagePrefill {
     model?: string | null;
     aspectRatio?: string | null;
 }
-
-type GenerationStatusResponse = {
-    status: 'processing' | 'waiting' | 'succeeded' | 'failed';
-    output?: string | null;
-    outputs?: string[] | null;
-    error?: string | null;
-    timing?: GenerationTiming | null;
-};
 
 export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
     const router = useRouter();
@@ -712,10 +705,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         let attempts = 0;
 
         while (attempts < maxAttempts) {
-            const response = await fetch(`/api/generate-image?id=${predictionId}`, {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
+            const data = await fetchGenerationStatus({
+                url: `/api/generate-image?id=${predictionId}`,
+                accessToken,
             });
-            const data = await response.json() as GenerationStatusResponse;
 
             if (data.timing) {
                 setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
