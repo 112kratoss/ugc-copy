@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
@@ -147,6 +147,12 @@ interface VideoWorkflowSettings {
     referenceAudioUrls?: string[];
     klingVideoElements?: KlingVideoElementDescriptor[];
     seedanceAssets?: SeedanceAssetCollections;
+}
+
+function revokeObjectUrl(url: string | null) {
+    if (url?.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+    }
 }
 
 type VideoElementDraft = ImageElementDescriptor & {
@@ -512,11 +518,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
-    const revokeObjectUrl = (url: string | null) => {
-        if (url?.startsWith('blob:')) {
-            URL.revokeObjectURL(url);
-        }
-    };
     const commitElements = (nextElements: VideoElementDraft[]) => {
         elementsRef.current = nextElements;
         setElements(nextElements);
@@ -533,7 +534,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         klingVideoElementsRef.current = nextElements;
         setKlingVideoElements(nextElements);
     };
-    const persistVideoElements = async (nextElements: VideoElementDraft[]) => {
+    const persistVideoElements = useCallback(async (nextElements: VideoElementDraft[]) => {
         if (remixId) {
             return;
         }
@@ -550,7 +551,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             PERSISTED_MEDIA_KEYS.createVideoElements,
             persistableElements
         );
-    };
+    }, [remixId]);
     const persistReferenceVideos = async (nextReferences: SeedanceMediaReferenceDraft[]) => {
         if (remixId) {
             return;
@@ -826,16 +827,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    useEffect(() => () => {
+        revokeObjectUrl(startImageUrl);
+    }, [startImageUrl]);
+
+    useEffect(() => () => {
+        revokeObjectUrl(endImageUrl);
+    }, [endImageUrl]);
+
     useEffect(() => {
         return () => {
-            revokeObjectUrl(startImageUrl);
-            revokeObjectUrl(endImageUrl);
             elementsRef.current.forEach((element) => revokeObjectUrl(element.previewUrl));
             referenceVideosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
             referenceAudiosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
             klingVideoElementsRef.current.forEach((element) => revokeObjectUrl(element.previewUrl));
         };
-    }, [startImageUrl, endImageUrl]);
+    }, []);
 
     useEffect(() => {
         elementsRef.current = elements;
@@ -900,7 +907,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         elements.slice(videoElementSupport.maxElements).forEach((element) => revokeObjectUrl(element.previewUrl));
         commitElements(nextElements);
         void persistVideoElements(nextElements);
-    }, [canUseVideoElements, elements, videoElementSupport.maxElements]);
+    }, [canUseVideoElements, elements, persistVideoElements, videoElementSupport.maxElements]);
 
     useEffect(() => {
         if (!remixId) return;

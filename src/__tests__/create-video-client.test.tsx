@@ -7,6 +7,8 @@ const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
+const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(async () => []));
+const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const uploadMock = vi.fn(async () => ({ error: null }));
 const createSignedUrlMock = vi.fn(async () => ({
   data: { signedUrl: 'https://signed.example.com/uploads/user-1/kling-ref.mp4' },
@@ -66,12 +68,12 @@ vi.mock('@/lib/persisted-media', () => ({
     createVideoSeedanceAssets: 'create-video:seedance-assets',
   },
   getPersistedFile: vi.fn(async () => null),
-  getPersistedImageElementRecords: vi.fn(async () => []),
+  getPersistedImageElementRecords: getPersistedImageElementRecordsMock,
   getPersistedMediaRecords: vi.fn(async () => []),
   getPersistedValue: vi.fn(async () => null),
   removePersistedMedia: vi.fn(async () => undefined),
   setPersistedFile: vi.fn(async () => undefined),
-  setPersistedImageElementRecords: vi.fn(async () => undefined),
+  setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
   setPersistedMediaRecords: vi.fn(async () => undefined),
   setPersistedValue: vi.fn(async () => undefined),
 }));
@@ -126,6 +128,15 @@ vi.mock('@/lib/generation-model-client', async () => {
             capabilities: {},
             inputs: {},
           },
+          {
+            id: 'seedance-1.5-pro',
+            kind: 'video',
+            displayName: 'Seedance 1.5 Pro',
+            description: 'Test element-capable video model',
+            controls: [],
+            capabilities: {},
+            inputs: {},
+          },
         ],
       },
       error: null,
@@ -165,8 +176,16 @@ describe('CreateVideoClient Kling video elements', () => {
     createSignedUrlMock.mockClear();
     maybeSingleMock.mockClear();
     queryBuilder.is.mockClear();
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    setPersistedImageElementRecordsMock.mockClear();
 
-    URL.createObjectURL = vi.fn(() => 'blob:kling-video') as typeof URL.createObjectURL;
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn((value: Blob) => {
+      objectUrlSequence += 1;
+      const label = value instanceof File ? value.name : 'media';
+      return `blob:${label}:${objectUrlSequence}`;
+    }) as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
     vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
       if (tagName === 'video') {
@@ -230,6 +249,87 @@ describe('CreateVideoClient Kling video elements', () => {
     await waitFor(() => {
       expect(queryBuilder.is).toHaveBeenCalledWith('creation_mode', null);
     });
+  });
+
+  it('keeps active video element URLs alive when a frame changes', async () => {
+    const view = render(<CreateVideoClient prefill={{}} />);
+    const videoFile = new File(['video-bytes'], 'active-reference.mp4', { type: 'video/mp4' });
+    const videoInput = view.container.querySelector(
+      'input[accept="video/mp4,video/quicktime,.mp4,.mov"]'
+    ) as HTMLInputElement | null;
+
+    expect(videoInput).not.toBeNull();
+    fireEvent.change(videoInput!, { target: { files: [videoFile] } });
+    await waitFor(() => {
+      expect(screen.getAllByText('@video_element_1').length).toBeGreaterThan(0);
+    });
+    const activeReferenceUrl = vi.mocked(URL.createObjectURL).mock.results[0]?.value;
+    expect(activeReferenceUrl).toBe('blob:active-reference.mp4:1');
+
+    const frameInputs = view.container.querySelectorAll<HTMLInputElement>('input[accept="image/*"]');
+    expect(frameInputs.length).toBeGreaterThan(0);
+    const startFrame = new File(['image-bytes'], 'start-frame.png', { type: 'image/png' });
+    fireEvent.change(frameInputs[0], { target: { files: [startFrame] } });
+
+    await waitFor(() => {
+      expect(URL.createObjectURL).toHaveBeenCalledWith(startFrame);
+    });
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(activeReferenceUrl);
+
+    view.unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(activeReferenceUrl);
+  });
+
+  it('persists image elements on upload and removal without prompt-rerender rewrites', async () => {
+    const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+
+    await screen.findByText('Reference mode');
+    fireEvent.click(screen.getByRole('button', { name: /Elements Upload named references/i }));
+
+    const file = new File(['image-bytes'], 'video-element.png', { type: 'image/png' });
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');
+    expect(input).not.toBeNull();
+    fireEvent.change(input!, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
+    });
+    expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({ displayName: 'Element 1', file }),
+    ]);
+
+    fireEvent.change(screen.getByPlaceholderText(/describe the seedance 1\.5 pro scene/i), {
+      target: { value: 'A product rotates in a bright studio' },
+    });
+    expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
+
+    const uploadedImage = await screen.findByAltText('Element 1');
+    const uploadedMedia = uploadedImage.closest('div.relative');
+    const removeButton = uploadedMedia?.querySelectorAll('button')[1];
+    expect(removeButton).toBeDefined();
+    fireEvent.click(removeButton!);
+
+    await waitFor(() => {
+      expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(2);
+    });
+    expect(setPersistedImageElementRecordsMock.mock.calls[1]?.[1]).toEqual([]);
+  });
+
+  it('persists the clamped video element set when model capacity decreases', async () => {
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(
+      Array.from({ length: 3 }, (_, index) => ({
+        id: `saved-element-${index + 1}`,
+        displayName: `Saved element ${index + 1}`,
+        file: new File([`image-${index + 1}`], `saved-element-${index + 1}.png`, { type: 'image/png' }),
+      }))
+    );
+
+    render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+
+    await waitFor(() => {
+      expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
+    });
+    expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toHaveLength(2);
   });
 
   it('keeps the Kling video elements panel visible in single-shot and multi-shot modes', async () => {

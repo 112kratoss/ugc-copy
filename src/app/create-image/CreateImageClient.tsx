@@ -120,6 +120,19 @@ type ImageElementSeed = {
     sourceGenerationId?: string | null;
 };
 
+function revokePreviewUrl(url: string | null | undefined) {
+    if (url?.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+    }
+}
+
+async function clearLegacyPersistedImageElements() {
+    await Promise.all([
+        removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageReferences),
+        removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageElementDrafts),
+    ]);
+}
+
 function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
     const usedHandles = new Set<string>();
 
@@ -234,20 +247,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             }
         }
     }, [modelCatalog.catalog, selectedModel, prefillModel, remixId]);
-    const revokePreviewUrl = (url: string | null | undefined) => {
-        if (url?.startsWith('blob:')) {
-            URL.revokeObjectURL(url);
-        }
-    };
-
-    const clearLegacyPersistedImageElements = async () => {
-        await Promise.all([
-            removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageReferences),
-            removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageElementDrafts),
-        ]);
-    };
-
-    const persistUploadedImageElements = async (nextElements: ImageElementDraft[]) => {
+    const persistUploadedImageElements = useCallback(async (nextElements: ImageElementDraft[]) => {
         if (remixId) {
             return;
         }
@@ -265,12 +265,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             persistableElements
         );
         await clearLegacyPersistedImageElements();
-    };
+    }, [remixId]);
 
-    const commitElements = (nextElements: ImageElementDraft[]) => {
+    const commitElements = useCallback((nextElements: ImageElementDraft[]) => {
         elementRefs.current = nextElements;
         setElements(nextElements);
-    };
+    }, []);
 
     const updateMentionState = (nextPrompt: string, caretIndex?: number) => {
         const fallbackCaret = typeof caretIndex === 'number'
@@ -284,7 +284,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (elements.length > model.maxImages) {
             const nextElements = hydrateImageElements(elements.slice(0, model.maxImages));
             elements.slice(model.maxImages).forEach((element) => revokePreviewUrl(element.previewUrl));
-            setElements(nextElements);
+            commitElements(nextElements);
             void persistUploadedImageElements(nextElements);
         }
 
@@ -302,7 +302,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (!model.supportsGoogleSearch) {
             setGoogleSearch(false);
         }
-    }, [selectedModel, aspectRatio, resolution]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [aspectRatio, commitElements, elements, model, persistUploadedImageElements, resolution, selectedModel]);
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -397,7 +397,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         return () => {
             isCancelled = true;
         };
-    }, [remixId, remixPostId, session?.access_token]);
+    }, [commitElements, remixId, remixPostId, session?.access_token]);
 
     useEffect(() => {
         elementRefs.current = elements;
@@ -463,7 +463,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         } catch (err) {
             console.error('Error loading persisted image elements:', err);
         }
-    }, [model.maxImages, remixId]);
+    }, [commitElements, model.maxImages, persistUploadedImageElements, remixId]);
 
     useEffect(() => {
         if (hasRestoredPersistedMedia.current) return;
