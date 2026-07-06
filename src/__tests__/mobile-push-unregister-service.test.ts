@@ -121,6 +121,43 @@ describe('mobile push token unregister service', () => {
     ]);
   });
 
+  it('rejects empty unregister requests instead of disabling every device implicitly', async () => {
+    const user = createUserClient();
+
+    await expect(unregisterMobilePushTokenForRoute({
+      getAdminSupabase: () => createRateLimitClient(),
+      requestBody: {},
+      userSupabase: user.client,
+    })).resolves.toEqual({
+      ok: false,
+      body: { error: 'Provide an Expo push token, device ID, or allDevices: true.' },
+      status: 400,
+    });
+
+    expect(user.updateCalls).toEqual([]);
+  });
+
+  it('allows explicit all-device unregister requests', async () => {
+    const user = createUserClient();
+
+    await expect(unregisterMobilePushTokenForRoute({
+      getAdminSupabase: () => createRateLimitClient(),
+      now: () => new Date('2026-05-26T08:00:00.000Z'),
+      requestBody: { allDevices: true },
+      userSupabase: user.client,
+    })).resolves.toEqual({ ok: true, body: { success: true } });
+
+    expect(user.updateCalls[0]).toMatchObject({
+      values: {
+        is_active: false,
+        disabled_at: '2026-05-26T08:00:00.000Z',
+      },
+      eqFilters: [
+        ['user_id', 'user-1'],
+      ],
+    });
+  });
+
   it('returns a rate-limit error before token updates', async () => {
     const user = createUserClient();
     const result = await unregisterMobilePushTokenForRoute({
@@ -139,7 +176,7 @@ describe('mobile push token unregister service', () => {
 
     await expect(unregisterMobilePushTokenForRoute({
       getAdminSupabase: () => createRateLimitClient(),
-      requestBody: {},
+      requestBody: { allDevices: true },
       userSupabase: user.client,
     })).resolves.toEqual({
       ok: false,

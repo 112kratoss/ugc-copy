@@ -2,7 +2,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
 import { signInWithNativeApple } from './apple-auth';
@@ -11,6 +11,7 @@ import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-cata
 import { getProfileCreditsOrNull } from './auth-profile';
 import {
   registerForMobilePushNotifications,
+  subscribeToMobilePushTokenChanges,
   unregisterMobilePushNotifications,
 } from './notifications';
 import {
@@ -167,9 +168,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    void registerForMobilePushNotifications(api, { requestPermission: false }).catch((error) => {
+    const syncPushRegistration = () => registerForMobilePushNotifications(api, { requestPermission: false }).catch((error) => {
       console.error('Failed to register mobile push notifications', error);
     });
+
+    void syncPushRegistration();
+    const unsubscribePushTokenChanges = subscribeToMobilePushTokenChanges(api);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void syncPushRegistration();
+      }
+    });
+
+    return () => {
+      unsubscribePushTokenChanges();
+      appStateSubscription.remove();
+    };
   }, [api, session?.user?.id]);
 
   const signInWithPassword = async (email: string, password: string) => {

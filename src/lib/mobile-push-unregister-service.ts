@@ -60,6 +60,15 @@ export async function unregisterMobilePushTokenForRoute(
     const body = asRecord(await readRequestBody(input));
     const expoPushToken = optionalString(body.expoPushToken ?? body.token);
     const deviceId = optionalString(body.deviceId);
+    const allDevices = body.allDevices === true;
+
+    if (!expoPushToken && !deviceId && !allDevices) {
+      return {
+        ok: false,
+        body: { error: 'Provide an Expo push token, device ID, or allDevices: true.' },
+        status: 400,
+      };
+    }
 
     try {
       await enforceBackendRateLimit(input.getAdminSupabase() as AdminSupabaseClient, {

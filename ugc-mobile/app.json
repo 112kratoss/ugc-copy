@@ -23,6 +23,7 @@
     },
     "android": {
       "package": "com.magicbooklet.mobile",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "com.android.vending.BILLING"
       ],
@@ -47,6 +48,7 @@
       [
         "expo-notifications",
         {
+          "icon": "./assets/images/adaptive-icon.png",
           "color": "#03040d"
         }
       ]

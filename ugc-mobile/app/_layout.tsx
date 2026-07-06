@@ -1,5 +1,5 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -10,8 +10,8 @@ import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
-import { AuthProvider } from '@/lib/auth';
-import { subscribeToNotificationResponses } from '@/lib/notifications';
+import { AuthProvider, useAuth } from '@/lib/auth';
+import { navigateToNotificationDeepLink, subscribeToNotificationResponses } from '@/lib/notifications';
 import { appTheme } from '@/lib/theme';
 
 export {
@@ -57,11 +57,10 @@ export default function RootLayout() {
 }
 
 function RootLayoutNav() {
-  useEffect(() => subscribeToNotificationResponses(), []);
-
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
+        <NotificationResponseCoordinator />
         <SafeAreaProvider>
           <ThemeProvider value={DarkTheme}>
             <View style={{ flex: 1, backgroundColor: '#03040d' }}>
@@ -92,4 +91,28 @@ function RootLayoutNav() {
       </AuthProvider>
     </QueryClientProvider>
   );
+}
+
+function NotificationResponseCoordinator() {
+  const { api, user } = useAuth();
+  const queryClient = useQueryClient();
+
+  useEffect(() => subscribeToNotificationResponses({
+    handleResponse: async ({ notificationId, deepLink }) => {
+      if (notificationId) {
+        await api.markMobileNotificationsRead([notificationId]).catch((error) => {
+          console.error('Failed to mark tapped notification read', error);
+        });
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
+      if (!navigateToNotificationDeepLink(deepLink)) {
+        return navigateToNotificationDeepLink('/studio');
+      }
+
+      return true;
+    },
+  }), [api, queryClient, user?.id]);
+
+  return null;
 }

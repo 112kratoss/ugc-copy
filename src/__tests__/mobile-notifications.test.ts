@@ -8,6 +8,7 @@ import {
   normalizeMobilePushTokenPayload,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
+  sendExpoPushNotificationWithRetry,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
@@ -88,12 +89,55 @@ describe('mobile notifications', () => {
       to: 'ExponentPushToken[abc123]',
       title: 'Render ready',
       body: 'Your image finished.',
+      channelId: 'default',
+      priority: 'high',
       data: {
         notificationId: 'notification-1',
         type: 'generation_succeeded',
         category: 'generation',
       },
     });
+  });
+
+  it('retries transient Expo send failures and reports the provider attempt count', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        errors: [{ message: 'Expo temporarily unavailable' }],
+      }), {
+        headers: { 'content-type': 'application/json' },
+        status: 500,
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          status: 'ok',
+          id: 'ticket-2',
+        },
+      }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      }));
+
+    await expect(sendExpoPushNotificationWithRetry({
+      expoPushToken: 'ExponentPushToken[abc123]',
+      title: 'Render ready',
+      body: 'Your image finished.',
+      data: {
+        deepLink: '/viewer?source=studio-creations&initialId=gen-1',
+        notificationId: 'notification-1',
+        type: 'generation_succeeded',
+        category: 'generation',
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+      retryDelayMs: () => 0,
+    })).resolves.toEqual({
+      result: {
+        status: 'ok',
+        id: 'ticket-2',
+      },
+      attemptCount: 2,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('builds mobile deep links for notification targets', () => {
@@ -379,11 +423,14 @@ describe('mobile notifications', () => {
         receipt_status: 'error',
         receipt_message: 'Push send failed before a receipt was created.',
         provider_message: 'network down',
-        provider_details: {
-          name: 'Error',
-          message: 'network down',
-        },
-        attempt_count: 1,
+        provider_details: expect.objectContaining({
+          attempts: 3,
+          cause: {
+            name: 'Error',
+            message: 'network down',
+          },
+        }),
+        attempt_count: 3,
       }),
     ]);
     expect(notificationUpdates).toEqual([
@@ -396,6 +443,65 @@ describe('mobile notifications', () => {
         }),
       }),
     ]);
+  });
+
+  it('uses the atomic notification RPC for aggregated social events without re-pushing updated groups', async () => {
+    const rpc = vi.fn(async (name: string, payload: Record<string, unknown>) => {
+      expect(name).toBe('upsert_mobile_notification');
+      expect(payload).toMatchObject({
+        p_user_id: 'user-1',
+        p_actor_user_id: 'actor-1',
+        p_type: 'post_shared',
+        p_category: 'social',
+        p_aggregation_key: 'post-social:post_shared:user-1:post-1:123',
+      });
+
+      return {
+        data: {
+          notification: {
+            id: 'notification-1',
+            user_id: 'user-1',
+            actor_user_id: 'actor-1',
+            type: 'post_shared',
+            category: 'social',
+            title: 'Someone shared your post',
+            body: 'Creator activity is grouped here to keep your phone quiet.',
+            deep_link: '/viewer?source=showcase-feed&initialId=post-1',
+            object_type: 'post',
+            object_id: 'post-1',
+            event_count: 2,
+            is_read: false,
+            created_at: '2026-05-26T10:00:00.000Z',
+            updated_at: '2026-05-26T10:05:00.000Z',
+          },
+          wasCreated: false,
+        },
+        error: null,
+      };
+    });
+    const from = vi.fn(() => {
+      throw new Error('Aggregated updates should not load push tokens or preferences');
+    });
+
+    await expect(createMobileNotification({
+      adminSupabase: { rpc, from } as never,
+      userId: 'user-1',
+      actorUserId: 'actor-1',
+      type: 'post_shared',
+      category: 'social',
+      title: 'Someone shared your post',
+      body: 'Creator activity is grouped here to keep your phone quiet.',
+      deepLink: '/viewer?source=showcase-feed&initialId=post-1',
+      objectType: 'post',
+      objectId: 'post-1',
+      aggregationKey: 'post-social:post_shared:user-1:post-1:123',
+    })).resolves.toMatchObject({
+      id: 'notification-1',
+      eventCount: 2,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(from).not.toHaveBeenCalled();
   });
 
   it('marks receipts stale once Expo clears them after 24 hours', async () => {

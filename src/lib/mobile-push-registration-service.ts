@@ -104,6 +104,21 @@ export async function registerMobilePushTokenForRoute(
     if (rateLimitResult) return rateLimitResult;
 
     const nowIso = new Date().toISOString();
+
+    const { error: deactivateCrossUserError } = await adminSupabase
+      .from('mobile_push_tokens')
+      .update({
+        is_active: false,
+        disabled_at: nowIso,
+      })
+      .eq('expo_push_token', payload.expoPushToken)
+      .eq('is_active', true)
+      .neq('user_id', userId);
+
+    if (deactivateCrossUserError) {
+      throw new MobileNotificationError('Failed to deactivate mobile push token for previous account.', 500);
+    }
+
     const { error } = await userSupabase
       .from('mobile_push_tokens')
       .upsert({

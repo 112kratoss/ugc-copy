@@ -20,11 +20,11 @@ const mocks = vi.hoisted(() => ({
     void _options;
     return 0;
   }),
-  hasPendingMobilePushReceipts: vi.fn(async (_client: unknown) => {
+  hasMobilePushMaintenanceWork: vi.fn(async (_client: unknown) => {
     void _client;
     return true;
   }),
-  processPendingMobilePushReceipts: vi.fn(),
+  processMobilePushMaintenance: vi.fn(),
   startBackendJobRun: vi.fn(async (_client, options: {
     name: string;
     route: string;
@@ -49,8 +49,8 @@ vi.mock('@/lib/mobile-notifications', async () => {
   const actual = await vi.importActual<typeof import('@/lib/mobile-notifications')>('@/lib/mobile-notifications');
   return {
     ...actual,
-    hasPendingMobilePushReceipts: (...args: unknown[]) => mocks.hasPendingMobilePushReceipts(...args),
-    processPendingMobilePushReceipts: (...args: unknown[]) => mocks.processPendingMobilePushReceipts(...args),
+    hasMobilePushMaintenanceWork: (...args: unknown[]) => mocks.hasMobilePushMaintenanceWork(...args),
+    processMobilePushMaintenance: (...args: unknown[]) => mocks.processMobilePushMaintenance(...args),
   };
 });
 
@@ -82,14 +82,14 @@ describe('/api/cron/mobile-push-receipts route', () => {
     vi.resetModules();
     mocks.createServiceClient.mockReset();
     mocks.finishBackendJobRun.mockClear();
-    mocks.hasPendingMobilePushReceipts.mockReset();
-    mocks.hasPendingMobilePushReceipts.mockResolvedValue(true);
+    mocks.hasMobilePushMaintenanceWork.mockReset();
+    mocks.hasMobilePushMaintenanceWork.mockResolvedValue(true);
     mocks.pruneBackendJobRuns.mockClear();
-    mocks.processPendingMobilePushReceipts.mockReset();
+    mocks.processMobilePushMaintenance.mockReset();
     mocks.startBackendJobRun.mockClear();
     mocks.withBackendJobLock.mockReset();
     mocks.createServiceClient.mockReturnValue({ service: 'supabase' });
-    mocks.processPendingMobilePushReceipts.mockResolvedValue({
+    mocks.processMobilePushMaintenance.mockResolvedValue({
       checkedCount: 1,
       updatedCount: 1,
       staleCount: 0,
@@ -111,7 +111,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
     expect(response.status).toBe(401);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('push-receipts-reject-1');
-    expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+    expect(mocks.processMobilePushMaintenance).not.toHaveBeenCalled();
     expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
   });
 
@@ -128,7 +128,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
     expect(response.status).toBe(401);
     expect(mocks.startBackendJobRun).not.toHaveBeenCalled();
     expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
-    expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+    expect(mocks.processMobilePushMaintenance).not.toHaveBeenCalled();
   });
 
   it('runs the receipt processor for authorized requests', async () => {
@@ -152,11 +152,11 @@ describe('/api/cron/mobile-push-receipts route', () => {
         requestId: 'push-receipts-run-1',
       }),
     );
-    expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith(
+    expect(mocks.hasMobilePushMaintenanceWork).toHaveBeenCalledWith(
       { service: 'supabase' },
       { now: expect.any(Date) },
     );
-    expect(mocks.processPendingMobilePushReceipts).toHaveBeenCalledWith(
+    expect(mocks.processMobilePushMaintenance).toHaveBeenCalledWith(
       { service: 'supabase' },
       { now: expect.any(Date) },
     );
@@ -195,7 +195,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
   });
 
   it('records a skipped job-run without taking the lock when no push receipts are pending', async () => {
-    mocks.hasPendingMobilePushReceipts.mockResolvedValueOnce(false);
+    mocks.hasMobilePushMaintenanceWork.mockResolvedValueOnce(false);
 
     const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
     const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {
@@ -205,7 +205,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
     }));
 
     expect(response.status).toBe(202);
-    expect(mocks.hasPendingMobilePushReceipts).toHaveBeenCalledWith(
+    expect(mocks.hasMobilePushMaintenanceWork).toHaveBeenCalledWith(
       { service: 'supabase' },
       { now: expect.any(Date) },
     );
@@ -217,7 +217,7 @@ describe('/api/cron/mobile-push-receipts route', () => {
       }),
     );
     expect(mocks.withBackendJobLock).not.toHaveBeenCalled();
-    expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+    expect(mocks.processMobilePushMaintenance).not.toHaveBeenCalled();
     expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({ id: 'run-1' }),
@@ -265,12 +265,12 @@ describe('/api/cron/mobile-push-receipts route', () => {
       skipped: true,
       reason: 'already_running',
     });
-    expect(mocks.processPendingMobilePushReceipts).not.toHaveBeenCalled();
+    expect(mocks.processMobilePushMaintenance).not.toHaveBeenCalled();
   });
 
   it('records failed receipt processing before returning a retryable error', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    mocks.processPendingMobilePushReceipts.mockRejectedValueOnce(new Error('receipt processor failed'));
+    mocks.processMobilePushMaintenance.mockRejectedValueOnce(new Error('receipt processor failed'));
 
     const { GET } = await import('@/app/api/cron/mobile-push-receipts/route');
     const response = await GET(new NextRequest('http://localhost/api/cron/mobile-push-receipts', {

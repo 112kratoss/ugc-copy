@@ -22,7 +22,7 @@ import {
   processGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
-import { hasPendingMobilePushReceipts, processPendingMobilePushReceipts } from '@/lib/mobile-notifications';
+import { hasMobilePushMaintenanceWork, processMobilePushMaintenance } from '@/lib/mobile-notifications';
 import { withRequestTrace } from '@/lib/request-trace';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -374,7 +374,7 @@ export function runMobilePushReceiptsBackendJob(options: {
       completed: 'mobile_push_receipts_completed',
       failed: 'mobile_push_receipts_failed',
     },
-    hasWork: (client, context) => hasPendingMobilePushReceipts(client, { now: new Date(context.startedAtMs) }),
-    run: (client, context) => processPendingMobilePushReceipts(client, { now: new Date(context.startedAtMs) }),
+    hasWork: (client, context) => hasMobilePushMaintenanceWork(client, { now: new Date(context.startedAtMs) }),
+    run: (client, context) => processMobilePushMaintenance(client, { now: new Date(context.startedAtMs) }),
   });
 }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "75134695489",
+    "project_id": "magicbooklet-60b5d",
+    "storage_bucket": "magicbooklet-60b5d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:75134695489:android:b5cc8e30a582a9829e6ec0",
+        "android_client_info": {
+          "package_name": "com.magicbooklet.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC8NEgVGazN5aZfPbPNtEb8RqHLZOTnuBg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -11,6 +11,15 @@ const DEVICE_ID_KEY = 'magicbooklet.mobileNotifications.deviceId';
 const EXPO_PUSH_TOKEN_KEY = 'magicbooklet.mobileNotifications.expoPushToken';
 let lastHandledNotificationResponseKey: string | null = null;
 
+export type MobileNotificationResponseEvent = {
+  notificationId: string | null;
+  deepLink: string | null;
+};
+
+export type MobileNotificationResponseHandler = (
+  event: MobileNotificationResponseEvent
+) => boolean | Promise<boolean>;
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldPlaySound: true,
@@ -156,13 +165,21 @@ export async function unregisterMobilePushNotifications(api: MagicbookletApiClie
 
   const expoPushToken = await SecureStore.getItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => null);
   const deviceId = await SecureStore.getItemAsync(DEVICE_ID_KEY).catch(() => null);
-  await api.unregisterMobilePushToken({
-    ...(expoPushToken ? { expoPushToken } : {}),
-    ...(deviceId ? { deviceId } : {}),
-    platform,
-  }).catch((error) => {
+  try {
+    await api.unregisterMobilePushToken({
+      ...(expoPushToken ? { expoPushToken } : {}),
+      ...(deviceId ? { deviceId } : {}),
+      platform,
+      ...(!expoPushToken && !deviceId ? { allDevices: true } : {}),
+    });
+  } catch (error) {
     console.error('Failed to unregister mobile push token', error);
+  }
+
+  await Notifications.unregisterForNotificationsAsync().catch((error) => {
+    console.error('Failed to unregister native push notifications', error);
   });
+  await SecureStore.deleteItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => undefined);
 }
 
 export function navigateToNotificationDeepLink(deepLink: unknown) {
@@ -193,31 +210,91 @@ function getNotificationResponseKey(response: Notifications.NotificationResponse
   return null;
 }
 
-function handleNotificationResponse(response: Notifications.NotificationResponse | null | undefined) {
+function getNotificationResponseEvent(
+  response: Notifications.NotificationResponse | null | undefined
+): MobileNotificationResponseEvent {
+  const data = response?.notification.request.content.data;
+  const notificationId = data?.notificationId;
+  const deepLink = data?.deepLink;
+
+  return {
+    notificationId: typeof notificationId === 'string' && notificationId.trim() ? notificationId.trim() : null,
+    deepLink: typeof deepLink === 'string' && deepLink.trim() ? deepLink.trim() : null,
+  };
+}
+
+async function clearLastNotificationResponseIfAvailable() {
+  const maybeNotifications = Notifications as typeof Notifications & {
+    clearLastNotificationResponseAsync?: () => Promise<void>;
+  };
+  await maybeNotifications.clearLastNotificationResponseAsync?.().catch(() => undefined);
+}
+
+async function handleNotificationResponse(
+  response: Notifications.NotificationResponse | null | undefined,
+  options: { handleResponse?: MobileNotificationResponseHandler } = {},
+) {
   const responseKey = getNotificationResponseKey(response);
   if (responseKey && responseKey === lastHandledNotificationResponseKey) {
     return false;
   }
 
-  const deepLink = response?.notification.request.content.data?.deepLink;
-  const handled = navigateToNotificationDeepLink(deepLink);
+  const event = getNotificationResponseEvent(response);
+  const handled = options.handleResponse
+    ? await options.handleResponse(event)
+    : navigateToNotificationDeepLink(event.deepLink);
   if (handled && responseKey) {
     lastHandledNotificationResponseKey = responseKey;
+    await clearLastNotificationResponseIfAvailable();
   }
 
   return handled;
 }
 
-export async function syncLastNotificationResponse() {
+export async function syncLastNotificationResponse(options: { handleResponse?: MobileNotificationResponseHandler } = {}) {
   const response = await Notifications.getLastNotificationResponseAsync();
-  return handleNotificationResponse(response);
+  return handleNotificationResponse(response, options);
 }
 
-export function subscribeToNotificationResponses() {
+export function subscribeToNotificationResponses(options: { handleResponse?: MobileNotificationResponseHandler } = {}) {
   const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-    handleNotificationResponse(response);
+    void handleNotificationResponse(response, options);
   });
-  void syncLastNotificationResponse();
+  void syncLastNotificationResponse(options);
 
   return () => subscription.remove();
+}
+
+export function subscribeToMobilePushTokenChanges(api: MagicbookletApiClient) {
+  if (!isNativeMobile()) {
+    return () => undefined;
+  }
+
+  const maybeNotifications = Notifications as typeof Notifications & {
+    addPushTokenListener?: (listener: (token: Notifications.DevicePushToken | Notifications.ExpoPushToken) => void) => {
+      remove: () => void;
+    };
+  };
+
+  const subscription = maybeNotifications.addPushTokenListener?.((token) => {
+    void (async () => {
+      const expoPushToken = typeof token.data === 'string' ? token.data : null;
+      if (!expoPushToken) {
+        return;
+      }
+
+      const deviceId = await getStableDeviceId();
+      await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
+      await api.registerMobilePushToken({
+        expoPushToken,
+        platform: Platform.OS === 'ios' ? 'ios' : 'android',
+        deviceId,
+        appVersion: Constants.expoConfig?.version ?? null,
+      });
+    })().catch((error) => {
+      console.error('Failed to register rotated mobile push token', error);
+    });
+  });
+
+  return () => subscription?.remove();
 }

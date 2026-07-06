@@ -376,7 +376,7 @@ export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher =
       request<{ success: boolean }>('/api/showcase/share', {
         method: 'POST',
         body: JSON.stringify({ postId, sourceSurface: 'detail-page', channel }),
-      }, { auth: false }),
+      }),
     publishGeneration: (body: Record<string, unknown>) =>
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),
     createPost: (body: FormData) =>

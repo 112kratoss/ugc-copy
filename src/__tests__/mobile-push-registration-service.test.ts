@@ -16,6 +16,11 @@ const deactivateCalls: Array<{
   eqFilters: Array<[string, unknown]>;
   neqFilters: Array<[string, unknown]>;
 }> = [];
+const crossUserDeactivateCalls: Array<{
+  values: Record<string, unknown>;
+  eqFilters: Array<[string, unknown]>;
+  neqFilters: Array<[string, unknown]>;
+}> = [];
 
 function createRateLimitRpc({
   allowed = true,
@@ -78,6 +83,39 @@ function createUserSupabaseMock(options: { userId?: string | null; authError?: E
   };
 }
 
+function createAdminSupabaseMock(rateLimitRpc: ReturnType<typeof createRateLimitRpc>) {
+  return {
+    rpc: rateLimitRpc,
+    from(table: string) {
+      if (table !== 'mobile_push_tokens') {
+        throw new Error(`Unexpected admin table ${table}`);
+      }
+
+      return {
+        update(values: Record<string, unknown>) {
+          const call = {
+            values,
+            eqFilters: [] as Array<[string, unknown]>,
+            neqFilters: [] as Array<[string, unknown]>,
+            error: null as null,
+            eq(column: string, value: unknown) {
+              call.eqFilters.push([column, value]);
+              return call;
+            },
+            neq(column: string, value: unknown) {
+              call.neqFilters.push([column, value]);
+              return call;
+            },
+          };
+
+          crossUserDeactivateCalls.push(call);
+          return call;
+        },
+      };
+    },
+  };
+}
+
 describe('mobile push registration service', () => {
   let rateLimitRpc: ReturnType<typeof createRateLimitRpc>;
   let getAdminSupabase: ReturnType<typeof vi.fn>;
@@ -88,8 +126,9 @@ describe('mobile push registration service', () => {
     vi.setSystemTime(new Date('2026-05-26T08:00:00.000Z'));
     upsertCalls.length = 0;
     deactivateCalls.length = 0;
+    crossUserDeactivateCalls.length = 0;
     rateLimitRpc = createRateLimitRpc();
-    getAdminSupabase = vi.fn(() => ({ rpc: rateLimitRpc }));
+    getAdminSupabase = vi.fn(() => createAdminSupabaseMock(rateLimitRpc));
     ensureMobileNotificationPreferencesMock.mockReset();
     ensureMobileNotificationPreferencesMock.mockResolvedValue({
       pushEnabled: true,
@@ -182,6 +221,24 @@ describe('mobile push registration service', () => {
         neq: expect.any(Function),
       },
     ]);
+    expect(crossUserDeactivateCalls).toEqual([
+      {
+        values: {
+          is_active: false,
+          disabled_at: '2026-05-26T08:00:00.000Z',
+        },
+        eqFilters: [
+          ['expo_push_token', 'ExponentPushToken[new123]'],
+          ['is_active', true],
+        ],
+        neqFilters: [
+          ['user_id', 'user-1'],
+        ],
+        error: null,
+        eq: expect.any(Function),
+        neq: expect.any(Function),
+      },
+    ]);
     expect(ensureMobileNotificationPreferencesMock).toHaveBeenCalledWith(userSupabase, 'user-1');
   });
 
@@ -191,7 +248,7 @@ describe('mobile push registration service', () => {
       remaining: 0,
       retryAfterSeconds: 35,
     });
-    getAdminSupabase = vi.fn(() => ({ rpc: rateLimitRpc }));
+    getAdminSupabase = vi.fn(() => createAdminSupabaseMock(rateLimitRpc));
 
     const { registerMobilePushTokenForRoute } = await import('@/lib/mobile-push-registration-service');
     const result = await registerMobilePushTokenForRoute({

@@ -210,4 +210,21 @@ describe('mobile shared API v1 contract fixture', () => {
       fallbackEndpoint.response
     );
   });
+
+  it('sends auth for mobile showcase share calls so social notifications can identify the actor', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/api/showcase/share');
+      expect(init?.headers).toBeInstanceOf(Headers);
+      expect((init?.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+      return jsonResponse(contract.endpoints.shareShowcasePost.response);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.shareShowcasePost('post-1')).resolves.toEqual(contract.endpoints.shareShowcasePost.response);
+  });
 });

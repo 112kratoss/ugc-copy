@@ -10,6 +10,11 @@ const deactivateCalls: Array<{
   eqFilters: Array<[string, unknown]>;
   neqFilters: Array<[string, unknown]>;
 }> = [];
+const crossUserDeactivateCalls: Array<{
+  values: Record<string, unknown>;
+  eqFilters: Array<[string, unknown]>;
+  neqFilters: Array<[string, unknown]>;
+}> = [];
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
@@ -71,6 +76,39 @@ function createUserSupabaseMock() {
   };
 }
 
+function createAdminSupabaseMock() {
+  return {
+    rpc: rateLimitRpcMock,
+    from(table: string) {
+      if (table !== 'mobile_push_tokens') {
+        throw new Error(`Unexpected admin table ${table}`);
+      }
+
+      return {
+        update(values: Record<string, unknown>) {
+          const call = {
+            values,
+            eqFilters: [] as Array<[string, unknown]>,
+            neqFilters: [] as Array<[string, unknown]>,
+            error: null as null,
+            eq(column: string, value: unknown) {
+              call.eqFilters.push([column, value]);
+              return call;
+            },
+            neq(column: string, value: unknown) {
+              call.neqFilters.push([column, value]);
+              return call;
+            },
+          };
+
+          crossUserDeactivateCalls.push(call);
+          return call;
+        },
+      };
+    },
+  };
+}
+
 describe('/api/mobile/notifications/register route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -78,12 +116,13 @@ describe('/api/mobile/notifications/register route', () => {
     vi.setSystemTime(new Date('2026-05-26T08:00:00.000Z'));
     upsertCalls.length = 0;
     deactivateCalls.length = 0;
+    crossUserDeactivateCalls.length = 0;
     createUserClientMock.mockReset();
     createServiceClientMock.mockReset();
     rateLimitRpcMock.mockReset();
     ensureMobileNotificationPreferencesMock.mockReset();
     createUserClientMock.mockReturnValue(createUserSupabaseMock());
-    createServiceClientMock.mockReturnValue({ rpc: rateLimitRpcMock });
+    createServiceClientMock.mockReturnValue(createAdminSupabaseMock());
     rateLimitRpcMock.mockResolvedValue({
       data: {
         allowed: true,
@@ -161,6 +200,24 @@ describe('/api/mobile/notifications/register route', () => {
         neq: expect.any(Function),
       },
     ]);
+    expect(crossUserDeactivateCalls).toEqual([
+      {
+        values: {
+          is_active: false,
+          disabled_at: '2026-05-26T08:00:00.000Z',
+        },
+        eqFilters: [
+          ['expo_push_token', 'ExponentPushToken[new123]'],
+          ['is_active', true],
+        ],
+        neqFilters: [
+          ['user_id', 'user-1'],
+        ],
+        error: null,
+        eq: expect.any(Function),
+        neq: expect.any(Function),
+      },
+    ]);
     expect(createServiceClientMock).toHaveBeenCalledTimes(1);
     expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'mobile-push-token:register',
@@ -216,6 +273,7 @@ describe('/api/mobile/notifications/register route', () => {
     });
     expect(upsertCalls).toEqual([]);
     expect(deactivateCalls).toEqual([]);
+    expect(crossUserDeactivateCalls).toEqual([]);
     expect(ensureMobileNotificationPreferencesMock).not.toHaveBeenCalled();
   });
 });

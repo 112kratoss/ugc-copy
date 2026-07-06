@@ -66,6 +66,16 @@ type ExpoPushSendResult =
     message: string;
     details: Record<string, unknown> | null;
   };
+type ExpoPushPriority = 'default' | 'normal' | 'high';
+type ExpoPushSendPayload = {
+  expoPushToken: string;
+  title: string;
+  body: string;
+  data: Record<string, string | number | boolean | null>;
+  channelId?: string;
+  priority?: ExpoPushPriority;
+  fetcher?: typeof fetch;
+};
 
 const DEFAULT_PREFERENCES: MobileNotificationPreferences = {
   pushEnabled: true,
@@ -77,6 +87,11 @@ const DEFAULT_RECEIPT_BATCH_SIZE = 1000;
 const MAX_RECEIPT_BATCH_SIZE = 1000;
 const RECEIPT_MIN_AGE_MINUTES = 15;
 const RECEIPT_STALE_AFTER_HOURS = 24;
+const DEFAULT_EXPO_PUSH_MAX_ATTEMPTS = 3;
+const DEFAULT_EXPO_PUSH_RETRY_BASE_DELAY_MS = 500;
+const RETRYABLE_DELIVERY_BATCH_SIZE = 100;
+const DELIVERY_RETENTION_DAYS = 90;
+const READ_NOTIFICATION_RETENTION_DAYS = 180;
 
 export class MobileNotificationError extends Error {
   constructor(
@@ -85,6 +100,17 @@ export class MobileNotificationError extends Error {
   ) {
     super(message);
     this.name = 'MobileNotificationError';
+  }
+}
+
+class ExpoPushRetryError extends Error {
+  constructor(
+    message: string,
+    public readonly attemptCount: number,
+    public readonly cause: unknown
+  ) {
+    super(message);
+    this.name = 'ExpoPushRetryError';
   }
 }
 
@@ -151,6 +177,10 @@ function isDeviceNotRegistered(details: unknown) {
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ExpoPushRetryError) {
+    return getErrorMessage(error.cause, error.message || fallback);
+  }
+
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();
   }
@@ -158,7 +188,14 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function toProviderErrorDetails(error: unknown) {
+function toProviderErrorDetails(error: unknown): Record<string, unknown> | null {
+  if (error instanceof ExpoPushRetryError) {
+    return {
+      attempts: error.attemptCount,
+      cause: toProviderErrorDetails(error.cause),
+    };
+  }
+
   if (error instanceof MobileNotificationError) {
     return {
       name: error.name,
@@ -175,6 +212,27 @@ function toProviderErrorDetails(error: unknown) {
   }
 
   return null;
+}
+
+function getExpoPushAttemptCount(error: unknown, fallback = 1) {
+  return error instanceof ExpoPushRetryError ? error.attemptCount : fallback;
+}
+
+function isTransientExpoPushError(error: unknown) {
+  if (!(error instanceof MobileNotificationError)) {
+    return error instanceof Error;
+  }
+
+  return error.status === 429 || error.status >= 500;
+}
+
+function expoPushRetryDelayMs(attempt: number) {
+  return DEFAULT_EXPO_PUSH_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1));
+}
+
+function wait(ms: number) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function chunkValues<T>(values: T[], size: number) {
@@ -278,14 +336,10 @@ export async function sendExpoPushNotification({
   title,
   body,
   data,
+  channelId = 'default',
+  priority = 'high',
   fetcher = fetch,
-}: {
-  expoPushToken: string;
-  title: string;
-  body: string;
-  data: Record<string, string | number | boolean | null>;
-  fetcher?: typeof fetch;
-}): Promise<ExpoPushSendResult> {
+}: ExpoPushSendPayload): Promise<ExpoPushSendResult> {
   const response = await fetchWithProviderTimeout(
     'https://exp.host/--/api/v2/push/send',
     {
@@ -300,6 +354,8 @@ export async function sendExpoPushNotification({
         sound: 'default',
         title,
         body,
+        channelId,
+        priority,
         data,
       }),
     },
@@ -314,7 +370,10 @@ export async function sendExpoPushNotification({
   } | null;
 
   if (!response.ok) {
-    throw new MobileNotificationError('Expo push service rejected the notification.', 502);
+    const message = Array.isArray(payload?.errors) && isRecord(payload.errors[0])
+      ? normalizeOptionalString(payload.errors[0].message) ?? 'Expo push service rejected the notification.'
+      : 'Expo push service rejected the notification.';
+    throw new MobileNotificationError(message, response.status === 429 ? 429 : Math.max(response.status, 400));
   }
 
   const firstResult = Array.isArray(payload?.data) ? payload?.data[0] : payload?.data;
@@ -334,6 +393,39 @@ export async function sendExpoPushNotification({
     message: normalizeOptionalString(firstResult.message) ?? 'Expo push delivery failed.',
     details: isRecord(firstResult.details) ? firstResult.details : null,
   };
+}
+
+export async function sendExpoPushNotificationWithRetry({
+  maxAttempts = DEFAULT_EXPO_PUSH_MAX_ATTEMPTS,
+  retryDelayMs = expoPushRetryDelayMs,
+  ...payload
+}: ExpoPushSendPayload & {
+  maxAttempts?: number;
+  retryDelayMs?: (attempt: number) => number;
+}): Promise<{ result: ExpoPushSendResult; attemptCount: number }> {
+  const boundedMaxAttempts = Number.isFinite(maxAttempts)
+    ? Math.max(1, Math.min(Math.trunc(maxAttempts), DEFAULT_EXPO_PUSH_MAX_ATTEMPTS))
+    : DEFAULT_EXPO_PUSH_MAX_ATTEMPTS;
+  let attemptCount = 0;
+
+  for (;;) {
+    attemptCount += 1;
+
+    try {
+      const result = await sendExpoPushNotification(payload);
+      return { result, attemptCount };
+    } catch (error) {
+      if (attemptCount >= boundedMaxAttempts || !isTransientExpoPushError(error)) {
+        throw new ExpoPushRetryError(
+          getErrorMessage(error, 'Expo push send failed after retry attempts.'),
+          attemptCount,
+          error,
+        );
+      }
+
+      await wait(retryDelayMs(attemptCount));
+    }
+  }
 }
 
 export async function ensureMobileNotificationPreferences(supabase: SupabaseClient, userId: string) {
@@ -373,6 +465,65 @@ function shouldPushForPreferences(preferences: MobileNotificationPreferences, ca
   if (category === 'commerce') return preferences.commerceEnabled;
   if (category === 'social') return preferences.socialEnabled;
   return true;
+}
+
+function priorityForNotificationCategory(category: MobileNotificationCategory): ExpoPushPriority {
+  return category === 'social' ? 'default' : 'high';
+}
+
+async function createAggregatedMobileNotification({
+  adminSupabase,
+  userId,
+  actorUserId,
+  type,
+  category,
+  title,
+  body,
+  deepLink,
+  objectType,
+  objectId,
+  dedupeKey,
+  aggregationKey,
+}: {
+  adminSupabase: SupabaseClient;
+  userId: string;
+  actorUserId: string | null;
+  type: MobileNotificationType;
+  category: MobileNotificationCategory;
+  title: string;
+  body: string;
+  deepLink: string | null;
+  objectType: string | null;
+  objectId: string | null;
+  dedupeKey: string | null;
+  aggregationKey: string;
+}): Promise<{ notification: MobileNotificationRecord; wasCreated: boolean }> {
+  const { data, error } = await adminSupabase.rpc('upsert_mobile_notification', {
+    p_user_id: userId,
+    p_actor_user_id: actorUserId,
+    p_type: type,
+    p_category: category,
+    p_title: title,
+    p_body: body,
+    p_deep_link: deepLink,
+    p_object_type: objectType,
+    p_object_id: objectId,
+    p_dedupe_key: dedupeKey,
+    p_aggregation_key: aggregationKey,
+  });
+
+  if (error) {
+    throw new MobileNotificationError('Failed to upsert aggregated mobile notification.', 500);
+  }
+
+  if (!isRecord(data) || !isRecord(data.notification)) {
+    throw new MobileNotificationError('Aggregated mobile notification response was invalid.', 500);
+  }
+
+  return {
+    notification: toMobileNotificationRecord(data.notification),
+    wasCreated: rowBoolean(data, 'wasCreated', true),
+  };
 }
 
 async function sendMobilePushForNotification(
@@ -418,11 +569,13 @@ async function sendMobilePushForNotification(
     }
 
     let result: ExpoPushSendResult;
+    let attemptCount = 1;
     try {
-      result = await sendExpoPushNotification({
+      const sendAttempt = await sendExpoPushNotificationWithRetry({
         expoPushToken: token.expo_push_token,
         title: notification.title,
         body: notification.body,
+        priority: priorityForNotificationCategory(notification.category),
         data: {
           notificationId: notification.id,
           type: notification.type,
@@ -430,8 +583,11 @@ async function sendMobilePushForNotification(
           deepLink: notification.deepLink,
         },
       });
+      result = sendAttempt.result;
+      attemptCount = sendAttempt.attemptCount;
     } catch (error) {
       const providerMessage = getErrorMessage(error, 'Expo push send failed before the provider accepted the notification.');
+      const failedAttemptCount = getExpoPushAttemptCount(error, 1);
       firstError ??= providerMessage;
 
       await recordDeliveryAttempt({
@@ -446,7 +602,7 @@ async function sendMobilePushForNotification(
         receipt_message: 'Push send failed before a receipt was created.',
         provider_message: providerMessage,
         provider_details: toProviderErrorDetails(error),
-        attempt_count: 1,
+        attempt_count: failedAttemptCount,
         last_attempt_at: pushedAt,
       });
       continue;
@@ -463,7 +619,7 @@ async function sendMobilePushForNotification(
         push_ticket_id: result.id ?? null,
         send_status: 'sent',
         receipt_status: 'pending',
-        attempt_count: 1,
+        attempt_count: attemptCount,
         sent_at: pushedAt,
         last_attempt_at: pushedAt,
       });
@@ -561,6 +717,73 @@ export async function hasPendingMobilePushReceipts(
   }
 
   return Array.isArray(data) && data.length > 0;
+}
+
+async function hasRetryableMobilePushDeliveries(adminSupabase: SupabaseClient): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .select('id')
+    .eq('send_status', 'error')
+    .eq('receipt_status', 'error')
+    .is('push_ticket_id', null)
+    .lt('attempt_count', DEFAULT_EXPO_PUSH_MAX_ATTEMPTS)
+    .limit(1);
+
+  if (error) {
+    throw new MobileNotificationError('Failed to check retryable mobile push deliveries.', 500);
+  }
+
+  return Array.isArray(data) && data.length > 0;
+}
+
+async function hasMobileNotificationRetentionWork(
+  adminSupabase: SupabaseClient,
+  now: Date
+): Promise<boolean> {
+  const deliveryCutoff = new Date(now.getTime() - DELIVERY_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const notificationCutoff = new Date(now.getTime() - READ_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: deliveryData, error: deliveryError } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .select('id')
+    .lt('created_at', deliveryCutoff)
+    .limit(1);
+
+  if (deliveryError) {
+    throw new MobileNotificationError('Failed to check mobile push delivery retention.', 500);
+  }
+
+  if (Array.isArray(deliveryData) && deliveryData.length > 0) {
+    return true;
+  }
+
+  const { data: notificationData, error: notificationError } = await adminSupabase
+    .from('mobile_notifications')
+    .select('id')
+    .eq('is_read', true)
+    .lt('updated_at', notificationCutoff)
+    .limit(1);
+
+  if (notificationError) {
+    throw new MobileNotificationError('Failed to check mobile notification retention.', 500);
+  }
+
+  return Array.isArray(notificationData) && notificationData.length > 0;
+}
+
+export async function hasMobilePushMaintenanceWork(
+  adminSupabase: SupabaseClient,
+  { now = new Date() }: { now?: Date } = {}
+): Promise<boolean> {
+  if (await hasPendingMobilePushReceipts(adminSupabase, { now })) {
+    return true;
+  }
+
+  if (await hasRetryableMobilePushDeliveries(adminSupabase)) {
+    return true;
+  }
+
+  return hasMobileNotificationRetentionWork(adminSupabase, now);
 }
 
 export async function processPendingMobilePushReceipts(
@@ -686,6 +909,227 @@ export async function processPendingMobilePushReceipts(
   };
 }
 
+async function processRetryableMobilePushDeliveries(
+  adminSupabase: SupabaseClient,
+  {
+    fetcher = fetch,
+    now = new Date(),
+    batchSize = RETRYABLE_DELIVERY_BATCH_SIZE,
+  }: {
+    fetcher?: typeof fetch;
+    now?: Date;
+    batchSize?: number;
+  } = {}
+) {
+  const nowIso = now.toISOString();
+  const boundedBatchSize = Number.isFinite(batchSize)
+    ? Math.max(1, Math.min(Math.trunc(batchSize), RETRYABLE_DELIVERY_BATCH_SIZE))
+    : RETRYABLE_DELIVERY_BATCH_SIZE;
+
+  const { data, error } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .select('id, notification_id, user_id, token_id, expo_push_token, platform, attempt_count')
+    .eq('send_status', 'error')
+    .eq('receipt_status', 'error')
+    .is('push_ticket_id', null)
+    .lt('attempt_count', DEFAULT_EXPO_PUSH_MAX_ATTEMPTS)
+    .order('last_attempt_at', { ascending: true })
+    .limit(boundedBatchSize);
+
+  if (error) {
+    throw new MobileNotificationError('Failed to load retryable mobile push deliveries.', 500);
+  }
+
+  const deliveries = (data ?? []) as DeliveryRow[];
+  let retriedCount = 0;
+  let resentCount = 0;
+  let retryFailedCount = 0;
+  let disabledTokenCount = 0;
+
+  for (const delivery of deliveries) {
+    const deliveryId = rowString(delivery, 'id');
+    const notificationId = rowString(delivery, 'notification_id');
+    const userId = rowString(delivery, 'user_id');
+    const tokenId = rowString(delivery, 'token_id');
+    const expoPushToken = rowString(delivery, 'expo_push_token');
+    const priorAttemptCount = rowNumber(delivery, 'attempt_count', 0);
+
+    if (!deliveryId || !notificationId || !userId || !expoPushToken) {
+      continue;
+    }
+
+    const { data: notificationData, error: notificationError } = await adminSupabase
+      .from('mobile_notifications')
+      .select('id, type, category, title, body, deep_link')
+      .eq('id', notificationId)
+      .maybeSingle();
+
+    if (notificationError) {
+      throw new MobileNotificationError('Failed to load notification for push retry.', 500);
+    }
+
+    if (!notificationData) {
+      await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          receipt_message: 'Notification no longer exists.',
+          last_attempt_at: nowIso,
+        })
+        .eq('id', deliveryId);
+      continue;
+    }
+
+    const notification = toMobileNotificationRecord(notificationData as NotificationRow);
+    const remainingAttempts = DEFAULT_EXPO_PUSH_MAX_ATTEMPTS - priorAttemptCount;
+    retriedCount += 1;
+
+    try {
+      const { result, attemptCount } = await sendExpoPushNotificationWithRetry({
+        expoPushToken,
+        title: notification.title,
+        body: notification.body,
+        priority: priorityForNotificationCategory(notification.category),
+        data: {
+          notificationId: notification.id,
+          type: notification.type,
+          category: notification.category,
+          deepLink: notification.deepLink,
+        },
+        fetcher,
+        maxAttempts: remainingAttempts,
+      });
+
+      if (result.status === 'ok') {
+        resentCount += 1;
+        await adminSupabase
+          .from('mobile_push_deliveries')
+          .update({
+            push_ticket_id: result.id ?? null,
+            send_status: 'sent',
+            receipt_status: 'pending',
+            receipt_checked_at: null,
+            receipt_error_code: null,
+            receipt_message: null,
+            provider_message: null,
+            provider_details: null,
+            attempt_count: priorAttemptCount + attemptCount,
+            sent_at: nowIso,
+            last_attempt_at: nowIso,
+          })
+          .eq('id', deliveryId);
+        continue;
+      }
+
+      retryFailedCount += 1;
+      await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
+          receipt_message: result.message,
+          provider_message: result.message,
+          provider_details: isRecord(result.details) ? result.details : null,
+          attempt_count: priorAttemptCount + attemptCount,
+          last_attempt_at: nowIso,
+        })
+        .eq('id', deliveryId);
+
+      if (isDeviceNotRegistered(result.details) && tokenId) {
+        disabledTokenCount += 1;
+        await adminSupabase
+          .from('mobile_push_tokens')
+          .update({
+            is_active: false,
+            disabled_at: nowIso,
+          })
+          .eq('id', tokenId);
+      }
+    } catch (error) {
+      retryFailedCount += 1;
+      const attemptCount = getExpoPushAttemptCount(error, remainingAttempts);
+      await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          provider_message: getErrorMessage(error, 'Expo push retry failed.'),
+          provider_details: toProviderErrorDetails(error),
+          attempt_count: Math.min(DEFAULT_EXPO_PUSH_MAX_ATTEMPTS, priorAttemptCount + attemptCount),
+          last_attempt_at: nowIso,
+        })
+        .eq('id', deliveryId);
+    }
+  }
+
+  return {
+    retryableCount: deliveries.length,
+    retriedCount,
+    resentCount,
+    retryFailedCount,
+    retryDisabledTokenCount: disabledTokenCount,
+  };
+}
+
+async function pruneMobileNotificationRetention(
+  adminSupabase: SupabaseClient,
+  { now = new Date() }: { now?: Date } = {}
+) {
+  const deliveryCutoff = new Date(now.getTime() - DELIVERY_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const notificationCutoff = new Date(now.getTime() - READ_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const { error: deliveryDeleteError } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .delete()
+    .lt('created_at', deliveryCutoff);
+
+  if (deliveryDeleteError) {
+    throw new MobileNotificationError('Failed to prune mobile push delivery history.', 500);
+  }
+
+  const { error: notificationDeleteError } = await adminSupabase
+    .from('mobile_notifications')
+    .delete()
+    .eq('is_read', true)
+    .lt('updated_at', notificationCutoff);
+
+  if (notificationDeleteError) {
+    throw new MobileNotificationError('Failed to prune read mobile notifications.', 500);
+  }
+
+  return {
+    deliveryRetentionDays: DELIVERY_RETENTION_DAYS,
+    readNotificationRetentionDays: READ_NOTIFICATION_RETENTION_DAYS,
+  };
+}
+
+export async function processMobilePushMaintenance(
+  adminSupabase: SupabaseClient,
+  {
+    fetcher = fetch,
+    now = new Date(),
+    batchSize = DEFAULT_RECEIPT_BATCH_SIZE,
+  }: {
+    fetcher?: typeof fetch;
+    now?: Date;
+    batchSize?: number;
+  } = {}
+) {
+  const receiptSummary = await processPendingMobilePushReceipts(adminSupabase, {
+    fetcher,
+    now,
+    batchSize,
+  });
+  const retrySummary = await processRetryableMobilePushDeliveries(adminSupabase, {
+    fetcher,
+    now,
+  });
+  const retentionSummary = await pruneMobileNotificationRetention(adminSupabase, { now });
+
+  return {
+    ...receiptSummary,
+    ...retrySummary,
+    ...retentionSummary,
+    disabledTokenCount: receiptSummary.disabledTokenCount + retrySummary.retryDisabledTokenCount,
+  };
+}
+
 export async function createMobileNotification({
   adminSupabase,
   userId,
@@ -735,41 +1179,33 @@ export async function createMobileNotification({
   }
 
   if (aggregationKey) {
-    const { data: existing, error: existingError } = await adminSupabase
-      .from('mobile_notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('aggregation_key', aggregationKey)
-      .maybeSingle();
+    const { notification, wasCreated } = await createAggregatedMobileNotification({
+      adminSupabase,
+      userId,
+      actorUserId,
+      type,
+      category,
+      title,
+      body,
+      deepLink,
+      objectType,
+      objectId,
+      dedupeKey,
+      aggregationKey,
+    });
 
-    if (existingError) {
-      throw new MobileNotificationError('Failed to check mobile notification history.', 500);
-    }
-
-    if (existing) {
-      const existingRow = existing as NotificationRow;
-      const { data: updated, error: updateError } = await adminSupabase
-        .from('mobile_notifications')
-        .update({
-          actor_user_id: actorUserId,
-          title,
-          body,
-          deep_link: deepLink,
-          object_type: objectType,
-          object_id: objectId,
-          event_count: rowNumber(existingRow, 'event_count', 1) + 1,
-          is_read: false,
-        })
-        .eq('id', rowString(existingRow, 'id') ?? '')
-        .select('*')
-        .single();
-
-      if (updateError) {
-        throw new MobileNotificationError('Failed to update mobile notification history.', 500);
+    if (wasCreated) {
+      const preferences = await ensureMobileNotificationPreferences(adminSupabase, userId);
+      if (shouldPushForPreferences(preferences, category)) {
+        try {
+          await sendMobilePushForNotification(adminSupabase, { ...notification, userId });
+        } catch (error) {
+          console.error('Failed to send mobile push notification:', error);
+        }
       }
-
-      return toMobileNotificationRecord(updated as NotificationRow);
     }
+
+    return notification;
   }
 
   const { data: inserted, error: insertError } = await adminSupabase
