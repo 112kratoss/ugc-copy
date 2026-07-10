@@ -16,7 +16,7 @@ import { supabase } from '@/lib/supabase';
 import AppShellAccountFallback from './AppShellAccountFallback';
 
 type ProfileSummary = {
-  name: string | null;
+  display_name: string | null;
   avatar_url: string | null;
   credits: number | null;
 };
@@ -30,7 +30,7 @@ type AccountAvatarProps = {
 function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
   const avatarUrl = getAuthAvatarUrl(session?.user?.user_metadata) ?? profile?.avatar_url;
   const label = getCreatorDisplayName({
-    name: profile?.name ?? null,
+    displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
   });
   const initials = getUserInitials(label);
@@ -63,7 +63,7 @@ export default function AppShellAccount() {
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const credits = profile?.credits ?? 0;
   const displayName = getCreatorDisplayName({
-    name: profile?.name ?? null,
+    displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
   });
 
@@ -85,13 +85,13 @@ export default function AppShellAccount() {
 
       const { data } = await supabase
         .from('profiles')
-        .select('name, avatar_url, credits')
+        .select('display_name, avatar_url, credits')
         .eq('id', nextSession.user.id)
         .maybeSingle();
 
       if (mounted) {
         setProfile({
-          name: data?.name ?? null,
+          display_name: data?.display_name ?? null,
           avatar_url: data?.avatar_url ?? null,
           credits: typeof data?.credits === 'number' ? data.credits : null,
         });
@@ -138,7 +138,7 @@ export default function AppShellAccount() {
         .then(({ data }) => {
           if (typeof data?.credits === 'number') {
             setProfile((current) => ({
-              ...(current ?? { name: null, avatar_url: null }),
+              ...(current ?? { display_name: null, avatar_url: null }),
               credits: data.credits,
             }));
           }
