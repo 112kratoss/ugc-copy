@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   signInWithOAuth: vi.fn(),
   signInWithPassword: vi.fn(),
+  resetPasswordForEmail: vi.fn(),
   signUp: vi.fn(),
   searchParams: new URLSearchParams(),
 }));
@@ -27,6 +28,7 @@ vi.mock('@/lib/supabase', () => ({
       getSession: mocks.getSession,
       signInWithOAuth: mocks.signInWithOAuth,
       signInWithPassword: mocks.signInWithPassword,
+      resetPasswordForEmail: mocks.resetPasswordForEmail,
       signUp: mocks.signUp,
     },
   },
@@ -41,11 +43,13 @@ describe('LoginPage onboarding redirects', () => {
     mocks.refresh.mockClear();
     mocks.signInWithOAuth.mockReset();
     mocks.signInWithPassword.mockReset();
+    mocks.resetPasswordForEmail.mockReset();
     mocks.signUp.mockReset();
     mocks.getSession.mockReset();
     mocks.searchParams = new URLSearchParams();
     mocks.getSession.mockResolvedValue({ data: { session: null } });
     mocks.signInWithPassword.mockResolvedValue({ error: null });
+    mocks.resetPasswordForEmail.mockResolvedValue({ error: null });
     mocks.signInWithOAuth.mockResolvedValue({ error: null });
     mocks.signUp.mockResolvedValue({ data: { session: null }, error: null });
     delete process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN;
@@ -85,6 +89,23 @@ describe('LoginPage onboarding redirects', () => {
     await waitFor(() => expect(mocks.signInWithPassword).toHaveBeenCalled());
     expect(mocks.replace).toHaveBeenCalledWith('/create');
     expect(mocks.refresh).toHaveBeenCalled();
+  });
+
+  it('sends password recovery back through the authenticated reset page', async () => {
+    render(<LoginPage />);
+
+    fireEvent.change(screen.getByLabelText('Email Address'), {
+      target: { value: 'creator@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /forgot password/i }));
+
+    await waitFor(() => expect(mocks.resetPasswordForEmail).toHaveBeenCalled());
+    const [, options] = mocks.resetPasswordForEmail.mock.calls[0];
+    const redirectTo = new URL(options.redirectTo);
+
+    expect(redirectTo.pathname).toBe('/auth/callback');
+    expect(redirectTo.searchParams.get('next')).toBe('/auth/reset-password');
+    expect(await screen.findByText(/password reset link sent/i)).toBeInTheDocument();
   });
 
   it('sends immediate email signups to creator profile setup instead of the requested app route', async () => {

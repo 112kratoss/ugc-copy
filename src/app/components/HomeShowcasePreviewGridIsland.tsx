@@ -21,7 +21,7 @@ export default function HomeShowcasePreviewGridIsland({
     <AuthProvider
       initialSession={initialSession}
       initialCredits={initialCredits}
-      hasResolvedInitialState
+      hasResolvedInitialState={initialSession !== null}
     >
       <HomeShowcasePreviewGrid items={items} />
     </AuthProvider>

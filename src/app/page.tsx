@@ -1,10 +1,10 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Sparkles } from 'lucide-react';
 
 import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
-import { SectionHeader, Text } from '@/app/components/DesignSystem';
+import { Button, getAccentClasses, Kicker, SectionHeader, StatusCallout, Text } from '@/app/components/DesignSystem';
 import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowcasePreviewGrid';
 import { JsonLd } from '@/app/components/JsonLd';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
@@ -38,37 +38,37 @@ const LATEST_MODELS = [
     name: IMAGE_MODELS['grok-imagine-image'].displayName,
     description: 'xAI multi-output image runs',
     href: '/create-image?model=grok-imagine-image',
-    accent: 'from-amber-500/20 to-orange-400/10',
+    accent: 'border-amber-300/15 bg-amber-400/[0.07] text-amber-100',
   },
   {
     name: VIDEO_MODELS['grok-imagine-video'].displayName,
     description: 'xAI prompt and image-to-video',
     href: '/create-video?model=grok-imagine-video',
-    accent: 'from-rose-500/20 to-amber-400/10',
+    accent: 'border-rose-300/15 bg-rose-400/[0.07] text-rose-100',
   },
   {
     name: IMAGE_MODELS['gpt-image-2'].displayName,
     description: 'ChatGPT image generation',
     href: '/create-image?model=gpt-image-2',
-    accent: 'from-amber-500/20 to-orange-400/10',
+    accent: 'border-amber-300/15 bg-amber-400/[0.07] text-amber-100',
   },
   {
     name: IMAGE_MODELS['nano-banana-pro'].displayName,
     description: 'High-fidelity stills',
     href: '/create-image?model=nano-banana-pro',
-    accent: 'from-violet-500/20 to-fuchsia-400/10',
+    accent: 'border-violet-300/15 bg-violet-400/[0.07] text-violet-100',
   },
   {
     name: VIDEO_MODELS['kling-3.0-video'].displayName,
     description: 'Cinematic video scenes',
     href: '/create-video?model=kling-3.0-video',
-    accent: 'from-rose-500/20 to-orange-400/10',
+    accent: 'border-rose-300/15 bg-rose-400/[0.07] text-rose-100',
   },
   {
     name: MOTION_MODELS['kling-3.0'].displayName,
     description: 'Motion-led UGC output',
     href: '/create-motion?model=kling-3.0',
-    accent: 'from-violet-500/20 to-indigo-400/10',
+    accent: 'border-violet-300/15 bg-violet-400/[0.07] text-violet-100',
   },
 ] as const;
 
@@ -140,7 +140,7 @@ export default async function Home() {
   });
 
   return (
-    <div className="ui-page relative flex flex-col overflow-hidden font-[family-name:var(--font-geist-sans)]">
+    <div className="ui-page ui-page-ambient relative flex flex-col overflow-hidden font-[family-name:var(--font-geist-sans)]">
       <JsonLd data={buildOrganizationSchema()} />
       <JsonLd
         data={buildSoftwareApplicationSchema({
@@ -159,27 +159,30 @@ export default async function Home() {
         })}
       />
 
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[10%] top-20 h-48 w-48 rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="absolute right-[12%] top-24 h-64 w-64 rounded-full bg-fuchsia-500/10 blur-3xl" />
-      </div>
+      <main className="studio-shell relative z-10 flex flex-1 flex-col pb-24 pt-7 sm:pt-10">
+        <section className="ui-enter grid gap-8 border-b border-[var(--ui-border-subtle)] pb-10 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.78fr)] lg:items-end">
+          <div className="max-w-3xl">
+            <Kicker icon={Sparkles}>Obsidian creator studio</Kicker>
+            <Text as="h1" variant="display" className="mt-4 max-w-[13ch]">
+              What will you create <span className="text-[var(--ui-primary)]">today?</span>
+            </Text>
+            <Text variant="bodySm" className="mt-4 max-w-xl sm:text-base">
+              Choose a format, start with a strong default, and move from idea to output without the setup maze.
+            </Text>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button href="/create" variant="primary" icon={ArrowRight}>
+                Start creating
+              </Button>
+              <Button href="/showcase" variant="secondary">
+                Browse the feed
+              </Button>
+            </div>
+          </div>
 
-      <main className="studio-shell relative z-10 flex flex-1 flex-col pb-24 pt-8 sm:pt-12">
-        <section className="flex flex-col items-center text-center">
-          <Text as="h1" variant="display" className="max-w-3xl">
-            What would you like to{' '}
-            <span className="bg-gradient-to-r from-pink-400 via-fuchsia-400 to-violet-300 bg-clip-text text-transparent">
-              create
-            </span>{' '}
-            today?
-          </Text>
-          <Text variant="bodySm" className="mt-4 max-w-2xl sm:text-base">
-            Pick a path, see the output style immediately, and move straight into creation.
-          </Text>
-
-          <div className="ui-surface-soft mt-6 grid w-full max-w-[880px] grid-cols-2 gap-2 rounded-3xl p-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-2 sm:grid-cols-4 lg:grid-cols-2">
             {CREATOR_TOOLS.map((tool) => {
               const Icon = tool.icon;
+              const theme = getAccentClasses(tool.accent);
 
               return (
                 <Link
@@ -188,9 +191,11 @@ export default async function Home() {
                   prefetch={
                     tool.id === 'workflow' || tool.id === 'video' ? false : undefined
                   }
-                  className="flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                  className="ui-focus-ring group flex min-h-14 items-center gap-3 rounded-[20px] border border-transparent px-3 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-subtle)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 >
-                  <Icon className="h-4 w-4" />
+                  <span className={`flex h-9 w-9 items-center justify-center rounded-[13px] border transition ${theme.iconWrap}`}>
+                    <Icon className="h-4 w-4" aria-hidden />
+                  </span>
                   {tool.shortLabel}
                 </Link>
               );
@@ -210,7 +215,7 @@ export default async function Home() {
             className="mb-5"
           />
 
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="ui-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {CREATOR_TOOLS.map((tool) => (
               <CreatorToolCard
                 key={tool.id}
@@ -237,22 +242,24 @@ export default async function Home() {
             variant="minimal"
           />
 
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="ui-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {LATEST_MODELS.map((model) => (
               <Link
                 key={model.name}
                 href={model.href}
                 prefetch={model.href.includes('/create-video') ? false : undefined}
-                className="ui-card ui-card-interactive ui-focus-ring group overflow-hidden p-3.5"
+                className="ui-card ui-card-interactive ui-focus-ring group flex min-h-28 items-center justify-between gap-5 overflow-hidden p-5"
               >
                 <div
-                  className={`flex h-36 w-full items-end rounded-2xl bg-gradient-to-br p-5 ${model.accent}`}
+                  className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border ${model.accent}`}
                 >
-                  <div className="text-2xl font-semibold text-white/90">
-                    {model.name}
-                  </div>
+                  <Sparkles className="h-5 w-5" aria-hidden />
                 </div>
-                <Text variant="bodySm" className="px-1 pb-1 pt-4">{model.description}</Text>
+                <div className="min-w-0 flex-1">
+                  <Text as="h3" variant="cardTitle" className="truncate text-lg">{model.name}</Text>
+                  <Text variant="bodySm" className="mt-1 line-clamp-2">{model.description}</Text>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-[var(--ui-text-faint)] transition group-hover:translate-x-0.5 group-hover:text-[var(--ui-primary)]" aria-hidden />
               </Link>
             ))}
           </div>
@@ -267,16 +274,35 @@ export default async function Home() {
             variant="minimal"
           />
 
-          <DeferredHomeShowcasePreviewGrid
-            items={showcaseFeed.items}
-            initialSession={null}
-            initialCredits={null}
-          />
+          {usedFallback ? (
+            <div className="space-y-3">
+              <StatusCallout
+                tone="danger"
+                title="Could not load the creator feed"
+                body="Your creation tools are still available. Check the connection, then try the feed again."
+              />
+              <Link href="/?retryFeed=1" className="ui-button ui-button-secondary ui-focus-ring">Retry feed</Link>
+            </div>
+          ) : (
+            <DeferredHomeShowcasePreviewGrid
+              items={showcaseFeed.items}
+              initialSession={null}
+              initialCredits={null}
+            />
+          )}
         </section>
       </main>
 
-      <footer className="relative z-10 border-t border-white/[0.04] bg-black/70 px-6 py-8 text-center text-sm text-zinc-600 backdrop-blur-sm">
-        <p>© {new Date().getFullYear()} magicbooklet. All rights reserved.</p>
+      <footer className="relative z-10 border-t border-[var(--ui-border-subtle)] bg-[var(--ui-bg-app)] px-6 py-8 text-sm text-[var(--ui-text-faint)]">
+        <div className="studio-shell flex flex-col items-center justify-between gap-4 sm:flex-row">
+          <p>© {new Date().getFullYear()} magicbooklet.</p>
+          <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Legal and support">
+            <Link href="/contact" className="hover:text-[var(--ui-text-primary)]">Contact</Link>
+            <Link href="/privacy" className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
+            <Link href="/terms" className="hover:text-[var(--ui-text-primary)]">Terms</Link>
+            <Link href="/cancellation" className="hover:text-[var(--ui-text-primary)]">Cancellation</Link>
+          </nav>
+        </div>
       </footer>
     </div>
   );

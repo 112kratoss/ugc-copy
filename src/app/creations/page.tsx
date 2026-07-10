@@ -1315,7 +1315,7 @@ export default function CreationsPage() {
             : workspaceState.monetizationLabel;
 
     return (
-        <div className="min-h-screen bg-black text-white">
+        <div className="ui-page ui-page-ambient min-h-screen">
             <input
                 ref={restoreInputRef}
                 type="file"
@@ -1325,7 +1325,7 @@ export default function CreationsPage() {
                 onChange={(event) => void handlePreviewRestoreFile(event)}
             />
             {/* Background effects */}
-            <div className="fixed inset-0 z-0 pointer-events-none">
+            <div className="fixed inset-0 z-0 hidden pointer-events-none">
                 <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-purple-900/15 blur-[120px] rounded-full mix-blend-screen" />
                 <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-pink-900/10 blur-[120px] rounded-full mix-blend-screen" />
             </div>
@@ -1335,7 +1335,7 @@ export default function CreationsPage() {
                 <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-4">
                         <div>
-                            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-zinc-400 text-transparent bg-clip-text">
+                            <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
                                 Studio
                             </h1>
                             <p className="text-sm text-zinc-500 font-medium tracking-wide">
@@ -1347,21 +1347,21 @@ export default function CreationsPage() {
                     <div className="flex flex-wrap items-center gap-2.5 self-start">
                         <Link
                             href="/create"
-                            className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition-all hover:bg-zinc-200"
+                            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
                         >
                             <Wand2 className="h-4 w-4" />
                             Create
                         </Link>
                         <Link
                             href="/post/new"
-                            className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-semibold text-zinc-200 transition-all hover:bg-white/[0.08] hover:text-white"
+                            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-5 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
                         >
                             <Plus className="h-4 w-4" />
                             Post
                         </Link>
                         <Link
                             href="/profile"
-                            className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-all hover:border-purple-500/40 hover:bg-purple-500/10 hover:text-white"
+                            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-5 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[rgba(255,122,89,0.3)] hover:bg-[var(--ui-primary-soft)] hover:text-[var(--ui-text-primary)]"
                         >
                             <UserRound className="h-4 w-4" />
                             Manage profile
@@ -1401,11 +1401,11 @@ export default function CreationsPage() {
                 ) : null}
 
                 {shouldShowPortfolioStarter ? (
-                    <section className="mb-8 rounded-[28px] border border-purple-400/15 bg-[linear-gradient(135deg,rgba(88,28,135,0.22),rgba(2,6,23,0.78)_48%,rgba(15,118,110,0.16))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-md sm:p-6">
+                    <section className="mb-8 rounded-[28px] border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
                         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                             <div>
                                 <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
-                                    <UserRound className="h-3.5 w-3.5 text-purple-200" />
+                                    <UserRound className="h-3.5 w-3.5 text-[var(--ui-primary)]" />
                                     Portfolio setup
                                 </div>
                                 <h2 className="mt-4 max-w-2xl text-2xl font-semibold tracking-tight text-white">

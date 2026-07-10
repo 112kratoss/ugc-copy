@@ -85,6 +85,12 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <a
+          href="#main-content"
+          className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"
+        >
+          Skip to content
+        </a>
         <AppShell>{children}</AppShell>
         <DeferredGenerationNotifications />
         {gaMeasurementId ? (

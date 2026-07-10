@@ -1050,7 +1050,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     if (isLoadingUser) {
         return (
-            <div className="min-h-screen bg-black text-white flex items-center justify-center">
+            <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
                 <Loader2 className="w-8 h-8 animate-spin text-zinc-500" />
             </div>
         );
@@ -1081,9 +1081,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         : (outputImage ? [outputImage] : []);
 
     return (
-        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
+        <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
             {/* Background glows — animated per model */}
-            <div className="fixed inset-0 z-0 pointer-events-none">
+            <div className="fixed inset-0 z-0 hidden pointer-events-none">
                 <AnimatePresence mode="wait">
                     {selectedModel === 'nano-banana-2' ? (
                         <motion.div key="glow-nb2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
@@ -1637,7 +1637,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                 Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
                                             </p>
                                         </div>
-                                        <Link href="/pricing" className="flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-600 to-cyan-600 px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90">
+                                        <Link href="/pricing" className="ui-focus-ring flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
                                             <Sparkles className="h-4 w-4" />
                                             Top Up Credits
                                         </Link>
@@ -1646,7 +1646,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     <button
                                         onClick={handleGenerate}
                                         disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0}
-                                        className={`flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r px-6 py-4 text-base font-semibold text-white transition ${accentStyles.generate} disabled:cursor-not-allowed disabled:opacity-50`}
+                                        className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (
                                             <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</>

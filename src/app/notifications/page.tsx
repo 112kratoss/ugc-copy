@@ -41,9 +41,11 @@ export default function NotificationsPage() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   const fetchNotifications = async () => {
+    setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
@@ -54,15 +56,17 @@ export default function NotificationsPage() {
       setIsAuthenticated(true);
 
       const response = await fetch('/api/mobile/notifications?limit=50');
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setNotifications(data.notifications || []);
-          setUnreadCount(data.unreadCount || 0);
-        }
+      if (!response.ok) {
+        throw new Error(`Alerts request failed with ${response.status}`);
+      }
+      const data = await response.json();
+      if (data.success) {
+        setNotifications(data.notifications || []);
+        setUnreadCount(data.unreadCount || 0);
       }
     } catch (error) {
       console.error('Failed to load notifications:', error);
+      setError('Could not load alerts. Check the connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -147,10 +151,11 @@ export default function NotificationsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="ui-page ui-page-ambient min-h-[calc(100dvh-64px)]">
+      <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+      <div className="ui-enter mb-6 flex flex-col gap-4 border-b border-[var(--ui-border-subtle)] pb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white">Notifications</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">Alerts</h1>
           <p className="mt-1 text-sm text-zinc-400">
             {isAuthenticated
               ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}`
@@ -162,7 +167,8 @@ export default function NotificationsPage() {
           <div className="flex gap-2">
             <button
               onClick={fetchNotifications}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+              aria-label="Refresh alerts"
+              className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
               title="Refresh alerts"
             >
               <RefreshCw className="h-4 w-4" />
@@ -170,7 +176,7 @@ export default function NotificationsPage() {
             <button
               onClick={handleMarkAllRead}
               disabled={unreadCount === 0}
-              className="inline-flex h-10 gap-2 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+              className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <CheckCheck className="h-4 w-4" />
               <span>Mark all read</span>
@@ -180,7 +186,7 @@ export default function NotificationsPage() {
       </div>
 
       {!isAuthenticated ? (
-        <div className="rounded-3xl border border-white/10 bg-[#10111a] p-8 text-center">
+        <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-8 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white/5 text-zinc-400">
             <Bell className="h-6 w-6" />
           </div>
@@ -190,14 +196,23 @@ export default function NotificationsPage() {
           </p>
           <Link
             href="/login"
-            className="mt-6 inline-flex items-center justify-center rounded-full bg-blue-500 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-400"
+            className="ui-focus-ring mt-6 inline-flex min-h-12 items-center justify-center rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
           >
             Sign in
           </Link>
         </div>
       ) : loading ? (
         <div className="flex min-h-[240px] items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--ui-primary)]" />
+        </div>
+      ) : error ? (
+        <div role="alert" className="rounded-3xl border border-rose-300/25 bg-rose-400/10 p-6">
+          <h2 className="text-lg font-bold text-rose-200">Could not load alerts</h2>
+          <p className="mt-2 text-sm text-[var(--ui-text-secondary)]">{error}</p>
+          <button onClick={() => void fetchNotifications()} className="ui-focus-ring mt-5 inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]">
+            <RefreshCw className="h-4 w-4" aria-hidden />
+            Retry
+          </button>
         </div>
       ) : notifications.length > 0 ? (
         <div className="space-y-3">
@@ -206,13 +221,14 @@ export default function NotificationsPage() {
             const Icon = meta.Icon;
 
             return (
-              <div
+              <button
+                type="button"
                 key={notification.id}
                 onClick={() => handlePressNotification(notification)}
-                className={`flex cursor-pointer items-start gap-4 rounded-2xl border p-4 transition ${
+                className={`ui-focus-ring flex w-full cursor-pointer items-start gap-4 rounded-2xl border p-4 text-left transition ${
                   notification.isRead
-                    ? 'border-white/10 bg-zinc-950/40 hover:bg-zinc-900/40'
-                    : 'border-violet-500/30 bg-violet-500/[0.04] hover:bg-violet-500/[0.07]'
+                    ? 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] hover:bg-[var(--ui-surface-raised)]'
+                    : 'border-[rgba(255,122,89,0.28)] bg-[var(--ui-primary-soft)] hover:border-[rgba(255,122,89,0.4)]'
                 }`}
               >
                 <div
@@ -226,7 +242,7 @@ export default function NotificationsPage() {
                       {notification.title}
                     </h3>
                     {!notification.isRead && (
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-violet-500 shadow-[0_0_8px_#8b5cf6]" />
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--ui-primary)]" />
                     )}
                   </div>
                   <p className="mt-1 text-xs sm:text-sm leading-relaxed text-zinc-400">
@@ -242,12 +258,12 @@ export default function NotificationsPage() {
                     </span>
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
       ) : (
-        <div className="rounded-3xl border border-white/10 bg-[#10111a] p-8 text-center">
+        <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-8 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <CheckCircle2 className="h-6 w-6" />
           </div>
@@ -257,6 +273,7 @@ export default function NotificationsPage() {
           </p>
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -3,10 +3,10 @@ import Link from 'next/link';
 export default function AppShellAccountFallback() {
   return (
     <Link
-      href="/login"
-      className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
+      href="/login?returnUrl=/create"
+      className="ui-focus-ring inline-flex min-h-12 items-center justify-center rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
     >
-      Start Creating
+      Sign in
     </Link>
   );
 }

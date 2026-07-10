@@ -1,3 +1,5 @@
+import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+
 import CreateImageClient, { type CreateImagePrefill } from './CreateImageClient';
 
 type CreateImagePageProps = {
@@ -19,6 +21,19 @@ export default async function CreateImagePage({
     model: getFirstValue(resolvedSearchParams.model),
     aspectRatio: getFirstValue(resolvedSearchParams.aspectRatio),
   };
+  const returnParams = new URLSearchParams();
+  if (prefill.remixId) returnParams.set('remix', prefill.remixId);
+  if (prefill.remixPostId) returnParams.set('remixPost', prefill.remixPostId);
+  if (prefill.prompt) returnParams.set('prompt', prefill.prompt);
+  if (prefill.model) returnParams.set('model', prefill.model);
+  if (prefill.aspectRatio) returnParams.set('aspectRatio', prefill.aspectRatio);
+  const returnTo = returnParams.size > 0
+    ? `/create-image?${returnParams.toString()}`
+    : '/create-image';
 
-  return <CreateImageClient prefill={prefill} />;
+  return (
+    <RequireAuth returnTo={returnTo}>
+      <CreateImageClient prefill={prefill} />
+    </RequireAuth>
+  );
 }

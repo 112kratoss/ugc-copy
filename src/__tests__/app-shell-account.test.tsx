@@ -62,7 +62,7 @@ describe('AppShellAccount', () => {
   it('loads the real profile fields and displays the stored credit balance', async () => {
     render(<AppShellAccount />);
 
-    expect(await screen.findByText('1295 Credits')).toBeInTheDocument();
+    expect(await screen.findByText('1295 credits')).toBeInTheDocument();
     expect(mocks.select).toHaveBeenCalledWith('display_name, avatar_url, credits');
     await waitFor(() => expect(mocks.eq).toHaveBeenCalledWith('id', 'user-1'));
   });

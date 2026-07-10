@@ -277,13 +277,10 @@ describe('creator tool card links', () => {
 
     render(await Home());
 
-    expect(screen.getByText(/What would you like to/i)).toBeInTheDocument();
-    expect(screen.getByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '0');
-    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
-      items: [],
-      initialSession: null,
-      initialCredits: null,
-    });
+    expect(screen.getByText(/What will you create/i)).toBeInTheDocument();
+    expect(screen.getByText(/Could not load the creator feed/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('home-showcase-preview-grid')).not.toBeInTheDocument();
+    expect(homeShowcasePreviewGridMock).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       'Failed to load homepage showcase content:',
       expect.any(Error)

@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { Apple, ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
+import { Apple, ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2, WandSparkles } from 'lucide-react';
 
 function getSafeRedirectPath(value: string | null, fallback = '/profile') {
     if (!value) {
@@ -59,8 +59,8 @@ type SocialProvider = 'apple' | 'google';
 export default function LoginPage() {
     return (
         <Suspense fallback={
-            <div className="min-h-screen bg-black text-white flex items-center justify-center">
-                <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+            <div className="ui-page min-h-screen flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-[var(--ui-primary)]" />
             </div>
         }>
             <LoginContent />
@@ -162,67 +162,116 @@ function LoginContent() {
         }
     };
 
+    const handlePasswordReset = async () => {
+        if (!email.trim()) {
+            setError('Enter your email address first, then choose Forgot password.');
+            return;
+        }
+
+        setLoading(true);
+        setError(null);
+        setSuccessMessage(null);
+
+        try {
+            const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+                redirectTo: getAuthCallbackUrl('/auth/reset-password'),
+            });
+            if (resetError) throw resetError;
+            setSuccessMessage('Password reset link sent. Check your email to continue.');
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : 'Could not send the reset link.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
-        <div className="min-h-screen bg-black text-white flex flex-col p-6">
-            <Link
-                href="/"
-                className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8 w-fit"
-            >
-                <ArrowLeft className="w-4 h-4" />
-                Back to Home
-            </Link>
+        <div className="ui-page ui-page-ambient flex min-h-screen flex-col p-4 sm:p-6">
+            <div className="flex items-center justify-between gap-4">
+                <Link
+                    href="/"
+                    className="ui-focus-ring inline-flex min-h-12 w-fit items-center gap-2 rounded-full px-3 text-sm font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+                >
+                    <ArrowLeft className="h-4 w-4" aria-hidden />
+                    Back home
+                </Link>
+                <Link href="/" className="ui-focus-ring flex items-center gap-2 rounded-xl text-[var(--ui-text-primary)]">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
+                        <WandSparkles className="h-4 w-4" aria-hidden />
+                    </span>
+                    <span className="hidden text-sm font-extrabold sm:inline">magicbooklet</span>
+                </Link>
+            </div>
 
             <div className="flex-1 flex items-center justify-center">
                 <div className="w-full max-w-md">
-                    <div className="text-center mb-8">
-                        <h1 className="text-3xl font-bold mb-2">
+                    <div className="mb-7 text-center">
+                        <h1 className="mb-2 text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
                             {isLogin ? 'Welcome Back' : 'Create Account'}
                         </h1>
-                        <p className="text-zinc-400">
+                        <p className="text-sm leading-6 text-[var(--ui-text-muted)]">
                             {isLogin
                                 ? 'Enter your details to access your account'
-                                : 'Start creating viral AI videos today'}
+                                : 'Set up your creator identity and start making'}
                         </p>
                     </div>
 
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8">
+                    <div className="rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
                         <form onSubmit={handleAuth} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-zinc-400 mb-1.5">
+                                <label htmlFor="login-email" className="mb-1.5 block text-sm font-bold text-[var(--ui-text-secondary)]">
                                     Email Address
                                 </label>
                                 <div className="relative">
                                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
                                     <input
+                                        id="login-email"
+                                        name="email"
                                         type="email"
                                         value={email}
                                         onChange={(e) => setEmail(e.target.value)}
                                         required
-                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg py-3 pl-10 pr-4 text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder:text-zinc-600"
+                                        autoComplete="email"
+                                        className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-10 pr-4 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
                                         placeholder="name@example.com"
                                     />
                                 </div>
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-zinc-400 mb-1.5">
-                                    Password
-                                </label>
+                                <div className="mb-1.5 flex items-center justify-between gap-3">
+                                    <label htmlFor="login-password" className="block text-sm font-bold text-[var(--ui-text-secondary)]">
+                                        Password
+                                    </label>
+                                    {isLogin ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => void handlePasswordReset()}
+                                            disabled={loading}
+                                            className="ui-focus-ring rounded-full px-2 py-1 text-xs font-bold text-[var(--ui-primary)] hover:bg-[var(--ui-primary-soft)] disabled:opacity-50"
+                                        >
+                                            Forgot password?
+                                        </button>
+                                    ) : null}
+                                </div>
                                 <div className="relative">
                                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
                                     <input
+                                        id="login-password"
+                                        name="password"
                                         type={showPassword ? 'text' : 'password'}
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
                                         required
                                         minLength={6}
-                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg py-3 pl-10 pr-12 text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder:text-zinc-600"
+                                        autoComplete={isLogin ? 'current-password' : 'new-password'}
+                                        className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-10 pr-12 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
                                         placeholder="••••••••"
                                     />
                                     <button
                                         type="button"
                                         onClick={() => setShowPassword((current) => !current)}
-                                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-500 transition-colors hover:text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                                        className="ui-focus-ring absolute right-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                                         aria-label={showPassword ? 'Hide password' : 'Show password'}
                                     >
                                         {showPassword ? (
@@ -235,14 +284,14 @@ function LoginContent() {
                             </div>
 
                             {error && (
-                                <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-500 text-sm">
+                                <div role="alert" aria-live="assertive" className="flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
                                     <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                                     <p>{error}</p>
                                 </div>
                             )}
 
                             {successMessage && (
-                                <div className="flex items-start gap-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                                <div role="status" aria-live="polite" className="flex items-start gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
                                     <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
                                     <p>{successMessage}</p>
                                 </div>
@@ -251,7 +300,7 @@ function LoginContent() {
                             <button
                                 type="submit"
                                 disabled={loading}
-                                className="w-full bg-white text-black font-semibold py-3 rounded-lg hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 {loading ? (
                                     <>
@@ -266,10 +315,10 @@ function LoginContent() {
 
                         <div className="relative my-8">
                             <div className="absolute inset-0 flex items-center">
-                                <div className="w-full border-t border-zinc-800"></div>
+                                <div className="w-full border-t border-[var(--ui-border-subtle)]"></div>
                             </div>
                             <div className="relative flex justify-center text-sm">
-                                <span className="px-2 bg-zinc-900 text-zinc-500">Or continue with</span>
+                                <span className="bg-[var(--ui-surface-1)] px-2 text-[var(--ui-text-faint)]">Or continue with</span>
                             </div>
                         </div>
 
@@ -277,7 +326,7 @@ function LoginContent() {
                             <button
                                 onClick={() => handleSocialLogin('google')}
                                 disabled={loading}
-                                className="w-full bg-zinc-950 border border-zinc-800 text-white font-medium py-3 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
                             >
                                 <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
                                     <path
@@ -302,7 +351,7 @@ function LoginContent() {
                             <button
                                 onClick={() => handleSocialLogin('apple')}
                                 disabled={loading}
-                                className="w-full bg-zinc-950 border border-zinc-800 text-white font-medium py-3 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
                             >
                                 <Apple className="w-5 h-5" fill="currentColor" strokeWidth={1.6} aria-hidden="true" />
                                 Apple
@@ -317,7 +366,7 @@ function LoginContent() {
                                     setError(null);
                                     setSuccessMessage(null);
                                 }}
-                                className="text-white hover:underline font-medium"
+                                className="ui-focus-ring rounded-full px-1 font-bold text-[var(--ui-primary)] hover:underline"
                             >
                                 {isLogin ? 'Sign up' : 'Log in'}
                             </button>
@@ -325,6 +374,11 @@ function LoginContent() {
                     </div>
                 </div>
             </div>
+            <footer className="mt-8 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-semibold text-[var(--ui-text-faint)]">
+                <Link href="/privacy" className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
+                <Link href="/terms" className="hover:text-[var(--ui-text-primary)]">Terms</Link>
+                <Link href="/contact" className="hover:text-[var(--ui-text-primary)]">Contact</Link>
+            </footer>
         </div>
     );
 }

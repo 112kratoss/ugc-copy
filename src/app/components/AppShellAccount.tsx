@@ -40,7 +40,7 @@ function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
     return (
       <span
         aria-hidden="true"
-        className={`${className} rounded-full border border-white/10 bg-cover bg-center`}
+        className={`${className} rounded-full border border-[var(--ui-border-default)] bg-cover bg-center`}
         style={{ backgroundImage: `url(${avatarUrl})` }}
       />
     );
@@ -48,7 +48,7 @@ function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
 
   return (
     <span
-      className={`${className} inline-flex items-center justify-center rounded-full border border-white/10 bg-white text-black font-semibold`}
+      className={`${className} inline-flex items-center justify-center rounded-full border border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary-soft)] font-extrabold text-[var(--ui-primary-strong)]`}
     >
       {initials}
     </span>
@@ -61,7 +61,7 @@ export default function AppShellAccount() {
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
-  const credits = profile?.credits ?? 0;
+  const credits = profile?.credits;
   const displayName = getCreatorDisplayName({
     displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
@@ -122,7 +122,16 @@ export default function AppShellAccount() {
     }
 
     document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setAccountOpen(false);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   useEffect(() => {
@@ -165,19 +174,20 @@ export default function AppShellAccount() {
     <>
       <Link
         href="/pricing"
-        className="hidden items-center gap-2 rounded-full border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-sm font-semibold text-violet-100 shadow-lg shadow-violet-500/10 transition hover:bg-violet-500/15 sm:inline-flex"
+        className="ui-focus-ring hidden min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-3 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 sm:inline-flex"
       >
         <Sparkles className="h-4 w-4" />
-        <span>{credits} Credits</span>
+        <span>{typeof credits === 'number' ? `${credits} credits` : 'Credits'}</span>
       </Link>
 
       <div className="relative" ref={accountMenuRef}>
         <button
           type="button"
-          className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] p-1 pr-2 transition hover:bg-white/[0.08]"
+          className="ui-focus-ring flex min-h-12 items-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] p-1 pr-2 transition hover:bg-[var(--ui-surface-3)]"
           onClick={() => setAccountOpen((open) => !open)}
           aria-haspopup="menu"
           aria-expanded={accountOpen}
+          aria-label={`Open account menu for ${displayName}`}
         >
           <AccountAvatar session={session} profile={profile} />
           <ChevronDown className="hidden h-4 w-4 text-zinc-500 sm:block" />
@@ -186,7 +196,8 @@ export default function AppShellAccount() {
         {accountOpen ? (
           <div
             role="menu"
-            className="absolute right-0 top-12 z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[#101013] p-2 shadow-2xl shadow-black/40"
+            aria-label="Account"
+            className="absolute right-0 top-14 z-50 w-64 overflow-hidden rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-2 shadow-2xl shadow-black/40"
           >
             <div className="flex items-center gap-3 border-b border-white/10 px-2 pb-3 pt-1">
               <AccountAvatar session={session} profile={profile} size="sm" />
@@ -197,16 +208,20 @@ export default function AppShellAccount() {
             </div>
             <Link
               href="/profile"
+              role="menuitem"
               onClick={() => setAccountOpen(false)}
-              className="mt-2 flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-white/[0.05] hover:text-white"
+              className="ui-focus-ring mt-2 flex min-h-11 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
             >
               Profile
-              <span className="text-xs text-zinc-500">{credits} credits</span>
+              <span className="text-xs text-[var(--ui-text-faint)]">
+                {typeof credits === 'number' ? `${credits} credits` : 'View account'}
+              </span>
             </Link>
             <button
               type="button"
+              role="menuitem"
               onClick={handleSignOut}
-              className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-zinc-300 hover:bg-white/[0.05] hover:text-white"
+              className="ui-focus-ring mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
             >
               <LogOut className="h-4 w-4" />
               Sign out

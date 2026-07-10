@@ -215,7 +215,12 @@ export default function ShowcaseMediaCarousel({
 
         {items.length > 1 ? (
           <>
-            <div className="pointer-events-none absolute right-3 top-3 z-[3] inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-md">
+            <div
+              role="status"
+              aria-live="polite"
+              aria-label={`Media ${activeIndex + 1} of ${items.length}`}
+              className="pointer-events-none absolute right-3 top-3 z-[3] inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-md"
+            >
               <Images className="h-3.5 w-3.5" />
               {activeIndex + 1}/{items.length}
             </div>
@@ -227,7 +232,7 @@ export default function ShowcaseMediaCarousel({
               }}
               disabled={activeIndex === 0}
               aria-label="Previous media"
-              className="absolute left-3 top-1/2 z-[4] hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85 disabled:opacity-25 group-hover/carousel:flex sm:flex"
+              className="ui-focus-ring absolute left-3 top-1/2 z-[4] hidden h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85 disabled:opacity-25 group-hover/carousel:flex sm:flex"
             >
               <ChevronLeft className="h-5 w-5" />
             </button>
@@ -239,11 +244,11 @@ export default function ShowcaseMediaCarousel({
               }}
               disabled={activeIndex === items.length - 1}
               aria-label="Next media"
-              className="absolute right-3 top-1/2 z-[4] hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85 disabled:opacity-25 group-hover/carousel:flex sm:flex"
+              className="ui-focus-ring absolute right-3 top-1/2 z-[4] hidden h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85 disabled:opacity-25 group-hover/carousel:flex sm:flex"
             >
               <ChevronRight className="h-5 w-5" />
             </button>
-            <div className="absolute inset-x-0 bottom-3 z-[4] flex justify-center gap-1.5">
+            <div role="group" className="absolute inset-x-0 bottom-0 z-[4] flex justify-center gap-0.5" aria-label="Choose media">
               {items.map((item, index) => (
                 <button
                   key={item.id}
@@ -253,10 +258,16 @@ export default function ShowcaseMediaCarousel({
                     selectIndex(index);
                   }}
                   aria-label={`Show media ${index + 1}`}
-                  className={`h-1.5 rounded-full transition ${
-                    index === activeIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/45 hover:bg-white/70'
-                  }`}
-                />
+                  aria-pressed={index === activeIndex}
+                  className="ui-focus-ring group flex h-12 min-w-8 items-center justify-center rounded-full"
+                >
+                  <span
+                    aria-hidden
+                    className={`h-1.5 rounded-full transition ${
+                      index === activeIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/45 group-hover:bg-white/70'
+                    }`}
+                  />
+                </button>
               ))}
             </div>
           </>

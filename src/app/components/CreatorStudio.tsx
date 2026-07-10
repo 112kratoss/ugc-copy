@@ -85,7 +85,7 @@ export function CreatorToolCard({
       href={tool.href}
       prefetch={prefetch}
       className={clsx(
-        'ui-card ui-card-interactive ui-focus-ring group relative block h-full cursor-pointer overflow-hidden bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(9,9,12,0.96))]',
+        'ui-card ui-card-interactive ui-focus-ring group relative block h-full cursor-pointer overflow-hidden bg-[var(--ui-surface-1)]',
         theme.border,
         theme.focusRing,
         isLaunchpad
@@ -222,7 +222,7 @@ export function GeneratorPageHeader({
   const theme = getAccentClasses(tool.accent);
 
   return (
-    <Surface as="section" variant="panel" padding="none" className="mb-8 p-5 sm:p-7">
+    <Surface as="section" variant="panel" padding="none" className="ui-enter mb-6 p-5 sm:p-6">
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-start gap-4">
@@ -240,7 +240,7 @@ export function GeneratorPageHeader({
           </div>
 
           {credits !== null ? (
-            <div className="inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-100">
+            <div className="inline-flex min-h-11 items-center gap-2 self-start rounded-full border border-amber-300/20 bg-amber-400/10 px-4 text-sm font-bold text-amber-100">
               <Sparkles className={clsx('h-4 w-4', theme.accentText)} />
               <span>{credits}</span>
               <span className="text-zinc-500">credits</span>
@@ -283,7 +283,7 @@ function MediaStudioRail({
       <StudioPanel className="sticky top-24 p-3">
         <Link
           href="/create"
-          className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-[20px] border border-white/10 bg-white/[0.03] px-3 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+          className="ui-focus-ring mb-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-[20px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
         >
           <ArrowLeft className="h-4 w-4" />
           Hub
@@ -302,9 +302,9 @@ function MediaStudioRail({
                 href={tool.href}
                 prefetch={tool.id === 'video' ? false : undefined}
                 className={clsx(
-                  'group flex flex-col items-center gap-2 rounded-[24px] border px-3 py-4 text-center transition',
+                  'ui-focus-ring group flex min-h-24 flex-col items-center gap-2 rounded-[24px] border px-3 py-4 text-center transition',
                   isActive
-                    ? 'border-white/12 bg-white/[0.06] text-white'
+                    ? 'border-[rgba(255,122,89,0.28)] bg-[var(--ui-primary-soft)] text-[var(--ui-text-primary)]'
                     : 'border-white/8 bg-white/[0.02] text-zinc-400 hover:border-white/12 hover:bg-white/[0.05] hover:text-white'
                 )}
               >
@@ -438,15 +438,15 @@ export function StudioRunPanel({
     <StudioPanel className="p-5 sm:p-6">
       <div className="space-y-5">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+            <div className="text-xs font-bold uppercase tracking-[0.22em] text-[var(--ui-text-faint)]">
             Run summary
           </div>
           <h2 className="mt-2 text-xl font-semibold tracking-tight text-white">{title}</h2>
         </div>
         <div>{summary}</div>
-        {details ? <div className="rounded-[22px] border border-white/8 bg-black/30 p-4">{details}</div> : null}
+        {details ? <div className="rounded-[22px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">{details}</div> : null}
         <div>{action}</div>
-        {status ? <div className="rounded-[22px] border border-white/8 bg-black/30 p-4">{status}</div> : null}
+        {status ? <div className="rounded-[22px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">{status}</div> : null}
         {footer ? <div className="border-t border-white/8 pt-4">{footer}</div> : null}
       </div>
     </StudioPanel>
@@ -519,7 +519,7 @@ export function StudioWorkspacePanel({
 }) {
   return (
     <StudioPanel className="overflow-hidden">
-      <div className="flex items-start justify-between gap-4 border-b border-white/8 px-5 py-4 sm:px-6">
+      <div className="flex items-start justify-between gap-4 border-b border-[var(--ui-border-subtle)] px-5 py-4 sm:px-6">
         <div>
           <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
             Workspace
@@ -553,7 +553,7 @@ export function StudioBackgroundProcessingNotice({
   return (
     <div
       className={clsx(
-        'rounded-[24px] border border-white/8 bg-black/30',
+        'rounded-[24px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)]',
         isWorkspace ? 'flex min-h-[520px] flex-col items-center justify-center p-10 text-center' : 'p-4'
       )}
     >
@@ -579,7 +579,7 @@ export function StudioBackgroundProcessingNotice({
           .
         </p>
         {phaseLabel || timingLabel ? (
-          <div className={clsx('mt-3 rounded-2xl border border-white/8 bg-black/30 px-4 py-3 text-left', isWorkspace ? 'mx-auto max-w-sm' : '')}>
+          <div className={clsx('mt-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-4 py-3 text-left', isWorkspace ? 'mx-auto max-w-sm' : '')}>
             {phaseLabel ? <div className="text-sm font-medium text-zinc-200">{phaseLabel}</div> : null}
             {timingLabel ? <div className="mt-1 text-xs uppercase tracking-[0.18em] text-zinc-500">{timingLabel}</div> : null}
           </div>
@@ -666,7 +666,7 @@ export function StudioUploadedMediaPreview({
             event.stopPropagation();
             onRemove();
           }}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/65 text-white transition hover:bg-rose-500/90"
+          className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-black/70 text-white transition hover:bg-rose-500/90"
           aria-label={`Remove ${alt}`}
         >
           <X className="h-4 w-4" />

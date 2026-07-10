@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import type { ComponentType, ReactNode } from 'react';
+import type { AriaRole, ComponentType, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -57,7 +57,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-sky-300/40 focus-visible:ring-sky-300/35',
     iconWrap: 'border-sky-400/20 bg-sky-400/10 text-sky-200',
     badge: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
-    button: 'border-sky-200/70 bg-sky-300 text-slate-950 hover:bg-sky-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-sky-500/20 via-sky-400/10 to-transparent',
     accentText: 'text-sky-300',
   },
@@ -66,7 +66,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-rose-300/40 focus-visible:ring-rose-300/35',
     iconWrap: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
     badge: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
-    button: 'border-rose-200/70 bg-rose-300 text-slate-950 hover:bg-rose-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-rose-500/20 via-fuchsia-400/10 to-transparent',
     accentText: 'text-rose-300',
   },
@@ -75,7 +75,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-violet-300/40 focus-visible:ring-violet-300/35',
     iconWrap: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
     badge: 'border-violet-400/20 bg-violet-400/10 text-violet-100',
-    button: 'border-violet-200/70 bg-violet-300 text-slate-950 hover:bg-violet-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-violet-500/20 via-indigo-400/10 to-transparent',
     accentText: 'text-violet-300',
   },
@@ -84,7 +84,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-emerald-300/40 focus-visible:ring-emerald-300/35',
     iconWrap: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
     badge: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100',
-    button: 'border-emerald-200/70 bg-emerald-300 text-slate-950 hover:bg-emerald-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-emerald-500/20 via-teal-400/10 to-transparent',
     accentText: 'text-emerald-300',
   },
@@ -93,7 +93,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-amber-300/40 focus-visible:ring-amber-300/35',
     iconWrap: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
     badge: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
-    button: 'border-amber-200/70 bg-amber-300 text-slate-950 hover:bg-amber-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-amber-500/20 via-orange-400/10 to-transparent',
     accentText: 'text-amber-300',
   },
@@ -102,7 +102,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-rose-300/40 focus-visible:ring-rose-300/35',
     iconWrap: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
     badge: 'border-rose-400/20 bg-rose-400/10 text-rose-100',
-    button: 'border-rose-200/70 bg-rose-300 text-slate-950 hover:bg-rose-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-rose-500/20 via-red-400/10 to-transparent',
     accentText: 'text-rose-300',
   },
@@ -111,7 +111,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     focusRing: 'focus-visible:border-white/35 focus-visible:ring-white/25',
     iconWrap: 'border-white/10 bg-white/[0.04] text-zinc-100',
     badge: 'border-white/10 bg-white/[0.04] text-zinc-200',
-    button: 'border-white/70 bg-white text-black hover:bg-zinc-200',
+    button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-white/10 via-white/[0.04] to-transparent',
     accentText: 'text-zinc-200',
   },
@@ -136,16 +136,16 @@ export type TextVariant =
 type TextElement = 'p' | 'span' | 'div' | 'h1' | 'h2' | 'h3' | 'strong' | 'code';
 
 const TEXT_VARIANTS: Record<TextVariant, string> = {
-  display: 'text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-6xl',
-  pageTitle: 'text-4xl font-semibold leading-tight tracking-tight text-white sm:text-5xl',
-  sectionTitle: 'text-3xl font-semibold leading-tight tracking-tight text-white',
-  cardTitle: 'text-xl font-semibold leading-7 tracking-tight text-white',
-  body: 'text-base leading-6 text-zinc-300',
-  bodySm: 'text-sm leading-6 text-zinc-400',
-  label: 'text-xs font-semibold leading-4 text-zinc-300',
-  caption: 'text-[11px] font-medium leading-4 text-zinc-500',
-  metric: 'text-4xl font-bold leading-10 tracking-tight text-white',
-  code: 'font-mono text-[13px] leading-5 text-zinc-300',
+  display: 'text-4xl font-extrabold leading-[1.08] tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl lg:text-6xl',
+  pageTitle: 'text-4xl font-extrabold leading-tight tracking-[-0.025em] text-[var(--ui-text-primary)] sm:text-5xl',
+  sectionTitle: 'text-2xl font-bold leading-tight tracking-tight text-[var(--ui-text-primary)] sm:text-3xl',
+  cardTitle: 'text-xl font-bold leading-7 tracking-tight text-[var(--ui-text-primary)]',
+  body: 'text-base leading-6 text-[var(--ui-text-secondary)]',
+  bodySm: 'text-sm leading-6 text-[var(--ui-text-muted)]',
+  label: 'text-[13px] font-bold leading-[18px] text-[var(--ui-text-secondary)]',
+  caption: 'text-xs font-semibold leading-[17px] text-[var(--ui-text-faint)]',
+  metric: 'text-4xl font-extrabold leading-10 tracking-tight text-[var(--ui-text-primary)]',
+  code: 'font-mono text-[13px] leading-5 text-[var(--ui-text-secondary)]',
 };
 
 export function Text({
@@ -202,6 +202,8 @@ export function Surface({
   variant = 'card',
   padding = 'md',
   interactive = false,
+  role,
+  ariaLive,
   className,
   children,
 }: {
@@ -209,6 +211,8 @@ export function Surface({
   variant?: keyof typeof SURFACE_VARIANTS;
   padding?: keyof typeof SURFACE_PADDING;
   interactive?: boolean;
+  role?: AriaRole;
+  ariaLive?: 'off' | 'polite' | 'assertive';
   className?: string;
   children: ReactNode;
 }) {
@@ -216,6 +220,8 @@ export function Surface({
 
   return (
     <Component
+      role={role}
+      aria-live={ariaLive}
       className={clsx(
         SURFACE_VARIANTS[variant],
         SURFACE_PADDING[padding],
@@ -422,17 +428,28 @@ export function StatusCallout({
   icon: Icon,
   className,
 }: {
-  tone?: 'neutral' | 'success' | 'danger';
+  tone?: 'neutral' | 'info' | 'success' | 'warning' | 'danger';
   title: string;
   body?: string;
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   className?: string;
 }) {
-  const toneClass =
-    tone === 'success' ? 'text-emerald-300' : tone === 'danger' ? 'text-rose-300' : 'text-zinc-200';
+  const toneClass = {
+    neutral: 'text-[var(--ui-text-secondary)]',
+    info: 'text-[var(--ui-accent-image)]',
+    success: 'text-[var(--ui-accent-workflow)]',
+    warning: 'text-[var(--ui-accent-commerce)]',
+    danger: 'text-[var(--ui-accent-danger)]',
+  }[tone];
 
   return (
-    <Surface variant="soft" padding="md" className={clsx('flex gap-3', className)}>
+    <Surface
+      variant="soft"
+      padding="md"
+      role={tone === 'danger' ? 'alert' : 'status'}
+      ariaLive={tone === 'danger' ? 'assertive' : 'polite'}
+      className={clsx('flex gap-3', className)}
+    >
       {Icon ? <Icon className={clsx('mt-0.5 h-5 w-5 shrink-0', toneClass)} aria-hidden /> : null}
       <div>
         <Text as="h3" variant="cardTitle" className={clsx('text-base leading-6', toneClass)}>

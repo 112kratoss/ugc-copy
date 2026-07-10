@@ -684,7 +684,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     if (isLoadingUser) {
         return (
-            <div className="min-h-screen bg-black text-white flex items-center justify-center">
+            <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
                 <Loader2 className="w-8 h-8 animate-spin text-zinc-500" />
             </div>
         );
@@ -719,8 +719,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
     return (
-        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <div className="fixed inset-0 z-0 pointer-events-none">
+        <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
+            <div className="fixed inset-0 z-0 hidden pointer-events-none">
                 <div className="absolute top-[8%] left-[-10%] h-[40%] w-[40%] rounded-full bg-violet-900/15 blur-[120px] mix-blend-screen" />
                 <div className="absolute bottom-[-10%] right-[-10%] h-[44%] w-[44%] rounded-full bg-fuchsia-900/10 blur-[140px] mix-blend-screen" />
             </div>
@@ -1097,7 +1097,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
                                             </p>
                                         </div>
-                                        <Link href="/pricing" className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90">
+                                        <Link href="/pricing" className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
                                             <Sparkles className="h-4 w-4" />
                                             Top Up Credits
                                         </Link>
@@ -1106,7 +1106,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     <button
                                         onClick={handleGenerate}
                                         disabled={!canGenerate || isGenerating || quotePending}
-                                        className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-4 text-base font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                                        className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (
                                             <>

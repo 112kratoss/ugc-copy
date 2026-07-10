@@ -31,11 +31,11 @@ const profile: EditableCreatorProfile = {
   bio: 'This is a test bio',
   avatarUrl: 'https://example.com/avatar.jpg',
   coverUrl: '',
-  websiteUrl: '',
+  websiteUrl: 'https://creator.example.com',
   twitterHandle: '',
   instagramHandle: '',
   tiktokHandle: '',
-  location: '',
+  location: 'Kochi, India',
   credits: 100,
 };
 
@@ -93,11 +93,11 @@ describe('CreatorProfileCard', () => {
             bio: 'Updated bio',
             avatarUrl: 'https://example.com/updated.jpg',
             coverUrl: '',
-            websiteUrl: '',
+            websiteUrl: 'https://creator.example.com',
             twitterHandle: '',
             instagramHandle: '',
             tiktokHandle: '',
-            location: '',
+            location: 'Kochi, India',
             credits: 25,
           }),
         } as Response;
@@ -137,10 +137,14 @@ describe('CreatorProfileCard', () => {
     );
     const validationBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     const patchBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
-    expect(validationBody).not.toHaveProperty('location');
-    expect(validationBody).not.toHaveProperty('websiteUrl');
-    expect(patchBody).not.toHaveProperty('location');
-    expect(patchBody).not.toHaveProperty('websiteUrl');
+    expect(validationBody).toMatchObject({
+      location: 'Kochi, India',
+      websiteUrl: 'https://creator.example.com',
+    });
+    expect(patchBody).toMatchObject({
+      location: 'Kochi, India',
+      websiteUrl: 'https://creator.example.com',
+    });
     expect(onProfileSaved).toHaveBeenCalled();
     expect(screen.getByRole('link', { name: /preview profile/i })).toHaveAttribute('href', '/creators/updated-name');
   });
@@ -166,7 +170,7 @@ describe('CreatorProfileCard', () => {
     expect(screen.getByText(/save the handle first/i)).toBeInTheDocument();
   });
 
-  it('keeps onboarding profile setup focused on identity and common social handles', () => {
+  it('lets creators preserve their public website, location, and social handles', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
@@ -176,8 +180,8 @@ describe('CreatorProfileCard', () => {
       />
     );
 
-    expect(screen.queryByText(/^Location$/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Website URL$/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Location$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Website$/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Social Links' })).toBeInTheDocument();
     expect(screen.getByText(/^X \(Twitter\) Handle$/i)).toBeInTheDocument();
   });
@@ -203,7 +207,8 @@ describe('CreatorProfileCard', () => {
     });
     const cropPreview = screen.getByAltText('Cropped avatar preview');
 
-    expect(screen.queryByText(/^Zoom$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: /avatar zoom/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /zoom in avatar/i })).toBeInTheDocument();
     expect(screen.queryByText(/^Fine tune X$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Fine tune Y$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /smart portrait/i })).not.toBeInTheDocument();
@@ -212,6 +217,9 @@ describe('CreatorProfileCard', () => {
     fireEvent.wheel(cropControl, { deltaY: -120 });
 
     expect(cropPreview).toHaveStyle('transform: scale(1.43)');
+
+    fireEvent.click(screen.getByRole('button', { name: /zoom out avatar/i }));
+    expect(cropPreview).toHaveStyle('transform: scale(1.35)');
   });
 
   it('uses the cover banner itself for drag and scroll cropping', () => {
@@ -237,6 +245,7 @@ describe('CreatorProfileCard', () => {
 
     expect(screen.queryByText(/^Fine tune X$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Fine tune Y$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: /cover zoom/i })).toBeInTheDocument();
     expect(cropPreview).toHaveStyle('transform: scale(1)');
 
     fireEvent.wheel(cropControl, { deltaY: -120 });

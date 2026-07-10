@@ -91,6 +91,14 @@ interface ActiveReferencePreview {
   alt: string;
 }
 
+function getFocusableElements(container: HTMLElement | null) {
+  if (!container) return [];
+
+  return Array.from(container.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+}
+
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
   return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
 }
@@ -229,6 +237,12 @@ export default function ShowcaseReelViewer({
   const wheelCooldownRef = useRef(0);
   const detailsScrollerRef = useRef<HTMLDivElement | null>(null);
   const pendingAdvanceAfterLoadRef = useRef(false);
+  const reelDialogRef = useRef<HTMLDivElement | null>(null);
+  const reelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const referenceDialogRef = useRef<HTMLDivElement | null>(null);
+  const referenceCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const referencePreviousFocusRef = useRef<HTMLElement | null>(null);
   const prefersReducedMotion = useReducedMotion();
   const [transitionDirection, setTransitionDirection] = useState<ReelTransitionDirection>('neutral');
   const [activeMediaIndex, setActiveMediaIndex] = useState(initialMediaIndex);
@@ -408,13 +422,35 @@ export default function ShowcaseReelViewer({
       return;
     }
 
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    const focusFrame = window.requestAnimationFrame(() => reelCloseButtonRef.current?.focus());
 
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus();
+      previousFocusRef.current = null;
     };
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!activeReferencePreview) return;
+
+    referencePreviousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusFrame = window.requestAnimationFrame(() => referenceCloseButtonRef.current?.focus());
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      referencePreviousFocusRef.current?.focus();
+      referencePreviousFocusRef.current = null;
+    };
+  }, [activeReferencePreview]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -558,6 +594,25 @@ export default function ShowcaseReelViewer({
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Tab') {
+        const activeDialog = activeReferencePreview
+          ? referenceDialogRef.current
+          : reelDialogRef.current;
+        const focusable = getFocusableElements(activeDialog);
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+
       if (event.key === 'Escape') {
         if (activeReferencePreview) {
           setActiveReferencePreview(null);
@@ -1222,6 +1277,7 @@ export default function ShowcaseReelViewer({
 
   return (
     <div
+      ref={reelDialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Showcase reel viewer"
@@ -1237,6 +1293,7 @@ export default function ShowcaseReelViewer({
       <AnimatePresence>
         {activeReferencePreview ? (
           <motion.div
+            ref={referenceDialogRef}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -1252,9 +1309,10 @@ export default function ShowcaseReelViewer({
               onClick={(event) => event.stopPropagation()}
             >
               <button
+                ref={referenceCloseButtonRef}
                 type="button"
                 onClick={() => setActiveReferencePreview(null)}
-                className="absolute right-3 top-3 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-black/65 text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
+                className="ui-focus-ring absolute right-3 top-3 z-10 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/65 text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
                 aria-label="Close reference preview"
               >
                 <X className="h-5 w-5" />
@@ -1279,9 +1337,10 @@ export default function ShowcaseReelViewer({
 
       <header className="relative z-10 flex h-14 items-center justify-between gap-3 border-b border-white/8 bg-black/40 px-3 backdrop-blur-xl sm:px-5">
         <button
+          ref={reelCloseButtonRef}
           type="button"
           onClick={handleClose}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+          className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
         >
           <X className="h-4 w-4" />
           Feed
@@ -1359,7 +1418,7 @@ export default function ShowcaseReelViewer({
               onClick={goPrevious}
               disabled={!previousItem}
               aria-label="Previous post"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-black/50 text-zinc-100 backdrop-blur-md transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/50 text-zinc-100 backdrop-blur-md transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               <ArrowUp className="h-4 w-4" />
             </button>
@@ -1369,7 +1428,7 @@ export default function ShowcaseReelViewer({
               disabled={!nextItem && !hasMoreItems}
               aria-busy={!nextItem && hasMoreItems && isLoadingMoreItems}
               aria-label="Next post"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-black/50 text-zinc-100 backdrop-blur-md transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/50 text-zinc-100 backdrop-blur-md transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               {!nextItem && hasMoreItems && isLoadingMoreItems ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1433,7 +1492,7 @@ export default function ShowcaseReelViewer({
             <button
               type="button"
               onClick={() => void onRemix(item.id)}
-              className="inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-purple-300/25 bg-purple-500/15 text-xs font-semibold text-purple-100 transition hover:border-purple-300/45 hover:bg-purple-500/20 lg:h-[70px] lg:w-[70px] lg:flex-none"
+              className="ui-focus-ring inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] lg:h-[70px] lg:w-[70px] lg:flex-none"
             >
               <Wand2 className="h-5 w-5" />
               <span>Remix</span>

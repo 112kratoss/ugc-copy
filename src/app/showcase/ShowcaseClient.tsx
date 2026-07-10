@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X } from 'lucide-react';
+import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PublicShareButton from '@/app/components/PublicShareButton';
@@ -215,6 +215,7 @@ export default function ShowcaseClient({
     const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
     const [pageInfo, setPageInfo] = useState(initialFeed.pageInfo);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
     const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
         const value = Number(searchParams.get('media'));
@@ -373,6 +374,7 @@ export default function ShowcaseClient({
         setItems(initialFeed.items);
         setPageInfo(initialFeed.pageInfo);
         setIsLoadingMore(false);
+        setLoadMoreError(null);
         isLoadingMoreRef.current = false;
         setCategory(initialCategory);
         setSort(initialSort);
@@ -425,6 +427,7 @@ export default function ShowcaseClient({
 
         isLoadingMoreRef.current = true;
         setIsLoadingMore(true);
+        setLoadMoreError(null);
 
         try {
             const params = new URLSearchParams({
@@ -464,6 +467,7 @@ export default function ShowcaseClient({
             });
         } catch (error) {
             console.error('Failed to fetch more showcase items:', error);
+            setLoadMoreError('Could not load more posts. Your current feed is still available.');
         } finally {
             isLoadingMoreRef.current = false;
             setIsLoadingMore(false);
@@ -555,43 +559,39 @@ export default function ShowcaseClient({
     ].filter((pill): pill is { key: string; label: string; clear: () => void } => Boolean(pill));
 
     return (
-        <div className="min-h-screen bg-black py-6 text-white sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <div className="fixed inset-0 z-0 pointer-events-none">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(120,0,255,0.05),transparent_50%)]" />
-            </div>
-
-            <div className="studio-shell relative z-10 pt-20">
-                <div className="mb-12 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7">
+            <div className="studio-shell relative z-10">
+                <div className="ui-enter mb-7 flex flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 lg:flex-row lg:items-end lg:justify-between">
                     <div>
-                        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
+                        <div className="mb-3 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">
                             <TrendingUp className="h-3.5 w-3.5" />
-                            Community
+                            Creator community
                         </div>
-                        <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-                            Public posts and reusable unlocks from every creator tool
+                        <h1 className="text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
+                            Feed
                         </h1>
-                        <p className="mt-4 max-w-3xl text-lg leading-8 text-zinc-400">
-                            Browse public results from any AI tool, then unlock the reusable prompt, workflow, files, notes, or remix access when a creator shares the process.
+                        <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:text-base">
+                            Fresh creator posts with unlocks mixed in. Browse the result, then save it, remix it, or open the reusable process.
                         </p>
                     </div>
 
-                    <div className="flex flex-wrap gap-3">
+                    <div className="flex flex-wrap gap-2">
                         <Link
                             href="/post/new"
-                            className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
                         >
                             Share a post
                         </Link>
                         <Link
                             href="/marketplace"
-                            className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-5 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15"
                         >
                             Browse unlocks
                         </Link>
                     </div>
                 </div>
 
-                <div className="mb-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-3 backdrop-blur-sm sm:p-4">
+                <div className="sticky top-[72px] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto hide-scrollbar">
                         {CATEGORIES.map((cat) => {
@@ -607,10 +607,11 @@ export default function ShowcaseClient({
                                         navigateWithFilters(cat.id, sort);
                                     }}
                                     disabled={isPending}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-70
+                                    aria-pressed={isActive}
+                                    className={`ui-focus-ring flex min-h-12 items-center gap-2 whitespace-nowrap rounded-full border px-4 text-sm font-bold transition disabled:opacity-70
                                         ${isActive
-                                            ? 'bg-purple-600 text-white'
-                                            : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                                            ? 'border-[var(--ui-primary-strong)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
+                                            : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
                                         }`}
                                 >
                                     <Icon className="w-4 h-4" />
@@ -628,7 +629,7 @@ export default function ShowcaseClient({
                                 navigateWithFilters(category, nextSort);
                             }}
                             disabled={isPending}
-                            className="h-10 rounded-full border border-white/10 bg-zinc-900 px-3 text-sm font-medium text-zinc-100 outline-none transition hover:border-white/20 disabled:opacity-70"
+                            className="ui-focus-ring h-12 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 text-sm font-bold text-[var(--ui-text-primary)] outline-none transition hover:border-[var(--ui-border-strong)] disabled:opacity-70"
                             aria-label="Sort community posts"
                         >
                             {SORTS.map((sortOption) => (
@@ -640,12 +641,13 @@ export default function ShowcaseClient({
                         <button
                             type="button"
                             onClick={() => setIsFilterPanelOpen((current) => !current)}
-                            className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-semibold transition ${
+                            className={`ui-focus-ring inline-flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-bold transition ${
                                 isFilterPanelOpen || activeFilterPills.length > 0
-                                    ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-50'
-                                    : 'border-white/10 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.06]'
+                                    ? 'border-[rgba(255,122,89,0.32)] bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
+                                    : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)]'
                             }`}
                             aria-expanded={isFilterPanelOpen}
+                            aria-controls="showcase-filter-panel"
                         >
                             <SlidersHorizontal className="h-4 w-4" />
                             Filters
@@ -673,7 +675,7 @@ export default function ShowcaseClient({
                   ) : null}
 
                   {isFilterPanelOpen ? (
-                        <div className="overflow-hidden">
+                        <div id="showcase-filter-panel" className="overflow-hidden">
                             <div className="mt-4 grid gap-4 border-t border-white/8 pt-4 lg:grid-cols-3">
                                 <div>
                                     <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Tool</div>
@@ -684,7 +686,8 @@ export default function ShowcaseClient({
                                                 setTool('all');
                                                 navigateWithFilters(category, sort, 'all');
                                             }}
-                                            className={`shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition ${tool === 'all' ? 'border-sky-300/30 bg-sky-400/15 text-sky-50' : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'}`}
+                                            aria-pressed={tool === 'all'}
+                                            className={`ui-focus-ring min-h-11 shrink-0 rounded-full border px-3 text-sm font-bold transition ${tool === 'all' ? 'border-sky-300/30 bg-sky-400/15 text-sky-50' : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]'}`}
                                         >
                                             All tools
                                         </button>
@@ -696,7 +699,8 @@ export default function ShowcaseClient({
                                                     setTool(option.slug);
                                                     navigateWithFilters(category, sort, option.slug);
                                                 }}
-                                                className={`shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition ${tool === option.slug ? 'border-sky-300/30 bg-sky-400/15 text-sky-50' : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'}`}
+                                                aria-pressed={tool === option.slug}
+                                                className={`ui-focus-ring min-h-11 shrink-0 rounded-full border px-3 text-sm font-bold transition ${tool === option.slug ? 'border-sky-300/30 bg-sky-400/15 text-sky-50' : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]'}`}
                                             >
                                                 {option.label}
                                             </button>
@@ -714,7 +718,8 @@ export default function ShowcaseClient({
                                 setUnlock(option.id);
                                 navigateWithFilters(category, sort, tool, option.id, resource);
                             }}
-                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition ${unlock === option.id ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-50' : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'}`}
+                            aria-pressed={unlock === option.id}
+                            className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border px-3 text-sm font-bold transition ${unlock === option.id ? 'border-amber-300/30 bg-amber-400/15 text-amber-50' : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]'}`}
                         >
                             <BadgeDollarSign className="h-4 w-4" />
                             {option.label}
@@ -733,7 +738,8 @@ export default function ShowcaseClient({
                                 setResource(option.id);
                                 navigateWithFilters(category, sort, tool, unlock, option.id);
                             }}
-                            className={`rounded-full border px-3 py-2 text-sm font-medium transition ${resource === option.id ? 'border-purple-300/30 bg-purple-400/15 text-purple-50' : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'}`}
+                            aria-pressed={resource === option.id}
+                            className={`ui-focus-ring min-h-11 rounded-full border px-3 text-sm font-bold transition ${resource === option.id ? 'border-violet-300/30 bg-violet-400/15 text-violet-50' : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]'}`}
                         >
                             {option.label}
                         </button>
@@ -754,10 +760,15 @@ export default function ShowcaseClient({
                         ))}
                     </div>
                 ) : items.length === 0 ? (
-                    <div className="text-center py-24 text-zinc-500 bg-zinc-900/20 rounded-2xl border border-zinc-800">
-                        <ImageIcon className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                        <p className="text-lg">No community posts found in this category.</p>
-                        <p className="text-sm mt-2">Share a result, tip, prompt, or workflow to start this lane.</p>
+                    <div className="rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
+                        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--ui-surface-2)] text-[var(--ui-text-faint)]">
+                            <ImageIcon className="h-6 w-6" aria-hidden />
+                        </span>
+                        <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
+                        <p className="mt-2 text-sm">Clear a filter or share a result, tip, prompt, or workflow to start it.</p>
+                        <Link href="/post/new" className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]">
+                            Share the first post
+                        </Link>
                     </div>
                 ) : (
                     <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
@@ -773,7 +784,7 @@ export default function ShowcaseClient({
                                         className="break-inside-avoid mb-6 flex flex-col"
                                     >
                                         {/* Pinterest Style Card Frame */}
-                                        <div className="group relative overflow-hidden rounded-[1.5rem] bg-[#09090b] border border-white/[0.04] hover:border-purple-500/30 hover:shadow-[0_12px_40px_rgba(0,0,0,0.65)] transition-all duration-300">
+                                        <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
                                             <div className="relative overflow-hidden bg-black">
                                                 {item.postFormat === 'text' ? (
                                                     <button
@@ -810,7 +821,7 @@ export default function ShowcaseClient({
                                             </div>
 
                                             {/* Hover State Controls Overlay (Pinterest Style) */}
-                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 flex flex-col justify-between p-4">
+                                            <div className="showcase-card-actions pointer-events-none absolute inset-0 z-20 flex flex-col justify-between bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 transition-opacity duration-200">
                                                 <div className="flex justify-between items-start pointer-events-auto">
                                                     {item.postFormat !== 'text' ? (
                                                         <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
@@ -827,14 +838,14 @@ export default function ShowcaseClient({
                                                         sourceSurface="showcase"
                                                         accessToken={session?.access_token ?? null}
                                                         iconOnly
-                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-black hover:bg-white transition-all shadow-md"
+                                                        className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] shadow-md transition hover:bg-white"
                                                     />
 
                                                     {item.asset ? (
                                                         <Link
                                                             href={buildCommunityDetailPath(item.id, 'resources')}
                                                             prefetch={false}
-                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/90 text-white hover:bg-emerald-500 transition-all shadow-md"
+                                                            className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-amber-400 text-[#1a0d08] shadow-md transition hover:bg-amber-300"
                                                             aria-label={`${getAssetPurchaseCtaLabel(item.asset)} for ${item.title}`}
                                                             title={getAssetPurchaseCtaLabel(item.asset)}
                                                         >
@@ -852,10 +863,10 @@ export default function ShowcaseClient({
                                                         aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
                                                         aria-pressed={isSaved}
                                                         aria-busy={savingItemIds.has(item.id)}
-                                                        className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-all shadow-md ${
+                                                        className={`ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full shadow-md transition ${
                                                             isSaved
                                                                 ? 'bg-rose-600 text-white hover:bg-rose-700'
-                                                                : 'bg-white/90 text-black hover:bg-white'
+                                                                : 'bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] hover:bg-white'
                                                         }`}
                                                         title={isSaved ? 'Remove save' : 'Save'}
                                                     >
@@ -922,13 +933,30 @@ export default function ShowcaseClient({
                     />
                 ) : null}
 
+                {loadMoreError ? (
+                    <div role="alert" className="mt-8 flex flex-col items-start justify-between gap-4 rounded-[24px] border border-rose-300/25 bg-rose-400/10 p-4 sm:flex-row sm:items-center">
+                        <div>
+                            <p className="text-sm font-bold text-rose-200">Could not load more posts</p>
+                            <p className="mt-1 text-sm text-[var(--ui-text-secondary)]">{loadMoreError}</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void loadMore()}
+                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-rose-300/25 bg-rose-400/10 px-4 text-sm font-bold text-rose-100 transition hover:bg-rose-400/15"
+                        >
+                            <RefreshCw className="h-4 w-4" aria-hidden />
+                            Retry
+                        </button>
+                    </div>
+                ) : null}
+
                 {pageInfo.hasMore && !isLoadingInitialFeed && (
                     <div className="mt-12 text-center">
                         <button
                             type="button"
                             onClick={() => void loadMore()}
                             disabled={isLoadingMore}
-                            className="px-6 py-3 bg-zinc-900 border border-zinc-700 rounded-xl text-sm font-medium hover:bg-zinc-800 hover:border-zinc-600 transition-all disabled:opacity-50"
+                            className="ui-focus-ring min-h-12 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-6 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] disabled:opacity-50"
                         >
                             {isLoadingMore ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Load More'}
                         </button>

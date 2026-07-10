@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import Link from 'next/link';
-import { AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus } from 'lucide-react';
+import { AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus, Globe2, MapPin, Minus, Plus } from 'lucide-react';
 
 import type { EditableCreatorProfile, ProfileFieldErrors, ProfileUpdatePayload } from '@/lib/profile';
 import { uploadProfileMediaWithSignedIntent } from '@/lib/profile-media-upload';
@@ -65,9 +65,11 @@ function buildProfilePayload(
     bio: form.bio,
     avatarUrl: overrides?.avatarUrl ?? form.avatarUrl,
     coverUrl: overrides?.coverUrl ?? form.coverUrl,
+    websiteUrl: form.websiteUrl,
     twitterHandle: form.twitterHandle,
     instagramHandle: form.instagramHandle,
     tiktokHandle: form.tiktokHandle,
+    location: form.location,
   };
 }
 
@@ -76,6 +78,52 @@ function getMediaObjectStyle(crop: MediaCrop): CSSProperties {
     objectPosition: `${crop.x}% ${crop.y}%`,
     transform: `scale(${crop.zoom})`,
   };
+}
+
+function CropZoomControl({
+  label,
+  zoom,
+  onChange,
+}: {
+  label: string;
+  zoom: number;
+  onChange: (zoom: number) => void;
+}) {
+  const updateZoom = (nextZoom: number) => onChange(clampZoom(nextZoom));
+
+  return (
+    <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2">
+      <button
+        type="button"
+        onClick={() => updateZoom(zoom - 0.08)}
+        aria-label={`Zoom out ${label}`}
+        className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-primary)]"
+      >
+        <Minus className="h-4 w-4" aria-hidden />
+      </button>
+      <input
+        type="range"
+        min={MIN_AVATAR_ZOOM}
+        max={MAX_AVATAR_ZOOM}
+        step="0.05"
+        value={zoom}
+        onChange={(event) => updateZoom(Number(event.target.value))}
+        aria-label={`${label} zoom`}
+        className="min-w-0 flex-1 accent-[var(--ui-primary)]"
+      />
+      <output className="w-11 text-center text-xs font-bold text-[var(--ui-text-muted)]">
+        {zoom.toFixed(1)}×
+      </output>
+      <button
+        type="button"
+        onClick={() => updateZoom(zoom + 0.08)}
+        aria-label={`Zoom in ${label}`}
+        className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-primary)]"
+      >
+        <Plus className="h-4 w-4" aria-hidden />
+      </button>
+    </div>
+  );
 }
 
 async function loadImage(file: File): Promise<HTMLImageElement> {
@@ -651,7 +699,7 @@ export default function CreatorProfileCard({
 
   if (isLoading) {
     return (
-      <div className="mb-8 rounded-3xl border border-white/5 bg-zinc-900/30 p-6 backdrop-blur-sm">
+      <div className="mb-8 rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
         <div className="h-6 w-48 animate-pulse rounded bg-white/10" />
         <div className="mt-3 h-4 w-80 animate-pulse rounded bg-white/5" />
         <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -665,8 +713,15 @@ export default function CreatorProfileCard({
 
   if (loadError) {
     return (
-      <div className="mb-8 rounded-3xl border border-red-500/20 bg-red-500/5 p-6 text-sm text-red-200">
-        {loadError}
+      <div role="alert" className="mb-8 rounded-3xl border border-red-500/20 bg-red-500/5 p-6 text-sm text-red-200">
+        <p className="font-bold">{loadError}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="ui-focus-ring mt-4 inline-flex min-h-12 items-center rounded-full border border-red-300/25 bg-red-400/10 px-4 font-bold text-red-100"
+        >
+          Retry profile
+        </button>
       </div>
     );
   }
@@ -693,10 +748,10 @@ export default function CreatorProfileCard({
   return (
     <section className="space-y-6">
       {!isEmbedded && (
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between rounded-3xl border border-white/5 bg-zinc-900/40 p-6 backdrop-blur-md shadow-xl">
+        <div className="flex flex-col gap-4 rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] md:flex-row md:items-start md:justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <div className="rounded-2xl border border-purple-500/20 bg-purple-500/10 p-3 text-purple-300">
+              <div className="rounded-2xl border border-[rgba(255,122,89,0.24)] bg-[var(--ui-primary-soft)] p-3 text-[var(--ui-primary)]">
                 <UserRound className="h-5 w-5" />
               </div>
               <div>
@@ -713,7 +768,7 @@ export default function CreatorProfileCard({
               href={previewHref}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-white/20 hover:text-white"
+              className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
             >
               Preview profile
               <ExternalLink className="h-4 w-4" />
@@ -729,7 +784,7 @@ export default function CreatorProfileCard({
       {onboardingMode ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(300px,0.55fr)]">
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/80">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">
               <BadgeCheck className="h-4 w-4" />
               Setup progress
             </div>
@@ -798,7 +853,7 @@ export default function CreatorProfileCard({
 
       <form id="creator-profile-form" onSubmit={handleSubmit} className="space-y-6">
         {/* Profile Identity Section */}
-        <div className="rounded-3xl border border-white/5 bg-zinc-900/40 p-6 backdrop-blur-md shadow-xl">
+        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)]">
           <div className="mb-6 flex flex-col gap-1">
             <h3 className="text-lg font-semibold text-white">Profile Identity</h3>
             <p className="text-sm text-zinc-400">Manage your basic information, avatar, and cover banner.</p>
@@ -826,14 +881,14 @@ export default function CreatorProfileCard({
                       </div>
                     )}
                   </div>
-                  <label className="group relative flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-white/10 bg-black/40 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-black/60 hover:border-purple-500/50">
-                    <Camera className="h-4 w-4 text-purple-400 group-hover:scale-110 transition-transform" />
+                  <label className="group relative flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-5 py-3 text-sm font-bold text-[var(--ui-text-primary)] transition hover:border-[rgba(255,122,89,0.4)] hover:bg-[var(--ui-surface-2)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
+                    <Camera className="h-4 w-4 text-[var(--ui-primary)] transition-transform group-hover:scale-105" />
                     <span>Upload image</span>
                     <input
                       type="file"
                       accept="image/*"
                       onChange={handleAvatarChange}
-                      className="hidden"
+                      className="sr-only"
                     />
                   </label>
                 </div>
@@ -876,6 +931,11 @@ export default function CreatorProfileCard({
                           Move and scale the image directly inside the circle until the face sits clearly in frame.
                         </p>
                       </div>
+                      <CropZoomControl
+                        label="avatar"
+                        zoom={avatarCrop.zoom}
+                        onChange={(zoom) => setAvatarCrop((current) => ({ ...current, zoom }))}
+                      />
                     </div>
                   </div>
                 </div>
@@ -921,21 +981,28 @@ export default function CreatorProfileCard({
                         </>
                       ) : null}
                     </button>
-                    <label className="absolute bottom-3 right-3 z-10 flex cursor-pointer items-center justify-center">
+                    <label className="absolute bottom-3 right-3 z-10 flex cursor-pointer items-center justify-center has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)] rounded-full">
                       <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-md transition-colors hover:bg-white/10">
-                        <Camera className="h-4 w-4 text-pink-400" />
+                        <Camera className="h-4 w-4 text-[var(--ui-primary)]" />
                         <span>{coverPreview || form.coverUrl ? 'Change cover' : 'Upload cover'}</span>
                       </div>
                       <input
                         type="file"
                         accept="image/*"
                         onChange={handleCoverChange}
-                        className="hidden"
+                        className="sr-only"
                       />
                     </label>
                   </div>
                   {coverPreview ? (
-                    <p className="text-xs leading-5 text-zinc-500">Drag the cover to position it. Scroll over the banner to zoom.</p>
+                    <div>
+                      <p className="text-xs leading-5 text-zinc-500">Drag the cover to position it, then use the zoom control for a precise crop.</p>
+                      <CropZoomControl
+                        label="cover"
+                        zoom={coverCrop.zoom}
+                        onChange={(zoom) => setCoverCrop((current) => ({ ...current, zoom }))}
+                      />
+                    </div>
                   ) : null}
                 </div>
                 {fieldErrors.coverUrl ? <p className="mt-2 text-xs text-red-300">{fieldErrors.coverUrl}</p> : null}
@@ -945,7 +1012,7 @@ export default function CreatorProfileCard({
             <label className="block">
               <span className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                 <AtSign className="h-3.5 w-3.5" />
-                Username <span className="text-sky-300">Required</span>
+                Username <span className="text-[var(--ui-primary)]">Required</span>
               </span>
               <input
                 type="text"
@@ -956,7 +1023,7 @@ export default function CreatorProfileCard({
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
+                className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
                 autoComplete="off"
                 aria-invalid={Boolean(fieldErrors.username)}
               />
@@ -975,7 +1042,7 @@ export default function CreatorProfileCard({
                 value={form.displayName || ''}
                 onChange={(event) => updateField('displayName', event.target.value)}
                 placeholder="Your creator name"
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
+                className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
               />
               {fieldErrors.displayName ? <p className="mt-2 text-xs text-red-300">{fieldErrors.displayName}</p> : null}
             </label>
@@ -990,7 +1057,7 @@ export default function CreatorProfileCard({
                 placeholder="What kind of UGC creator are you?"
                 rows={3}
                 maxLength={MAX_BIO_LENGTH}
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
+                className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
               />
               <div className="mt-2 flex justify-end text-xs text-zinc-500">
                 {form.bio.length}/{MAX_BIO_LENGTH}
@@ -1001,13 +1068,47 @@ export default function CreatorProfileCard({
         </div>
 
         {/* Social Links Section */}
-        <div className="rounded-3xl border border-white/5 bg-zinc-900/40 p-6 backdrop-blur-md shadow-xl">
+        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)]">
           <div className="mb-6 flex flex-col gap-1">
             <h3 className="text-lg font-semibold text-white">Social Links</h3>
             <p className="text-sm text-zinc-400">Add the handles buyers already use to recognize you.</p>
           </div>
 
           <div className="grid gap-6 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                <Globe2 className="h-3.5 w-3.5" aria-hidden />
+                Website
+              </span>
+              <input
+                type="url"
+                value={form.websiteUrl || ''}
+                onChange={(event) => updateField('websiteUrl', event.target.value)}
+                placeholder="https://your-site.com"
+                autoComplete="url"
+                className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
+                aria-invalid={Boolean(fieldErrors.websiteUrl)}
+              />
+              {fieldErrors.websiteUrl ? <p className="mt-2 text-xs text-red-300">{fieldErrors.websiteUrl}</p> : null}
+            </label>
+
+            <label className="block">
+              <span className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                <MapPin className="h-3.5 w-3.5" aria-hidden />
+                Location
+              </span>
+              <input
+                type="text"
+                value={form.location || ''}
+                onChange={(event) => updateField('location', event.target.value)}
+                placeholder="City, country"
+                autoComplete="address-level2"
+                className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
+                aria-invalid={Boolean(fieldErrors.location)}
+              />
+              {fieldErrors.location ? <p className="mt-2 text-xs text-red-300">{fieldErrors.location}</p> : null}
+            </label>
+
             <label className="block">
               <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                 X (Twitter) Handle
@@ -1019,7 +1120,7 @@ export default function CreatorProfileCard({
                   value={form.twitterHandle || ''}
                   onChange={(event) => updateField('twitterHandle', event.target.value)}
                   placeholder="username"
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 pl-8 pr-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
+                  className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-8 pr-4 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
                 />
               </div>
               {fieldErrors.twitterHandle ? <p className="mt-2 text-xs text-red-300">{fieldErrors.twitterHandle}</p> : null}
@@ -1036,7 +1137,7 @@ export default function CreatorProfileCard({
                   value={form.instagramHandle || ''}
                   onChange={(event) => updateField('instagramHandle', event.target.value)}
                   placeholder="username"
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 pl-8 pr-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
+                  className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-8 pr-4 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
                 />
               </div>
               {fieldErrors.instagramHandle ? <p className="mt-2 text-xs text-red-300">{fieldErrors.instagramHandle}</p> : null}
@@ -1053,7 +1154,7 @@ export default function CreatorProfileCard({
                   value={form.tiktokHandle || ''}
                   onChange={(event) => updateField('tiktokHandle', event.target.value)}
                   placeholder="username"
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 pl-8 pr-4 py-3 text-white outline-none transition-colors focus:border-purple-500/50"
+                  className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-8 pr-4 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
                 />
               </div>
               {fieldErrors.tiktokHandle ? <p className="mt-2 text-xs text-red-300">{fieldErrors.tiktokHandle}</p> : null}
@@ -1062,22 +1163,24 @@ export default function CreatorProfileCard({
         </div>
 
         {/* Action Bar */}
-        <div className="rounded-3xl border border-purple-500/20 bg-purple-900/10 p-6 backdrop-blur-md shadow-[0_0_40px_-15px_rgba(168,85,247,0.3)]">
+        <div className="rounded-3xl border border-[rgba(255,122,89,0.24)] bg-[var(--ui-primary-soft)] p-6 backdrop-blur-md">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-zinc-400">
               {form.credits !== null ? (
-                <span><strong className="text-purple-300">{form.credits} credits</strong> available right now.</span>
+                <span><strong className="text-amber-200">{form.credits} credits</strong> available right now.</span>
               ) : (
                 'Credits will update automatically from your account.'
               )}
             </div>
             <div className="flex flex-col items-start gap-2 sm:items-end">
-              {formError ? <p className="text-sm text-red-300">{formError}</p> : null}
-              {!formError && successMessage ? <p className="text-sm text-emerald-300">{successMessage}</p> : null}
+              <div aria-live="polite" aria-atomic="true">
+                {formError ? <p role="alert" className="text-sm text-red-300">{formError}</p> : null}
+                {!formError && successMessage ? <p role="status" className="text-sm text-emerald-300">{successMessage}</p> : null}
+              </div>
               <button
                 type="submit"
                 disabled={isSaving || !normalizedUsername}
-                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 px-8 py-3 text-sm font-semibold text-white shadow-[0_0_20px_-5px_rgba(168,85,247,0.5)] transition-all hover:scale-105 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+                className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-8 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 Save Changes

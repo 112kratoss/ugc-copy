@@ -2,15 +2,15 @@
 
 import {
   Bell,
-  Command,
   HelpCircle,
   Menu,
-  Search,
+  Plus,
+  WandSparkles,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   APP_NAV_ITEMS,
@@ -21,9 +21,11 @@ import {
 } from './app-shell-nav';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 
-const subscribeToHydration = () => () => {};
-const getClientHydrationSnapshot = () => true;
-const getServerHydrationSnapshot = () => false;
+const NAV_GROUPS = [
+  { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
+  { label: 'Explore', ids: ['marketplace', 'workflow'] },
+  { label: 'Account', ids: ['alerts', 'profile'] },
+] as const;
 
 function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean }) {
   const Icon = item.icon;
@@ -32,17 +34,22 @@ function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean })
     <Link
       href={item.href}
       prefetch={item.prefetch}
-      className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+      aria-current={active ? 'page' : undefined}
+      className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] font-semibold transition ${
         active
-          ? 'border border-blue-400/20 bg-blue-500/15 text-blue-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-          : 'text-zinc-400 hover:bg-white/[0.04] hover:text-white'
+          ? 'border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] text-[var(--ui-text-primary)]'
+          : 'border-transparent text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
       }`}
       title={item.description}
     >
+      {active ? (
+        <span className="absolute left-0 h-5 w-[3px] rounded-full bg-[var(--ui-primary)]" aria-hidden />
+      ) : null}
       <Icon
-        className={`h-4 w-4 ${
-          active ? 'text-blue-300' : 'text-zinc-500 group-hover:text-zinc-200'
+        className={`h-[18px] w-[18px] ${
+          active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-faint)] group-hover:text-[var(--ui-text-secondary)]'
         }`}
+        aria-hidden
       />
       <span>{item.label}</span>
     </Link>
@@ -64,14 +71,15 @@ function DrawerNavItem({
     <Link
       href={item.href}
       prefetch={item.prefetch}
+      aria-current={active ? 'page' : undefined}
       onClick={onClick}
-      className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${
+      className={`ui-focus-ring flex min-h-12 items-center gap-3 rounded-2xl border px-3 py-3 text-sm font-bold transition ${
         active
-          ? 'bg-blue-500/15 text-blue-100'
-          : 'text-zinc-300 hover:bg-white/[0.05] hover:text-white'
+          ? 'border-[rgba(255,122,89,0.28)] bg-[var(--ui-primary-soft)] text-[var(--ui-text-primary)]'
+          : 'border-transparent text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
       }`}
     >
-      <Icon className="h-4 w-4" />
+      <Icon className={`h-[18px] w-[18px] ${active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-faint)]'}`} aria-hidden />
       <span>{item.label}</span>
     </Link>
   );
@@ -80,31 +88,64 @@ function DrawerNavItem({
 function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) {
   const Icon = item.icon;
 
+  if (item.id === 'create') {
+    return (
+      <Link
+        href={item.href}
+        prefetch={item.prefetch}
+        aria-current={active ? 'page' : undefined}
+        aria-label="Create"
+        className="ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-end gap-0.5 rounded-2xl pb-1 text-xs font-extrabold text-[var(--ui-primary)]"
+      >
+        <span className="absolute -top-6 flex h-[58px] w-[58px] items-center justify-center rounded-full border-[3px] border-[var(--ui-surface-1)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_8px_20px_rgba(0,0,0,0.36)] transition active:scale-[0.985]">
+          <Plus className="h-6 w-6" strokeWidth={2.7} aria-hidden />
+        </span>
+        <span>Create</span>
+      </Link>
+    );
+  }
+
   return (
     <Link
       href={item.href}
       prefetch={item.prefetch}
-      className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-[10px] font-semibold transition ${
-        active ? 'bg-blue-500/15 text-blue-100' : 'text-zinc-500 hover:text-zinc-100'
+      aria-current={active ? 'page' : undefined}
+      className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[18px] px-1 py-2 text-[11px] font-bold transition ${
+        active
+          ? 'bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]'
+          : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
       }`}
     >
-      <Icon className="h-4 w-4" />
-      <span className="truncate">{item.shortLabel}</span>
+      {active ? <span className="absolute top-1 h-[3px] w-[18px] rounded-full bg-[var(--ui-primary)]" aria-hidden /> : null}
+      <Icon className="h-5 w-5" strokeWidth={active ? 2.5 : 2.1} aria-hidden />
+      <span className="max-w-full truncate">{item.shortLabel}</span>
+    </Link>
+  );
+}
+
+function Brand({ compact = false }: { compact?: boolean }) {
+  return (
+    <Link href="/" className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_10px_24px_rgba(255,122,89,0.18)]">
+        <WandSparkles className="h-5 w-5" strokeWidth={2.4} aria-hidden />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[15px] font-extrabold tracking-tight">magicbooklet</span>
+        {!compact ? (
+          <span className="mt-0.5 block text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ui-text-faint)]">
+            Creator studio
+          </span>
+        ) : null}
+      </span>
     </Link>
   );
 }
 
 export default function AppShellClient({ children }: { children: React.ReactNode }) {
-  const currentPathname = usePathname();
+  const pathname = usePathname() || '/';
   const [mobileOpen, setMobileOpen] = useState(false);
-  const hasHydrated = useSyncExternalStore(
-    subscribeToHydration,
-    getClientHydrationSnapshot,
-    getServerHydrationSnapshot
-  );
-  const pathname = hasHydrated && currentPathname && currentPathname.length > 0
-    ? currentPathname
-    : '/';
+  const drawerRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
@@ -115,111 +156,210 @@ export default function AppShellClient({ children }: { children: React.ReactNode
       .filter((item): item is AppNavItem => Boolean(item));
   }, []);
 
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMobileOpen(false);
+        return;
+      }
+
+      if (event.key !== 'Tab' || !drawerRef.current) return;
+
+      const focusable = Array.from(
+        drawerRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [mobileOpen]);
+
   if (isMinimalAppChromePath(pathname)) {
-    return <>{children}</>;
+    return (
+      <main id="main-content" tabIndex={-1}>
+        {children}
+      </main>
+    );
   }
 
   return (
     <div className="app-shell-root">
-      <aside className="app-shell-sidebar">
-        <Link href="/" className="mt-6 flex items-center gap-3 px-3 text-white">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-violet-500 text-sm font-bold shadow-lg shadow-blue-500/20">
-            M
-          </span>
-          <span className="text-base font-semibold tracking-tight">magicbooklet</span>
-        </Link>
+      <aside className="app-shell-sidebar" aria-label="Primary navigation">
+        <div className="px-4 pt-5">
+          <Brand />
+        </div>
 
-        <nav className="mt-10 flex flex-1 flex-col gap-1 px-3">
-          {APP_NAV_ITEMS.map((item) => (
-            <DesktopNavItem key={item.id} item={item} active={activeItem?.id === item.id} />
+        <nav className="app-scrollbar mt-7 flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label}>
+              <div className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ui-text-faint)]">
+                {group.label}
+              </div>
+              <div className="flex flex-col gap-1">
+                {group.ids.map((id) => {
+                  const item = APP_NAV_ITEMS.find((candidate) => candidate.id === id);
+                  return item ? (
+                    <DesktopNavItem key={item.id} item={item} active={activeItem?.id === item.id} />
+                  ) : null;
+                })}
+              </div>
+            </div>
           ))}
         </nav>
 
         <Link
           href="/contact"
-          className="mx-3 mb-4 flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm font-medium text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+          className="ui-focus-ring mx-3 mb-4 flex min-h-12 items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 py-2 text-[13px] font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-default)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-black text-white">
-            <HelpCircle className="h-4 w-4" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ui-surface-inset)] text-[var(--ui-text-secondary)]">
+            <HelpCircle className="h-4 w-4" aria-hidden />
           </span>
-          <span>Quick help</span>
+          <span>Help & feedback</span>
         </Link>
       </aside>
 
-      <div className="app-shell-main">
+      <div className="app-shell-main" aria-hidden={mobileOpen ? true : undefined}>
         <header className="app-shell-header">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.08] md:hidden"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] md:hidden"
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation"
+              aria-expanded={mobileOpen}
             >
-              <Menu className="h-5 w-5" />
+              <Menu className="h-5 w-5" aria-hidden />
             </button>
-            <h1 className="truncate text-base font-semibold text-white">{title}</h1>
+            <div className="min-w-0">
+              <div className="truncate text-[15px] font-extrabold text-[var(--ui-text-primary)]">{title}</div>
+              {activeItem ? (
+                <div className="hidden truncate text-xs text-[var(--ui-text-faint)] lg:block">
+                  {activeItem.description}
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
-            <Link href="/create" className="app-shell-command">
-              <Search className="h-4 w-4 text-zinc-500" />
-              <span className="min-w-0 flex-1 truncate">Search or jump to...</span>
-              <span className="hidden rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-500 sm:inline-flex">
-                <Command className="mr-0.5 h-3 w-3" />K
-              </span>
-            </Link>
-
-            <button
-              type="button"
-              className="hidden h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-400 transition hover:bg-white/[0.08] hover:text-white sm:inline-flex"
-              aria-label="Notifications"
+            <Link
+              href="/notifications"
+              aria-label="Open alerts"
+              className="ui-focus-ring hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex"
             >
-              <Bell className="h-4 w-4" />
-            </button>
-
+              <Bell className="h-[18px] w-[18px]" aria-hidden />
+            </Link>
+            <Link
+              href="/create"
+              className="ui-focus-ring hidden min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] md:inline-flex"
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+              New creation
+            </Link>
             <DeferredAppShellAccount />
           </div>
         </header>
 
-        <main className="app-shell-content app-scrollbar">{children}</main>
+        <main id="main-content" tabIndex={-1} className="app-shell-content app-scrollbar">
+          {children}
+        </main>
       </div>
 
-      <nav className="app-shell-bottom-nav">
+      <nav
+        className="app-shell-bottom-nav"
+        aria-label="Primary mobile navigation"
+        aria-hidden={mobileOpen ? true : undefined}
+      >
         {visibleBottomItems.map((item) => (
           <BottomNavItem key={item.id} item={item} active={activeItem?.id === item.id} />
         ))}
       </nav>
 
       {mobileOpen ? (
-        <div className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm md:hidden">
-          <div className="flex h-full w-[min(86vw,360px)] flex-col border-r border-white/10 bg-[#0b0b0d] p-4 shadow-2xl shadow-black">
-            <div className="flex items-center justify-between">
-              <Link href="/" className="flex items-center gap-3 text-white">
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-violet-500 text-sm font-bold">
-                  M
-                </span>
-                <span className="text-base font-semibold">magicbooklet</span>
-              </Link>
+        <div
+          className="fixed inset-0 z-[80] bg-black/[0.72] backdrop-blur-sm md:hidden"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setMobileOpen(false);
+          }}
+        >
+          <div
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation"
+            className="ui-enter app-scrollbar flex h-full w-[min(88vw,370px)] flex-col overflow-y-auto border-r border-[var(--ui-border-default)] bg-[var(--ui-bg-app)] p-4 shadow-2xl shadow-black"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <Brand compact />
               <button
+                ref={closeButtonRef}
                 type="button"
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 text-zinc-300"
+                className="ui-focus-ring flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-2)]"
                 onClick={() => setMobileOpen(false)}
                 aria-label="Close navigation"
               >
-                <X className="h-5 w-5" />
+                <X className="h-5 w-5" aria-hidden />
               </button>
             </div>
 
-            <nav className="mt-8 flex flex-col gap-1">
-              {APP_NAV_ITEMS.map((item) => (
-                <DrawerNavItem
-                  key={item.id}
-                  item={item}
-                  active={activeItem?.id === item.id}
-                  onClick={() => setMobileOpen(false)}
-                />
+            <nav className="mt-8 flex flex-col gap-6">
+              {NAV_GROUPS.map((group) => (
+                <div key={group.label}>
+                  <div className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ui-text-faint)]">
+                    {group.label}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {group.ids.map((id) => {
+                      const item = APP_NAV_ITEMS.find((candidate) => candidate.id === id);
+                      return item ? (
+                        <DrawerNavItem
+                          key={item.id}
+                          item={item}
+                          active={activeItem?.id === item.id}
+                          onClick={() => setMobileOpen(false)}
+                        />
+                      ) : null;
+                    })}
+                  </div>
+                </div>
               ))}
             </nav>
+
+            <Link
+              href="/contact"
+              onClick={() => setMobileOpen(false)}
+              className="ui-focus-ring mt-8 flex min-h-12 items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-sm font-bold text-[var(--ui-text-secondary)]"
+            >
+              <HelpCircle className="h-[18px] w-[18px]" aria-hidden />
+              Help & feedback
+            </Link>
           </div>
         </div>
       ) : null}

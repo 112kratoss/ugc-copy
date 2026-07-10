@@ -48,7 +48,7 @@ export default function FeatureLandingPage({
     featureList,
 }: FeatureLandingPageProps) {
     return (
-        <div className="ui-page overflow-hidden">
+        <div className="ui-page ui-page-ambient overflow-hidden">
             <JsonLd
                 data={buildSoftwareApplicationSchema({
                     name: title,
@@ -73,7 +73,7 @@ export default function FeatureLandingPage({
             <main className="studio-shell ui-section-gap relative py-20">
                 <section className="grid gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
                     <div className="space-y-8">
-                        <Kicker icon={Sparkles} className="rounded-full border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-fuchsia-200">
+                        <Kicker icon={Sparkles} className="rounded-full border border-[rgba(255,122,89,0.28)] bg-[var(--ui-primary-soft)] px-4 py-2 text-[var(--ui-primary-strong)]">
                             {badge}
                         </Kicker>
                         <div className="space-y-5">
@@ -168,7 +168,7 @@ export default function FeatureLandingPage({
                                 </Kicker>
                                 <Text as="h3" variant="cardTitle" className="mt-4">{link.title}</Text>
                                 <Text variant="bodySm" className="mt-3">{link.description}</Text>
-                                <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-fuchsia-300">
+                                <span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-[var(--ui-primary)]">
                                     {link.label}
                                     <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
                                 </span>

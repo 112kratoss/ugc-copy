@@ -39,14 +39,11 @@ describe('deferred app shell islands', () => {
     });
   }
 
-  it('keeps the account menu island out of the first render', () => {
+  it('loads the account island immediately to avoid signed-in CTA flicker', () => {
     render(<DeferredAppShellAccount />);
 
-    expect(screen.queryByTestId('dynamic-island')).not.toBeInTheDocument();
-
-    flushIdleCallbacks();
-
     expect(screen.getByTestId('dynamic-island')).toBeInTheDocument();
+    expect(idleCallbacks).toHaveLength(0);
   });
 
   it('keeps generation notifications out of the first render', () => {
@@ -59,7 +56,7 @@ describe('deferred app shell islands', () => {
     expect(screen.getByTestId('dynamic-island')).toBeInTheDocument();
   });
 
-  it('keeps the homepage showcase island out of the first render', () => {
+  it('loads the homepage showcase island immediately so save state can resolve', () => {
     render(
       <DeferredHomeShowcasePreviewGrid
         items={[]}
@@ -68,10 +65,7 @@ describe('deferred app shell islands', () => {
       />
     );
 
-    expect(screen.queryByTestId('dynamic-island')).not.toBeInTheDocument();
-
-    flushIdleCallbacks();
-
     expect(screen.getByTestId('dynamic-island')).toBeInTheDocument();
+    expect(idleCallbacks).toHaveLength(0);
   });
 });

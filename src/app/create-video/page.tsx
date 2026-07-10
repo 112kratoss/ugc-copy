@@ -1,3 +1,5 @@
+import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+
 import CreateVideoClient, { type CreateVideoPrefill } from './CreateVideoClient';
 
 type CreateVideoPageProps = {
@@ -19,6 +21,19 @@ export default async function CreateVideoPage({
     aspectRatio: getFirstValue(resolvedSearchParams.aspectRatio),
     duration: getFirstValue(resolvedSearchParams.duration),
   };
+  const returnParams = new URLSearchParams();
+  if (prefill.remixId) returnParams.set('remix', prefill.remixId);
+  if (prefill.prompt) returnParams.set('prompt', prefill.prompt);
+  if (prefill.model) returnParams.set('model', prefill.model);
+  if (prefill.aspectRatio) returnParams.set('aspectRatio', prefill.aspectRatio);
+  if (prefill.duration) returnParams.set('duration', prefill.duration);
+  const returnTo = returnParams.size > 0
+    ? `/create-video?${returnParams.toString()}`
+    : '/create-video';
 
-  return <CreateVideoClient prefill={prefill} />;
+  return (
+    <RequireAuth returnTo={returnTo}>
+      <CreateVideoClient prefill={prefill} />
+    </RequireAuth>
+  );
 }

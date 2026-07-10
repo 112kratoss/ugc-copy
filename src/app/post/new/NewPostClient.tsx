@@ -1962,8 +1962,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to studio' : 'Back to community';
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="fixed inset-0 pointer-events-none">
+    <div className="ui-page ui-page-ambient min-h-screen">
+      <div className="fixed inset-0 hidden pointer-events-none">
         <div className="absolute left-[-10%] top-[-8%] h-[40%] w-[32%] rounded-full bg-sky-500/12 blur-[140px]" />
         <div className="absolute bottom-[-12%] right-[-8%] h-[36%] w-[30%] rounded-full bg-emerald-500/10 blur-[160px]" />
       </div>
@@ -1985,7 +1985,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 form="post-composer-form"
                 disabled={isSubmitting || isLoadingGeneration}
                 onClick={() => submitWithVisibility('unlisted')}
-                className="inline-flex shrink-0 items-center gap-2 rounded-full bg-sky-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
               >
                 {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Save unlisted
@@ -2008,7 +2008,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 form="post-composer-form"
                 disabled={isSubmitting || isLoadingGeneration}
                 onClick={() => submitWithVisibility('public')}
-                className="inline-flex flex-1 shrink-0 items-center justify-center gap-2 rounded-full bg-sky-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                className="ui-focus-ring inline-flex min-h-12 flex-1 shrink-0 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
               >
                 {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
                 Publish public
@@ -3240,7 +3240,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         type="submit"
                         disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
                         onClick={() => submitWithVisibility('public')}
-                        className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                        className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
                       >
                         {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                         Make public
@@ -3272,10 +3272,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         type="submit"
                         disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
                         onClick={() => submitWithVisibility('public')}
-                        className="rounded-2xl bg-sky-300 px-5 py-5 text-left transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                        className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
                       >
-                        <div className="text-sm font-semibold text-slate-950">Publish public</div>
-                        <p className="mt-1.5 text-xs leading-5 text-slate-700">Visible in Feed.</p>
+                        <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
+                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Feed.</p>
                       </button>
                     </div>
                   </div>

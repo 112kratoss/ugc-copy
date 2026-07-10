@@ -1,3 +1,5 @@
+import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+
 import CreateMotionClient, { type CreateMotionPrefill } from './CreateMotionClient';
 
 type CreateMotionPageProps = {
@@ -17,6 +19,17 @@ export default async function CreateMotionPage({
     prompt: getFirstValue(resolvedSearchParams.prompt),
     model: getFirstValue(resolvedSearchParams.model),
   };
+  const returnParams = new URLSearchParams();
+  if (prefill.remixId) returnParams.set('remix', prefill.remixId);
+  if (prefill.prompt) returnParams.set('prompt', prefill.prompt);
+  if (prefill.model) returnParams.set('model', prefill.model);
+  const returnTo = returnParams.size > 0
+    ? `/create-motion?${returnParams.toString()}`
+    : '/create-motion';
 
-  return <CreateMotionClient prefill={prefill} />;
+  return (
+    <RequireAuth returnTo={returnTo}>
+      <CreateMotionClient prefill={prefill} />
+    </RequireAuth>
+  );
 }

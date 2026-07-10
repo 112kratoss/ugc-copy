@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getActiveAppNavItem, getAppShellTitle } from '@/app/components/app-shell-nav';
+import { getActiveAppNavItem, getAppShellTitle, isMinimalAppChromePath } from '@/app/components/app-shell-nav';
 
 describe('app shell navigation', () => {
   it('keeps post composer routes in the Studio section', () => {
@@ -15,5 +15,11 @@ describe('app shell navigation', () => {
 
   it('uses the composer title for new post routes', () => {
     expect(getAppShellTitle('/post/new')).toBe('Share Post');
+  });
+
+  it('keeps authentication routes focused outside the workspace shell', () => {
+    expect(isMinimalAppChromePath('/login')).toBe(true);
+    expect(isMinimalAppChromePath('/auth/reset-password')).toBe(true);
+    expect(isMinimalAppChromePath('/showcase')).toBe(false);
   });
 });

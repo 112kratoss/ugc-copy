@@ -15,42 +15,21 @@ export default async function CreateHubPage() {
   const previewByTool = await loadCreatorToolPreviewMap();
 
   return (
-    <div className="ui-page relative overflow-hidden pb-20 font-[family-name:var(--font-geist-sans)]">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[10%] top-20 h-52 w-52 rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="absolute right-[10%] top-20 h-64 w-64 rounded-full bg-fuchsia-500/10 blur-3xl" />
-      </div>
-
+    <div className="ui-page ui-page-ambient relative overflow-hidden pb-20 font-[family-name:var(--font-geist-sans)]">
       <div className="studio-shell relative z-10 pt-10 sm:pt-14">
-        <section>
+        <section className="ui-enter border-b border-[var(--ui-border-subtle)] pb-8">
           <div className="max-w-3xl">
             <Kicker>Creator launchpad</Kicker>
-            <Text as="h1" variant="display" className="mt-4 max-w-[14ch]">
-              Pick the path that gets you to a first output fastest.
+            <Text as="h1" variant="display" className="mt-4 max-w-[13ch]">
+              Choose a format. <span className="text-[var(--ui-primary)]">Start creating.</span>
             </Text>
             <Text variant="bodySm" className="mt-3 max-w-2xl sm:text-base">
-              Image for quick stills, video for scenes, motion for remixes, workflow
-              for repeatable systems.
+              Each path opens with useful defaults. You can tune the model, references, and output after the first decision.
             </Text>
-          </div>
-
-          <div className="mt-6 flex flex-wrap gap-2">
-            {CREATOR_TOOLS.map((tool) => (
-              <Link
-                key={tool.id}
-                href={tool.href}
-                prefetch={
-                  tool.id === 'workflow' || tool.id === 'video' ? false : undefined
-                }
-                className="ui-pill ui-focus-ring hover:border-white/18 hover:bg-white/[0.06] hover:text-white"
-              >
-                {tool.shortLabel}
-              </Link>
-            ))}
           </div>
         </section>
 
-        <section className="mt-8 grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+        <section className="ui-stagger mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {CREATOR_TOOLS.map((tool) => (
             <CreatorToolCard
               key={tool.id}
@@ -78,7 +57,7 @@ export default async function CreateHubPage() {
             variant="minimal"
           />
 
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="ui-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {CREATOR_STARTER_RECIPES.map((recipe) => {
               const tool = getCreatorTool(recipe.toolId);
 

@@ -14,11 +14,11 @@ export default function Contact() {
     const businessAddress = process.env.NEXT_PUBLIC_BUSINESS_ADDRESS ?? defaultBusinessAddress;
 
     return (
-        <div className="min-h-screen bg-black text-white">
+        <div className="ui-page ui-page-ambient min-h-screen">
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <div className="text-center mb-12">
-                    <h1 className="text-4xl sm:text-5xl font-bold mb-4 bg-gradient-to-b from-white to-zinc-500 text-transparent bg-clip-text">
+                    <h1 className="mb-4 text-4xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-5xl">
                         Get in Touch
                     </h1>
                     <p className="text-xl text-zinc-400 max-w-2xl mx-auto">
@@ -33,14 +33,14 @@ export default function Contact() {
                             <h2 className="text-2xl font-semibold mb-6">Contact Information</h2>
                             <div className="space-y-6">
                                 <div className="flex items-start gap-4">
-                                    <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-                                        <Mail className="w-6 h-6 text-purple-400" />
+                                    <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-primary-soft)] p-3">
+                                        <Mail className="h-6 w-6 text-[var(--ui-primary)]" />
                                     </div>
                                     <div>
                                         <h3 className="font-medium mb-1">Email Support</h3>
                                         <a
                                             href={`mailto:${siteConfig.supportEmail}`}
-                                            className="text-purple-400 hover:text-purple-300"
+                                            className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]"
                                         >
                                             {siteConfig.supportEmail}
                                         </a>
@@ -49,14 +49,14 @@ export default function Contact() {
                                 </div>
 
                                 <div className="flex items-start gap-4">
-                                    <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-                                        <MessageSquare className="w-6 h-6 text-purple-400" />
+                                    <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-primary-soft)] p-3">
+                                        <MessageSquare className="h-6 w-6 text-[var(--ui-primary)]" />
                                     </div>
                                     <div>
                                         <h3 className="font-medium mb-1">General Inquiries</h3>
                                         <a
                                             href={`mailto:${siteConfig.helloEmail}`}
-                                            className="text-purple-400 hover:text-purple-300"
+                                            className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]"
                                         >
                                             {siteConfig.helloEmail}
                                         </a>
@@ -66,14 +66,14 @@ export default function Contact() {
 
                                 {!!supportPhone && !!supportPhoneTel && (
                                     <div className="flex items-start gap-4">
-                                        <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-                                            <Phone className="w-6 h-6 text-purple-400" />
+                                        <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-primary-soft)] p-3">
+                                            <Phone className="h-6 w-6 text-[var(--ui-primary)]" />
                                         </div>
                                         <div>
                                             <h3 className="font-medium mb-1">Phone</h3>
                                             <a
                                                 href={`tel:${supportPhoneTel}`}
-                                                className="text-purple-400 hover:text-purple-300"
+                                                className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]"
                                             >
                                                 {supportPhone}
                                             </a>
@@ -84,8 +84,8 @@ export default function Contact() {
 
                                 {!!businessAddress && (
                                     <div className="flex items-start gap-4">
-                                        <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-                                            <MapPin className="w-6 h-6 text-purple-400" />
+                                        <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-primary-soft)] p-3">
+                                            <MapPin className="h-6 w-6 text-[var(--ui-primary)]" />
                                         </div>
                                         <div>
                                             <h3 className="font-medium mb-1">Registered Address</h3>
@@ -96,7 +96,7 @@ export default function Contact() {
                             </div>
                         </div>
 
-                        <div className="bg-zinc-900 rounded-xl p-6 border border-zinc-800">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="font-semibold mb-3">Quick Links</h3>
                             <ul className="space-y-3 text-zinc-400">
                                 <li>
@@ -124,7 +124,7 @@ export default function Contact() {
                     </div>
 
                     {/* Contact Form */}
-                    <div className="bg-zinc-900 rounded-xl p-8 border border-zinc-800">
+                    <div className="rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-8 shadow-[var(--ui-shadow-panel)]">
                         <ContactForm />
                     </div>
                 </div>

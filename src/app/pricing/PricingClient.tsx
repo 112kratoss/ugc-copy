@@ -322,14 +322,14 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
     const locale = typeof navigator !== 'undefined' ? navigator.language : undefined;
 
     return (
-        <div className="min-h-screen bg-black text-white">
+        <div className="ui-page ui-page-ambient min-h-screen">
             <JsonLd data={[faqSchema, pricingSchema]} />
             <Script
                 id="razorpay-checkout-js"
                 src="https://checkout.razorpay.com/v1/checkout.js"
             />
 
-            <div className="studio-shell py-16">
+            <div className="studio-shell py-10 sm:py-14">
                 <Link
                     href="/"
                     className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
@@ -338,12 +338,12 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                     Back to Home
                 </Link>
 
-                <div className="mt-8 mb-16 text-center">
-                    <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-purple-500/20 bg-purple-500/10 px-3 py-1 text-sm font-medium text-purple-400">
+                <div className="ui-enter mb-12 mt-6 text-center">
+                    <div className="mb-5 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">
                         <Sparkles className="h-4 w-4" />
                         Pay as you go
                     </div>
-                    <h1 className="mb-6 bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-5xl font-extrabold tracking-tight text-transparent sm:text-6xl">
+                    <h1 className="mb-5 text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
                         Simple, transparent pricing
                     </h1>
                     <p className="mx-auto max-w-3xl text-xl font-light leading-relaxed text-zinc-400">
@@ -399,24 +399,24 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                     </div>
                 </div>
 
-                <div className="mb-20 grid gap-8 md:grid-cols-3">
+                <div className="ui-stagger mb-16 grid gap-5 md:grid-cols-3">
                     {plans.map((plan) => (
                         <div
                             key={plan.id}
-                            className={`relative rounded-3xl p-8 backdrop-blur-xl transition-all duration-500 hover:-translate-y-2 ${plan.popular
-                                ? "z-10 border border-purple-500/50 bg-zinc-900/80 shadow-[0_0_40px_-15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_50px_-10px_rgba(168,85,247,0.5)]"
-                                : "border border-white/5 bg-black/40 hover:border-white/10 hover:bg-zinc-900/60"
+                            className={`relative rounded-[28px] p-6 transition duration-200 sm:p-7 ${plan.popular
+                                ? "z-10 border border-amber-300/30 bg-[var(--ui-surface-raised)] shadow-[var(--ui-shadow-panel)]"
+                                : "border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] hover:border-[var(--ui-border-default)]"
                                 }`}
                         >
                             {plan.popular ? (
-                                <div className="absolute -top-4 left-1/2 -translate-x-1/2 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-white shadow-lg">
+                                <div className="absolute -top-4 left-1/2 -translate-x-1/2 rounded-full border border-amber-200/30 bg-amber-300 px-4 py-1.5 text-xs font-extrabold uppercase tracking-wider text-[#1a0d08] shadow-lg">
                                     Most Popular
                                 </div>
                             ) : null}
 
                             <div className="mb-6 flex items-center gap-3">
-                                <div className={`rounded-2xl p-3 transition-transform duration-500 group-hover:scale-110 ${plan.popular ? "border border-purple-500/30 bg-purple-500/20" : "border border-zinc-700/50 bg-zinc-800/50"}`}>
-                                    <plan.icon className={`h-6 w-6 ${plan.popular ? "text-purple-400 drop-shadow-[0_0_10px_rgba(192,132,252,0.5)]" : "text-zinc-400"}`} />
+                                <div className={`rounded-2xl p-3 ${plan.popular ? "border border-amber-300/25 bg-amber-400/10" : "border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]"}`}>
+                                    <plan.icon className={`h-6 w-6 ${plan.popular ? "text-amber-300" : "text-[var(--ui-text-muted)]"}`} />
                                 </div>
                                 <h2 className="text-2xl font-bold tracking-tight">{plan.name}</h2>
                             </div>
@@ -455,14 +455,8 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             <button
                                 onClick={() => handlePayment(plan.id)}
                                 disabled={loadingPlan === plan.id}
-                                className={`group relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-2xl px-6 py-4 font-semibold transition-all duration-300 ${plan.popular
-                                    ? "bg-purple-500 text-white hover:scale-[1.02] hover:shadow-[0_0_20px_-5px_rgba(168,85,247,0.5)] disabled:bg-purple-500/50 disabled:hover:shadow-none"
-                                    : "bg-white text-black hover:scale-[1.02] hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500"
-                                    }`}
+                                className="ui-focus-ring group relative flex min-h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-[var(--ui-primary)] px-6 py-3 font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                {plan.popular ? (
-                                    <div className="absolute inset-0 bg-gradient-to-r from-purple-400 to-pink-500 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-                                ) : null}
                                 <span className="relative z-10 flex items-center justify-center gap-2">
                                     {loadingPlan === plan.id ? (
                                         <>
@@ -478,7 +472,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             <ul className="mt-8 space-y-4">
                                 {plan.features.map((feature) => (
                                     <li key={feature} className="flex items-start gap-3">
-                                        <Check className={`mt-0.5 h-5 w-5 shrink-0 ${plan.popular ? "text-purple-400" : "text-zinc-600"}`} />
+                                        <Check className={`mt-0.5 h-5 w-5 shrink-0 ${plan.popular ? "text-amber-300" : "text-[var(--ui-text-faint)]"}`} />
                                         <span className={plan.popular ? "text-zinc-200" : "text-zinc-400"}>{feature}</span>
                                     </li>
                                 ))}
@@ -491,7 +485,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                     <h2 className="mb-8 text-center text-3xl font-bold">Frequently Asked Questions</h2>
 
                     <div className="space-y-6">
-                        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="mb-2 text-lg font-semibold">What are credits?</h3>
                             <p className="text-zinc-400">
                                 Credits are used to generate AI images, AI videos, and motion-transfer outputs.
@@ -499,28 +493,28 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="mb-2 text-lg font-semibold">Do credits expire?</h3>
                             <p className="text-zinc-400">
                                 No, your credits stay available as long as your account remains active.
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="mb-2 text-lg font-semibold">Which currency is used at checkout?</h3>
                             <p className="text-zinc-400">
                                 Prices are shown in your local currency as an estimate. Checkout is processed in INR through Razorpay.
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="mb-2 text-lg font-semibold">What payment methods do you accept?</h3>
                             <p className="text-zinc-400">
                                 We accept cards, UPI, net banking, and popular digital wallets through our payment partner.
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="mb-2 text-lg font-semibold">Can I get a refund?</h3>
                             <p className="text-zinc-400">
                                 Because AI generation creates immediate processing costs, refunds are generally limited.
@@ -528,7 +522,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                        <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
                             <h3 className="mb-2 text-lg font-semibold">How long does generation take?</h3>
                             <p className="text-zinc-400">
                                 Most outputs are generated within a few minutes depending on the workflow you choose and current demand.

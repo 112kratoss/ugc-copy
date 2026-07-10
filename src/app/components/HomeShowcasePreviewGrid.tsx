@@ -226,7 +226,7 @@ export default function HomeShowcasePreviewGrid({
                 type="button"
                 onClick={() => void handleRemix(selectedItem.id)}
                 aria-label={`Remix ${selectedItem.title}. ${selectedItem.remixCount} remixes`}
-                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-purple-500 hover:to-fuchsia-400"
+                className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
               >
                 <Wand2 aria-hidden="true" className="h-4 w-4" />
                 <span aria-hidden="true">Remix</span>

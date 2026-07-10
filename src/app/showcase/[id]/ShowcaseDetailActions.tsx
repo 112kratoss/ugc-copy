@@ -214,14 +214,14 @@ export default function ShowcaseDetailActions({
           description={description}
           sourceSurface="detail-page"
           accessToken={session?.access_token ?? null}
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
+          className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
         />
 
         {canRemix ? (
           <button
             type="button"
             onClick={handleRemix}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-purple-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-purple-500"
+            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 py-2 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
           >
             <Wand2 className="h-4 w-4" />
             Remix
@@ -231,7 +231,7 @@ export default function ShowcaseDetailActions({
         {creatorUsername ? (
           <Link
             href={`/creators/${creatorUsername}`}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
+            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
           >
             View creator
           </Link>
@@ -239,7 +239,7 @@ export default function ShowcaseDetailActions({
 
         <Link
           href="/create"
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/45 hover:bg-emerald-500/15"
+          className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/45 hover:bg-emerald-500/15"
         >
           <Sparkles className="h-4 w-4" />
           Create your own
