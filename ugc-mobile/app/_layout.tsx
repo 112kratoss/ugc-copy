@@ -1,8 +1,6 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
@@ -11,6 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses } from '@/lib/notifications';
 import { appTheme } from '@/lib/theme';
 
@@ -23,8 +22,6 @@ export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
 
-SplashScreen.preventAutoHideAsync();
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -34,54 +31,56 @@ const queryClient = new QueryClient({
   },
 });
 
+const navigationTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: appTheme.colors.primary ?? '#FF7A59',
+    background: appTheme.colors.background,
+    card: appTheme.colors.panel,
+    text: appTheme.colors.text,
+    border: appTheme.colors.border,
+    notification: appTheme.colors.danger,
+  },
+};
+
 export default function RootLayout() {
-  const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-  });
-
-  useEffect(() => {
-    if (error) throw error;
-  }, [error]);
-
-  useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
-
-  if (!loaded) {
-    return null;
-  }
-
   return <RootLayoutNav />;
 }
 
 function RootLayoutNav() {
+  const reducedMotion = useReducedMotion();
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <NotificationResponseCoordinator />
         <SafeAreaProvider>
-          <ThemeProvider value={DarkTheme}>
-            <View style={{ flex: 1, backgroundColor: '#03040d' }}>
-              <StatusBar style="light" backgroundColor="#03040d" translucent={false} />
+          <ThemeProvider value={navigationTheme}>
+            <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
+              <StatusBar style="light" backgroundColor={appTheme.colors.background} translucent={false} />
               <Stack
                 screenOptions={{
+                  animation: reducedMotion ? 'none' : 'default',
+                  gestureEnabled: true,
+                  headerBackButtonDisplayMode: 'minimal',
+                  headerShadowVisible: false,
                   headerStyle: { backgroundColor: appTheme.colors.background },
                   headerTintColor: appTheme.colors.text,
+                  headerTitleStyle: { fontWeight: '700' },
                   contentStyle: { backgroundColor: appTheme.colors.background },
                 }}
               >
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="auth" options={{ title: 'Sign in' }} />
-                <Stack.Screen name="create/[tool]" options={{ title: 'Create' }} />
-                <Stack.Screen name="post/new" options={{ title: 'Post' }} />
-                <Stack.Screen name="viewer" options={{ headerShown: false }} />
-                <Stack.Screen name="profile-media-feed" options={{ headerShown: false }} />
-                <Stack.Screen name="showcase" options={{ headerShown: false }} />
+                <Stack.Screen name="auth" options={{ title: 'Sign in', presentation: 'modal', animation: reducedMotion ? 'none' : 'fade_from_bottom' }} />
+                <Stack.Screen name="create/[tool]" options={{ title: 'Create', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                <Stack.Screen name="post/new" options={{ title: 'Post', presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
+                <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
-                <Stack.Screen name="edit-profile" options={{ headerShown: false }} />
+                <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Seller Dashboard' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />

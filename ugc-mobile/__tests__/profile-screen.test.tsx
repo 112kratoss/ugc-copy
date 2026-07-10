@@ -52,13 +52,13 @@ describe('profile screen', () => {
     expect(tree!.toJSON()).toBeNull();
   });
 
-  it('redirects signed-out users to auth', () => {
+  it('renders a signed-out profile state without an abrupt redirect', () => {
     let tree: { toJSON: () => unknown } | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileScreen />);
     });
 
-    expect(tree!.toJSON()).toMatchObject({ type: 'redirect', props: { href: '/auth' } });
+    expect(tree!.toJSON()).toMatchObject({ type: 'profile-dashboard' });
   });
 
   it('renders the profile dashboard for signed-in users', () => {

@@ -102,7 +102,7 @@ async function configureAndroidChannel() {
     name: 'Default',
     importance: Notifications.AndroidImportance.DEFAULT,
     vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#a78bfa',
+    lightColor: '#ff7a59',
   });
 }
 
@@ -188,12 +188,38 @@ export function navigateToNotificationDeepLink(deepLink: unknown) {
   }
 
   const target = deepLink.trim();
-  if (!target.startsWith('/')) {
+  if (!isAllowedNotificationDeepLink(target)) {
     return false;
   }
 
   router.push(target as never);
   return true;
+}
+
+const NOTIFICATION_ROUTE_PATTERNS = [
+  /^\/$/,
+  /^\/\(tabs\)(?:\/(?:index|creator|showcase|studio|pricing|profile))?$/,
+  /^\/(?:creator|showcase|studio|pricing|profile|auth|viewer|profile-media-feed|post\/new|seller-dashboard|settings|help|edit-profile)$/,
+  /^\/create\/(?:image|video|motion)$/,
+  /^\/showcase\/[^/]+$/,
+  /^\/creators\/[^/]+$/,
+  /^\/marketplace\/[^/]+$/,
+] as const;
+
+function isAllowedNotificationDeepLink(target: string) {
+  if (!target.startsWith('/') || target.startsWith('//') || target.includes('\\')) return false;
+  if (/[\u0000-\u001f\u007f]/.test(target)) return false;
+
+  const rawPath = target.split(/[?#]/, 1)[0];
+  let path: string;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    return false;
+  }
+
+  if (path.includes('..') || path.includes('\\')) return false;
+  return NOTIFICATION_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
 function getNotificationResponseKey(response: Notifications.NotificationResponse | null | undefined) {

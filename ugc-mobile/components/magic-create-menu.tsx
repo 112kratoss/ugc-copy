@@ -1,11 +1,32 @@
-import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
 import { FilePlus2, Sparkles, X } from 'lucide-react-native';
-import { Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import {
+  Animated,
+  BackHandler,
+  Modal,
+  type ModalProps,
+  Pressable,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CREATE_MENU_ACTIONS, type CreateMenuAction, type CreateMenuActionId } from '@/lib/create-menu-view-model';
+import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
+import { appTheme } from '@/lib/theme';
+
+const PRIMARY = appTheme.colors.primary ?? '#FF7A59';
+const PRIMARY_STRONG = appTheme.colors.primaryStrong ?? '#FF8A6D';
+const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
+const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+const FallbackModal = ({ children, visible }: ModalProps) => (
+  visible ? <>{children}</> : null
+);
+const AnimatedView = (IS_TEST_ENVIRONMENT ? View : Animated.View) as typeof Animated.View;
+const ModalSurface: React.ComponentType<ModalProps> = IS_TEST_ENVIRONMENT ? FallbackModal : Modal;
 
 export function MagicCreateMenu({
   visible,
@@ -21,94 +42,138 @@ export function MagicCreateMenu({
   bottomInset?: number;
 }) {
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const safeBottom = resolvedBottomInset(insets.bottom);
-  const panelWidth = Math.max(320, width - horizontalInset * 2);
-  const panelHeight = 252 + safeBottom;
-  const actionWidth = Math.max(132, Math.min(176, (width - 92) / 2));
+  const { width } = useWindowDimensions();
+  const safeBottom = Math.max(resolvedBottomInset(insets.bottom), bottomInset);
+  const panelInset = Math.max(12, horizontalInset);
+  const panelWidth = Math.min(520, Math.max(0, width - panelInset * 2));
+  const actionWidth = Math.max(116, (panelWidth - 52) / 2);
+  const reduceMotionEnabled = useReducedMotion();
+  const [rendered, setRendered] = useState(visible);
+  const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
 
-  if (!visible) return null;
+  useEffect(() => {
+    if (visible) setRendered(true);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!rendered) return;
+
+    animateProgress(progress, visible ? 1 : 0, reduceMotionEnabled, () => {
+      if (!visible) setRendered(false);
+    });
+  }, [progress, reduceMotionEnabled, rendered, visible]);
+
+  useEffect(() => {
+    if (IS_TEST_ENVIRONMENT || !visible || !BackHandler.addEventListener) return;
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [onClose, visible]);
+
+  const backdropOpacity = progress
+    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.72] })
+    : 0.72;
+  const sheetOpacity = progress
+    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] })
+    : 1;
+  const sheetTranslateY = progress
+    ? progress.interpolate({ inputRange: [0, 1], outputRange: [32, 0] })
+    : 0;
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={{
-        position: 'absolute',
-        left: -horizontalInset,
-        right: -horizontalInset,
-        bottom: -bottomInset,
-        height: height + bottomInset + 24,
-        zIndex: 40,
-        elevation: 40,
-      }}
+    <ModalSurface
+      visible={rendered}
+      transparent
+      animationType="none"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={onClose}
     >
-      <Pressable
-        accessible={false}
-        onPress={onClose}
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          top: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.64)',
-        }}
-      >
-        <BlurView intensity={34} tint="dark" style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }} />
-      </Pressable>
-
       <View
-        pointerEvents="box-none"
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          alignItems: 'center',
-        }}
+        pointerEvents={visible ? 'auto' : 'none'}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
       >
-        <BlurView
-          intensity={42}
-          tint="dark"
+        <AnimatedView
+          importantForAccessibility="no-hide-descendants"
           style={{
-            width: panelWidth,
-            height: panelHeight,
-            marginBottom: 0,
-            overflow: 'hidden',
-            borderTopLeftRadius: 36,
-            borderTopRightRadius: 36,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.13)',
-            backgroundColor: 'rgba(24,24,27,0.84)',
+            position: 'absolute',
+            inset: 0,
+            opacity: backdropOpacity,
+            backgroundColor: '#000000',
           }}
         >
-          <LinearGradient
-            colors={['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.045)', 'rgba(3,4,13,0.18)']}
-            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-          />
-          <View
-            style={{
-              width,
-              alignSelf: 'center',
-              paddingTop: 30,
-              paddingHorizontal: 34,
-              paddingBottom: safeBottom + 18,
-            }}
-          >
-            <View style={{ height: 112, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 24 }}>
-              {CREATE_MENU_ACTIONS.map((action) => (
-                <MenuActionButton key={action.id} action={action} width={actionWidth} onPress={() => onAction(action.id)} />
-              ))}
-            </View>
-          </View>
-        </BlurView>
-      </View>
+          <Pressable accessible={false} onPress={onClose} style={{ flex: 1 }} />
+        </AnimatedView>
 
-      <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: safeBottom + 184, alignItems: 'center' }}>
-        <CloseMenuButton onPress={onClose} />
+        <AnimatedView
+          accessibilityViewIsModal
+          importantForAccessibility="yes"
+          style={{
+            width: panelWidth,
+            alignSelf: 'center',
+            overflow: 'hidden',
+            borderTopLeftRadius: 28,
+            borderTopRightRadius: 28,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderBottomWidth: 0,
+            borderColor: appTheme.colors.border,
+            paddingTop: 12,
+            paddingHorizontal: 20,
+            paddingBottom: safeBottom + 16,
+            backgroundColor: appTheme.colors.panel,
+            opacity: sheetOpacity,
+            transform: [{ translateY: sheetTranslateY }],
+            boxShadow: '0 -16px 42px rgba(0,0,0,0.34)',
+          }}
+        >
+          <View
+            accessible={false}
+            style={{
+              width: 36,
+              height: 4,
+              borderRadius: 2,
+              alignSelf: 'center',
+              marginBottom: 8,
+              backgroundColor: appTheme.colors.borderStrong,
+            }}
+          />
+
+          <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text
+                accessibilityRole="header"
+                accessibilityLiveRegion="polite"
+                style={{ color: appTheme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800' }}
+              >
+                Create or publish
+              </Text>
+            </View>
+            <CloseMenuButton onPress={onClose} />
+          </View>
+
+          <Text style={{ marginTop: 4, color: appTheme.colors.muted, fontSize: 14, lineHeight: 20 }}>
+            Start with AI, or share work you already have.
+          </Text>
+
+          <View style={{ marginTop: 20, flexDirection: 'row', justifyContent: 'center', gap: 12 }}>
+            {CREATE_MENU_ACTIONS.map((action) => (
+              <MenuActionButton
+                key={action.id}
+                action={action}
+                width={actionWidth}
+                onPress={() => onAction(action.id)}
+              />
+            ))}
+          </View>
+        </AnimatedView>
       </View>
-    </View>
+    </ModalSurface>
   );
 }
 
@@ -118,21 +183,20 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
       accessibilityRole="button"
       accessibilityLabel="Close create menu"
       onPress={onPress}
+      hitSlop={4}
       style={({ pressed }) => ({
-        width: 62,
-        height: 62,
-        borderRadius: 31,
+        width: 48,
+        height: 48,
+        borderRadius: 24,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.08)',
-        backgroundColor: 'rgba(3,4,13,0.68)',
-        opacity: pressed ? 0.76 : 1,
-        transform: [{ scale: pressed ? 0.96 : 1 }],
-        boxShadow: '0 14px 40px rgba(0,0,0,0.38)',
+        borderColor: appTheme.colors.border,
+        backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+        opacity: pressed ? 0.78 : 1,
       })}
     >
-      <X size={31} color="#ffffff" strokeWidth={2.4} />
+      <X size={22} color={appTheme.colors.text} strokeWidth={2.2} />
     </Pressable>
   );
 }
@@ -140,50 +204,78 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
 function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction; width: number; onPress: () => void }) {
   const isCreate = action.id === 'create';
   const Icon = isCreate ? Sparkles : FilePlus2;
-  const colors: readonly [string, string] = isCreate
-    ? ['rgba(217,70,239,0.95)', 'rgba(124,58,237,0.72)']
-    : ['rgba(34,211,238,0.72)', 'rgba(52,211,153,0.58)'];
+  const foreground = isCreate ? ON_PRIMARY : appTheme.colors.text;
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={action.label}
+      accessibilityHint={action.body}
       onPress={onPress}
       style={({ pressed }) => ({
         width,
-        height: 112,
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        gap: 12,
-        opacity: pressed ? 0.76 : 1,
-        transform: [{ translateY: pressed ? 2 : 0 }],
+        minHeight: 148,
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: 16,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: isCreate ? PRIMARY : appTheme.colors.border,
+        padding: 16,
+        backgroundColor: isCreate
+          ? (pressed ? PRIMARY_STRONG : PRIMARY)
+          : (pressed ? appTheme.colors.surfaceStrong : appTheme.colors.panelSoft),
+        opacity: pressed ? 0.9 : 1,
       })}
     >
-      <LinearGradient
-        colors={colors}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+      <View
         style={{
-          width: 72,
-          height: 72,
-          borderRadius: 36,
+          width: 48,
+          height: 48,
+          borderRadius: 24,
           alignItems: 'center',
           justifyContent: 'center',
-          borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.18)',
-          boxShadow: isCreate ? '0 12px 36px rgba(217,70,239,0.30)' : '0 12px 36px rgba(34,211,238,0.22)',
+          backgroundColor: isCreate ? 'rgba(26,14,10,0.12)' : appTheme.colors.surfaceStrong,
         }}
       >
-        <Icon size={32} color="#ffffff" strokeWidth={2.3} />
-      </LinearGradient>
-      <View style={{ alignItems: 'center', gap: 3 }}>
-        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color: '#ffffff', fontSize: 17, fontWeight: '900' }}>
+        <Icon size={26} color={foreground} strokeWidth={2.2} />
+      </View>
+      <View style={{ gap: 4 }}>
+        <Text style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}>
           {action.label}
         </Text>
-        <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.62)', textAlign: 'center', fontSize: 11, lineHeight: 14, fontWeight: '700' }}>
+        <Text numberOfLines={2} style={{ color: isCreate ? 'rgba(26,14,10,0.72)' : appTheme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
           {action.body}
         </Text>
       </View>
     </Pressable>
   );
+}
+
+function createAnimatedValue(initialValue: number): Animated.Value | null {
+  if (IS_TEST_ENVIRONMENT) return null;
+  return new Animated.Value(initialValue);
+}
+
+function animateProgress(
+  progress: Animated.Value | null,
+  toValue: number,
+  reduceMotionEnabled: boolean,
+  onComplete: () => void
+) {
+  if (!progress || !Animated?.timing || reduceMotionEnabled) {
+    progress?.setValue(toValue);
+    onComplete();
+    return;
+  }
+
+  progress.stopAnimation();
+  Animated.timing(progress, {
+    toValue,
+    duration: toValue === 1 ? 180 : 150,
+    useNativeDriver: true,
+  }).start(({ finished }) => {
+    if (finished) onComplete();
+  });
 }

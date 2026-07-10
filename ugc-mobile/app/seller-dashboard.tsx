@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { BarChart3, DollarSign, PackageCheck } from 'lucide-react-native';
-import { Text, View } from 'react-native';
+import { BarChart3, ChevronRight, DollarSign, PackageCheck } from 'lucide-react-native';
+import { Pressable, View } from 'react-native';
 
-import { Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
+import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { appTheme } from '@/lib/theme';
@@ -20,7 +20,7 @@ export default function SellerDashboardScreen() {
     return (
       <Screen>
         <SectionTitle eyebrow="Seller Dashboard" title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
-        <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="image" />
+        <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
       </Screen>
     );
   }
@@ -37,36 +37,61 @@ export default function SellerDashboardScreen() {
         body="Track total sales from your reusable resources. Earnings are shown as lifetime tracked sales."
       />
 
-      {error ? <StatusBlock tone="danger" title="Could not load seller dashboard" body={error instanceof Error ? error.message : 'Try again.'} /> : null}
+      {!router.canGoBack() ? <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile' as never)} /> : null}
 
-      <View style={{ flexDirection: 'row', gap: 12 }}>
-        <MetricCard icon={<DollarSign size={22} color="#22d3ee" />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
-        <MetricCard icon={<BarChart3 size={22} color="#d946ef" />} label="Unlocks sold" value={String(summary.salesCount)} />
-      </View>
+      {isLoading ? <StatusBlock title="Loading sales" body="Fetching your current listings and unlock totals." /> : null}
 
-      <SecondaryButton label={isLoading ? 'Refreshing...' : 'Refresh dashboard'} onPress={() => void refetch()} disabled={isLoading} />
+      {error ? (
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock tone="danger" title="Could not load seller dashboard" body="Your existing listings are safe. Check your connection, then retry." />
+          <SecondaryButton label="Retry dashboard" onPress={() => void refetch()} />
+        </View>
+      ) : null}
 
-      <View style={{ gap: 14 }}>
-        {listings.map((item) => (
-          <Card key={item.id} accent={item.bundle?.accessMode === 'free' ? 'workflow' : 'amber'}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <PackageCheck size={22} color={item.bundle?.accessMode === 'free' ? appTheme.colors.success : '#fbbf24'} />
-              <Text numberOfLines={1} style={{ flex: 1, color: appTheme.colors.text, fontSize: 18, fontWeight: '900' }}>
-                {item.title || 'Untitled listing'}
-              </Text>
+      {!isLoading && !error ? (
+        <>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <MetricCard icon={<DollarSign size={22} color={appTheme.colors.info} />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
+            <MetricCard icon={<BarChart3 size={22} color={appTheme.colors.primary} />} label="Unlocks sold" value={String(summary.salesCount)} />
+          </View>
+
+          <SecondaryButton label="Refresh dashboard" onPress={() => void refetch()} />
+
+          <View style={{ gap: 12 }}>
+            {listings.map((item) => (
+              <Pressable
+                key={item.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Edit listing ${item.title || 'Untitled listing'}`}
+                onPress={() => router.push({ pathname: '/post/new', params: { postId: item.id } } as never)}
+                style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              >
+                <Card accent={item.bundle?.accessMode === 'free' ? 'workflow' : 'amber'}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <PackageCheck size={22} color={item.bundle?.accessMode === 'free' ? appTheme.colors.success : appTheme.colors.commerce} />
+                    <AppText numberOfLines={1} variant="cardTitle" style={{ flex: 1 }}>
+                      {item.title || 'Untitled listing'}
+                    </AppText>
+                    <ChevronRight size={20} color={appTheme.colors.faint} />
+                  </View>
+                  <AppText variant="bodySm" color="muted">
+                    {item.bundle?.salesCount ?? 0} sales · {formatUsdCents(item.bundle?.earningsUsdCents)} tracked earnings
+                  </AppText>
+                  <AppText variant="caption" color="faint">
+                    {item.bundle?.status ?? 'draft'} · {item.visibility}
+                  </AppText>
+                </Card>
+              </Pressable>
+            ))}
+          </View>
+
+          {listings.length === 0 ? (
+            <View style={{ gap: appTheme.spacing.gap }}>
+              <StatusBlock title="No seller listings yet" body="Publish a post with reusable resources to start tracking sales here." />
+              <PrimaryButton label="Create a listing" accent="primary" onPress={() => router.push('/post/new' as never)} />
             </View>
-            <Text style={{ color: appTheme.colors.muted, lineHeight: 21 }}>
-              {item.bundle?.salesCount ?? 0} sales · {formatUsdCents(item.bundle?.earningsUsdCents)} tracked earnings
-            </Text>
-            <Text style={{ color: appTheme.colors.faint, fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>
-              {item.bundle?.status ?? 'draft'} · {item.visibility}
-            </Text>
-          </Card>
-        ))}
-      </View>
-
-      {!isLoading && listings.length === 0 ? (
-        <StatusBlock title="No seller listings yet" body="Publish a post with reusable resources and paid access to start tracking sales here." />
+          ) : null}
+        </>
       ) : null}
     </Screen>
   );
@@ -80,8 +105,8 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
           <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center' }}>
             {icon}
           </View>
-          <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{label}</Text>
-          <Text style={{ color: appTheme.colors.text, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{value}</Text>
+          <AppText variant="caption" color="faint">{label}</AppText>
+          <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>{value}</AppText>
         </View>
       </Card>
     </View>

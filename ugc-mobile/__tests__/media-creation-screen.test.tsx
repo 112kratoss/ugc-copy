@@ -728,6 +728,52 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(text).not.toContain('Google Search');
   });
 
+  it('labels advanced switches and gives shot removal an accessible 48dp target', () => {
+    const catalog = createTestGenerationModelCatalog();
+    const videoModel = catalog.models.find((model) => model.id === 'kling-3.0-video')!;
+    videoModel.capabilities.multiShot = true;
+    videoModel.controls.push({
+      key: 'isMultiShot',
+      label: 'Multi-shot',
+      type: 'boolean',
+      presentation: 'toggle',
+      defaultValue: false,
+    });
+    catalogState.catalog = catalog;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Expand Advanced' }).props.onPress();
+    });
+
+    expect(tree!.root.find((node) => (
+      String(node.type) === 'switch'
+      && node.props.accessibilityLabel === 'Sound'
+    ))).toBeTruthy();
+
+    const multiShotSwitch = tree!.root.find((node) => (
+      String(node.type) === 'switch'
+      && node.props.accessibilityLabel === 'Multi-shot'
+    ));
+    renderer.act(() => {
+      multiShotSwitch.props.onValueChange(true);
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Add shot').props.onPress();
+    });
+
+    const removeShot = tree!.root.find((node) => (
+      String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Remove shot 2'
+    ));
+    expect(removeShot.props.accessibilityRole).toBe('button');
+    expect(removeShot.props.accessibilityState).toEqual({ disabled: false });
+    expect(removeShot.props.style).toMatchObject({ width: 48, height: 48 });
+  });
+
   it('keeps generate blockers inline without a nested generation checks card', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

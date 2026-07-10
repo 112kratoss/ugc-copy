@@ -2,10 +2,9 @@ import { useIsFocused } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Globe, ImageOff, Images, LockKeyhole, MoreVertical, Play, Repeat2, Share2, Wand2 } from 'lucide-react-native';
+import { ArrowLeft, Globe, ImageOff, Images, LockKeyhole, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
@@ -13,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
+import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -31,6 +31,7 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import {
   applyShowcaseSaveStateToFeedResponse,
@@ -308,7 +309,25 @@ export function ProfileMediaFeedScreen() {
   if (!items.length && sourceQuery.isLoading) {
     return (
       <ProfileFeedShell topInset={topInset} bottomInset={bottomInset}>
-        <ActivityIndicator accessibilityLabel="Loading profile media" color="#d946ef" />
+        <ActivityIndicator accessibilityLabel="Loading profile media" color={appTheme.colors.primary} />
+      </ProfileFeedShell>
+    );
+  }
+
+  if (!items.length && sourceQuery.isError) {
+    return (
+      <ProfileFeedShell topInset={topInset} bottomInset={bottomInset}>
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          <StatusBlock
+            tone="danger"
+            title={`Couldn't load ${title.toLowerCase()}`}
+            body="Check your connection and try again."
+          />
+          <SecondaryButton
+            label="Try again"
+            onPress={() => void sourceQuery.refetch()}
+          />
+        </View>
       </ProfileFeedShell>
     );
   }
@@ -316,13 +335,13 @@ export function ProfileMediaFeedScreen() {
   if (!items.length) {
     return (
       <ProfileFeedShell topInset={topInset} bottomInset={bottomInset}>
-        <Text selectable style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>No items found in this section.</Text>
+        <Text selectable style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '700' }}>No items found in this section.</Text>
       </ProfileFeedShell>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#05050c' }}>
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <ProfileFeedTopBar
         activeItem={activeItem}
         sourceTitle={title}
@@ -371,7 +390,7 @@ export function ProfileMediaFeedScreen() {
         )}
         showsVerticalScrollIndicator={false}
         snapToInterval={pageHeight}
-        style={{ flex: 1, backgroundColor: '#05050c' }}
+        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         testID="profile-media-feed-list"
       />
       {activeItem ? (
@@ -406,14 +425,14 @@ export function ProfileMediaFeedScreen() {
 
 function ProfileFeedShell({ topInset, bottomInset, children }: { topInset: number; bottomInset: number; children: React.ReactNode }) {
   return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#05050c', paddingTop: topInset, paddingBottom: bottomInset, paddingHorizontal: 24 }}>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.background, paddingTop: topInset, paddingBottom: bottomInset, paddingHorizontal: 24 }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Go back"
         onPress={() => router.back()}
-        style={{ position: 'absolute', left: 12, top: topInset + 7, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+        style={{ position: 'absolute', left: 12, top: topInset + 7, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}
       >
-        <ArrowLeft size={29} color="#ffffff" strokeWidth={2.4} />
+        <ArrowLeft size={27} color={appTheme.colors.text} strokeWidth={2.4} />
       </Pressable>
       {children}
     </View>
@@ -437,8 +456,8 @@ function ProfileFeedTopBar({
         height: topInset + 54,
         paddingTop: topInset,
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.08)',
-        backgroundColor: '#0b0a13',
+        borderBottomColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.panel,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -450,16 +469,18 @@ function ProfileFeedTopBar({
         accessibilityLabel="Go back"
         onPress={() => router.back()}
         style={({ pressed }) => ({
-          width: 44,
-          height: 44,
+          width: 48,
+          height: 48,
+          borderRadius: 24,
           alignItems: 'center',
           justifyContent: 'center',
+          backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
           opacity: pressed ? 0.68 : 1,
         })}
       >
-        <ArrowLeft size={29} color="#ffffff" strokeWidth={2.4} />
+        <ArrowLeft size={27} color={appTheme.colors.text} strokeWidth={2.4} />
       </Pressable>
-      <Text numberOfLines={1} style={{ color: '#fff', fontSize: 19, fontWeight: '900' }}>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 19, fontWeight: '700' }}>
         {sourceTitle}
       </Text>
       <Pressable
@@ -468,14 +489,16 @@ function ProfileFeedTopBar({
         disabled={!activeItem}
         onPress={onActionsOpen}
         style={({ pressed }) => ({
-          width: 44,
-          height: 44,
+          width: 48,
+          height: 48,
+          borderRadius: 24,
           alignItems: 'center',
           justifyContent: 'center',
+          backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
           opacity: !activeItem ? 0.38 : pressed ? 0.68 : 1,
         })}
       >
-        <MoreVertical size={27} color="#ffffff" strokeWidth={2.5} />
+        <MoreVertical size={25} color={appTheme.colors.text} strokeWidth={2.5} />
       </Pressable>
     </View>
   );
@@ -522,7 +545,7 @@ function ProfileFeedPage({
       }}
       nestedScrollEnabled
       showsVerticalScrollIndicator={false}
-      style={{ width, height, backgroundColor: '#05050c' }}
+      style={{ width, height, backgroundColor: appTheme.colors.background }}
     >
       <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: 10 }}>
         <ProfileFeedCreatorRow item={item} />
@@ -541,7 +564,7 @@ function ProfileFeedPage({
         visibilityLoading={visibilityLoading}
       />
       <View style={{ paddingHorizontal: 14, paddingTop: 8, gap: 8 }}>
-        <Text selectable numberOfLines={2} style={{ color: '#fff', ...appTheme.type.sectionTitle, fontWeight: '900' }}>
+        <Text selectable numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>
           {item.title}
         </Text>
         {displayText ? (
@@ -563,7 +586,7 @@ function ProfileFeedCreatorRow({ item }: { item: ImmersivePreviewItem }) {
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
       <ProfileFeedAvatar item={item} />
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 15, fontWeight: '900' }}>
+        <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 15, fontWeight: '700' }}>
           {item.creatorLabel}
         </Text>
         <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>
@@ -578,11 +601,11 @@ function ProfileFeedAvatar({ item }: { item: ImmersivePreviewItem }) {
   const initial = item.creatorLabel.replace(/^@/, '').trim()[0]?.toUpperCase() || 'C';
 
   return (
-    <View style={{ width: 38, height: 38, borderRadius: 19, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: '#27272a' }}>
+    <View style={{ width: 38, height: 38, borderRadius: 19, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft, borderWidth: 1, borderColor: appTheme.colors.border }}>
       {item.creatorAvatar ? (
         <Image source={{ uri: item.creatorAvatar }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
       ) : (
-        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>{initial}</Text>
+        <Text style={{ color: appTheme.colors.text, fontSize: 15, fontWeight: '800' }}>{initial}</Text>
       )}
     </View>
   );
@@ -599,14 +622,25 @@ function ProfileFeedMediaCarousel({ active, item, width }: { active: boolean; it
   if (!pages.length) {
     return (
       <View style={{ width, paddingHorizontal: 14 }}>
-        <LinearGradient
-          colors={['#17051d', '#060609', '#07171f']}
-          style={{ minHeight: 360, borderRadius: 6, borderCurve: 'continuous', justifyContent: 'center', padding: 18 }}
+        <View
+          style={{
+            minHeight: 360,
+            borderRadius: appTheme.radii.lg,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: appTheme.colors.border,
+            backgroundColor: appTheme.colors.panelSoft,
+            justifyContent: 'center',
+            padding: 18,
+          }}
         >
-          <Text selectable numberOfLines={10} style={{ color: '#fff', fontSize: 19, lineHeight: 26, fontWeight: '900' }}>
+          <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.motion}1f`, marginBottom: 14 }}>
+            <Wand2 size={18} color={appTheme.colors.motion} />
+          </View>
+          <Text selectable numberOfLines={10} style={{ color: appTheme.colors.text, fontSize: 19, lineHeight: 26, fontWeight: '700' }}>
             {item.displayText || item.title}
           </Text>
-        </LinearGradient>
+        </View>
       </View>
     );
   }
@@ -625,7 +659,7 @@ function ProfileFeedMediaCarousel({ active, item, width }: { active: boolean; it
         }}
         pagingEnabled
         renderItem={({ item: mediaItem, index }) => (
-          <View style={{ width, alignItems: 'center', backgroundColor: '#030308' }}>
+          <View style={{ width, alignItems: 'center', backgroundColor: appTheme.colors.surfaceInset }}>
             <ProfileFeedMediaFrame
               active={active && index === currentIndex}
               mediaItem={mediaItem}
@@ -639,7 +673,7 @@ function ProfileFeedMediaCarousel({ active, item, width }: { active: boolean; it
       {pages.length > 1 ? (
         <>
           <View style={{ position: 'absolute', top: 10, right: 12, borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.58)', paddingHorizontal: 9, paddingVertical: 5 }}>
-            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>{currentIndex + 1}/{pages.length}</Text>
+            <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '700' }}>{currentIndex + 1}/{pages.length}</Text>
           </View>
           <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 5, paddingTop: 10 }}>
             {pages.map((mediaItem, index) => (
@@ -649,7 +683,7 @@ function ProfileFeedMediaCarousel({ active, item, width }: { active: boolean; it
                   width: 6,
                   height: 6,
                   borderRadius: 3,
-                  backgroundColor: index === currentIndex ? '#7c3cff' : 'rgba(255,255,255,0.26)',
+                  backgroundColor: index === currentIndex ? appTheme.colors.primary : appTheme.colors.borderStrong,
                 }}
               />
             ))}
@@ -696,13 +730,13 @@ function ProfileFeedMediaFrame({ active, mediaItem, width, height }: { active: b
     }
 
     return (
-      <View style={{ width, height, backgroundColor: '#090914' }}>
+      <View style={{ width, height, backgroundColor: appTheme.colors.surfaceInset }}>
         <FeedVideoPreview
           url={mediaItem.url}
           active={false}
           height={height}
           radius={0}
-          accent="#67e8f9"
+          accent={appTheme.colors.video}
         />
         <ProfileFeedPlayBadge />
       </View>
@@ -725,8 +759,8 @@ function ProfileFeedMediaFrame({ active, mediaItem, width, height }: { active: b
   }
 
   return (
-    <View style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#090914' }}>
-      <ImageOff size={32} color="rgba(255,255,255,0.58)" />
+    <View style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceInset }}>
+      <ImageOff size={32} color={appTheme.colors.faint} />
     </View>
   );
 }
@@ -750,24 +784,34 @@ function ActiveProfileFeedVideo({
 }) {
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const reducedMotion = useReducedMotion();
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
-    instance.muted = false;
+    instance.muted = true;
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
   });
   const [isPlaying, setIsPlaying] = useState(player.playing);
+  const [isMuted, setIsMuted] = useState(player.muted);
 
   useEffect(() => {
+    if (reducedMotion) {
+      player.pause();
+      setIsPlaying(false);
+      return;
+    }
+
     player.play();
     setIsPlaying(player.playing);
-  }, [player]);
+  }, [player, reducedMotion]);
 
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-  }, [url]);
+    player.muted = true;
+    setIsMuted(true);
+  }, [player, url]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event: { isPlaying: boolean }) => {
@@ -797,36 +841,68 @@ function ActiveProfileFeedVideo({
     setIsPlaying(true);
   };
 
+  const toggleMuted = () => {
+    const nextMuted = !player.muted;
+    player.muted = nextMuted;
+    setIsMuted(nextMuted);
+  };
+
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={isPlaying ? 'Pause video' : 'Play video'}
-      onPress={togglePlayback}
-      style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#030308' }}
-    >
-      <FeedMediaFrame
-        kind="video"
-        player={player}
-        backdropUrl={previewUrl}
-        posterUrl={previewUrl}
-        posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
-        cacheKey={previewCacheKey}
-        thumbhash={previewThumbhash}
-        recyclingKey={recyclingKey}
-        radius={0}
-        style={{ width, height }}
-        onFirstFrameRender={() => {
-          setHasFrame(true);
-          setHasError(false);
-        }}
-      />
-      {!hasFrame && !hasError ? (
-        <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(3,3,8,0.36)' }}>
-          <ActivityIndicator color="#f97316" />
-        </View>
-      ) : null}
-      {!isPlaying && hasFrame ? <ProfileFeedPlayBadge /> : null}
-    </Pressable>
+    <View style={{ width, height, backgroundColor: appTheme.colors.surfaceInset }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isPlaying ? 'Pause video' : 'Play video'}
+        onPress={togglePlayback}
+        style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
+      >
+        <FeedMediaFrame
+          kind="video"
+          player={player}
+          backdropUrl={previewUrl}
+          posterUrl={previewUrl}
+          posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+          cacheKey={previewCacheKey}
+          thumbhash={previewThumbhash}
+          recyclingKey={recyclingKey}
+          radius={0}
+          style={{ width, height }}
+          onFirstFrameRender={() => {
+            setHasFrame(true);
+            setHasError(false);
+          }}
+        />
+        {!hasFrame && !hasError ? (
+          <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(3,3,8,0.36)' }}>
+            <ActivityIndicator color={appTheme.colors.primary} />
+          </View>
+        ) : null}
+        {!isPlaying && hasFrame ? <ProfileFeedPlayBadge /> : null}
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isMuted ? 'Unmute video' : 'Mute video'}
+        onPress={toggleMuted}
+        style={({ pressed }) => ({
+          position: 'absolute',
+          right: 14,
+          bottom: 14,
+          width: 48,
+          height: 48,
+          borderRadius: 24,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: pressed ? 'rgba(9,15,17,0.9)' : 'rgba(9,15,17,0.72)',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.22)',
+        })}
+      >
+        {isMuted ? (
+          <VolumeX size={22} color="#ffffff" strokeWidth={2.2} />
+        ) : (
+          <Volume2 size={22} color="#ffffff" strokeWidth={2.2} />
+        )}
+      </Pressable>
+    </View>
   );
 }
 
@@ -882,7 +958,7 @@ function ProfileFeedActionRow({
           {!item.archivedAt ? (
             <ProfileFeedActionChip
               accessibilityLabel="Recreate media"
-              icon={<Repeat2 size={18} color="#050506" strokeWidth={2.8} />}
+              icon={<Repeat2 size={18} color={appTheme.colors.onPrimary} strokeWidth={2.8} />}
               label="Create"
               onPress={onRecreate}
               primary
@@ -892,13 +968,13 @@ function ProfileFeedActionRow({
             <>
               <ProfileFeedActionChip
                 accessibilityLabel="Share media"
-                icon={<Share2 size={18} color="#ffffff" strokeWidth={2.5} />}
+                icon={<Share2 size={18} color={appTheme.colors.text} strokeWidth={2.5} />}
                 label="Share"
                 onPress={onShare}
               />
               <ProfileFeedActionChip
                 accessibilityLabel={`Publish ${item.title}`}
-                icon={<Globe size={18} color="#ffffff" strokeWidth={2.5} />}
+                icon={<Globe size={18} color={appTheme.colors.text} strokeWidth={2.5} />}
                 label="Publish"
                 onPress={onPublish}
               />
@@ -907,7 +983,7 @@ function ProfileFeedActionRow({
             <>
               <ProfileFeedActionChip
                 accessibilityLabel={`${manageUnlockLabel} for ${item.title}`}
-                icon={<Wand2 size={18} color="#07110a" strokeWidth={2.6} />}
+                icon={<Wand2 size={18} color={appTheme.colors.success} strokeWidth={2.6} />}
                 label={manageUnlockLabel}
                 onPress={onManageUnlock}
                 tone="success"
@@ -917,8 +993,8 @@ function ProfileFeedActionRow({
                   accessibilityLabel={`${visibilityLabel} for ${item.title}`}
                   disabled={visibilityLoading}
                   icon={nextVisibility === 'private'
-                    ? <LockKeyhole size={18} color="#ffffff" strokeWidth={2.5} />
-                    : <Globe size={18} color="#ffffff" strokeWidth={2.5} />}
+                    ? <LockKeyhole size={18} color={appTheme.colors.warning} strokeWidth={2.5} />
+                    : <Globe size={18} color={appTheme.colors.text} strokeWidth={2.5} />}
                   label={visibilityLabel}
                   onPress={() => onLinkedVisibilityChange(nextVisibility)}
                   tone={nextVisibility === 'private' ? 'private' : 'default'}
@@ -926,7 +1002,7 @@ function ProfileFeedActionRow({
               ) : (
                 <ProfileFeedActionChip
                   accessibilityLabel={`Open linked post for ${item.title}`}
-                  icon={<Globe size={18} color="#ffffff" strokeWidth={2.5} />}
+                  icon={<Globe size={18} color={appTheme.colors.text} strokeWidth={2.5} />}
                   label="Open post"
                   onPress={onOpenLinkedPost}
                 />
@@ -936,7 +1012,7 @@ function ProfileFeedActionRow({
             item.canShare ? (
               <ProfileFeedActionChip
                 accessibilityLabel="Share media"
-                icon={<Share2 size={18} color="#ffffff" strokeWidth={2.5} />}
+                icon={<Share2 size={18} color={appTheme.colors.text} strokeWidth={2.5} />}
                 label="Share"
                 onPress={onShare}
               />
@@ -945,8 +1021,8 @@ function ProfileFeedActionRow({
         </View>
         {item.mediaItems.length > 1 ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Images size={17} color="rgba(255,255,255,0.64)" />
-            <Text style={{ color: 'rgba(255,255,255,0.64)', fontSize: 12, fontWeight: '900' }}>
+            <Images size={17} color={appTheme.colors.muted} />
+            <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>
               {item.mediaItems.length}
             </Text>
           </View>
@@ -958,9 +1034,19 @@ function ProfileFeedActionRow({
           accessibilityLabel={item.isSaved ? 'Saved' : 'Save'}
           disabled={saveLoading}
           onPress={onSave}
-          style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? 0.72 : 1 })}
+          style={({ pressed }) => ({
+            minHeight: appTheme.touch.default,
+            alignSelf: 'flex-start',
+            justifyContent: 'center',
+            borderRadius: appTheme.radii.pill,
+            borderWidth: 1,
+            borderColor: item.isSaved ? appTheme.colors.primary : appTheme.colors.border,
+            backgroundColor: item.isSaved ? appTheme.colors.selected : appTheme.colors.surface,
+            paddingHorizontal: 14,
+            opacity: pressed ? 0.72 : 1,
+          })}
         >
-          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>{item.isSaved ? 'Saved' : 'Save'}</Text>
+          <Text style={{ color: item.isSaved ? appTheme.colors.primary : appTheme.colors.text, fontSize: 13, fontWeight: '700' }}>{item.isSaved ? 'Saved' : 'Save'}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -1003,18 +1089,18 @@ function ProfileFeedActionChip({
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: primary
-          ? 'rgba(255,255,255,0.22)'
+          ? appTheme.colors.primary
           : isSuccess
-            ? 'rgba(102,255,69,0.42)'
+            ? appTheme.semantic.success.border
             : isPrivate
-              ? 'rgba(168,85,247,0.36)'
+              ? appTheme.semantic.warning.border
               : appTheme.colors.borderStrong,
         backgroundColor: primary
-          ? appTheme.colors.text
+          ? appTheme.colors.primary
           : isSuccess
-            ? '#66ff45'
+            ? appTheme.semantic.success.background
             : isPrivate
-              ? 'rgba(124,58,237,0.18)'
+              ? appTheme.semantic.warning.background
               : appTheme.colors.surfaceStrong,
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: appTheme.spacing.gap,
@@ -1024,9 +1110,15 @@ function ProfileFeedActionChip({
       <Text
         numberOfLines={1}
         style={{
-          color: primary || isSuccess ? appTheme.colors.textInverse : appTheme.colors.text,
+          color: primary
+            ? appTheme.colors.onPrimary
+            : isSuccess
+              ? appTheme.colors.success
+              : isPrivate
+                ? appTheme.colors.warning
+                : appTheme.colors.text,
           ...appTheme.type.label,
-          fontWeight: '900',
+          fontWeight: '700',
         }}
       >
         {label}
@@ -1038,7 +1130,7 @@ function ProfileFeedActionChip({
 function ProfileFeedMetaPill({ label }: { label: string }) {
   return (
     <View style={{ minHeight: 32, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceStrong, borderWidth: 1, borderColor: appTheme.colors.border, paddingHorizontal: appTheme.spacing.gap, alignItems: 'center', justifyContent: 'center' }}>
-      <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '900' }}>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '700' }}>
         {label}
       </Text>
     </View>
@@ -1057,9 +1149,10 @@ function ProfileFeedDetailsSheet({
   visible: boolean;
 }) {
   const details = item.details;
+  const reducedMotion = useReducedMotion();
 
   return (
-    <Modal animationType="slide" onRequestClose={onClose} transparent visible={visible}>
+    <Modal animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} transparent visible={visible}>
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' }}>
         <Pressable
           accessibilityRole="button"
@@ -1075,15 +1168,15 @@ function ProfileFeedDetailsSheet({
             borderCurve: 'continuous',
             borderWidth: 1,
             borderBottomWidth: 0,
-            borderColor: 'rgba(255,255,255,0.12)',
-            backgroundColor: '#0c0c16',
+            borderColor: appTheme.colors.border,
+            backgroundColor: appTheme.colors.panel,
             paddingTop: 12,
             paddingBottom: bottomInset + 18,
           }}
         >
-          <View style={{ width: 42, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.2)', alignSelf: 'center', marginBottom: 12 }} />
+          <View style={{ width: 42, height: 4, borderRadius: 2, backgroundColor: appTheme.colors.borderStrong, alignSelf: 'center', marginBottom: 12 }} />
           <ScrollView contentContainerStyle={{ paddingHorizontal: 20, gap: 16 }} showsVerticalScrollIndicator={false}>
-            <Text style={{ color: '#fff', fontSize: 22, lineHeight: 27, fontWeight: '900' }}>{item.title}</Text>
+            <Text style={{ color: appTheme.colors.text, fontSize: 22, lineHeight: 27, fontWeight: '800' }}>{item.title}</Text>
             <ProfileFeedDetailBlock title="Prompt" body={details?.prompt || item.recreatePrompt || item.displayText} emptyLabel="No prompt provided" />
             <ProfileFeedDetailBlock title="Caption" body={details?.body || ''} emptyLabel="No caption provided" />
             {details?.generationInfo ? (
@@ -1108,11 +1201,11 @@ function ProfileFeedDetailsSheet({
 function ProfileFeedDetailBlock({ title, body, emptyLabel }: { title: string; body: string; emptyLabel: string }) {
   return (
     <View style={{ gap: 7 }}>
-      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{title}</Text>
+      <Text style={{ color: appTheme.colors.text, fontSize: 16, fontWeight: '700' }}>{title}</Text>
       {body ? (
-        <Text selectable style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 21 }}>{body}</Text>
+        <Text selectable style={{ color: appTheme.colors.textSecondary, fontSize: 14, lineHeight: 21 }}>{body}</Text>
       ) : (
-        <Text style={{ color: 'rgba(255,255,255,0.48)', fontSize: 14 }}>{emptyLabel}</Text>
+        <Text style={{ color: appTheme.colors.faint, fontSize: 14 }}>{emptyLabel}</Text>
       )}
     </View>
   );

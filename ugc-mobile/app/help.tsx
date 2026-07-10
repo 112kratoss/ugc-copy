@@ -1,7 +1,7 @@
 import { Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
-import { Text, View } from 'react-native';
+import { Linking, Pressable, View } from 'react-native';
 
-import { Card, Screen, SectionTitle } from '@/components/ui';
+import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { appTheme } from '@/lib/theme';
 
 export default function HelpScreen() {
@@ -14,7 +14,7 @@ export default function HelpScreen() {
       />
 
       <HelpCard
-        icon={<MessageCircle size={22} color="#d946ef" />}
+        icon={<MessageCircle size={22} color={appTheme.colors.primary} />}
         title="Creation help"
         body="If a generation is processing, you can leave the screen and watch for the mobile notification when it finishes."
       />
@@ -26,24 +26,32 @@ export default function HelpScreen() {
       <HelpCard
         icon={<Mail size={22} color="#fbbf24" />}
         title="Contact support"
-        body="For account or purchase issues, share your Magic Booklet email and the action you were trying to complete."
+        body="Email info@magicbooklet.com for account or purchase help."
+        onPress={() => void Linking.openURL('mailto:info@magicbooklet.com?subject=Magicbooklet%20app%20support')}
       />
     </Screen>
   );
 }
 
-function HelpCard({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
-  return (
-    <Card>
+function HelpCard({ icon, title, body, onPress }: { icon: React.ReactNode; title: string; body: string; onPress?: () => void }) {
+  const content = (
+    <Card style={{ minHeight: 112 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
           {icon}
         </View>
         <View style={{ flex: 1, gap: 5 }}>
-          <Text style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '900' }}>{title}</Text>
-          <Text style={{ color: appTheme.colors.muted, lineHeight: 21 }}>{body}</Text>
+          <AppText variant="cardTitle">{title}</AppText>
+          <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
       </View>
     </Card>
+  );
+
+  if (!onPress) return content;
+  return (
+    <Pressable accessibilityRole="link" accessibilityLabel={`${title}. ${body}`} onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+      {content}
+    </Pressable>
   );
 }

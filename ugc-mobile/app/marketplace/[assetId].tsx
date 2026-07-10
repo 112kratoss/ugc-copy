@@ -66,12 +66,16 @@ export default function MarketplaceAssetScreen() {
       />
 
       {detailQuery.error ? (
-        <StatusBlock
-          tone="danger"
-          title="Could not load unlock"
-          body={detailQuery.error instanceof Error ? detailQuery.error.message : 'Try again.'}
-        />
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock
+            tone="danger"
+            title="Could not load unlock"
+            body="Check your connection, then try again."
+          />
+          <SecondaryButton label="Retry unlock" onPress={() => void detailQuery.refetch()} />
+        </View>
       ) : null}
+      {detailQuery.isLoading ? <StatusBlock title="Loading unlock" body="Fetching the latest resource details." /> : null}
       {unlockMutation.error ? (
         <StatusBlock
           tone="danger"
@@ -133,12 +137,12 @@ export default function MarketplaceAssetScreen() {
 
           <Card>
             {!user ? (
-              <View style={{ gap: 4 }}>
+              <View style={{ gap: appTheme.spacing.gap }}>
                 <AppText variant="label">Sign in required</AppText>
                 <AppText variant="bodySm" color="muted">Sign in before unlocking free or paid resources.</AppText>
+                <PrimaryButton label="Sign in to unlock" onPress={() => router.push('/auth')} accent="primary" />
               </View>
-            ) : null}
-            {detail.viewerCanAccess ? (
+            ) : detail.viewerCanAccess ? (
               <View style={{ gap: 4 }}>
                 <AppText variant="label" color="success">Unlocked</AppText>
                 <AppText variant="bodySm" color="muted">This resource is available on your account.</AppText>
@@ -154,14 +158,14 @@ export default function MarketplaceAssetScreen() {
                   }
                   unlockMutation.mutate();
                 }}
-                accent="workflow"
+                accent="primary"
               />
             ) : (
               <View style={{ gap: 10 }}>
                 <View style={{ gap: 4 }}>
                   <AppText variant="label">Unlock with credits</AppText>
                   <AppText variant="bodySm" color="muted">
-                    Paid mobile unlocks now use your Magic Booklet credit balance instead of a separate store checkout.
+                    Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
                   </AppText>
                   <AppText variant="label" color="success">
                     Costs {detail.priceUsdCents ?? 0} credits • Balance {credits ?? 0}
@@ -177,7 +181,7 @@ export default function MarketplaceAssetScreen() {
                     }
                     unlockMutation.mutate();
                   }}
-                  accent="commerce"
+                  accent="primary"
                 />
               </View>
             )}

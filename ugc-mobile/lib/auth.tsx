@@ -204,7 +204,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     await refreshProfile();
-    router.replace('/(tabs)');
   };
 
   const signUpWithPassword = async (email: string, password: string) => {
@@ -221,7 +220,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     await refreshProfile();
-    router.replace('/(tabs)/profile');
   };
 
   const signInWithApple = async (mode: AuthMode) => {
@@ -241,7 +239,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     await refreshProfile();
-    router.replace(mode === 'signup' ? '/(tabs)/profile' : '/(tabs)');
   };
 
   const signOut = async () => {

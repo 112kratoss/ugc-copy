@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { Check, ChevronDown, ImageIcon, Lock, Play, Plus, Sparkles, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -86,6 +85,7 @@ export default function NewPostScreen() {
   const params = useLocalSearchParams<{ generationId?: string; postId?: string; focus?: string }>();
   const generationId = params.generationId;
   const postId = params.postId;
+  const focusTarget = Array.isArray(params.focus) ? params.focus[0] : params.focus;
 
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -105,6 +105,9 @@ export default function NewPostScreen() {
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
   const [pendingPublishVisibility, setPendingPublishVisibility] = useState<PostComposerDraft['visibility'] | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const [unlockSectionY, setUnlockSectionY] = useState(0);
+  const didApplyFocusRef = useRef(false);
 
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id],
@@ -133,7 +136,9 @@ export default function NewPostScreen() {
   const isGenerationBacked = Boolean(postQuery.data?.post?.generationId) || draft.mode === 'creation';
   const isEditMode = Boolean(postId);
   const isFieldsLocked = isEditMode && isGenerationBacked;
-  const canSubmit = !isPickingMedia && !isPickingResourceFile && (!isEditMode || !postQuery.isLoading);
+  const canSubmit = !isPickingMedia
+    && !isPickingResourceFile
+    && (!isEditMode || (postQuery.isSuccess && hasPrefilledEdit));
   const sourceTools = sourceToolsQuery.data?.tools ?? [];
   const packageStatus = useMemo(
     () => getPostComposerPackageStatus(draft, selectedGeneration),
@@ -264,6 +269,19 @@ export default function NewPostScreen() {
     }
   }, [postId, postQuery.data, hasPrefilledEdit]);
 
+  useEffect(() => {
+    didApplyFocusRef.current = false;
+  }, [focusTarget, postId]);
+
+  useEffect(() => {
+    if (focusTarget !== 'resources' || unlockSectionY <= 0 || didApplyFocusRef.current) return;
+    if (isEditMode && !hasPrefilledEdit) return;
+    didApplyFocusRef.current = true;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, unlockSectionY - 12), animated: true });
+    });
+  }, [focusTarget, hasPrefilledEdit, isEditMode, unlockSectionY]);
+
   const publishMutation = useMutation({
     mutationFn: async (targetVisibility?: PostComposerDraft['visibility']) => {
       const effectiveDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
@@ -339,6 +357,25 @@ export default function NewPostScreen() {
 
   if (!user) {
     return <Redirect href="/auth" />;
+  }
+
+  if (isEditMode && (postQuery.isLoading || (postQuery.isSuccess && Boolean(postQuery.data?.post) && !hasPrefilledEdit))) {
+    return (
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
+        <ActivityIndicator color={appTheme.colors.primary} />
+        <AppText variant="bodySm" color="muted">Loading your post</AppText>
+      </View>
+    );
+  }
+
+  if (isEditMode && (postQuery.isError || (postQuery.isSuccess && !postQuery.data?.post))) {
+    return (
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, justifyContent: 'center', gap: 12, padding: 24 }}>
+        <StatusBlock tone="danger" title="Could not load this post" body="Nothing has been changed. Check your connection, then try again." />
+        <SecondaryButton label="Retry post" onPress={() => void postQuery.refetch()} />
+        <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile?tab=posts' as never)} />
+      </View>
+    );
   }
 
   const setMode = (mode: PostComposerMode) => {
@@ -657,9 +694,11 @@ export default function NewPostScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <ScrollView
+        ref={scrollRef}
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
@@ -668,10 +707,6 @@ export default function NewPostScreen() {
           gap: 10,
         }}
       >
-        {postQuery.isLoading && isEditMode ? (
-          <ActivityIndicator color="#d946ef" style={{ marginVertical: 20 }} />
-        ) : null}
-
         {message ? (
           <StatusBlock tone={message.tone} title={message.title} body={message.body} />
         ) : null}
@@ -720,7 +755,9 @@ export default function NewPostScreen() {
           onToggleDescription={() => setIsDescriptionOpen((current) => !current)}
         />
 
-        {unlockSection}
+        <View onLayout={(event) => setUnlockSectionY(event.nativeEvent.layout.y)}>
+          {unlockSection}
+        </View>
 
         <PublishSection
           actions={publishActions}
@@ -948,7 +985,7 @@ function TitleSection({
     <SurfaceSection
       eyebrow="Post"
       title="Title"
-      accent="motion"
+      accent="primary"
       style={COMPOSER_SECTION_STYLE}
     >
       <ComposerInput
@@ -1102,10 +1139,10 @@ function MobileCreatablePicker({
             }
           }}
           placeholder={placeholder}
-          placeholderTextColor="rgba(255,255,255,0.36)"
+          placeholderTextColor={appTheme.colors.faint}
           editable={!disabled}
           style={{
-            minHeight: 44,
+            minHeight: appTheme.touch.compact,
             borderRadius: 14,
             borderCurve: 'continuous',
             borderWidth: 1,
@@ -1115,7 +1152,7 @@ function MobileCreatablePicker({
             ...appTheme.type.bodySm,
             fontWeight: '700',
             paddingLeft: appTheme.spacing.gap,
-            paddingRight: 44,
+            paddingRight: appTheme.touch.compact,
             paddingVertical: appTheme.spacing.gap,
           }}
         />
@@ -1136,7 +1173,7 @@ function MobileCreatablePicker({
             top: 0,
             right: 0,
             bottom: 0,
-            width: 44,
+            width: appTheme.touch.compact,
             alignItems: 'center',
             justifyContent: 'center',
             opacity: pressed ? 0.72 : disabled ? 0.38 : 1,
@@ -1169,7 +1206,7 @@ function MobileCreatablePicker({
                   accessibilityRole="button"
                   onPress={() => chooseEntry(entry)}
                   style={({ pressed }) => ({
-                    minHeight: 44,
+                    minHeight: appTheme.touch.compact,
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 8,
@@ -1665,10 +1702,10 @@ function GeneratedProofCard({
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <LinearGradient colors={['#17131d', '#0b0c12', '#1d1020']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.gap }}>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.gap, backgroundColor: appTheme.colors.panelSoft }}>
             <Sparkles size={34} color={appTheme.colors.motion} />
             <AppText variant="cardTitle">Creation ready</AppText>
-          </LinearGradient>
+          </View>
         )}
         {mediaKind === 'video' ? (
           <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.16)' }}>
@@ -1806,7 +1843,7 @@ function UnlockChecklistRow({
       accessibilityState={{ checked }}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 44,
+        minHeight: appTheme.touch.compact,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: checked ? `${appTheme.colors.workflow}66` : 'transparent',
@@ -1866,8 +1903,8 @@ function PublishActionCard({
         minHeight: 58,
         borderRadius: 13,
         borderWidth: 1,
-        borderColor: isPrimary ? `${appTheme.colors.image}dd` : appTheme.colors.border,
-        backgroundColor: isPrimary ? appTheme.colors.image : appTheme.colors.surfaceStrong,
+        borderColor: isPrimary ? appTheme.colors.primaryStrong : appTheme.colors.border,
+        backgroundColor: isPrimary ? appTheme.colors.primary : appTheme.colors.surfaceStrong,
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         justifyContent: 'center',
         gap: 4,
@@ -1914,15 +1951,16 @@ function ComposerInput({
 }) {
   return (
     <TextInput
+      accessibilityLabel={placeholder}
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor="rgba(255,255,255,0.36)"
+      placeholderTextColor={appTheme.colors.faint}
       multiline={multiline}
       textAlignVertical={multiline ? 'top' : 'center'}
       editable={editable}
       style={{
-        minHeight: multiline ? minHeight ?? 112 : 44,
+        minHeight: multiline ? minHeight ?? 112 : appTheme.touch.compact,
         borderRadius: 14,
         borderCurve: 'continuous',
         borderWidth: 1,
@@ -1930,7 +1968,7 @@ function ComposerInput({
         backgroundColor: editable ? appTheme.colors.surfaceInset : appTheme.colors.surface,
         color: editable ? appTheme.colors.text : appTheme.colors.faint,
         ...appTheme.type.bodySm,
-        fontWeight: '700',
+        fontWeight: '500',
         paddingHorizontal: appTheme.spacing.gap,
         paddingVertical: appTheme.spacing.gap,
       }}
@@ -1947,7 +1985,7 @@ function Chip({
   active,
   onPress,
   disabled = false,
-  accent = 'motion',
+  accent = 'primary',
 }: {
   label: string;
   active: boolean;
@@ -2105,7 +2143,7 @@ function AddMediaGalleryCard({
         <AppText variant="caption" color="muted">{isPicking ? 'Opening...' : 'Add media'}</AppText>
       </View>
       <View style={{ padding: 9, gap: 7 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
           Add media
         </Text>
         <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
@@ -2189,7 +2227,20 @@ function MediaGalleryCard({
   return (
     <View
       accessibilityRole={canDrag ? 'adjustable' : undefined}
-      accessibilityLabel={canDrag ? `Hold ${label} to reorder` : undefined}
+      accessibilityLabel={canDrag ? `${label}, ${index + 1} of ${totalItems}` : undefined}
+      accessibilityValue={canDrag ? { text: `${index + 1} of ${totalItems}` } : undefined}
+      accessibilityActions={canDrag ? [
+        { name: 'decrement', label: 'Move left' },
+        { name: 'increment', label: 'Move right' },
+      ] : undefined}
+      onAccessibilityAction={canDrag ? (event) => {
+        if (event.nativeEvent.actionName === 'decrement' && index > 0) {
+          onReorderMedia(item.id, index - 1);
+        }
+        if (event.nativeEvent.actionName === 'increment' && index < totalItems - 1) {
+          onReorderMedia(item.id, index + 1);
+        }
+      } : undefined}
       {...dragResponder.panHandlers}
       style={{
         width: MEDIA_CARD_WIDTH,
@@ -2212,14 +2263,15 @@ function MediaGalleryCard({
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <LinearGradient colors={['#111827', '#271233', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
             <Play size={34} color="#fff" fill="#fff" />
-          </LinearGradient>
+          </View>
         )}
         {!disabled ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Remove ${label}`}
+              accessibilityLabel={`Remove ${label}`}
+              hitSlop={9}
             onPress={() => onRemoveMedia(item.id)}
             style={({ pressed }) => ({
               position: 'absolute',
@@ -2241,7 +2293,7 @@ function MediaGalleryCard({
         ) : null}
       </View>
       <View style={{ padding: 9, gap: 7 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
           {label}
         </Text>
         <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
@@ -2266,22 +2318,22 @@ function MiniAction({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
+      accessibilityLabel={accessibilityLabel ?? label}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 28,
-        borderRadius: 14,
+        minHeight: appTheme.touch.compact,
+        borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: appTheme.colors.border,
         backgroundColor: appTheme.colors.surfaceStrong,
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 8,
+        paddingHorizontal: 12,
         alignItems: 'center',
         justifyContent: 'center',
       })}
     >
-      <Text style={{ color: appTheme.colors.text, fontSize: 10, fontWeight: '900' }}>{label}</Text>
+      <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '700' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -2308,7 +2360,7 @@ function CreationContent({
   const displayItems = visibleItems ?? items;
 
   if (loading) {
-    return <ActivityIndicator color="#d946ef" />;
+    return <ActivityIndicator color={appTheme.colors.primary} />;
   }
 
   if (error) {
@@ -2337,7 +2389,7 @@ function CreationContent({
         <Text selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19 }}>
           No finished Magicbooklet creations are ready to post yet.
         </Text>
-        <PrimaryButton label="Create first" onPress={onCreate} accent="motion" />
+        <PrimaryButton label="Create first" onPress={onCreate} accent="primary" />
       </View>
     );
   }
@@ -2367,7 +2419,7 @@ function CreationCard({ item, selected, onPress, disabled = false }: { item: Gen
         borderRadius: 18,
         overflow: 'hidden',
         borderWidth: 1,
-        borderColor: selected ? '#66ff45' : 'rgba(255,255,255,0.10)',
+        borderColor: selected ? appTheme.colors.primary : appTheme.colors.borderSubtle,
         backgroundColor: 'rgba(255,255,255,0.06)',
         opacity: disabled ? 0.8 : pressed ? 0.78 : 1,
       })}
@@ -2382,9 +2434,9 @@ function CreationCard({ item, selected, onPress, disabled = false }: { item: Gen
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <LinearGradient colors={mediaKind === 'video' ? ['#111827', '#271233', '#080912'] : ['#121226', '#171123', '#080912']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
             {mediaKind === 'video' ? <Play size={31} color="#fff" fill="#fff" /> : <Sparkles size={31} color="#fff" />}
-          </LinearGradient>
+          </View>
         )}
         {visualUrl && mediaKind === 'video' ? (
           <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.18)' }}>
@@ -2392,13 +2444,13 @@ function CreationCard({ item, selected, onPress, disabled = false }: { item: Gen
           </View>
         ) : null}
         {selected ? (
-          <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: '#66ff45', alignItems: 'center', justifyContent: 'center' }}>
-            <Check size={17} color="#07110a" strokeWidth={3} />
+          <View style={{ position: 'absolute', top: 8, right: 8, width: 32, height: 32, borderRadius: 16, backgroundColor: appTheme.colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+            <Check size={17} color={appTheme.colors.onPrimary} strokeWidth={3} />
           </View>
         ) : null}
       </View>
       <View style={{ padding: 10, gap: 5 }}>
-        <Text numberOfLines={2} style={{ color: '#fff', fontSize: 13, lineHeight: 17, fontWeight: '900' }}>{getPublishGenerationTitle(item)}</Text>
+        <Text numberOfLines={2} style={{ color: '#fff', fontSize: 13, lineHeight: 17, fontWeight: '800' }}>{getPublishGenerationTitle(item)}</Text>
         <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>
           {getPublishGenerationSubtitle(item)} · {formatRelativeTime(item.completed_at ?? item.created_at)}
         </Text>
@@ -2415,11 +2467,11 @@ function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.Re
       onPress={onPress}
       style={({ pressed }) => ({
         flex: 1,
-        minHeight: 44,
+        minHeight: appTheme.touch.compact,
         borderRadius: 22,
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.12)',
-        backgroundColor: 'rgba(255,255,255,0.075)',
+        borderColor: appTheme.colors.border,
+        backgroundColor: appTheme.colors.surface,
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'row',
@@ -2428,7 +2480,7 @@ function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.Re
       })}
     >
       {loading ? <ActivityIndicator color="#fff" /> : icon}
-      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>{label}</Text>
+      <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '700' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -2502,11 +2554,11 @@ function UnlockFields({
           accessibilityState={{ checked: resource.allowRemix }}
           onPress={() => onChange({ allowRemix: !resource.allowRemix })}
           style={({ pressed }) => ({
-            minHeight: 42,
-            borderRadius: 21,
+            minHeight: appTheme.touch.compact,
+            borderRadius: appTheme.radii.pill,
             borderWidth: 1,
-            borderColor: resource.allowRemix ? 'rgba(102,255,69,0.48)' : 'rgba(255,255,255,0.10)',
-            backgroundColor: resource.allowRemix ? 'rgba(102,255,69,0.13)' : 'rgba(255,255,255,0.06)',
+            borderColor: resource.allowRemix ? appTheme.colors.primary : appTheme.colors.borderSubtle,
+            backgroundColor: resource.allowRemix ? appTheme.colors.selected : appTheme.colors.surface,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -2514,8 +2566,8 @@ function UnlockFields({
             opacity: pressed ? 0.76 : 1,
           })}
         >
-          <Text style={{ color: resource.allowRemix ? '#66ff45' : appTheme.colors.muted, fontSize: 13, fontWeight: '900' }}>Include remix access</Text>
-          <Lock size={16} color={resource.allowRemix ? '#66ff45' : appTheme.colors.muted} />
+          <Text style={{ color: resource.allowRemix ? appTheme.colors.primary : appTheme.colors.muted, fontSize: 13, fontWeight: '700' }}>Include remix access</Text>
+          <Lock size={16} color={resource.allowRemix ? appTheme.colors.primary : appTheme.colors.muted} />
         </Pressable>
       ) : null}
     </View>

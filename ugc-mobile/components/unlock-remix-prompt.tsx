@@ -7,6 +7,7 @@ import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind } from '@/lib/types';
 
@@ -27,6 +28,7 @@ export function UnlockRemixPrompt({
   const queryClient = useQueryClient();
   const [unlocking, setUnlocking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reducedMotion = useReducedMotion();
   const unlock = item?.details?.unlock ?? null;
   const accent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const accentValue = accentColor(accent);
@@ -73,7 +75,7 @@ export function UnlockRemixPrompt({
 
   return (
     <Modal
-      animationType="fade"
+      animationType={reducedMotion ? 'none' : 'fade'}
       onRequestClose={onClose}
       statusBarTranslucent
       transparent
@@ -106,7 +108,7 @@ export function UnlockRemixPrompt({
               <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
                 Remix locked
               </Text>
-              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '900' }}>
+              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
                 Unlock resources to remix
               </Text>
             </View>
@@ -115,9 +117,9 @@ export function UnlockRemixPrompt({
               accessibilityLabel="Close unlock prompt"
               onPress={onClose}
               style={({ pressed }) => ({
-                width: 40,
-                height: 40,
-                borderRadius: 20,
+                width: 48,
+                height: 48,
+                borderRadius: 24,
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: appTheme.colors.surfaceStrong,
@@ -134,7 +136,7 @@ export function UnlockRemixPrompt({
                 <Lock size={20} color={accentValue} strokeWidth={2.6} />
               </View>
               <View style={{ flex: 1, gap: 5 }}>
-                <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>
+                <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
                   {unlock.title || item.title}
                 </Text>
                 <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
@@ -143,7 +145,7 @@ export function UnlockRemixPrompt({
               </View>
               {unlock.priceLabel ? (
                 <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: `${accentValue}24`, paddingHorizontal: 10, paddingVertical: 6 }}>
-                  <Text style={{ color: accentValue, ...appTheme.type.caption, fontWeight: '900' }}>{unlock.priceLabel}</Text>
+                  <Text style={{ color: accentValue, ...appTheme.type.caption, fontWeight: '800' }}>{unlock.priceLabel}</Text>
                 </View>
               ) : null}
             </View>
@@ -166,7 +168,7 @@ export function UnlockRemixPrompt({
               justifyContent: 'center',
               gap: 9,
               borderRadius: appTheme.radii.pill,
-              backgroundColor: accentValue,
+              backgroundColor: appTheme.colors.primary,
               opacity: unlocking ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
               paddingHorizontal: 18,
             })}
@@ -176,7 +178,7 @@ export function UnlockRemixPrompt({
             ) : (
               <Lock size={19} color={appTheme.colors.textInverse} strokeWidth={2.8} />
             )}
-            <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.bodySm, fontWeight: '900' }}>
+            <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.bodySm, fontWeight: '800' }}>
               {unlocking ? 'Unlocking...' : ctaLabel}
             </Text>
           </Pressable>

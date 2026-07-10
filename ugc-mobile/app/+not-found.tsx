@@ -10,7 +10,7 @@ export default function NotFoundScreen() {
       <Stack.Screen options={{ title: 'Not found' }} />
       <Screen>
         <SectionTitle eyebrow="404" title="That screen is not here." body="Jump back to the creator launchpad and keep moving." />
-        <Link href="/" asChild>
+        <Link href="/creator" asChild>
           <Pressable
             style={({ pressed }) => ({
               opacity: pressed ? 0.82 : 1,

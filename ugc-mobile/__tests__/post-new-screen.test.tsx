@@ -699,7 +699,7 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     )).toHaveLength(0);
 
     renderer.act(() => {
-      const mediaCard = findNodeByAccessibilityLabel(tree!.root, 'Hold Media 2 to reorder');
+      const mediaCard = findNodeByAccessibilityLabel(tree!.root, 'Media 2, 2 of 2');
       expect(mediaCard.props.onStartShouldSetPanResponder()).toBe(true);
       mediaCard.props.onPanResponderGrant();
       vi.advanceTimersByTime(260);

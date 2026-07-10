@@ -40,6 +40,7 @@ import {
   SurfaceSection,
 } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { useReducedMotion } from '@/lib/motion';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
   applyCatalogModelDefaults,
@@ -210,6 +211,12 @@ export function MediaCreationScreen({
   const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
+  const generationPollControllerRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => () => {
+    generationPollControllerRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     if (!catalog) return;
@@ -287,7 +294,7 @@ export function MediaCreationScreen({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [api, quoteKey, quoteRequest, refetchCatalog]);
+  }, [api, quoteKey, refetchCatalog]);
 
   const activeQuote = quoteState.key === quoteKey ? quoteState : { status: 'pending' as const, cost: null, error: null };
   const validation = useMemo(
@@ -347,6 +354,7 @@ export function MediaCreationScreen({
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
   const showFloatingReviewBar = insideTab && hasStartedCreationDraft(currentDraft) && !isPromptFocused;
+  const contentTopPadding = insideTab ? topInset + 14 : appTheme.spacing.screen;
   const contentBottomPadding = insideTab
     ? tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section + (showFloatingReviewBar ? FLOATING_REVIEW_BAR_HEIGHT + appTheme.spacing.gap : 0)
     : bottomInset + 36;
@@ -354,11 +362,16 @@ export function MediaCreationScreen({
   const generateDisabled = isGenerating || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
 
   const changeTool = (tool: CreatorToolId) => {
+    if (isGenerating) {
+      setMessage('This generation is still running. You can switch tools when it finishes or leave and follow it in Alerts.');
+      return;
+    }
     setActiveTool(tool);
     setAdvancedExpanded(false);
     setMessage(null);
     setPromptMessage(null);
     setIsPromptFocused(false);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
 
   const replaceDraft = (draft: CreationDraft) => {
@@ -605,9 +618,13 @@ export function MediaCreationScreen({
     setLastGenerationId(null);
     const idempotencyKey = createMobileGenerationIdempotencyKey(currentDraft.tool);
     activeGenerationRequestKeyRef.current = idempotencyKey;
+    generationPollControllerRef.current?.abort();
+    const pollController = new AbortController();
+    generationPollControllerRef.current = pollController;
     setIsGenerating(true);
     try {
       let started: GenerationStartResponse;
+      let finalStatus: GenerationStatusResponse;
       if (currentDraft.tool === 'image') {
         started = await api.startImageGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
@@ -615,7 +632,7 @@ export function MediaCreationScreen({
         );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        setStatus(await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus }));
+        finalStatus = await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal });
       } else if (currentDraft.tool === 'video') {
         started = await api.startVideoGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
@@ -623,7 +640,7 @@ export function MediaCreationScreen({
         );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        setStatus(await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus }));
+        finalStatus = await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal });
       } else {
         started = await api.startMotionGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
@@ -631,13 +648,23 @@ export function MediaCreationScreen({
         );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        setStatus(await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus }));
+        finalStatus = await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal });
       }
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setStatus(finalStatus);
+      if (finalStatus.status === 'failed') {
+        setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } else {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
     } catch (error) {
+      if (pollController.signal.aborted) return;
       setMessage(error instanceof Error ? error.message : 'Generation failed.');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
+      if (generationPollControllerRef.current === pollController) {
+        generationPollControllerRef.current = null;
+      }
       activeGenerationRequestKeyRef.current = null;
       setIsGenerating(false);
     }
@@ -775,7 +802,7 @@ export function MediaCreationScreen({
         </View>
         <PrimaryButton
           label={isGenerating ? 'Generating...' : `Generate ${meta.title}`}
-          accent={meta.accent}
+          accent="primary"
           disabled={generateDisabled}
           loading={isGenerating}
           onPress={generate}
@@ -787,15 +814,15 @@ export function MediaCreationScreen({
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.background }} />
-      <View style={{ position: 'absolute', top: -120, right: -120, width: 260, height: 260, borderRadius: 130, backgroundColor: 'rgba(217,70,239,0.16)' }} />
-      <View style={{ position: 'absolute', bottom: 80, left: -120, width: 250, height: 250, borderRadius: 125, backgroundColor: 'rgba(56,189,248,0.11)' }} />
-      <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset, backgroundColor: appTheme.colors.background, zIndex: 3 }} />
+      {insideTab ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset, backgroundColor: appTheme.colors.background, zIndex: 3 }} /> : null}
       <ScrollView
+        ref={scrollRef}
         contentInsetAdjustmentBehavior="automatic"
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         style={{ flex: 1 }}
         contentContainerStyle={{
-          paddingTop: topInset + 14,
+          paddingTop: contentTopPadding,
           paddingHorizontal: isCompact ? 16 : 20,
           paddingBottom: contentBottomPadding,
           gap: 18,
@@ -824,10 +851,16 @@ export function MediaCreationScreen({
         {status && status.status !== 'succeeded' ? (
           <SurfaceSection
             eyebrow="Progress"
-            title={`Generation ${status.status}`}
-            body="You can leave this screen and watch Alerts if it takes longer."
+            title={status.status === 'failed' ? 'Generation failed' : `Generation ${status.status}`}
+            body={status.status === 'failed'
+              ? status.error?.trim() || 'Your inputs are preserved. Adjust anything you need, then retry.'
+              : 'You can leave this screen and follow progress in Alerts.'}
             accent={meta.accent}
-          />
+          >
+            {status.status === 'failed' ? (
+              <SecondaryButton label={`Retry ${meta.title}`} onPress={generate} disabled={generateDisabled} />
+            ) : null}
+          </SurfaceSection>
         ) : null}
 
         {outputUrl ? (
@@ -855,7 +888,6 @@ export function MediaCreationScreen({
       </ScrollView>
       {showFloatingReviewBar ? (
         <FloatingGenerateReviewBar
-          accent={meta.accent}
           bottom={tabBarMetrics.contentBottomPadding + 8}
           credits={credits ?? 0}
           cost={activeQuote.status === 'ready' ? activeQuote.cost : null}
@@ -883,7 +915,7 @@ function CreateHeader({
     <View style={{ gap: 12 }}>
       <View style={{ gap: 4 }}>
         <AppText variant="label" color={accentColor(meta.accent)} style={{ letterSpacing: 1.2, textTransform: 'uppercase' }}>
-          Magic Booklet
+          Magicbooklet
         </AppText>
         <AppText variant="pageTitle">Create</AppText>
         <AppText variant="bodySm" color="muted">{meta.title} generation · {meta.subtitle}</AppText>
@@ -894,7 +926,6 @@ function CreateHeader({
 }
 
 function FloatingGenerateReviewBar({
-  accent,
   bottom,
   credits,
   cost,
@@ -904,7 +935,6 @@ function FloatingGenerateReviewBar({
   toolTitle,
   onGenerate,
 }: {
-  accent: ToolAccent;
   bottom: number;
   credits: number;
   cost: number | null;
@@ -934,37 +964,39 @@ function FloatingGenerateReviewBar({
           borderRadius: 26,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: `${accentColor(accent)}66`,
+          borderColor: appTheme.colors.borderStrong,
           backgroundColor: 'rgba(12,12,16,0.96)',
           padding: 12,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 12,
-          boxShadow: `0 18px 48px ${accentColor(accent)}26`,
+          boxShadow: '0 18px 48px rgba(0,0,0,0.34)',
         }}
       >
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-          <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '900' }}>Review and generate</Text>
+          <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '800' }}>Review and generate</Text>
           <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>
             {credits} credits · {costLabel} cost · {status}
           </Text>
         </View>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel={isGenerating ? `Generating ${toolTitle}` : `Generate ${toolTitle}`}
+          accessibilityHint={`${credits} credits available. ${costLabel} credits required.`}
           accessibilityState={{ disabled }}
           disabled={disabled}
           onPress={onGenerate}
           style={{
             minHeight: 48,
             borderRadius: appTheme.radii.pill,
-            backgroundColor: disabled ? 'rgba(255,255,255,0.08)' : accentColor(accent),
+            backgroundColor: disabled ? appTheme.colors.surfaceStrong : appTheme.colors.primary,
             paddingHorizontal: 18,
             alignItems: 'center',
             justifyContent: 'center',
             opacity: disabled ? 0.62 : 1,
           }}
         >
-          <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '900' }}>
+          <Text style={{ color: disabled ? appTheme.colors.muted : appTheme.colors.onPrimary, fontSize: 13, fontWeight: '800' }}>
             {isGenerating ? 'Generating...' : `Generate ${toolTitle}`}
           </Text>
         </Pressable>
@@ -1030,13 +1062,15 @@ function PromptPanel({
         </View>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Enhance prompt"
+          accessibilityState={{ disabled: isEnhancing, busy: isEnhancing }}
           onPress={onEnhance}
           disabled={isEnhancing}
           style={{
-            minHeight: 38,
+            minHeight: 48,
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
-            borderColor: 'rgba(217,70,239,0.34)',
+            borderColor: 'rgba(255,122,89,0.5)',
             paddingHorizontal: 12,
             alignItems: 'center',
             justifyContent: 'center',
@@ -1046,18 +1080,19 @@ function PromptPanel({
             opacity: isEnhancing ? 0.6 : 1,
           }}
         >
-          {isEnhancing ? <ActivityIndicator color="#ffffff" size="small" /> : <Wand2 size={16} color="#f0abfc" />}
-          <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: 12 }}>Enhance</Text>
+          {isEnhancing ? <ActivityIndicator color="#F6F3EC" size="small" /> : <Wand2 size={16} color="#FF7A59" />}
+          <Text style={{ color: '#F6F3EC', fontWeight: '700', fontSize: 13 }}>Enhance</Text>
         </Pressable>
       </View>
-      {message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '900', lineHeight: 20 }}>{message}</Text> : null}
+      {message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '800', lineHeight: 20 }}>{message}</Text> : null}
       <TextInput
+        accessibilityLabel={optional ? 'Optional motion prompt' : 'Generation prompt'}
         value={draft.prompt}
         onChangeText={onPromptChange}
         multiline
         textAlignVertical="top"
         placeholder={draft.tool === 'image' ? 'Describe the final image...' : draft.tool === 'video' ? 'Describe action, camera, lighting, sound...' : 'Optional motion direction...'}
-        placeholderTextColor="rgba(255,255,255,0.34)"
+        placeholderTextColor="#8E918C"
         onFocus={onFocus}
         onBlur={onBlur}
         style={{
@@ -1066,8 +1101,8 @@ function PromptPanel({
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: 'rgba(255,255,255,0.12)',
-          backgroundColor: 'rgba(0,0,0,0.28)',
-          color: '#ffffff',
+          backgroundColor: '#0B0C0C',
+          color: '#F6F3EC',
           fontSize: 15,
           lineHeight: 22,
           paddingHorizontal: 14,
@@ -1472,7 +1507,7 @@ function ResultPanel({
               body="Post this opens the composer first. Nothing publishes until you review the post."
               state="ready"
             />
-            <PrimaryButton label="Post this" onPress={onPost} accent="workflow" />
+            <PrimaryButton label="Post this" onPress={onPost} accent="primary" />
           </>
         ) : null}
         <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
@@ -1540,14 +1575,14 @@ function ModelPicker({
           style={{ flex: 1, minWidth: 0, gap: 3, alignSelf: 'stretch', justifyContent: 'center' }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={{ color: accentColor(accent), fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>
+            <Text style={{ color: accentColor(accent), fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>
               Selected model
             </Text>
             {selected.badge ? (
-              <Text style={{ color: accentColor(accent), fontSize: 10, fontWeight: '900' }}>{selected.badge}</Text>
+              <Text style={{ color: accentColor(accent), fontSize: 10, fontWeight: '800' }}>{selected.badge}</Text>
             ) : null}
           </View>
-          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>
+          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 16, fontWeight: '800' }}>
             {selected.displayName}
           </Text>
         </Pressable>
@@ -1558,7 +1593,7 @@ function ModelPicker({
           onPress={toggleExpanded}
           hitSlop={10}
           style={{
-            minHeight: 44,
+            minHeight: appTheme.touch.compact,
             borderRadius: appTheme.radii.pill,
             backgroundColor: `${accentColor(accent)}22`,
             paddingHorizontal: 14,
@@ -1568,7 +1603,7 @@ function ModelPicker({
             gap: 5,
           }}
         >
-          <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '900' }}>{expanded ? 'Hide' : 'Change'}</Text>
+          <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>{expanded ? 'Hide' : 'Change'}</Text>
           <ChevronDown size={14} color="#ffffff" style={{ transform: [{ rotate: expanded ? '180deg' : '0deg' }] }} />
         </Pressable>
       </View>
@@ -1587,7 +1622,7 @@ function ModelPicker({
         >
           <View
             style={{
-              minHeight: 38,
+              minHeight: appTheme.touch.compact,
               borderRadius: 14,
               borderCurve: 'continuous',
               borderWidth: 1,
@@ -1605,7 +1640,7 @@ function ModelPicker({
               value={query}
               onChangeText={setQuery}
               placeholder="Search models"
-              placeholderTextColor="rgba(255,255,255,0.34)"
+              placeholderTextColor={appTheme.colors.faint}
               autoCapitalize="none"
               autoCorrect={false}
               style={{
@@ -1632,7 +1667,7 @@ function ModelPicker({
                   setQuery('');
                 }}
                 style={({ pressed }) => ({
-                  minHeight: 46,
+                  minHeight: appTheme.touch.compact,
                   borderRadius: 14,
                   borderCurve: 'continuous',
                   borderWidth: 1,
@@ -1644,11 +1679,11 @@ function ModelPicker({
                 })}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <Text numberOfLines={1} style={{ flex: 1, color: '#ffffff', fontSize: 14, fontWeight: '900' }}>
+                  <Text numberOfLines={1} style={{ flex: 1, color: '#ffffff', fontSize: 14, fontWeight: '800' }}>
                     {item.displayName}
                   </Text>
                   {item.badge ? (
-                    <Text style={{ color: accentColor(accent), fontSize: 10, fontWeight: '900' }}>{item.badge}</Text>
+                    <Text style={{ color: accentColor(accent), fontSize: 10, fontWeight: '800' }}>{item.badge}</Text>
                   ) : null}
                   {active ? (
                     <View style={{ width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentColor(accent)}20` }}>
@@ -1684,7 +1719,7 @@ function ShotEditor({ draft, onChange }: { draft: VideoCreationDraft; onChange: 
   return (
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-        <Text style={{ color: '#ffffff', fontWeight: '900' }}>Shots</Text>
+        <Text style={{ color: '#ffffff', fontWeight: '800' }}>Shots</Text>
         <SecondaryAction
           label="Add shot"
           compact
@@ -1707,13 +1742,24 @@ function ShotEditor({ draft, onChange }: { draft: VideoCreationDraft; onChange: 
           }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <Text style={{ color: '#ffffff', fontWeight: '900' }}>Shot {index + 1}</Text>
+            <Text style={{ color: '#ffffff', fontWeight: '800' }}>Shot {index + 1}</Text>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Remove shot ${index + 1}`}
+              accessibilityState={{ disabled: draft.multiPrompts.length <= 1 }}
               disabled={draft.multiPrompts.length <= 1}
               onPress={() => onChange({ ...draft, multiPrompts: draft.multiPrompts.filter((item) => item.id !== shot.id) })}
-              style={{ opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 }}
+              style={({ pressed }) => ({
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surface,
+                opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1,
+              })}
             >
-              <Trash2 size={16} color={appTheme.colors.muted} />
+              <Trash2 size={18} color={appTheme.colors.muted} />
             </Pressable>
           </View>
           <TextInput
@@ -1748,7 +1794,7 @@ function SectionLabel({ title, icon }: { title: string; icon: React.ReactNode })
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
       {icon}
-      <Text style={{ color: '#ffffff', fontSize: 17, fontWeight: '900' }}>{title}</Text>
+      <Text style={{ color: '#ffffff', fontSize: 17, fontWeight: '800' }}>{title}</Text>
     </View>
   );
 }
@@ -1778,7 +1824,13 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
       <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}>{title}</Text>
-      <Switch value={value} onValueChange={onValueChange} thumbColor={value ? '#ffffff' : '#d4d4d8'} trackColor={{ false: 'rgba(255,255,255,0.18)', true: 'rgba(217,70,239,0.62)' }} />
+      <Switch
+        accessibilityLabel={title}
+        value={value}
+        onValueChange={onValueChange}
+        thumbColor={value ? '#1A0D08' : '#CAC6BD'}
+        trackColor={{ false: '#343838', true: '#FF7A59' }}
+      />
     </View>
   );
 }
@@ -1812,14 +1864,14 @@ function UploadBlock({
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(168,85,247,0.18)' }}>
-          <Layers size={20} color="#d946ef" />
+        <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.pressed }}>
+          <Layers size={20} color={appTheme.colors.primary} />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text numberOfLines={1} style={{ color: '#ffffff', fontWeight: '900', flexShrink: 1 }}>{title}</Text>
+            <Text numberOfLines={1} style={{ color: '#ffffff', fontWeight: '800', flexShrink: 1 }}>{title}</Text>
             {badge ? (
-              <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '900', flexShrink: 0 }}>
+              <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', flexShrink: 0 }}>
                 {badge}
               </Text>
             ) : null}
@@ -1828,10 +1880,12 @@ function UploadBlock({
         </View>
       </View>
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={actionLabel}
         disabled={disabled}
         onPress={onPress}
         style={{
-          minHeight: 38,
+          minHeight: appTheme.touch.compact,
           borderRadius: appTheme.radii.pill,
           paddingHorizontal: 12,
           alignItems: 'center',
@@ -1841,7 +1895,7 @@ function UploadBlock({
           opacity: disabled ? 0.5 : 1,
         }}
       >
-        <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: 12 }}>{actionLabel}</Text>
+        <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 12 }}>{actionLabel}</Text>
       </Pressable>
     </View>
   );
@@ -1886,7 +1940,6 @@ function MediaList({
             style={({ pressed }) => ({
               borderRadius: 16,
               opacity: pressed ? 0.78 : 1,
-              transform: [{ scale: pressed ? 0.98 : 1 }],
             })}
           >
             <ReferenceMediaPreview media={media} />
@@ -1898,9 +1951,9 @@ function MediaList({
               onChangeText={(displayName) => onRename?.(media.id, displayName)}
               editable={Boolean(onRename)}
               placeholder="Reference name"
-              placeholderTextColor="rgba(255,255,255,0.34)"
+              placeholderTextColor={appTheme.colors.faint}
               style={{
-                minHeight: 34,
+                minHeight: appTheme.touch.compact,
                 borderRadius: 12,
                 borderCurve: 'continuous',
                 borderWidth: 1,
@@ -1908,7 +1961,7 @@ function MediaList({
                 backgroundColor: 'rgba(255,255,255,0.045)',
                 color: '#ffffff',
                 fontSize: 13,
-                fontWeight: '900',
+                fontWeight: '800',
                 paddingHorizontal: 10,
                 paddingVertical: 7,
               }}
@@ -1916,11 +1969,21 @@ function MediaList({
             <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11 }}>{mediaSummary(media)}</Text>
           </View>
           {media.handle && onUseHandle ? (
-            <Pressable onPress={() => onUseHandle(media.handle!)} style={{ borderRadius: appTheme.radii.pill, backgroundColor: 'rgba(56,189,248,0.12)', paddingHorizontal: 9, paddingVertical: 6 }}>
-              <Text style={{ color: '#7dd3fc', fontSize: 11, fontWeight: '900' }}>{media.handle}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Use ${media.handle}`}
+              onPress={() => onUseHandle(media.handle!)}
+              style={{ minHeight: appTheme.touch.compact, borderRadius: appTheme.radii.pill, backgroundColor: `${appTheme.colors.image}1f`, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ color: '#7dd3fc', fontSize: 11, fontWeight: '800' }}>{media.handle}</Text>
             </Pressable>
           ) : null}
-          <Pressable onPress={() => onRemove(media.id)} hitSlop={8}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Remove ${media.displayName}`}
+            onPress={() => onRemove(media.id)}
+            style={{ width: appTheme.touch.compact, height: appTheme.touch.compact, alignItems: 'center', justifyContent: 'center' }}
+          >
             <Trash2 size={17} color={appTheme.colors.muted} />
           </Pressable>
         </View>
@@ -1932,13 +1995,14 @@ function MediaList({
 
 function ReferencePreviewModal({ media, onClose }: { media: MediaDraft | null; onClose: () => void }) {
   const { height } = useWindowDimensions();
+  const reducedMotion = useReducedMotion();
   const previewHeight = Math.min(360, Math.max(240, Math.round(height - 300)));
 
   if (!media) return null;
 
   return (
     <Modal
-      animationType="fade"
+      animationType={reducedMotion ? 'none' : 'fade'}
       onRequestClose={onClose}
       statusBarTranslucent
       transparent
@@ -1971,15 +2035,15 @@ function ReferencePreviewModal({ media, onClose }: { media: MediaDraft | null; o
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>Reference preview</Text>
-              <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 18, fontWeight: '900' }}>{media.displayName}</Text>
+              <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference preview</Text>
+              <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 18, fontWeight: '800' }}>{media.displayName}</Text>
             </View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close reference preview"
               onPress={onClose}
               style={{
-                minHeight: 38,
+                minHeight: appTheme.touch.compact,
                 borderRadius: appTheme.radii.pill,
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1987,7 +2051,7 @@ function ReferencePreviewModal({ media, onClose }: { media: MediaDraft | null; o
                 paddingHorizontal: 14,
               }}
             >
-              <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '900' }}>Close</Text>
+              <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>Close</Text>
             </Pressable>
           </View>
 
@@ -1999,14 +2063,14 @@ function ReferencePreviewModal({ media, onClose }: { media: MediaDraft | null; o
                 borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: 'rgba(240,171,252,0.26)',
-                backgroundColor: 'rgba(217,70,239,0.12)',
+                backgroundColor: appTheme.colors.pressed,
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 10,
               }}
             >
-              <AudioLines size={36} color="#f0abfc" />
-              <Text style={{ color: '#f5d0fe', fontSize: 14, fontWeight: '900' }}>Audio reference</Text>
+              <AudioLines size={36} color={appTheme.colors.motion} />
+              <Text style={{ color: '#f5d0fe', fontSize: 14, fontWeight: '800' }}>Audio reference</Text>
             </View>
           ) : (
             <MediaPreview
@@ -2036,14 +2100,14 @@ function ReferenceMediaPreview({ media }: { media: MediaDraft }) {
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: 'rgba(240,171,252,0.26)',
-          backgroundColor: 'rgba(217,70,239,0.12)',
+          backgroundColor: appTheme.colors.pressed,
           alignItems: 'center',
           justifyContent: 'center',
           gap: 6,
         }}
       >
-        <AudioLines size={22} color="#f0abfc" />
-        <Text style={{ color: '#f5d0fe', fontSize: 10, fontWeight: '900' }}>Audio</Text>
+        <AudioLines size={22} color={appTheme.colors.motion} />
+        <Text style={{ color: '#f5d0fe', fontSize: 10, fontWeight: '800' }}>Audio</Text>
       </View>
     );
   }
@@ -2114,7 +2178,7 @@ function SecondaryAction({
         gap: 6,
       }}
     >
-      <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: compact ? 12 : 14 }}>{label}</Text>
+      <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: compact ? 12 : 14 }}>{label}</Text>
       <ChevronRight size={compact ? 14 : 16} color="#ffffff" />
     </Pressable>
   );
@@ -2145,10 +2209,10 @@ function ReviewIssuesPanel({
         gap: 8,
       }}
     >
-      <Text selectable style={{ color: '#fb7185', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+      <Text selectable style={{ color: '#fb7185', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1.1 }}>
         Review issues
       </Text>
-      {visible.message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '900', lineHeight: 20 }}>{visible.message}</Text> : null}
+      {visible.message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '800', lineHeight: 20 }}>{visible.message}</Text> : null}
       {visible.errors.map((error) => (
         <Text selectable key={error} style={{ color: appTheme.colors.danger, lineHeight: 20 }}>{error}</Text>
       ))}

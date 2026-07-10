@@ -4,13 +4,12 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { ArrowLeft, Camera, Check, ImageIcon, Sparkles } from 'lucide-react-native';
+import { ArrowLeft, Camera, Check, ImageIcon } from 'lucide-react-native';
 import type { ComponentProps } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -64,6 +63,7 @@ export function EditProfileScreen() {
   const [coverAsset, setCoverAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [message, setMessage] = useState<string | null>(null);
+  const [progressMessage, setProgressMessage] = useState<string | null>(null);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -80,6 +80,7 @@ export function EditProfileScreen() {
       setCoverAsset(null);
       setFieldErrors({});
       setMessage(null);
+      setProgressMessage(null);
     }
   }, [profileQuery.data]);
 
@@ -119,13 +120,12 @@ export function EditProfileScreen() {
     hasCoverDraft: Boolean(coverAsset),
   });
   const bioCount = form.bio.length;
-  const saveLabel = useMemo(() => {
-    if (avatarAsset || coverAsset) return 'Upload & Save';
-    return 'Save Changes';
-  }, [avatarAsset, coverAsset]);
-
   const saveMutation = useMutation({
     mutationFn: saveProfile,
+    onMutate: () => {
+      setMessage(null);
+      setProgressMessage('Preparing your changes...');
+    },
     onSuccess: async () => {
       await refreshProfile();
       await queryClient.invalidateQueries({ queryKey: ['profile'] });
@@ -138,6 +138,7 @@ export function EditProfileScreen() {
       }
     },
     onError: async (error) => {
+      setProgressMessage(null);
       if (error instanceof ApiError) {
         const details = error.details as { fieldErrors?: FieldErrors } | undefined;
         if (details?.fieldErrors) {
@@ -146,6 +147,9 @@ export function EditProfileScreen() {
       }
       setMessage(error instanceof Error ? error.message : 'Profile could not be saved.');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    },
+    onSettled: () => {
+      setProgressMessage(null);
     },
   });
 
@@ -184,6 +188,9 @@ export function EditProfileScreen() {
     if (!user) {
       throw new Error('Sign in before editing your profile.');
     }
+    if (!profile) {
+      throw new Error('Load your profile before saving changes.');
+    }
 
     const validationErrors = validateForm(form);
     setFieldErrors(validationErrors);
@@ -195,7 +202,7 @@ export function EditProfileScreen() {
     let coverUrl = form.coverUrl || null;
 
     if (avatarAsset) {
-      setMessage('Uploading display photo...');
+      setProgressMessage('Uploading display photo...');
       avatarUrl = await uploadProfileImage(avatarAsset.uri, {
         api,
         role: 'avatar',
@@ -206,7 +213,7 @@ export function EditProfileScreen() {
     }
 
     if (coverAsset) {
-      setMessage('Uploading background picture...');
+      setProgressMessage('Uploading background picture...');
       coverUrl = await uploadProfileImage(coverAsset.uri, {
         api,
         role: 'cover',
@@ -216,27 +223,27 @@ export function EditProfileScreen() {
       });
     }
 
-    setMessage('Saving profile...');
+    setProgressMessage('Saving profile...');
     await api.updateProfile({
       username: normalizeUsername(form.username),
       displayName: form.displayName,
       bio: form.bio,
       avatarUrl,
       coverUrl,
-      websiteUrl: profile?.websiteUrl ?? null,
-      twitterHandle: profile?.twitterHandle ?? null,
-      instagramHandle: profile?.instagramHandle ?? null,
-      tiktokHandle: profile?.tiktokHandle ?? null,
-      location: profile?.location ?? null,
+      websiteUrl: profile.websiteUrl ?? null,
+      twitterHandle: profile.twitterHandle ?? null,
+      instagramHandle: profile.instagramHandle ?? null,
+      tiktokHandle: profile.tiktokHandle ?? null,
+      location: profile.location ?? null,
     });
   }
 
   if (!user) {
     return (
       <EditProfileShell topInset={topInset} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
-        <EditHeader isSaving={false} onBack={() => router.back()} onSave={undefined} />
-        <StatusBlock title="Sign in required" body="Sign in to update your Magic Booklet profile." />
-        <PrimaryButton label="Sign in" accent="motion" onPress={() => router.replace('/auth' as never)} />
+        <EditHeader isSaving={false} onBack={leaveEditProfile} onSave={undefined} />
+        <StatusBlock title="Sign in required" body="Sign in to update your Magicbooklet profile." />
+        <PrimaryButton label="Sign in" accent="primary" onPress={() => router.replace('/auth' as never)} />
       </EditProfileShell>
     );
   }
@@ -245,20 +252,23 @@ export function EditProfileScreen() {
     <EditProfileShell topInset={topInset} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
       <EditHeader
         isSaving={saveMutation.isPending}
-        onBack={() => router.back()}
-        onSave={hasProfileChanges && !profileQuery.isLoading ? () => saveMutation.mutate() : undefined}
+        onBack={leaveEditProfile}
+        onSave={hasProfileChanges && profileQuery.isSuccess && Boolean(profile) ? () => saveMutation.mutate() : undefined}
       />
 
       {profileQuery.isLoading ? (
         <View style={{ minHeight: 360, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color="#d946ef" />
+          <ActivityIndicator color={appTheme.colors.primary} />
+        </View>
+      ) : profileQuery.isError || !profile ? (
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock tone="danger" title="Could not load profile" body="Nothing can be changed until your current profile loads. Check your connection, then try again." />
+          <SecondaryButton label="Retry profile" onPress={() => void profileQuery.refetch()} />
         </View>
       ) : (
         <>
-          {profileQuery.error ? (
-            <StatusBlock tone="danger" title="Could not load profile" body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again.'} />
-          ) : null}
-          {message ? <StatusBlock title="Profile status" body={message} /> : null}
+          {progressMessage ? <StatusBlock tone="info" title="Updating profile" body={progressMessage} /> : null}
+          {message ? <StatusBlock tone="danger" title="Profile not saved" body={message} /> : null}
 
           <View style={{ gap: 0 }}>
             <Pressable
@@ -266,62 +276,62 @@ export function EditProfileScreen() {
               accessibilityLabel="Change cover"
               onPress={() => pickProfileImage('cover')}
               style={({ pressed }) => ({
-                height: isCompact ? 190 : 210,
-                borderRadius: 30,
+                height: isCompact ? 148 : 164,
+                borderRadius: appTheme.radii.xl,
                 borderCurve: 'continuous',
                 overflow: 'hidden',
                 borderWidth: 1,
-                borderColor: fieldErrors.coverUrl ? 'rgba(251,113,133,0.75)' : 'rgba(168,85,247,0.36)',
-                backgroundColor: '#090914',
+                borderColor: fieldErrors.coverUrl ? appTheme.colors.danger : appTheme.colors.border,
+                backgroundColor: appTheme.colors.panel,
                 opacity: pressed ? 0.86 : 1,
               })}
             >
               {coverDraftUri || form.coverUrl ? (
                 <Image source={{ uri: coverDraftUri ?? form.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
               ) : (
-                <FantasyPortalArt variant="tree" muted />
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: appTheme.colors.panelSoft }}>
+                  <ImageIcon size={26} color={appTheme.colors.muted} />
+                  <Text style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600' }}>Add a cover image</Text>
+                </View>
               )}
               <LinearGradient colors={['rgba(3,4,13,0.08)', 'rgba(3,4,13,0.76)']} style={{ position: 'absolute', inset: 0 }} />
               <View style={{ position: 'absolute', left: 18, right: 18, bottom: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900' }}>{previewName}</Text>
-                  <Text style={{ color: '#d946ef', fontSize: 14, fontWeight: '900' }}>{previewHandle}</Text>
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 22, fontWeight: '700' }}>{previewName}</Text>
+                  <Text style={{ color: appTheme.colors.primary, fontSize: 14, fontWeight: '700' }}>{previewHandle}</Text>
                 </View>
-                <ActionPill icon={<ImageIcon size={17} color="#fff" />} label="Change cover" />
+                <ActionPill icon={<ImageIcon size={17} color={appTheme.colors.text} />} label="Change cover" />
               </View>
             </Pressable>
 
-            <View style={{ marginTop: -44, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
+            <View style={{ marginTop: -36, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Change display photo"
                 onPress={() => pickProfileImage('avatar')}
                 style={({ pressed }) => ({
-                  width: 96,
-                  height: 96,
-                  borderRadius: 48,
-                  padding: 4,
-                  backgroundColor: '#03040d',
+                  width: 84,
+                  height: 84,
+                  borderRadius: 42,
+                  padding: 3,
+                  borderWidth: 2,
+                  borderColor: appTheme.colors.primary,
+                  backgroundColor: appTheme.colors.background,
                   opacity: pressed ? 0.86 : 1,
                 })}
               >
-                <LinearGradient colors={['#f032d0', '#7c3cff', '#22d3ee']} style={{ flex: 1, borderRadius: 44, padding: 2 }}>
-                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: '#141225' }}>
+                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
                     {avatarDraftUri || form.avatarUrl ? (
                       <Image source={{ uri: avatarDraftUri ?? form.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                     ) : (
-                      <>
-                        <Sparkles size={22} color="#d946ef" />
-                        <Text style={{ color: '#fff', fontSize: 27, fontWeight: '900' }}>{previewInitials}</Text>
-                      </>
+                      <Text style={{ color: appTheme.colors.text, fontSize: 24, fontWeight: '700' }}>{previewInitials}</Text>
                     )}
                   </View>
-                </LinearGradient>
-                <View style={{ position: 'absolute', right: 0, bottom: 2, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#d946ef', borderWidth: 3, borderColor: '#03040d' }}>
-                  <Camera size={16} color="#fff" />
+                <View style={{ position: 'absolute', right: -2, bottom: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.primary, borderWidth: 3, borderColor: appTheme.colors.background }}>
+                  <Camera size={16} color={appTheme.colors.onPrimary} />
                 </View>
               </Pressable>
-              <ActionPill icon={<Camera size={17} color="#fff" />} label="Change photo" onPress={() => pickProfileImage('avatar')} />
+              <Text style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600', paddingBottom: 12 }}>Tap photo to replace</Text>
             </View>
             {fieldErrors.avatarUrl || fieldErrors.coverUrl ? (
               <View style={{ paddingHorizontal: 4, paddingTop: 10, gap: 4 }}>
@@ -370,20 +380,19 @@ export function EditProfileScreen() {
             />
           </GlassForm>
 
-          <View style={{ gap: 12 }}>
-            <PrimaryButton
-              label={saveMutation.isPending ? 'Saving...' : saveLabel}
-              accent="motion"
-              loading={saveMutation.isPending}
-              disabled={profileQuery.isLoading || !hasProfileChanges}
-              onPress={() => saveMutation.mutate()}
-            />
-            <SecondaryButton label="Cancel" disabled={saveMutation.isPending} onPress={() => router.back()} />
-          </View>
+          <SecondaryButton label="Cancel" disabled={saveMutation.isPending} onPress={leaveEditProfile} />
         </>
       )}
     </EditProfileShell>
   );
+
+  function leaveEditProfile() {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/profile' as never);
+    }
+  }
 }
 
 function EditProfileShell({
@@ -398,13 +407,10 @@ function EditProfileShell({
   horizontalPadding: number;
 }) {
   return (
-    <View style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: '#03040d' }} />
-      <View pointerEvents="none" style={{ position: 'absolute', top: -130, right: -100, width: 280, height: 280, borderRadius: 140, backgroundColor: 'rgba(217,70,239,0.16)' }} />
-      <View pointerEvents="none" style={{ position: 'absolute', bottom: 20, left: -130, width: 280, height: 280, borderRadius: 140, backgroundColor: 'rgba(34,211,238,0.11)' }} />
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
       <ScrollView
         contentInsetAdjustmentBehavior="never"
-        keyboardDismissMode="interactive"
+        keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         style={{ flex: 1 }}
@@ -451,47 +457,45 @@ function EditHeader({
   onSave?: () => void;
 }) {
   return (
-    <View style={{ minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+    <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Back"
         disabled={isSaving}
         onPress={onBack}
         style={({ pressed }) => ({
-          width: 42,
-          height: 42,
-          borderRadius: 21,
+          width: 48,
+          height: 48,
+          borderRadius: 24,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: 'rgba(255,255,255,0.07)',
+          backgroundColor: appTheme.colors.panelSoft,
           opacity: pressed ? 0.72 : isSaving ? 0.5 : 1,
         })}
       >
-        <ArrowLeft size={22} color="#fff" />
+        <ArrowLeft size={22} color={appTheme.colors.text} />
       </Pressable>
-      <Text style={{ flex: 1, textAlign: 'center', color: '#fff', fontSize: 21, fontWeight: '900' }}>Edit Profile</Text>
+      <Text accessibilityRole="header" style={{ flex: 1, textAlign: 'center', color: appTheme.colors.text, fontSize: 21, fontWeight: '700' }}>Edit Profile</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Save profile"
         disabled={!onSave || isSaving}
         onPress={onSave}
         style={({ pressed }) => ({
-          minWidth: 74,
-          minHeight: 42,
-          borderRadius: 21,
-          overflow: 'hidden',
-          opacity: pressed ? 0.82 : !onSave || isSaving ? 0.55 : 1,
+          minWidth: 82,
+          minHeight: 48,
+          borderRadius: 24,
+          paddingHorizontal: 14,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 7,
+          backgroundColor: !onSave || isSaving ? appTheme.colors.panelSoft : pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
+          opacity: !onSave || isSaving ? appTheme.opacity.disabled : 1,
         })}
       >
-        <LinearGradient
-          colors={['#f032d0', '#7c3cff']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ flex: 1, minHeight: 42, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }}
-        >
-          {isSaving ? <ActivityIndicator color="#fff" size="small" /> : <Check size={16} color="#fff" />}
-          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '900' }}>Save</Text>
-        </LinearGradient>
+        {isSaving ? <ActivityIndicator color={appTheme.colors.onPrimary} size="small" /> : <Check size={16} color={onSave ? appTheme.colors.onPrimary : appTheme.colors.faint} />}
+        <Text style={{ color: onSave ? appTheme.colors.onPrimary : appTheme.colors.faint, fontSize: 14, fontWeight: '700' }}>Save</Text>
       </Pressable>
     </View>
   );
@@ -502,11 +506,11 @@ function GlassForm({ children }: { children: React.ReactNode }) {
     <View
       style={{
         gap: 16,
-        borderRadius: 28,
+        borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.12)',
-        backgroundColor: 'rgba(255,255,255,0.055)',
+        borderColor: appTheme.colors.border,
+        backgroundColor: appTheme.colors.panel,
         padding: 16,
       }}
     >
@@ -529,23 +533,25 @@ function ProfileTextField({
   return (
     <View style={{ gap: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '900', textTransform: 'uppercase' }}>{label}</Text>
-        {footer ? <Text style={{ color: appTheme.colors.faint, fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{footer}</Text> : null}
+        <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '700' }}>{label}</Text>
+        {footer ? <Text style={{ color: appTheme.colors.faint, fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{footer}</Text> : null}
       </View>
       <TextInput
+        accessibilityLabel={label}
+        aria-invalid={Boolean(error)}
         placeholderTextColor={appTheme.colors.faint}
         multiline={multiline}
         textAlignVertical={multiline ? 'top' : 'center'}
         style={{
-          minHeight: multiline ? 122 : 54,
+          minHeight: multiline ? 112 : appTheme.touch.roomy,
           borderRadius: multiline ? 22 : 18,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: error ? 'rgba(251,113,133,0.72)' : 'rgba(255,255,255,0.12)',
-          backgroundColor: 'rgba(3,4,13,0.72)',
-          color: '#fff',
+          borderColor: error ? appTheme.colors.danger : appTheme.colors.border,
+          backgroundColor: appTheme.colors.surfaceInset,
+          color: appTheme.colors.text,
           fontSize: 16,
-          fontWeight: '700',
+          fontWeight: '500',
           paddingHorizontal: 15,
           paddingVertical: multiline ? 14 : 0,
         }}
@@ -566,9 +572,9 @@ function ActionPill({
   onPress?: () => void;
 }) {
   const content = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 12, paddingVertical: 9 }}>
+    <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 24, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
       {icon}
-      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>{label}</Text>
+      <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '700' }}>{label}</Text>
     </View>
   );
 
@@ -582,7 +588,7 @@ function ActionPill({
 }
 
 function ErrorText({ text }: { text: string }) {
-  return <Text style={{ color: '#fb7185', fontSize: 13, lineHeight: 18, fontWeight: '700' }}>{text}</Text>;
+  return <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ color: appTheme.colors.danger, fontSize: 13, lineHeight: 18, fontWeight: '600' }}>{text}</Text>;
 }
 
 function formFromProfile(profile: ProfileResponse): EditProfileForm {

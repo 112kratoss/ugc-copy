@@ -21,9 +21,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { StableMediaImage } from '@/components/media-preview';
-import { AppText, ChoiceChip, IconButton, MetricCard, PrimaryButton, StatusBlock } from '@/components/ui';
+import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref, profileMediaFeedHref } from '@/lib/immersive-preview-view-model';
@@ -55,6 +54,19 @@ const PROFILE_GALLERY_ASPECT_RATIO = 0.74;
 const PROFILE_MEDIA_SWIPE_START_DISTANCE = 28;
 const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
+
+const PROFILE_COLORS = {
+  background: appTheme.colors.background,
+  surface: appTheme.colors.panel,
+  surfaceRaised: appTheme.colors.panelSoft,
+  border: appTheme.colors.border,
+  borderStrong: appTheme.colors.borderStrong,
+  text: appTheme.colors.text,
+  muted: appTheme.colors.muted,
+  faint: appTheme.colors.faint,
+  coral: appTheme.colors.primary,
+  coralSoft: appTheme.colors.pressed,
+} as const;
 
 export function ProfileDashboard({
   initialTab = 'Saved',
@@ -150,12 +162,22 @@ export function ProfileDashboard({
     savedCount: savedCards.length,
   });
   const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
-  const showPreviewCards = !user && tabCards.length === 0;
-  const visibleCards = showPreviewCards ? FALLBACK_PROFILE_MEDIA : tabCards;
+  const signedOutPreviewCards = FALLBACK_PROFILE_MEDIA.filter((card) => (
+    activeTab === 'Saved'
+      ? card.label === 'Saved'
+      : activeTab === 'Creations'
+        ? card.label === 'Creation'
+        : card.label === 'Post'
+  ));
   const isMediaLoading =
     (activeTab === 'Saved' && savedQuery.isLoading)
     || (activeTab === 'Creations' && generationsQuery.isLoading)
     || (activeTab === 'Posts' && postsQuery.isLoading);
+  const mediaError = activeTab === 'Saved'
+    ? savedQuery.error
+    : activeTab === 'Creations'
+      ? generationsQuery.error
+      : postsQuery.error;
   const handleMediaTabChange = useCallback((tab: ProfileMediaTab) => {
     setActiveTab(tab);
   }, []);
@@ -182,9 +204,9 @@ export function ProfileDashboard({
     return (
       <ProfileMediaList
         activeTab={activeTab}
-        cards={FALLBACK_PROFILE_MEDIA}
+        cards={signedOutPreviewCards}
         contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
-        emptyTitle="Sign in to load your media"
+        emptyTitle={activeTab === 'Saved' ? 'Sign in to view saved media' : `Sign in to view your ${activeTab.toLowerCase()}`}
         fallbackAvatarInitials="C"
         header={(
           <>
@@ -194,6 +216,7 @@ export function ProfileDashboard({
         )}
         horizontalPadding={horizontalPadding}
         isLoading={false}
+        mediaError={null}
         onSwipeTab={handleMediaSwipe}
         onTabChange={handleMediaTabChange}
         topInset={topInset}
@@ -204,7 +227,7 @@ export function ProfileDashboard({
   return (
     <ProfileMediaList
       activeTab={activeTab}
-      cards={visibleCards}
+      cards={tabCards}
       contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
       emptyTitle={getProfileMediaEmptyTitle(activeTab)}
       fallbackAvatarInitials={initials}
@@ -213,7 +236,10 @@ export function ProfileDashboard({
         <>
           <ProfileTitle />
           {profileQuery.error && !profile ? (
-            <StatusBlock tone="danger" title="Could not load profile" body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again.'} />
+            <View style={{ gap: appTheme.spacing.gap }}>
+              <StatusBlock tone="danger" title="Could not load profile" body="Check your connection, then try again." />
+              <SecondaryButton label="Retry profile" onPress={() => void profileQuery.refetch()} />
+            </View>
           ) : null}
           <ProfileHeroCard
             profile={profile}
@@ -224,15 +250,15 @@ export function ProfileDashboard({
             stats={stats}
             onEdit={() => router.push('/edit-profile' as never)}
           />
-          <View style={{ flexDirection: 'row', gap: 12 }}>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
             <BalanceCard
-              icon={<Crown size={22} color="#fbbf24" />}
+              icon={<Crown size={19} color="#fbbf24" />}
               label="Credits"
               value={String(credits ?? profile?.credits ?? 0)}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard
-              icon={<Wallet size={22} color="#22d3ee" />}
+              icon={<Wallet size={19} color={PROFILE_COLORS.coral} />}
               label="Wallet"
               value={formatUsdCents(salesSummary.earningsUsdCents)}
               onPress={() => router.push('/seller-dashboard' as never)}
@@ -244,6 +270,7 @@ export function ProfileDashboard({
       horizontalPadding={horizontalPadding}
       highlightedPostId={highlightedPostId}
       isLoading={isMediaLoading}
+      mediaError={mediaError}
       onRefresh={refreshActiveMedia}
       onSwipeTab={handleMediaSwipe}
       onTabChange={handleMediaTabChange}
@@ -264,6 +291,7 @@ function ProfileMediaList({
   horizontalPadding,
   highlightedPostId,
   isLoading,
+  mediaError,
   onRefresh,
   onSwipeTab,
   onTabChange,
@@ -280,6 +308,7 @@ function ProfileMediaList({
   horizontalPadding: number;
   highlightedPostId?: string | null;
   isLoading: boolean;
+  mediaError?: unknown;
   onRefresh?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onTabChange: (tab: ProfileMediaTab) => void;
@@ -311,7 +340,7 @@ function ProfileMediaList({
         getItemType={(item) => item.mediaKind ?? item.previewKind}
         keyExtractor={(item) => `${item.label}-${item.id}`}
         ListHeaderComponent={(
-          <View style={{ gap: 20, paddingBottom: 14 }}>
+          <View style={{ gap: 14, paddingBottom: 12 }}>
             {header}
             <ProfileMediaHeader
               activeTab={activeTab}
@@ -319,11 +348,17 @@ function ProfileMediaList({
               onTabChange={onTabChange}
               title={title}
             />
+            {mediaError ? (
+              <View style={{ gap: appTheme.spacing.gap }}>
+                <StatusBlock tone="danger" title={`Could not load ${activeTab.toLowerCase()}`} body="Your existing media is safe. Check your connection, then retry." />
+                {onRefresh ? <SecondaryButton label={`Retry ${activeTab.toLowerCase()}`} onPress={onRefresh} /> : null}
+              </View>
+            ) : null}
           </View>
         )}
         ListEmptyComponent={isLoading ? (
           <View style={{ minHeight: 160, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivityIndicator color="#d946ef" />
+            <ActivityIndicator color={PROFILE_COLORS.coral} />
           </View>
         ) : (
           <ProfileMediaEmpty title={emptyTitle} />
@@ -352,9 +387,9 @@ function ProfileMediaList({
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{
-          paddingTop: 18,
+          paddingTop: 12,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: contentBottomPadding,
+          paddingBottom: contentBottomPadding + 20,
         }}
       />
     </View>
@@ -363,10 +398,11 @@ function ProfileMediaList({
 
 function ProfileTitle() {
   return (
-    <View style={{ minHeight: 42, alignItems: 'center', justifyContent: 'center' }}>
-      <AppText variant="sectionTitle" style={{ fontWeight: '900' }}>
+    <View style={{ minHeight: 40, justifyContent: 'center', gap: 2 }}>
+      <AppText variant="sectionTitle" style={{ fontSize: 24, lineHeight: 29, fontWeight: '800', letterSpacing: -0.4 }}>
         Profile
       </AppText>
+      <AppText variant="caption" color="muted">Your identity, balance, and published work.</AppText>
     </View>
   );
 }
@@ -375,28 +411,41 @@ function SignedOutCard() {
   return (
     <View
       style={{
-        overflow: 'hidden',
-        borderRadius: 28,
+        borderRadius: 22,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(168,85,247,0.28)',
-        backgroundColor: '#090914',
+        borderColor: PROFILE_COLORS.border,
+        backgroundColor: PROFILE_COLORS.surface,
+        padding: 18,
+        gap: 14,
       }}
     >
-      <FantasyPortalArt variant="portal" muted />
-      <LinearGradient colors={['rgba(3,4,13,0.94)', 'rgba(3,4,13,0.72)']} style={{ position: 'absolute', inset: 0 }} />
-      <View style={{ padding: 22, gap: 16 }}>
-        <View style={{ width: 74, height: 74, borderRadius: 37, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(217,70,239,0.18)', borderWidth: 1, borderColor: 'rgba(217,70,239,0.34)' }}>
-          <UserRound size={34} color="#ffffff" />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 13 }}>
+        <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised, borderWidth: 1, borderColor: PROFILE_COLORS.borderStrong }}>
+          <UserRound size={25} color={PROFILE_COLORS.muted} />
         </View>
-        <View style={{ gap: 8 }}>
-          <AppText variant="pageTitle" style={{ fontSize: 27, lineHeight: 32 }}>Sign in to view your creator profile.</AppText>
+        <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+          <AppText variant="cardTitle" style={{ fontSize: 19, lineHeight: 24 }}>Sign in to your creator profile</AppText>
           <AppText variant="bodySm" color="muted">
-            Saved media, creations, posts, credits, and wallet balance will appear here.
+            Keep saved media, creations, and earnings in one place.
           </AppText>
         </View>
-        <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="motion" />
       </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Sign in"
+        onPress={() => router.push('/auth')}
+        style={({ pressed }) => ({
+          minHeight: 50,
+          borderRadius: 18,
+          backgroundColor: PROFILE_COLORS.coral,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: pressed ? 0.84 : 1,
+        })}
+      >
+        <Text style={{ color: '#111114', fontSize: 15, fontWeight: '800' }}>Sign in</Text>
+      </Pressable>
     </View>
   );
 }
@@ -422,66 +471,68 @@ function ProfileHeroCard({
     <View
       style={{
         overflow: 'hidden',
-        borderRadius: 30,
+        borderRadius: 24,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(168,85,247,0.28)',
-        backgroundColor: '#090914',
+        borderColor: PROFILE_COLORS.border,
+        backgroundColor: PROFILE_COLORS.surface,
       }}
     >
-      <View style={{ height: 118, overflow: 'hidden' }}>
+      <View style={{ height: 84, overflow: 'hidden', backgroundColor: PROFILE_COLORS.surfaceRaised }}>
         {profile?.coverUrl ? (
           <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
-          <FantasyPortalArt variant="tree" muted />
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <View style={{ width: 36, height: 1, backgroundColor: PROFILE_COLORS.borderStrong }} />
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: PROFILE_COLORS.coral }} />
+            <View style={{ width: 36, height: 1, backgroundColor: PROFILE_COLORS.borderStrong }} />
+          </View>
         )}
-        <LinearGradient colors={['rgba(3,4,13,0.18)', 'rgba(3,4,13,0.78)']} style={{ position: 'absolute', inset: 0 }} />
+        {profile?.coverUrl ? <LinearGradient colors={['rgba(0,0,0,0.06)', 'rgba(0,0,0,0.56)']} style={{ position: 'absolute', inset: 0 }} /> : null}
       </View>
 
-      <View style={{ paddingHorizontal: 18, paddingBottom: 18 }}>
-        <View style={{ marginTop: -42, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+      <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+        <View style={{ marginTop: -32, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
           <ProfileAvatar profile={profile} initials={initials} />
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Edit profile"
             onPress={onEdit}
             style={({ pressed }) => ({
-              minHeight: 42,
-              borderRadius: 21,
-              overflow: 'hidden',
+              minHeight: 48,
+              borderRadius: 18,
+              backgroundColor: PROFILE_COLORS.coral,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              paddingHorizontal: 16,
               opacity: pressed ? 0.78 : 1,
             })}
           >
-            <LinearGradient
-              colors={['#f032d0', '#7c3cff']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{ minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 15 }}
-            >
-              <Pencil size={15} color="#ffffff" />
-              <Text style={{ color: '#fff', fontSize: 14, fontWeight: '900' }}>Edit Profile</Text>
-            </LinearGradient>
+            <Pencil size={15} color="#111114" />
+            <Text style={{ color: '#111114', fontSize: 14, fontWeight: '800' }}>Edit Profile</Text>
           </Pressable>
         </View>
 
-        <View style={{ gap: 8, paddingTop: 14 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{displayName}</Text>
-          <Text numberOfLines={1} style={{ color: '#d946ef', fontSize: 15, fontWeight: '800' }}>{handle}</Text>
+        <View style={{ gap: 5, paddingTop: 12 }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: PROFILE_COLORS.text, fontSize: 23, lineHeight: 28, fontWeight: '800', letterSpacing: -0.35 }}>{displayName}</Text>
+          <Text numberOfLines={1} style={{ color: PROFILE_COLORS.coral, fontSize: 13, fontWeight: '800' }}>{handle}</Text>
           {profile?.bio ? (
-            <Text numberOfLines={3} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 14, lineHeight: 21 }}>{profile.bio}</Text>
+            <Text numberOfLines={2} style={{ color: PROFILE_COLORS.muted, fontSize: 13, lineHeight: 19 }}>{profile.bio}</Text>
           ) : (
-            <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.62)', fontSize: 14, lineHeight: 21 }}>
+            <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 13, lineHeight: 19 }}>
               {email ? `Signed in as ${email}` : 'Creator profile ready for saved media and posts.'}
             </Text>
           )}
         </View>
 
-        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.09)', marginVertical: 16 }} />
-        <View style={{ flexDirection: 'row', gap: 10 }}>
+        <View style={{ height: 1, backgroundColor: PROFILE_COLORS.border, marginVertical: 13 }} />
+        <View style={{ flexDirection: 'row', gap: 8 }}>
           {stats.map((stat) => (
-            <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 5 }}>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: '#fff', fontSize: 20, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>{stat.label}</Text>
+            <View key={stat.label} style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 5 }}>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: PROFILE_COLORS.text, fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: PROFILE_COLORS.muted, fontSize: 10, fontWeight: '700' }}>{stat.label}</Text>
             </View>
           ))}
         </View>
@@ -494,28 +545,20 @@ function ProfileAvatar({ profile, initials }: { profile?: ProfileResponse | null
   return (
     <View
       style={{
-        width: 86,
-        height: 86,
-        borderRadius: 43,
+        width: 68,
+        height: 68,
+        borderRadius: 34,
         padding: 3,
-        backgroundColor: '#03040d',
+        backgroundColor: PROFILE_COLORS.background,
       }}
     >
-      <LinearGradient
-        colors={['#f032d0', '#7c3cff', '#22d3ee']}
-        style={{ flex: 1, borderRadius: 40, padding: 2 }}
-      >
-        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: '#141225' }}>
+        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 31, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised, borderWidth: 2, borderColor: PROFILE_COLORS.coral }}>
           {profile?.avatarUrl ? (
             <Image source={{ uri: profile.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
-            <>
-              <Sparkles size={21} color="#d946ef" />
-              <Text style={{ color: '#fff', fontSize: 25, fontWeight: '900' }}>{initials}</Text>
-            </>
+            <Text style={{ color: PROFILE_COLORS.text, fontSize: 21, fontWeight: '800' }}>{initials}</Text>
           )}
         </View>
-      </LinearGradient>
     </View>
   );
 }
@@ -532,15 +575,34 @@ function BalanceCard({
   onPress: () => void;
 }) {
   return (
-    <MetricCard
-      icon={icon}
-      label={label}
-      value={value}
-      accent={label === 'Wallet' ? 'workflow' : 'amber'}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
       onPress={onPress}
-      trailing={<ChevronRight size={17} color={appTheme.colors.muted} strokeWidth={2.3} />}
-      compact
-    />
+      style={({ pressed }) => ({
+        flex: 1,
+        minHeight: 74,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: PROFILE_COLORS.border,
+        backgroundColor: PROFILE_COLORS.surface,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 12,
+        opacity: pressed ? 0.8 : 1,
+      })}
+    >
+      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised }}>
+        {icon}
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: PROFILE_COLORS.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
+      </View>
+      <ChevronRight size={16} color={PROFILE_COLORS.faint} strokeWidth={2.3} />
+    </Pressable>
   );
 }
 
@@ -551,36 +613,27 @@ function SellerDashboardButton() {
       accessibilityLabel="Open seller dashboard"
       onPress={() => router.push('/seller-dashboard' as never)}
       style={({ pressed }) => ({
-        minHeight: 62,
-        borderRadius: 22,
+        minHeight: 58,
+        borderRadius: 20,
         borderCurve: 'continuous',
-        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: PROFILE_COLORS.border,
+        backgroundColor: PROFILE_COLORS.surface,
+        paddingHorizontal: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
         opacity: pressed ? 0.82 : 1,
-        transform: [{ scale: pressed ? 0.99 : 1 }],
       })}
     >
-      <LinearGradient
-        colors={['rgba(217,70,239,0.18)', 'rgba(34,211,238,0.10)']}
-        style={{
-          flex: 1,
-          borderWidth: 1,
-          borderColor: 'rgba(217,70,239,0.26)',
-          borderRadius: 22,
-          paddingHorizontal: 16,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 13,
-        }}
-      >
-        <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(217,70,239,0.18)', alignItems: 'center', justifyContent: 'center' }}>
-          <Store size={21} color="#ffffff" />
-        </View>
-        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-          <AppText variant="cardTitle" numberOfLines={1}>Seller Dashboard</AppText>
-          <AppText variant="caption" color="muted" numberOfLines={1}>Sales, paid unlocks, and seller listings</AppText>
-        </View>
-        <ChevronRight size={23} color="#ffffff" />
-      </LinearGradient>
+      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: PROFILE_COLORS.coralSoft, alignItems: 'center', justifyContent: 'center' }}>
+        <Store size={19} color={PROFILE_COLORS.coral} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Seller Dashboard</AppText>
+        <AppText variant="caption" color="muted" numberOfLines={1}>Sales, unlocks, and listings</AppText>
+      </View>
+      <ChevronRight size={20} color={PROFILE_COLORS.faint} />
     </Pressable>
   );
 }
@@ -597,19 +650,30 @@ function ProfileMediaHeader({
   title?: string;
 }) {
   return (
-    <View style={{ gap: 12 }}>
+    <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <AppText variant="sectionTitle" numberOfLines={1} style={{ flex: 1 }}>
+        <AppText variant="sectionTitle" numberOfLines={1} style={{ flex: 1, fontSize: 19, lineHeight: 24 }}>
           {title ?? getProfileMediaSectionTitle(activeTab)}
         </AppText>
-        <IconButton
-          icon={RefreshCw}
-          label="Refresh media"
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh media"
           disabled={!onRefresh}
           onPress={onRefresh}
-          accent="motion"
-          style={{ minHeight: 38, minWidth: 38 }}
-        />
+          style={({ pressed }) => ({
+            width: 48,
+            height: 48,
+            borderRadius: 24,
+            borderWidth: 1,
+            borderColor: PROFILE_COLORS.border,
+            backgroundColor: PROFILE_COLORS.surface,
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: !onRefresh ? 0.45 : pressed ? 0.72 : 1,
+          })}
+        >
+          <RefreshCw size={19} color={PROFILE_COLORS.muted} />
+        </Pressable>
       </View>
       <ProfileSegment value={activeTab} onChange={onTabChange} />
     </View>
@@ -664,19 +728,28 @@ function getProfileMediaSwipeDirection(gestureState: PanResponderGestureState): 
 
 function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange: (value: ProfileMediaTab) => void }) {
   return (
-    <View style={{ flexDirection: 'row', gap: appTheme.spacing.compact, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceInset, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderWidth: 1, borderColor: PROFILE_COLORS.border, backgroundColor: PROFILE_COLORS.surface, padding: 4 }}>
       {PROFILE_MEDIA_TABS.map((tab) => {
         const active = tab === value;
         return (
-          <ChoiceChip
+          <Pressable
             key={tab}
-            label={tab}
-            active={active}
+            accessibilityRole="tab"
+            accessibilityLabel={tab}
+            accessibilityState={{ selected: active }}
             onPress={() => onChange(tab)}
-            accent={tab === 'Saved' ? 'image' : tab === 'Creations' ? 'motion' : 'workflow'}
-            grow
-            compact
-          />
+            style={({ pressed }) => ({
+              flex: 1,
+              minHeight: appTheme.touch.compact,
+              borderRadius: 14,
+              backgroundColor: active ? PROFILE_COLORS.coral : 'transparent',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.78 : 1,
+            })}
+          >
+            <Text numberOfLines={1} style={{ color: active ? '#111114' : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>{tab}</Text>
+          </Pressable>
         );
       })}
     </View>
@@ -731,7 +804,6 @@ function ProfileMediaTile({
         width,
         height,
         opacity: pressed ? 0.84 : 1,
-        transform: [{ scale: pressed ? 0.985 : 1 }],
       })}
     >
       <View
@@ -741,9 +813,9 @@ function ProfileMediaTile({
           overflow: 'hidden',
           borderRadius: 12,
           borderCurve: 'continuous',
-          borderWidth: highlighted ? 2 : 0,
-          borderColor: highlighted ? 'rgba(103,255,69,0.72)' : 'transparent',
-          backgroundColor: '#090914',
+          borderWidth: highlighted ? 2 : 1,
+          borderColor: highlighted ? PROFILE_COLORS.coral : PROFILE_COLORS.border,
+          backgroundColor: PROFILE_COLORS.surface,
         }}
       >
         <ProfileGalleryPreview item={item} height={height} />
@@ -818,10 +890,10 @@ function ProfileSavedFeedOverlay({
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
-            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '900' }}>{avatarInitials}</Text>
+            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>{avatarInitials}</Text>
           )}
         </View>
-        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: '#ffffff', fontSize: 10, fontWeight: '900' }}>
+        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: '#ffffff', fontSize: 10, fontWeight: '800' }}>
           {item.avatarLabel || item.meta}
         </Text>
       </View>
@@ -845,14 +917,14 @@ function ProfileSavedFeedOverlay({
             color: '#ffffff',
             fontSize: 12,
             lineHeight: 15,
-            fontWeight: '900',
+            fontWeight: '800',
           }}
         >
           {item.title}
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 34, justifyContent: 'flex-end' }}>
-          <Heart size={15} color="#ff4d2d" fill="#ff4d2d" strokeWidth={2.2} />
-          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] }}>
+          <Heart size={15} color={PROFILE_COLORS.coral} fill={PROFILE_COLORS.coral} strokeWidth={2.2} />
+          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
             {countLabel}
           </Text>
         </View>
@@ -862,7 +934,7 @@ function ProfileSavedFeedOverlay({
 }
 
 function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
-  const accent = item.label === 'Creation' ? '#e879f9' : '#67e8f9';
+  const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.image;
   const icon = item.label === 'Creation'
     ? <Sparkles size={13} color={accent} strokeWidth={2.4} />
     : item.mediaKind === 'video'
@@ -870,13 +942,13 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
       : <ImageIcon size={13} color={accent} strokeWidth={2.4} />;
   const stateColor = item.label === 'Creation'
     ? item.linkedPostLabel && item.linkedPostLabel !== 'Not posted'
-      ? '#67ff45'
-      : '#c084fc'
+      ? appTheme.colors.success
+      : appTheme.colors.motion
     : item.visibilityLabel === 'Public'
-      ? '#67ff45'
+      ? appTheme.colors.success
       : item.visibilityLabel === 'Private'
-        ? '#f59e0b'
-        : '#67e8f9';
+        ? appTheme.colors.amber
+        : appTheme.colors.image;
 
   return (
     <View testID="profile-minimal-overlay" pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
@@ -892,7 +964,7 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           justifyContent: 'center',
           backgroundColor: 'rgba(3,4,13,0.62)',
           borderWidth: 1,
-          borderColor: item.label === 'Creation' ? 'rgba(216,180,254,0.38)' : 'rgba(103,232,249,0.28)',
+          borderColor: item.label === 'Creation' ? 'rgba(167,139,250,0.35)' : 'rgba(56,189,248,0.3)',
         }}
       >
         {icon}
@@ -952,34 +1024,31 @@ function ProfileGalleryPreview({ item, height }: { item: ProfileMediaCard; heigh
 }
 
 function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
-  const accent = item.label === 'Creation' ? '#e879f9' : '#67e8f9';
+  const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.info;
   const label = item.label === 'Creation' ? 'Text creation' : 'Text post';
 
   return (
-    <View testID="profile-text-preview" style={{ height, overflow: 'hidden', backgroundColor: '#090914' }}>
-      <LinearGradient
-        colors={['#2a1740', '#171827', '#080810']}
-        locations={[0, 0.48, 1]}
-        style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingTop: 46, paddingBottom: 14 }}
-      >
+    <View testID="profile-text-preview" style={{ height, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+      <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingTop: 46, paddingBottom: 14 }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
         <View
           style={{
             alignSelf: 'flex-start',
             borderRadius: 999,
-            backgroundColor: 'rgba(103,232,249,0.12)',
+            backgroundColor: `${accent}1f`,
             borderWidth: 1,
-            borderColor: 'rgba(103,232,249,0.42)',
+            borderColor: `${accent}66`,
             paddingHorizontal: 8,
             paddingVertical: 4,
             marginBottom: 8,
           }}
         >
-          <Text numberOfLines={1} style={{ color: accent, fontSize: 9, fontWeight: '900' }}>{label}</Text>
+          <Text numberOfLines={1} style={{ color: accent, fontSize: 9, fontWeight: '800' }}>{label}</Text>
         </View>
-        <Text numberOfLines={5} style={{ color: '#ffffff', fontSize: 13, lineHeight: 16, fontWeight: '900' }}>
+        <Text numberOfLines={5} style={{ color: '#ffffff', fontSize: 13, lineHeight: 16, fontWeight: '800' }}>
           {item.previewText || item.title}
         </Text>
-      </LinearGradient>
+      </View>
     </View>
   );
 }
@@ -989,12 +1058,8 @@ function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height
   const statusLabel = item.previewStatusLabel ?? (item.label === 'Creation' ? 'Tap to view media' : 'Preview unavailable');
 
   return (
-    <View testID="profile-video-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: '#090914' }}>
-      <LinearGradient
-        colors={['#26143a', '#111827', '#05050a']}
-        locations={[0, 0.52, 1]}
-        style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 12 }}
-      >
+    <View testID="profile-video-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 12 }}>
         <View
           style={{
             width: 42,
@@ -1002,21 +1067,21 @@ function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height
             borderRadius: 21,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(232,121,249,0.18)',
+            backgroundColor: `${appTheme.colors.video}1f`,
             borderWidth: 1,
-            borderColor: 'rgba(232,121,249,0.52)',
+            borderColor: `${appTheme.colors.video}66`,
           }}
         >
           <Play size={18} color="#ffffff" fill="#ffffff" strokeWidth={2.3} />
         </View>
-        <Text style={{ marginTop: 10, color: '#ffffff', fontSize: 12, fontWeight: '900' }}>{label}</Text>
+        <Text style={{ marginTop: 10, color: '#ffffff', fontSize: 12, fontWeight: '800' }}>{label}</Text>
         <Text
           numberOfLines={1}
           style={{ marginTop: 3, color: 'rgba(255,255,255,0.66)', fontSize: 9, fontWeight: '800' }}
         >
           {statusLabel}
         </Text>
-      </LinearGradient>
+      </View>
     </View>
   );
 }
@@ -1032,15 +1097,11 @@ function ProfileUnavailableFallback({
   showTitle?: boolean;
   statusLabel?: string;
 }) {
-  const accent = item.label === 'Creation' ? '#e879f9' : '#67e8f9';
+  const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.image;
 
   return (
-    <View testID="profile-art-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: '#090914' }}>
-      <LinearGradient
-        colors={['#182235', '#11131e', '#07070c']}
-        locations={[0, 0.5, 1]}
-        style={{ flex: 1, justifyContent: 'center', padding: 10 }}
-      >
+    <View testID="profile-art-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+      <View style={{ flex: 1, justifyContent: 'center', padding: 10 }}>
         <View
           style={{
             width: 28,
@@ -1048,9 +1109,9 @@ function ProfileUnavailableFallback({
             borderRadius: 14,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(103,232,249,0.12)',
+            backgroundColor: `${accent}1f`,
             borderWidth: 1,
-            borderColor: 'rgba(103,232,249,0.48)',
+            borderColor: `${accent}66`,
           }}
         >
           {item.label === 'Creation'
@@ -1058,7 +1119,7 @@ function ProfileUnavailableFallback({
             : <ImageIcon size={14} color={accent} strokeWidth={2.4} />}
         </View>
         {showTitle ? (
-          <Text numberOfLines={2} style={{ marginTop: 10, color: '#ffffff', fontSize: 11, lineHeight: 14, fontWeight: '900' }}>
+          <Text numberOfLines={2} style={{ marginTop: 10, color: '#ffffff', fontSize: 11, lineHeight: 14, fontWeight: '800' }}>
             {item.title}
           </Text>
         ) : null}
@@ -1068,7 +1129,7 @@ function ProfileUnavailableFallback({
         >
           {statusLabel ?? item.previewStatusLabel ?? 'Preview unavailable'}
         </Text>
-      </LinearGradient>
+      </View>
     </View>
   );
 }

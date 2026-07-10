@@ -5,17 +5,16 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
+import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostResourceReferences } from '@/components/post-resource-references';
-import { Pill } from '@/components/ui';
+import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
@@ -44,6 +43,7 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import { useReducedMotion } from '@/lib/motion';
 import {
   applyShowcaseSaveStateToFeedResponse,
   applyShowcaseSaveStateToInfiniteFeed,
@@ -272,7 +272,25 @@ export default function ImmersivePreviewViewerScreen() {
   if (!items.length && sourceQuery.isLoading) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
-        <ActivityIndicator accessibilityLabel="Loading preview" color="#6cff4a" />
+        <ActivityIndicator accessibilityLabel="Loading preview" color={appTheme.colors.primary} />
+      </ViewerShell>
+    );
+  }
+
+  if (!items.length && sourceQuery.isError) {
+    return (
+      <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          <StatusBlock
+            tone="danger"
+            title="Couldn't load this preview"
+            body="Check your connection and try again."
+          />
+          <SecondaryButton
+            label="Try again"
+            onPress={() => void sourceQuery.refetch()}
+          />
+        </View>
       </ViewerShell>
     );
   }
@@ -280,8 +298,8 @@ export default function ImmersivePreviewViewerScreen() {
   if (!items.length) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
-        <Text selectable style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Preview unavailable</Text>
-        <Text selectable style={{ color: 'rgba(255,255,255,0.64)', marginTop: 8 }}>This item may have been removed or is still loading.</Text>
+        <Text selectable style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '800' }}>Preview unavailable</Text>
+        <Text selectable style={{ color: appTheme.colors.muted, marginTop: 8 }}>This item may have been removed or is still loading.</Text>
       </ViewerShell>
     );
   }
@@ -340,16 +358,16 @@ export default function ImmersivePreviewViewerScreen() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Go back"
-        onPress={() => router.back()}
+        onPress={leaveViewer}
         style={({ pressed }) => ({
           position: 'absolute',
           left: 16,
           top: topInset + 10,
-          width: 44,
-          height: 44,
+          width: 48,
+          height: 48,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: 22,
+          borderRadius: 24,
           backgroundColor: 'rgba(0,0,0,0.18)',
           opacity: pressed ? 0.7 : 1,
         })}
@@ -419,14 +437,22 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Go back"
-        onPress={() => router.back()}
-        style={{ position: 'absolute', left: 16, top: topInset + 10, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+        onPress={leaveViewer}
+        style={{ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.18)' }}
       >
         <ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} />
       </Pressable>
       {children}
     </View>
   );
+}
+
+function leaveViewer() {
+  if (router.canGoBack()) {
+    router.back();
+    return;
+  }
+  router.replace('/(tabs)/showcase' as never);
 }
 
 function ImmersiveSlide({
@@ -527,7 +553,7 @@ function ImmersiveSlide({
                 paddingVertical: 7,
               }}
             >
-              <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
+              <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '800' }}>
                 {slideHint}
               </Text>
             </View>
@@ -642,7 +668,7 @@ function ImmersiveSlide({
           }}
         >
           <View pointerEvents="none" style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
-            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
+            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
               {item.badge}
             </Text>
           </View>
@@ -656,18 +682,18 @@ function ImmersiveSlide({
               opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
             })}
           >
-            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '900' }}>
+            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '800' }}>
               {item.creatorLabel}
             </Text>
           </Pressable>
-          <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '900' }}>
+          <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '800' }}>
             {item.title}
           </Text>
           <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
             {item.displayText}
           </Text>
           {slideHint ? (
-            <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '900' }}>
+            <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '800' }}>
               {slideHint}
             </Text>
           ) : null}
@@ -836,10 +862,11 @@ function ViewerDetailsSheet({
   width: number;
 }) {
   const sheetHeight = Math.min(height * 0.9, height - topInset - 12);
+  const reducedMotion = useReducedMotion();
 
   return (
     <Modal
-      animationType="slide"
+      animationType={reducedMotion ? 'none' : 'slide'}
       onRequestClose={onClose}
       statusBarTranslucent
       transparent
@@ -876,16 +903,16 @@ function ViewerDetailsSheet({
               borderBottomColor: 'rgba(255,255,255,0.1)',
             }}
           >
-            <View style={{ width: 40 }} />
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Details</Text>
+            <View style={{ width: 48 }} />
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Details</Text>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close details"
               onPress={onClose}
               style={({ pressed }) => ({
-                width: 40,
-                height: 40,
-                borderRadius: 20,
+                width: 48,
+                height: 48,
+                borderRadius: 24,
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: 'rgba(255,255,255,0.08)',
@@ -1046,7 +1073,7 @@ function PostDetailsPage({
           <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
             Post details
           </Text>
-          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '900' }}>
+          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
             {details.title}
           </Text>
           <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm, fontWeight: '700' }}>
@@ -1084,7 +1111,6 @@ function PostDetailsPage({
           {canUnlockRemix && unlock ? (
             <DetailActionButton
               label="Remix"
-              accent={unlockAccent}
               icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
               primary
               onPress={() => onUnlockRemix(item)}
@@ -1108,7 +1134,7 @@ function PostDetailsPage({
         <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: unlock ? `${accentColor(unlockAccent)}55` : appTheme.colors.border, backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 5 }}>
-              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '900' }}>Creator unlocks</Text>
+              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator unlocks</Text>
               {unlock ? (
                 <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
                   {bundle?.previewText ?? unlock.previewText ?? 'Reusable resources are attached to this post.'}
@@ -1125,7 +1151,7 @@ function PostDetailsPage({
           {unlock ? (
             <>
               <ResourceKindRow kinds={resourceKinds} />
-              {resourceQuery.isLoading ? <ActivityIndicator color="#67ff45" /> : null}
+              {resourceQuery.isLoading ? <ActivityIndicator color={appTheme.colors.primary} /> : null}
               {resourceQuery.error instanceof Error ? (
                 <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceQuery.error.message}</Text>
               ) : null}
@@ -1158,7 +1184,6 @@ function PostDetailsPage({
                   ) : null}
                   <DetailActionButton
                     label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Unlock free' : 'Unlock with credits'}
-                    accent={unlockAccent}
                     icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
                     loading={unlockMutation.isPending}
                     primary
@@ -1195,7 +1220,7 @@ function DetailStat({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ flex: 1, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
       <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
-      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{value}</Text>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
     </View>
   );
 }
@@ -1203,7 +1228,7 @@ function DetailStat({ label, value }: { label: string; value: string }) {
 function DetailSection({ title, emptyLabel, children }: { title: string; emptyLabel: string; children: React.ReactNode }) {
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '900' }}>{title}</Text>
+      <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>{title}</Text>
       {children || <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>{emptyLabel}</Text>}
     </View>
   );
@@ -1217,10 +1242,10 @@ function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) =
         accessibilityRole="button"
         accessibilityLabel="Copy text"
         onPress={() => void onCopy(text)}
-        style={({ pressed }) => ({ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? 0.7 : 1 })}
+        style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: appTheme.touch.compact, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? 0.7 : 1, paddingHorizontal: 4 })}
       >
         <Copy size={15} color={appTheme.colors.success} strokeWidth={2.4} />
-        <Text style={{ color: appTheme.colors.success, ...appTheme.type.caption, fontWeight: '900' }}>Copy</Text>
+        <Text style={{ color: appTheme.colors.success, ...appTheme.type.caption, fontWeight: '800' }}>Copy</Text>
       </Pressable>
     </View>
   );
@@ -1233,9 +1258,7 @@ function DetailActionButton({
   loading,
   onPress,
   primary,
-  accent = 'workflow',
 }: {
-  accent?: ToolAccent;
   disabled?: boolean;
   icon: React.ReactNode;
   label: string;
@@ -1243,14 +1266,14 @@ function DetailActionButton({
   onPress: () => void;
   primary?: boolean;
 }) {
-  const primaryColor = accentColor(accent);
+  const primaryColor = appTheme.colors.primary;
   return (
     <Pressable
       accessibilityRole="button"
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 44,
+        minHeight: appTheme.touch.compact,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1262,7 +1285,7 @@ function DetailActionButton({
       })}
     >
       {loading ? <ActivityIndicator color={primary ? appTheme.colors.textInverse : appTheme.colors.text} /> : icon}
-      <Text numberOfLines={1} style={{ color: primary ? appTheme.colors.textInverse : appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>{label}</Text>
+      <Text numberOfLines={1} style={{ color: primary ? appTheme.colors.textInverse : appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -1325,7 +1348,7 @@ function UnlockedResources({
       ) : null}
       {resources.attachments.length ? (
         <View style={{ gap: 8 }}>
-          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Files and links</Text>
+          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Files and links</Text>
           {resources.attachments.map((attachment) => {
             const loading = Boolean(attachment.storagePath && attachment.storagePath === fileLoadingPath);
             return (
@@ -1440,7 +1463,6 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
 
   return (
     <View style={{ width, height, backgroundColor: '#07070c' }}>
-      <FantasyPortalArt variant="portal" muted />
       <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
         <ImageOff size={34} color="rgba(255,255,255,0.68)" />
       </View>
@@ -1465,9 +1487,11 @@ function ActiveVideo({
 }) {
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const reducedMotion = useReducedMotion();
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
-    instance.muted = false;
+    instance.muted = true;
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
@@ -1476,14 +1500,19 @@ function ActiveVideo({
   const [isPlaying, setIsPlaying] = useState(player.playing);
 
   useEffect(() => {
-    player.play();
+    if (reducedMotion) player.pause();
+    else player.play();
     setIsPlaying(player.playing);
-  }, [player]);
+  }, [player, reducedMotion]);
 
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
   }, [url]);
+
+  useEffect(() => {
+    player.muted = isMuted;
+  }, [isMuted, player]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
@@ -1511,54 +1540,87 @@ function ActiveVideo({
     }
   };
 
+  const toggleMuted = () => {
+    setIsMuted((current) => !current);
+  };
+
   return (
-    <Pressable
-      onPress={togglePlayback}
-      style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
-    >
-      <FeedMediaFrame
-        kind="video"
-        player={player}
-        backdropUrl={previewUrl}
-        posterUrl={previewUrl}
-        posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
-        cacheKey={previewCacheKey}
-        thumbhash={previewThumbhash}
-        onFirstFrameRender={() => {
-          setHasFrame(true);
-          setHasError(false);
-        }}
-        style={{ width, height }}
-      />
-      {!isPlaying && hasFrame && !hasError && (
-        <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
-          <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
-        </View>
-      )}
-    </Pressable>
+    <View style={{ width, height, alignItems: 'center', justifyContent: 'center' }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isPlaying ? 'Pause video' : 'Play video'}
+        accessibilityHint={reducedMotion ? 'Playback is paused because reduced motion is enabled' : 'Toggles video playback'}
+        accessibilityState={{ selected: isPlaying }}
+        onPress={togglePlayback}
+        style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
+      >
+        <FeedMediaFrame
+          kind="video"
+          player={player}
+          backdropUrl={previewUrl}
+          posterUrl={previewUrl}
+          posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+          cacheKey={previewCacheKey}
+          thumbhash={previewThumbhash}
+          onFirstFrameRender={() => {
+            setHasFrame(true);
+            setHasError(false);
+          }}
+          style={{ width, height }}
+        />
+        {!isPlaying && hasFrame && !hasError ? (
+          <View pointerEvents="none" style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
+            <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
+          </View>
+        ) : null}
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isMuted ? 'Unmute video' : 'Mute video'}
+        accessibilityHint="Toggles video sound without changing playback"
+        accessibilityState={{ selected: !isMuted }}
+        onPress={toggleMuted}
+        style={({ pressed }) => ({
+          position: 'absolute',
+          top: 112,
+          left: 18,
+          width: 48,
+          height: 48,
+          borderRadius: 24,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.18)',
+          backgroundColor: pressed ? 'rgba(255,255,255,0.22)' : 'rgba(12,12,16,0.56)',
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: pressed ? 0.82 : 1,
+        })}
+      >
+        {isMuted ? <VolumeX size={22} color="#ffffff" /> : <Volume2 size={22} color="#ffffff" />}
+      </Pressable>
+    </View>
   );
 }
 
 function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width: number; height: number }) {
   return (
-    <LinearGradient
-      colors={['#17051d', '#060609', '#07171f']}
-      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120 }}
+    <View
+      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: appTheme.colors.app }}
     >
-      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', backgroundColor: 'rgba(255,255,255,0.07)', padding: 20, gap: 13 }}>
-        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 11, paddingVertical: 6 }}>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
+      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: appTheme.colors.primary }} />
+        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
             {item.badge}
           </Text>
         </View>
-        <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '900' }}>
+        <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '800' }}>
           {item.title}
         </Text>
-        <Text numberOfLines={8} style={{ color: 'rgba(255,255,255,0.76)', fontSize: 16, lineHeight: 23, fontWeight: '700' }}>
+        <Text numberOfLines={8} style={{ color: appTheme.colors.textSecondary, fontSize: 16, lineHeight: 23, fontWeight: '700' }}>
           {item.displayText}
         </Text>
       </View>
-    </LinearGradient>
+    </View>
   );
 }
 
@@ -1580,6 +1642,7 @@ function ViewerCreatorAvatar({
       accessibilityLabel={`Open ${item.creatorLabel} profile`}
       disabled={!onPress}
       onPress={onPress}
+      hitSlop={Math.max(0, (appTheme.touch.compact - size) / 2)}
       style={({ pressed }) => ({
         width: size,
         height: size,
@@ -1593,7 +1656,7 @@ function ViewerCreatorAvatar({
         {item.creatorAvatar ? (
           <Image source={{ uri: item.creatorAvatar }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
-          <Text style={{ color: '#fff', fontSize: size > 44 ? 20 : 15, fontWeight: '900' }}>{initial}</Text>
+          <Text style={{ color: '#fff', fontSize: size > 44 ? 20 : 15, fontWeight: '800' }}>{initial}</Text>
         )}
       </View>
     </Pressable>
@@ -1622,6 +1685,7 @@ function RailActionButton({
   tapAnimationSpec?: SaveHeartTapAnimationSpec;
 }) {
   const tapProgress = useRef(new Animated.Value(0)).current;
+  const reducedMotion = useReducedMotion();
   const [activeTapAnimationSpec, setActiveTapAnimationSpec] = useState(tapAnimationSpec);
   const animationSpec = activeTapAnimationSpec ?? tapAnimationSpec;
   const iconScale = tapProgress.interpolate({
@@ -1643,7 +1707,7 @@ function RailActionButton({
   });
 
   const runTapAnimation = useCallback(() => {
-    if (!tapAnimationSpec) {
+    if (!tapAnimationSpec || reducedMotion) {
       return;
     }
 
@@ -1664,7 +1728,7 @@ function RailActionButton({
         useNativeDriver: true,
       }),
     ]).start();
-  }, [tapAnimationSpec, tapProgress]);
+  }, [reducedMotion, tapAnimationSpec, tapProgress]);
 
   const handlePress = useCallback(() => {
     runTapAnimation();
@@ -1674,6 +1738,8 @@ function RailActionButton({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
       disabled={disabled || loading}
       onPress={handlePress}
       style={({ pressed }) => ({
@@ -1696,7 +1762,7 @@ function RailActionButton({
           borderRadius: 27,
           borderWidth: primary ? 0 : 1,
           borderColor: 'rgba(255,255,255,0.16)',
-          backgroundColor: primary ? '#67ff45' : 'rgba(12,12,16,0.42)',
+          backgroundColor: primary ? appTheme.colors.primary : 'rgba(12,12,16,0.42)',
         }}
       >
         {tapAnimationSpec && animationSpec ? (
@@ -1727,7 +1793,7 @@ function RailActionButton({
           color: '#fff',
           fontSize: 12,
           lineHeight: 15,
-          fontWeight: '900',
+          fontWeight: '800',
           textShadowColor: 'rgba(0,0,0,0.6)',
           textShadowOffset: { width: 0, height: 1 },
           textShadowRadius: 6,

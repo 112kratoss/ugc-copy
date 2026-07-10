@@ -1,4 +1,3 @@
-import { LinearGradient } from 'expo-linear-gradient';
 import { FileText } from 'lucide-react-native';
 import { Text, View } from 'react-native';
 
@@ -20,22 +19,19 @@ export function TextPreviewCard({
   compact?: boolean;
 }) {
   return (
-    <LinearGradient
-      colors={['#141018', '#161020', '#090914']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
+    <View
       style={{
         height,
         borderRadius: radius,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: `${accent}4d`,
+        borderColor: appTheme.colors.border,
+        backgroundColor: appTheme.colors.panelSoft,
         justifyContent: 'flex-end',
         overflow: 'hidden',
         padding: compact ? 10 : 14,
       }}
     >
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}14` }} />
       <View style={{ gap: compact ? 7 : 12 }}>
         <View
           style={{
@@ -51,10 +47,10 @@ export function TextPreviewCard({
         >
           <FileText size={compact ? 13 : 18} color={accent} strokeWidth={2.4} />
         </View>
-        <Text numberOfLines={lines} style={{ color: appTheme.colors.text, fontSize: compact ? 12 : 17, lineHeight: compact ? 15 : 22, fontWeight: '900' }}>
+        <Text numberOfLines={lines} style={{ color: appTheme.colors.text, fontSize: compact ? 12 : 17, lineHeight: compact ? 15 : 22, fontWeight: '800' }}>
           {text}
         </Text>
       </View>
-    </LinearGradient>
+    </View>
   );
 }

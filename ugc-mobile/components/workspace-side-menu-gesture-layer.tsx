@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type React from 'react';
 import { useMemo, useRef, useState } from 'react';
-import { type GestureResponderEvent, View } from 'react-native';
+import { type GestureResponderEvent, useWindowDimensions, View } from 'react-native';
 
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { useAuth } from '@/lib/auth';
@@ -24,11 +24,13 @@ interface WorkspaceSideMenuGestureLayerProps {
 }
 
 export function WorkspaceSideMenuGestureLayer({
+  bottomOffset = 0,
   children,
   edgeWidth = DEFAULT_WORKSPACE_SIDE_MENU_EDGE_WIDTH,
   enabled = true,
   topOffset = 0,
 }: WorkspaceSideMenuGestureLayerProps) {
+  const { height } = useWindowDimensions();
   const { api, credits, signOut, user } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
   const touchStartRef = useRef<WorkspaceSideMenuTouchPoint | null>(null);
@@ -55,7 +57,8 @@ export function WorkspaceSideMenuGestureLayer({
   const handleTouchStart = (event: GestureResponderEvent) => {
     const touch = event.nativeEvent.touches[0];
     const start = touch ? { x: touch.pageX, y: touch.pageY } : null;
-    touchStartRef.current = shouldTrackWorkspaceSideMenuTouchStart({
+    const startsAbovePersistentChrome = !start || start.y <= height - Math.max(0, bottomOffset);
+    touchStartRef.current = startsAbovePersistentChrome && shouldTrackWorkspaceSideMenuTouchStart({
       edgeWidth,
       enabled,
       menuVisible,

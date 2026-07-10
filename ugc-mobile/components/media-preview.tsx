@@ -1,9 +1,8 @@
 import { Image, type ImageProps } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { ImageOff } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Text } from 'react-native';
+import { Text, View } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
 
@@ -106,10 +105,7 @@ export function StableMediaImage({
 
 function MediaFallback({ height, radius, label }: { height?: number; radius: number; label: string }) {
   return (
-    <LinearGradient
-      colors={['#0b1022', '#12071c', '#050506']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
+    <View
       style={{
         width: '100%',
         aspectRatio: 4 / 5,
@@ -117,14 +113,15 @@ function MediaFallback({ height, radius, label }: { height?: number; radius: num
         borderRadius: radius,
         borderWidth: 1,
         borderColor: appTheme.colors.border,
+        backgroundColor: appTheme.colors.surfaceInset,
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
       }}
     >
-      <ImageOff size={28} color="#ffffff" strokeWidth={2.2} />
-      <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '900' }}>{label}</Text>
-    </LinearGradient>
+      <ImageOff size={28} color={appTheme.colors.faint} strokeWidth={2.2} />
+      <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
+    </View>
   );
 }
 

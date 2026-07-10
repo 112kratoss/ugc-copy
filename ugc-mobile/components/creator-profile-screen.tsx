@@ -49,7 +49,7 @@ import {
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
-import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { resolvedBottomInset } from '@/lib/safe-area';
 import { hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
@@ -87,7 +87,6 @@ export function CreatorProfileScreen({
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
-  const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 14 : 16;
@@ -232,14 +231,14 @@ export function CreatorProfileScreen({
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
-        <ActivityIndicator color={appTheme.colors.motion} />
+        <ActivityIndicator color={appTheme.colors.primary} />
       </View>
     );
   }
 
   if (!data) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset + 16, paddingHorizontal: 16 }}>
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: 16, paddingHorizontal: 16 }}>
         <Stack.Screen options={{ title: notFound ? 'Not found' : 'Creator' }} />
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
@@ -331,7 +330,7 @@ export function CreatorProfileScreen({
         viewabilityConfig={viewabilityConfig}
         style={{ flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
-          paddingTop: topInset + 12,
+          paddingTop: 12,
           paddingHorizontal: horizontalPadding,
           paddingBottom: bottomInset + 36,
         }}
@@ -379,13 +378,13 @@ function CreatorHeader({
 
   return (
     <View style={{ overflow: 'hidden', borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
-      <View style={{ height: 136, backgroundColor: '#0b0c10' }}>
+      <View style={{ height: 136, backgroundColor: appTheme.colors.panelSoft }}>
         {profile.coverUrl ? (
           <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
-          <LinearGradient colors={['rgba(56,189,248,0.28)', '#111215', 'rgba(251,113,133,0.18)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ position: 'absolute', inset: 0 }} />
+          <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.panelSoft }} />
         )}
-        <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(17,18,21,0.96)']} style={{ position: 'absolute', inset: 0 }} />
+        {profile.coverUrl ? <LinearGradient colors={['rgba(8,8,10,0.04)', 'rgba(8,8,10,0.90)']} style={{ position: 'absolute', inset: 0 }} /> : null}
       </View>
 
       <View style={{ padding: 16, paddingTop: 0, gap: 14 }}>
@@ -404,10 +403,10 @@ function CreatorHeader({
         </View>
 
         <View style={{ gap: 6 }}>
-          <Text selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: appTheme.colors.text, fontSize: 29, lineHeight: 34, fontWeight: '900' }}>
+          <Text selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: appTheme.colors.text, fontSize: 29, lineHeight: 34, fontWeight: '800' }}>
             {profile.displayName}
           </Text>
-          <Text selectable numberOfLines={1} style={{ color: appTheme.colors.image, ...appTheme.type.bodySm, fontWeight: '900' }}>@{profile.username}</Text>
+          <Text selectable numberOfLines={1} style={{ color: appTheme.colors.primary, ...appTheme.type.bodySm, fontWeight: '700' }}>@{profile.username}</Text>
           {profile.location ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
               <MapPin size={14} color={appTheme.colors.muted} strokeWidth={2.3} />
@@ -442,7 +441,7 @@ function CreatorStats({ data }: { data: CreatorProfileResponse }) {
     <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: appTheme.colors.borderSubtle, paddingTop: 14 }}>
       {stats.map((stat, index) => (
         <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: appTheme.colors.borderSubtle, paddingHorizontal: 2 }}>
-          <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
+          <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
         </View>
       ))}
@@ -467,9 +466,9 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
             onPress={() => onChange(tab.id)}
-            style={({ pressed }) => ({ flex: 1, minHeight: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? appTheme.colors.text : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
+            style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? appTheme.colors.primary : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
           >
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? appTheme.colors.textInverse : appTheme.colors.muted, ...appTheme.type.label, fontWeight: '900' }}>
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? appTheme.colors.onPrimary : appTheme.colors.muted, ...appTheme.type.label, fontWeight: '700' }}>
               {tab.label} {formatCompactCount(counts[tab.id])}
             </Text>
           </Pressable>
@@ -487,14 +486,14 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const hasVideo = item.mediaKind === 'video' || item.category === 'video' || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
 
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator creation'}`} onPress={onPress} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1, transform: [{ scale: pressed ? 0.985 : 1 }] })}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator creation'}`} onPress={onPress} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
-        <View style={{ height, backgroundColor: '#050506' }}>
+        <View style={{ height, backgroundColor: appTheme.colors.surfaceInset }}>
           {isTextPost ? (
-            <LinearGradient colors={['#181128', '#111215', '#0a1118']} style={{ flex: 1, padding: 13, justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, padding: 13, justifyContent: 'space-between', backgroundColor: appTheme.colors.panelSoft }}>
               <FileText size={22} color={accent} />
               <Text numberOfLines={7} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
-            </LinearGradient>
+            </View>
           ) : hasShowcasePreviewMedia(item) ? (
             <ShowcaseMediaPreview accent={accent} height={height} item={item} onPress={onPress} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
@@ -508,7 +507,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
           {item.asset ? (
             <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
               <Lock size={12} color={appTheme.colors.commerce} />
-              <Text numberOfLines={1} style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '900' }}>
+              <Text numberOfLines={1} style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
                 {item.asset.accessMode === 'free' ? 'Free' : item.asset.priceQuote?.formatted ?? 'Unlock'}
               </Text>
             </View>
@@ -516,7 +515,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
         </View>
 
         <View style={{ minHeight: 92, padding: 10, gap: 6 }}>
-          <Text numberOfLines={2} style={{ minHeight: 38, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>{item.title || displayText}</Text>
+          <Text numberOfLines={2} style={{ minHeight: 38, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{item.title || displayText}</Text>
           <Text numberOfLines={1} style={{ minHeight: 15, color: appTheme.colors.faint, ...appTheme.type.caption }}>
             {item.sourceTool ? `Made with ${item.sourceTool}` : ' '}
           </Text>
@@ -552,25 +551,25 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
 
 function EditProfileButton({ onPress }: { onPress: () => void }) {
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: appTheme.colors.text, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
-      <Pencil size={15} color={appTheme.colors.textInverse} />
-      <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.label, fontWeight: '900' }}>Edit</Text>
+    <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: appTheme.colors.primary, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
+      <Pencil size={15} color={appTheme.colors.onPrimary} />
+      <Text style={{ color: appTheme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>Edit</Text>
     </Pressable>
   );
 }
 
 function FollowButton({ following, loading, onPress }: { following: boolean; loading: boolean; onPress: () => void }) {
   return (
-    <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, selected: following }} disabled={loading} onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, borderWidth: following ? 1 : 0, borderColor: appTheme.colors.borderStrong, backgroundColor: following ? appTheme.colors.surface : appTheme.colors.text, opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 16 })}>
-      {loading ? <ActivityIndicator size="small" color={following ? appTheme.colors.text : appTheme.colors.textInverse} /> : following ? <UserCheck size={16} color={appTheme.colors.text} /> : <UserPlus size={16} color={appTheme.colors.textInverse} />}
-      <Text style={{ color: following ? appTheme.colors.text : appTheme.colors.textInverse, ...appTheme.type.label, fontWeight: '900' }}>{following ? 'Following' : 'Follow'}</Text>
+    <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, selected: following }} disabled={loading} onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, borderWidth: following ? 1 : 0, borderColor: appTheme.colors.borderStrong, backgroundColor: following ? appTheme.colors.surface : appTheme.colors.primary, opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 16 })}>
+      {loading ? <ActivityIndicator size="small" color={following ? appTheme.colors.text : appTheme.colors.onPrimary} /> : following ? <UserCheck size={16} color={appTheme.colors.text} /> : <UserPlus size={16} color={appTheme.colors.onPrimary} />}
+      <Text style={{ color: following ? appTheme.colors.text : appTheme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>{following ? 'Following' : 'Follow'}</Text>
     </Pressable>
   );
 }
 
 function SocialChip({ label, url }: { label: string; url: string }) {
   return (
-    <Pressable accessibilityRole="link" accessibilityLabel={`Open ${label}`} onPress={() => void Linking.openURL(url)} style={({ pressed }) => ({ minHeight: 44, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+    <Pressable accessibilityRole="link" accessibilityLabel={`Open ${label}`} onPress={() => void Linking.openURL(url)} style={({ pressed }) => ({ minHeight: appTheme.touch.default, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       {label === 'Website' ? <Globe size={14} color={appTheme.colors.text} /> : <ExternalLink size={14} color={appTheme.colors.text} />}
       <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.label }}>{label}</Text>
     </Pressable>
@@ -585,12 +584,10 @@ function CircleAction({ children, label, onPress }: { children: ReactNode; label
 
 function CreatorAvatar({ avatarUrl, initial, size }: { avatarUrl: string | null; initial: string; size: number }) {
   return (
-    <View style={{ width: size, height: size, borderRadius: 24, padding: 3, backgroundColor: appTheme.colors.panel }}>
-      <LinearGradient colors={[appTheme.colors.image, appTheme.colors.motion, appTheme.colors.commerce]} style={{ flex: 1, borderRadius: 21, padding: 2 }}>
-        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panel }}>
-          {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: appTheme.colors.text, fontSize: 26, fontWeight: '900' }}>{initial}</Text>}
-        </View>
-      </LinearGradient>
+    <View style={{ width: size, height: size, borderRadius: 24, padding: 3, backgroundColor: appTheme.colors.panel, borderWidth: 2, borderColor: appTheme.colors.primary }}>
+      <View style={{ flex: 1, overflow: 'hidden', borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
+        {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: appTheme.colors.text, fontSize: 26, fontWeight: '800' }}>{initial}</Text>}
+      </View>
     </View>
   );
 }

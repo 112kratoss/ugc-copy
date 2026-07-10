@@ -1,4 +1,4 @@
-import { Redirect, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 
 import { ProfileDashboard } from '@/components/profile-dashboard';
 import { useAuth } from '@/lib/auth';
@@ -21,17 +21,13 @@ function normalizeProfileTab(value: string | string[] | undefined): ProfileMedia
 }
 
 export default function ProfileScreen() {
-  const { user, isLoading } = useAuth();
+  const { isLoading } = useAuth();
   const params = useLocalSearchParams<ProfileRouteParams>();
   const initialTab = normalizeProfileTab(params.tab);
   const highlightedPostId = normalizeParam(params.postId) || null;
 
   if (isLoading) {
     return null;
-  }
-
-  if (!user) {
-    return <Redirect href="/auth" />;
   }
 
   return <ProfileDashboard initialTab={initialTab} highlightedPostId={highlightedPostId} />;

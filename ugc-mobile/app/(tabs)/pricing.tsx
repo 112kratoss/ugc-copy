@@ -78,7 +78,7 @@ function PricingPlanCard({
           <AppText selectable={false} variant="label" color={selected ? 'commerce' : 'muted'}>
             {plan.name}
           </AppText>
-          {plan.popular ? <Pill label="Popular" accent="motion" style={{ minHeight: 28, paddingVertical: 4 }} /> : null}
+          {plan.popular ? <Pill label="Popular" accent="commerce" style={{ minHeight: 28, paddingVertical: 4 }} /> : null}
         </View>
         <SelectionIcon
           color={selected ? appTheme.colors.commerce : appTheme.colors.faint}
@@ -115,6 +115,7 @@ export default function PricingScreen() {
   const [isConfigured, setIsConfigured] = useState(false);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeTone, setNoticeTone] = useState<'success' | 'danger' | 'neutral'>('neutral');
   const [selectedPlanId, setSelectedPlanId] = useState<PricingPlanId>(DEFAULT_MOBILE_PRICING_PLAN_ID);
   const carouselRef = useRef<ScrollView>(null);
   const { width: screenWidth } = useWindowDimensions();
@@ -211,11 +212,13 @@ export default function PricingScreen() {
     const nativePackage = packagesByProductId.get(productId);
     if (!nativePackage) {
       setNotice('Native purchase configuration is not ready for this product yet.');
+      setNoticeTone('danger');
       return;
     }
 
     setBusyProductId(productId);
     setNotice(null);
+    setNoticeTone('neutral');
     try {
       if (os !== 'ios' && os !== 'android') {
         throw new Error('Native purchases are only available on iOS and Android.');
@@ -235,8 +238,10 @@ export default function PricingScreen() {
       });
       await refreshProfile();
       setNotice(`${entitlement.credits} credits are synced to your account.`);
+      setNoticeTone('success');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Purchase could not be completed.');
+      setNoticeTone('danger');
     } finally {
       setBusyProductId(null);
     }
@@ -252,13 +257,16 @@ export default function PricingScreen() {
 
     setBusyProductId('restore');
     setNotice(null);
+    setNoticeTone('neutral');
     try {
       const customerInfo = isConfigured ? await restorePurchases() : null;
       await api.restoreMobilePurchases();
       await refreshProfile();
       setNotice(customerInfo ? 'Purchases restored and entitlements synced.' : 'Server-side entitlements refreshed.');
+      setNoticeTone('success');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Restore failed.');
+      setNoticeTone('danger');
     } finally {
       setBusyProductId(null);
     }
@@ -281,31 +289,37 @@ export default function PricingScreen() {
             </AppText>
           </View>
           <Pill
-            label={`${storeLabel} - ${isConfigured ? 'Ready' : 'Setup needed'}`}
-            accent={isConfigured ? 'workflow' : 'motion'}
+            label={`${storeLabel} · ${isConfigured ? 'Ready' : 'Unavailable'}`}
+            accent={isConfigured ? 'workflow' : 'amber'}
           />
         </View>
       </Card>
 
       {!isIapConfigured(os) ? (
         <StatusBlock
-          title="Native purchases need store keys"
-          body="Set the RevenueCat public key for this platform before store purchases can run on-device."
+          title="Purchases are unavailable in this build"
+          body="Your balance is safe. Update the app or try again later to buy a credit pack on this device."
         />
       ) : !user ? (
-        <StatusBlock
-          title="Sign in to buy credits"
-          body="RevenueCat purchases are tied to your Magic Booklet account, so mobile credit packs unlock after you sign in."
-        />
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock
+            title="Sign in to buy credits"
+            body="Credit packs are tied to your Magicbooklet account and sync across devices."
+          />
+          <PrimaryButton
+            label="Sign in to continue"
+            onPress={() => router.push('/auth' as never)}
+            accent="primary"
+          />
+        </View>
       ) : null}
       {packageQuery.error ? (
-        <StatusBlock
-          tone="danger"
-          title="Could not load store products"
-          body={packageQuery.error instanceof Error ? packageQuery.error.message : 'Try again.'}
-        />
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock tone="danger" title="Could not load credit packs" body="Check your connection, then try again." />
+          <SecondaryButton label="Retry credit packs" onPress={() => void packageQuery.refetch()} />
+        </View>
       ) : null}
-      {notice ? <StatusBlock title="Purchase status" body={notice} /> : null}
+      {notice ? <StatusBlock tone={noticeTone} title={noticeTone === 'success' ? 'Purchase updated' : noticeTone === 'danger' ? 'Purchase not completed' : 'Purchase status'} body={notice} /> : null}
       {selectedPackageUnavailable ? (
         <StatusBlock
           title="This credit pack is not available"
@@ -375,12 +389,12 @@ export default function PricingScreen() {
           onPress={() => void buyCredits(selectedPlan.productId)}
           loading={purchaseBusy}
           disabled={purchaseDisabled}
-          accent="commerce"
+          accent="primary"
         />
         <SecondaryButton
           label={busyProductId === 'restore' ? 'Restoring...' : 'Restore purchases'}
           onPress={() => void restore()}
-          disabled={busyProductId !== null}
+          disabled={!user || busyProductId !== null}
         />
       </View>
     </Screen>

@@ -11,7 +11,6 @@ import {
   FileText,
   Heart,
   ImageIcon,
-  Lock,
   Menu,
   MoreHorizontal,
   Play,
@@ -19,23 +18,20 @@ import {
   Rocket,
   Share2,
   Sparkles,
-  UserPlus,
   WandSparkles,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
-import { FantasyPortalArt } from '@/components/fantasy-portal-art';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { TextPreviewCard } from '@/components/text-preview-card';
+import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
-  FALLBACK_COMMUNITY,
   HOME_UNLOCKS_FEED_HREF,
   HOME_TOOL_SHORTCUTS,
-  formatCompactCount,
   formatUsdCents,
   generationsToHomeCards,
   getOwnerPostSalesSummary,
@@ -56,6 +52,7 @@ import {
   getShowcaseFeedPageParams,
 } from '@/lib/showcase-feed-query';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { MarketplaceResource } from '@/lib/types';
 
@@ -67,38 +64,20 @@ interface UnlockCard {
   priceLabel: string;
   accessLabel: string;
   mediaUrl: string | null;
-  isPreview: boolean;
 }
 
-const FALLBACK_UNLOCKS: UnlockCard[] = [
-  {
-    id: 'preview-beauty-hook',
-    title: 'Beauty Product Hook',
-    body: 'Prompt framework for a launch-ready product post.',
-    priceLabel: 'Free',
-    accessLabel: 'Prompt',
-    mediaUrl: null,
-    isPreview: true,
-  },
-  {
-    id: 'preview-founder-caption',
-    title: 'Founder Caption Kit',
-    body: 'Reusable notes for founder updates and proof-led posts.',
-    priceLabel: 'Free',
-    accessLabel: 'Notes',
-    mediaUrl: null,
-    isPreview: true,
-  },
-  {
-    id: 'preview-portrait-pack',
-    title: 'Portrait Prompt Pack',
-    body: 'Soft-lit portrait art direction and styling cues.',
-    priceLabel: '$9',
-    accessLabel: 'Prompt',
-    mediaUrl: null,
-    isPreview: true,
-  },
-];
+const DASHBOARD_COLORS = {
+  background: appTheme.colors.background,
+  surface: appTheme.colors.panel,
+  surfaceRaised: appTheme.colors.panelSoft,
+  border: appTheme.colors.borderSubtle,
+  borderStrong: appTheme.colors.border,
+  text: appTheme.colors.text,
+  muted: appTheme.colors.muted,
+  faint: appTheme.colors.faint,
+  coral: appTheme.colors.primary,
+  coralSoft: appTheme.colors.pressed,
+} as const;
 
 const TOOL_PREVIEW_IMAGES = {
   kingdom: require('../assets/images/home-previews/image.png'),
@@ -117,6 +96,7 @@ export function HomeDashboard() {
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const pageWidth = Math.min(width, 430);
   const isCompact = pageWidth < 390;
+  const reduceMotion = useReducedMotion();
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
   const toolGap = 10;
@@ -170,17 +150,16 @@ export function HomeDashboard() {
   const activeGenerationCount = rawGenerations.filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
 
   const communityCards = useMemo(() => {
-    const items = flattenShowcaseFeedPages(showcaseQuery.data?.pages)
+    return flattenShowcaseFeedPages(showcaseQuery.data?.pages)
       .filter(isShowcaseGridReady)
       .slice(0, 4)
       .map(showcaseToCommunityCard);
-    return items.length > 0 ? items : FALLBACK_COMMUNITY;
   }, [showcaseQuery.data]);
 
-  const unlockCards = useMemo(() => {
-    const items = (marketplaceQuery.data?.items ?? []).slice(0, 4).map(resourceToUnlockCard);
-    return items.length > 0 ? items : FALLBACK_UNLOCKS;
-  }, [marketplaceQuery.data]);
+  const unlockCards = useMemo(
+    () => (marketplaceQuery.data?.items ?? []).slice(0, 4).map(resourceToUnlockCard),
+    [marketplaceQuery.data]
+  );
 
   const salesSummary = useMemo(
     () => getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
@@ -194,14 +173,7 @@ export function HomeDashboard() {
     'Creator';
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#03040d', paddingTop: topInset }}>
-      <LinearGradient
-        pointerEvents="none"
-        colors={['rgba(37,99,235,0.16)', 'rgba(217,70,239,0.08)', 'rgba(3,4,13,0)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 340 }}
-      />
+    <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background, paddingTop: topInset }}>
       <ScrollView
         bounces={false}
         contentInsetAdjustmentBehavior="never"
@@ -209,10 +181,10 @@ export function HomeDashboard() {
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: 'transparent' }}
         contentContainerStyle={{
-          paddingTop: 12,
+          paddingTop: 10,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: tabBarMetrics.contentBottomOverlapPadding,
-          gap: 16,
+          paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24,
+          gap: 24,
         }}
       >
         <HomeTopBar credits={credits ?? 0} onMenuPress={() => setMenuVisible(true)} />
@@ -220,24 +192,22 @@ export function HomeDashboard() {
         <WelcomePanel
           displayName={displayName}
           signedIn={Boolean(user)}
-          credits={credits ?? 0}
           activeGenerationCount={activeGenerationCount}
-          studioCount={rawGenerations.length}
-          earningsUsdCents={salesSummary.earningsUsdCents}
+          reduceMotion={reduceMotion}
         />
 
-        <View style={{ gap: 11 }}>
-          <SectionHeader title="Creator paths" actionLabel="Create" onPress={() => router.push('/(tabs)/creator' as never)} />
+        <View style={{ gap: 12 }}>
+          <SectionHeader title="Start with a format" actionLabel="All tools" onPress={() => router.push('/(tabs)/creator' as never)} />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: toolGap }}>
             {HOME_TOOL_SHORTCUTS.map((tool) => (
-              <ToolShortcutCard key={tool.id} tool={tool} width={toolCardWidth} />
+              <ToolShortcutCard key={tool.id} tool={tool} width={toolCardWidth} reduceMotion={reduceMotion} />
             ))}
           </View>
         </View>
 
         {hasRecentStudio ? (
-          <Panel>
-            <SectionHeader title="Recent Studio" actionLabel="View all" onPress={() => router.push('/(tabs)/profile' as never)} compact />
+          <View style={{ gap: 12 }}>
+            <SectionHeader title="Recent work" actionLabel="View all" onPress={() => router.push('/(tabs)/profile' as never)} compact />
             <FlashList
               data={generationCards}
               drawDistance={HOME_RAIL_DRAW_DISTANCE}
@@ -251,24 +221,64 @@ export function HomeDashboard() {
               showsHorizontalScrollIndicator={false}
               style={{ height: 160 }}
             />
-          </Panel>
+          </View>
+        ) : user && generationsQuery.isError ? (
+          <RailFeedback
+            title="Recent work is unavailable"
+            body="Your creations are safe. Check your connection and try again."
+            onRetry={() => void generationsQuery.refetch()}
+          />
         ) : null}
 
-        <View style={{ gap: 16 }}>
-          <PreviewRail
-            title="Showcase"
-            actionLabel="Browse"
-            onPress={() => router.push('/(tabs)/showcase' as never)}
-            items={communityCards}
-            width={previewCardWidth}
-          />
-          <UnlockRail
-            title="Unlocks"
-            actionLabel="Open"
-            onPress={() => router.push(HOME_UNLOCKS_FEED_HREF as never)}
-            items={unlockCards}
-            width={previewCardWidth}
-          />
+        <View style={{ gap: 24 }}>
+          {showcaseQuery.isLoading && communityCards.length === 0 ? (
+            <RailLoading title="Loading showcase" />
+          ) : showcaseQuery.isError && communityCards.length === 0 ? (
+            <RailFeedback
+              title="Showcase is unavailable"
+              body="We could not load community work right now."
+              onRetry={() => void showcaseQuery.refetch()}
+            />
+          ) : communityCards.length === 0 ? (
+            <RailEmpty
+              title="No showcase posts yet"
+              body="New community work will appear here when it is published."
+              actionLabel="Open showcase"
+              onPress={() => router.push('/(tabs)/showcase' as never)}
+            />
+          ) : (
+            <PreviewRail
+              title="Showcase"
+              actionLabel="Browse"
+              onPress={() => router.push('/(tabs)/showcase' as never)}
+              items={communityCards}
+              width={previewCardWidth}
+            />
+          )}
+          {marketplaceQuery.isLoading && unlockCards.length === 0 ? (
+            <RailLoading title="Loading unlocks" />
+          ) : marketplaceQuery.isError && unlockCards.length === 0 ? (
+            <RailFeedback
+              title="Unlocks are unavailable"
+              body="We could not load creator resources right now."
+              onRetry={() => void marketplaceQuery.refetch()}
+            />
+          ) : unlockCards.length === 0 ? (
+            <RailEmpty
+              title="No unlocks yet"
+              body="Reusable creator resources will appear here as they are published."
+              actionLabel="Browse resources"
+              onPress={() => router.push(HOME_UNLOCKS_FEED_HREF as never)}
+            />
+          ) : (
+            <UnlockRail
+              title="Unlocks"
+              actionLabel="Open"
+              onPress={() => router.push(HOME_UNLOCKS_FEED_HREF as never)}
+              items={unlockCards}
+              width={previewCardWidth}
+            />
+          )}
         </View>
       </ScrollView>
 
@@ -288,27 +298,29 @@ export function HomeDashboard() {
 
 function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: () => void }) {
   return (
-    <View style={{ minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+    <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Open menu"
         onPress={onMenuPress}
         style={({ pressed }) => ({
-          width: 38,
-          height: 38,
+          width: 48,
+          height: 48,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: 19,
-          backgroundColor: 'rgba(255,255,255,0.06)',
+          borderRadius: 24,
+          borderWidth: 1,
+          borderColor: DASHBOARD_COLORS.border,
+          backgroundColor: DASHBOARD_COLORS.surface,
           opacity: pressed ? 0.72 : 1,
         })}
       >
-        <Menu size={23} color="#ffffff" strokeWidth={2.2} />
+        <Menu size={22} color={DASHBOARD_COLORS.text} strokeWidth={2.2} />
       </Pressable>
 
-      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minWidth: 0 }}>
-        <Sparkles size={22} color="#c084fc" fill="rgba(192,132,252,0.2)" />
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 19, fontWeight: '900', letterSpacing: 0, flexShrink: 1 }}>
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minWidth: 0 }}>
+        <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: DASHBOARD_COLORS.coral }} />
+        <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.text, fontSize: 17, fontWeight: '800', letterSpacing: -0.2, flexShrink: 1 }}>
           Magicbooklet
         </Text>
       </View>
@@ -319,23 +331,23 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           accessibilityLabel="Open credits"
           onPress={() => router.push('/pricing' as never)}
           style={({ pressed }) => ({
-            minWidth: 72,
-            height: 38,
-            borderRadius: 19,
-            overflow: 'hidden',
+            minWidth: 68,
+            height: 48,
+            borderRadius: 24,
+            borderWidth: 1,
+            borderColor: DASHBOARD_COLORS.border,
+            backgroundColor: DASHBOARD_COLORS.surface,
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: 10,
             opacity: pressed ? 0.78 : 1,
           })}
         >
-          <LinearGradient
-            colors={['rgba(124,58,237,0.4)', 'rgba(22,24,36,0.92)']}
-            style={{ flex: 1, borderWidth: 1, borderColor: 'rgba(168,85,247,0.36)', borderRadius: 19, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.24)" />
-              <Text style={{ color: '#fff', fontSize: 14, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{credits}</Text>
-              <Plus size={14} color="#c084fc" strokeWidth={2.5} />
-            </View>
-          </LinearGradient>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
+            <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits}</Text>
+            <Plus size={14} color={DASHBOARD_COLORS.coral} strokeWidth={2.5} />
+          </View>
         </Pressable>
 
         <Pressable
@@ -343,16 +355,18 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           accessibilityLabel="Open notifications"
           onPress={() => router.push('/studio' as never)}
           style={({ pressed }) => ({
-            width: 38,
-            height: 38,
-            borderRadius: 19,
+            width: 48,
+            height: 48,
+            borderRadius: 24,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(255,255,255,0.06)',
+            borderWidth: 1,
+            borderColor: DASHBOARD_COLORS.border,
+            backgroundColor: DASHBOARD_COLORS.surface,
             opacity: pressed ? 0.72 : 1,
           })}
         >
-          <Bell size={21} color="#ffffff" strokeWidth={2.1} />
+          <Bell size={21} color={DASHBOARD_COLORS.text} strokeWidth={2.1} />
         </Pressable>
       </View>
     </View>
@@ -362,129 +376,71 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
 function WelcomePanel({
   displayName,
   signedIn,
-  credits,
   activeGenerationCount,
-  studioCount,
-  earningsUsdCents,
+  reduceMotion,
 }: {
   displayName: string;
   signedIn: boolean;
-  credits: number;
   activeGenerationCount: number;
-  studioCount: number;
-  earningsUsdCents: number;
+  reduceMotion: boolean;
 }) {
-  const title = signedIn ? `Welcome back, ${displayName}` : 'Welcome to Magicbooklet';
+  const title = signedIn ? `Ready when you are, ${displayName}` : 'Create something worth sharing';
   const body = signedIn
-    ? 'Pick up a render, launch a new path, or open your workspace.'
-    : 'Explore creator paths, then sign in when you are ready to save and publish.';
-  const studioValue = signedIn
-    ? studioCount > 0
-      ? formatCompactCount(studioCount)
-      : earningsUsdCents > 0
-        ? formatUsdCents(earningsUsdCents)
-        : 'Empty'
-    : 'Preview';
+    ? 'Choose a format and turn the next idea into a polished post.'
+    : 'Choose a format, make a first draft, then sign in to save it.';
 
   return (
-    <Panel padded={false}>
-      <LinearGradient
-        colors={['rgba(37,99,235,0.22)', 'rgba(217,70,239,0.16)', 'rgba(15,23,42,0.2)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ padding: 16, gap: 14 }}
-      >
-        <View style={{ gap: 5 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: '#fff', fontSize: 22, fontWeight: '900' }}>
+    <View
+      style={{
+        borderRadius: 24,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: DASHBOARD_COLORS.borderStrong,
+        backgroundColor: DASHBOARD_COLORS.surfaceRaised,
+        padding: 18,
+        gap: 16,
+      }}
+    >
+        <View style={{ gap: 7 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? '#34d399' : DASHBOARD_COLORS.coral }} />
+            <Text style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+              {activeGenerationCount > 0 ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress` : 'Creator workspace'}
+            </Text>
+          </View>
+          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: DASHBOARD_COLORS.text, fontSize: 25, lineHeight: 30, fontWeight: '800', letterSpacing: -0.5 }}>
             {title}
           </Text>
-          <Text style={{ color: 'rgba(255,255,255,0.68)', fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
+          <Text style={{ color: DASHBOARD_COLORS.muted, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
             {body}
           </Text>
         </View>
 
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <MetricTile label="Credits" value={formatCompactCount(credits)} accent="rgba(168,85,247,0.22)" />
-          <MetricTile label="Renders" value={activeGenerationCount > 0 ? `${activeGenerationCount} live` : 'Ready'} accent="rgba(56,189,248,0.16)" />
-          <MetricTile label="Studio" value={studioValue} accent="rgba(52,211,153,0.14)" />
-        </View>
-
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Create now"
-            onPress={() => router.push('/(tabs)/creator' as never)}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 48,
-              borderRadius: 17,
-              overflow: 'hidden',
-              opacity: pressed ? 0.82 : 1,
-              transform: [{ scale: pressed ? 0.985 : 1 }],
-            })}
-          >
-            <LinearGradient
-              colors={['#2563eb', '#d946ef']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 }}
-            >
-              <WandSparkles size={19} color="#ffffff" />
-              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>Create new</Text>
-            </LinearGradient>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open Studio"
-            onPress={() => router.push('/(tabs)/profile' as never)}
-            style={({ pressed }) => ({
-              minWidth: 104,
-              minHeight: 48,
-              borderRadius: 17,
-              borderCurve: 'continuous',
-              borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.13)',
-              backgroundColor: 'rgba(255,255,255,0.06)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              opacity: pressed ? 0.78 : 1,
-            })}
-          >
-            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>Studio</Text>
-          </Pressable>
-        </View>
-      </LinearGradient>
-    </Panel>
-  );
-}
-
-function MetricTile({ label, value, accent }: { label: string; value: string; accent: string }) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        minHeight: 58,
-        borderRadius: 15,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: accent,
-        paddingHorizontal: 10,
-        paddingVertical: 9,
-        justifyContent: 'space-between',
-      }}
-    >
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: 'rgba(255,255,255,0.62)', fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>
-        {label}
-      </Text>
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: '#fff', fontSize: 15, fontWeight: '900', fontVariant: ['tabular-nums'] }}>
-        {value}
-      </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Create new project"
+          accessibilityHint="Opens the creator tools"
+          onPress={() => router.push('/(tabs)/creator' as never)}
+          style={({ pressed }) => ({
+            minHeight: 52,
+            borderRadius: 18,
+            backgroundColor: DASHBOARD_COLORS.coral,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 9,
+            opacity: pressed ? 0.84 : 1,
+            transform: reduceMotion ? undefined : [{ scale: pressed ? 0.985 : 1 }],
+          })}
+        >
+          <WandSparkles size={19} color={appTheme.colors.onPrimary} strokeWidth={2.5} />
+          <Text style={{ color: appTheme.colors.onPrimary, fontSize: 15, fontWeight: '800' }}>Create new</Text>
+        </Pressable>
     </View>
   );
 }
 
-function ToolShortcutCard({ tool, width }: { tool: HomeToolShortcut; width: number }) {
+function ToolShortcutCard({ tool, width, reduceMotion }: { tool: HomeToolShortcut; width: number; reduceMotion: boolean }) {
   const Icon = tool.id === 'image' ? ImageIcon : tool.id === 'video' ? Play : tool.id === 'motion' ? Rocket : Sparkles;
   const colors = toolColors(tool.accent);
   const disabled = !tool.href;
@@ -501,51 +457,49 @@ function ToolShortcutCard({ tool, width }: { tool: HomeToolShortcut; width: numb
       }}
       style={({ pressed }) => ({
         width,
-        opacity: disabled ? 0.86 : pressed ? 0.82 : 1,
-        transform: [{ scale: pressed && !disabled ? 0.985 : 1 }],
+        opacity: disabled ? 0.58 : pressed ? 0.82 : 1,
+        transform: reduceMotion ? undefined : [{ scale: pressed && !disabled ? 0.99 : 1 }],
       })}
     >
-      <LinearGradient
-        colors={colors.background}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+      <View
         style={{
-          minHeight: tool.previewVariant ? 150 : 132,
+          minHeight: 158,
           borderRadius: 20,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: colors.border,
-          padding: tool.previewVariant ? 0 : 13,
+          borderColor: DASHBOARD_COLORS.border,
+          backgroundColor: DASHBOARD_COLORS.surface,
+          padding: tool.previewVariant ? 0 : 14,
           justifyContent: 'space-between',
           overflow: 'hidden',
         }}
       >
-        <View style={{ position: 'absolute', right: -18, bottom: -18, width: 92, height: 92, borderRadius: 46, backgroundColor: colors.glow }} />
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: colors.accent }} />
         {tool.previewVariant ? (
           <ToolPreview variant={tool.previewVariant} icon={<Icon size={18} color="#ffffff" fill={tool.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />} />
         ) : (
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-            <View style={{ width: 36, height: 36, borderRadius: 13, backgroundColor: colors.icon, alignItems: 'center', justifyContent: 'center' }}>
-              <Icon size={20} color="#ffffff" fill={tool.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />
+            <View style={{ width: 38, height: 38, borderRadius: 13, backgroundColor: colors.soft, alignItems: 'center', justifyContent: 'center' }}>
+              <Icon size={20} color={colors.accent} fill={tool.id === 'video' ? 'transparent' : colors.fill} />
             </View>
             {tool.badge ? (
-              <View style={{ borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.32)', paddingHorizontal: 8, paddingVertical: 4 }}>
-                <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>{tool.badge}</Text>
+              <View style={{ borderRadius: 999, borderWidth: 1, borderColor: DASHBOARD_COLORS.border, backgroundColor: DASHBOARD_COLORS.surfaceRaised, paddingHorizontal: 8, paddingVertical: 5 }}>
+                <Text style={{ color: DASHBOARD_COLORS.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>{tool.badge}</Text>
               </View>
             ) : (
-              <ChevronRight size={20} color="rgba(255,255,255,0.86)" />
+              <ChevronRight size={20} color={DASHBOARD_COLORS.muted} />
             )}
           </View>
         )}
         <View style={{ gap: 5, paddingHorizontal: tool.previewVariant ? 12 : 0, paddingBottom: tool.previewVariant ? 11 : 0, paddingTop: tool.previewVariant ? 10 : 0 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: tool.previewVariant ? 16 : 17, fontWeight: '900' }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: tool.previewVariant ? 16 : 17, fontWeight: '800' }}>
             {tool.title}
           </Text>
-          <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
+          <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
             {tool.body}
           </Text>
         </View>
-      </LinearGradient>
+      </View>
     </Pressable>
   );
 }
@@ -558,7 +512,7 @@ function ToolPreview({
   icon: ReactNode;
 }) {
   return (
-    <View style={{ height: 58, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+    <View style={{ height: 82, overflow: 'hidden', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
       <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
       <LinearGradient
         colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.48)']}
@@ -567,9 +521,6 @@ function ToolPreview({
       <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' }}>
         {icon}
       </View>
-      <View style={{ position: 'absolute', right: 9, bottom: 8, width: 29, height: 29, borderRadius: 15, backgroundColor: 'rgba(0,0,0,0.42)', alignItems: 'center', justifyContent: 'center' }}>
-        <ChevronRight size={17} color="#ffffff" />
-      </View>
     </View>
   );
 }
@@ -577,17 +528,11 @@ function ToolPreview({
 function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: number }) {
   const Icon = item.kind === 'image' ? ImageIcon : item.kind === 'video' ? Play : item.kind === 'text' ? FileText : Rocket;
   const isText = item.kind === 'text';
-  const isFallbackPreview = item.sourceId.startsWith('preview-');
-
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={item.title}
       onPress={() => {
-        if (isFallbackPreview) {
-          router.push('/(tabs)/creator' as never);
-          return;
-        }
         router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
       }}
       style={({ pressed }) => ({
@@ -598,9 +543,8 @@ function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: 
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.11)',
-        backgroundColor: '#090914',
+        backgroundColor: DASHBOARD_COLORS.surface,
         opacity: pressed ? 0.86 : 1,
-        transform: [{ scale: pressed ? 0.985 : 1 }],
       })}
     >
       {isText ? (
@@ -616,20 +560,85 @@ function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: 
           style={{ position: 'absolute', inset: 0 }}
         />
       ) : (
-        <FantasyPortalArt variant={item.artVariant} muted />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
+          <Icon size={28} color={toolColors(item.kind === 'text' ? 'workflow' : item.kind).accent} strokeWidth={1.8} />
+        </View>
       )}
       <LinearGradient colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.82)']} style={{ position: 'absolute', inset: 0 }} />
       <View style={{ position: 'absolute', left: 10, top: 10, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.38)', padding: 7 }}>
         <Icon size={18} color="#ffffff" />
       </View>
       <View style={{ position: 'absolute', left: 12, right: 12, bottom: 11, gap: 5 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>{item.title}</Text>
+        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 15, fontWeight: '800' }}>{item.title}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, fontWeight: '700' }}>{item.label} • {item.timeLabel}</Text>
           <MoreHorizontal size={19} color="#ffffff" />
         </View>
       </View>
     </Pressable>
+  );
+}
+
+function RailLoading({ title }: { title: string }) {
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      <AppText heading variant="cardTitle">{title}</AppText>
+      <View
+        accessible
+        accessibilityLabel={title}
+        accessibilityLiveRegion="polite"
+        style={{
+          minHeight: 96,
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'row',
+          gap: appTheme.spacing.gap,
+          borderRadius: appTheme.radii.lg,
+          borderWidth: 1,
+          borderColor: appTheme.colors.borderSubtle,
+          backgroundColor: appTheme.colors.panel,
+        }}
+      >
+        <ActivityIndicator color={appTheme.colors.primary} />
+        <AppText variant="bodySm" color="muted">Fetching the latest items…</AppText>
+      </View>
+    </View>
+  );
+}
+
+function RailFeedback({
+  title,
+  body,
+  onRetry,
+}: {
+  title: string;
+  body: string;
+  onRetry: () => void;
+}) {
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      <StatusBlock tone="danger" title={title} body={body} />
+      <SecondaryButton label="Try again" onPress={onRetry} />
+    </View>
+  );
+}
+
+function RailEmpty({
+  title,
+  body,
+  actionLabel,
+  onPress,
+}: {
+  title: string;
+  body: string;
+  actionLabel: string;
+  onPress: () => void;
+}) {
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      <StatusBlock title={title} body={body} />
+      <SecondaryButton label={actionLabel} onPress={onPress} />
+    </View>
   );
 }
 
@@ -647,7 +656,7 @@ function PreviewRail({
   width: number;
 }) {
   return (
-    <Panel>
+    <View style={{ gap: 12 }}>
       <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
       <FlashList
         data={items}
@@ -666,7 +675,7 @@ function PreviewRail({
         snapToInterval={width + 10}
         style={{ height: 204 }}
       />
-    </Panel>
+    </View>
   );
 }
 
@@ -678,10 +687,6 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
       accessibilityRole="button"
       accessibilityLabel={item.title}
       onPress={() => {
-        if (isFallbackPreview) {
-          router.push('/(tabs)/showcase' as never);
-          return;
-        }
         router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
       }}
       style={({ pressed }) => ({
@@ -691,8 +696,8 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.11)',
-        backgroundColor: '#080916',
+        borderColor: DASHBOARD_COLORS.border,
+        backgroundColor: DASHBOARD_COLORS.surface,
         opacity: pressed ? 0.86 : 1,
       })}
     >
@@ -710,7 +715,9 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <FantasyPortalArt variant={item.artVariant} muted />
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
+            <ImageIcon size={28} color={appTheme.colors.image} strokeWidth={1.8} />
+          </View>
         )}
         <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.5)']} style={{ position: 'absolute', inset: 0 }} />
         <View
@@ -725,13 +732,13 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
             paddingVertical: 5,
           }}
         >
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, fontWeight: '900' }}>{item.accessLabel}</Text>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{item.accessLabel}</Text>
         </View>
       </View>
       <View style={{ flex: 1, paddingHorizontal: 10, paddingTop: 9, paddingBottom: 9, justifyContent: 'space-between', gap: 5 }}>
         <View style={{ gap: 4 }}>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 14, lineHeight: 17, fontWeight: '900' }}>{item.title}</Text>
-          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 14, fontWeight: '700' }}>{item.creatorHandle}</Text>
+          <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.text, fontSize: 14, lineHeight: 17, fontWeight: '800' }}>{item.title}</Text>
+          <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 14, fontWeight: '700' }}>{item.creatorHandle}</Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <MiniStat icon={<Heart size={13} color="#ffffff" />} label={item.saveLabel} />
@@ -756,7 +763,7 @@ function UnlockRail({
   width: number;
 }) {
   return (
-    <Panel>
+    <View style={{ gap: 12 }}>
       <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
       <FlashList
         data={items}
@@ -775,7 +782,7 @@ function UnlockRail({
         snapToInterval={width + 10}
         style={{ height: 146 }}
       />
-    </Panel>
+    </View>
   );
 }
 
@@ -785,10 +792,6 @@ function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number })
       accessibilityRole="button"
       accessibilityLabel={item.title}
       onPress={() => {
-        if (item.isPreview) {
-          router.push(HOME_UNLOCKS_FEED_HREF as never);
-          return;
-        }
         const postQuery = item.postId ? `?postId=${encodeURIComponent(item.postId)}` : '';
         router.push(`/marketplace/${encodeURIComponent(item.id)}${postQuery}` as never);
       }}
@@ -798,8 +801,8 @@ function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number })
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.11)',
-        backgroundColor: '#0d0e16',
+        borderColor: DASHBOARD_COLORS.border,
+        backgroundColor: DASHBOARD_COLORS.surface,
         overflow: 'hidden',
         opacity: pressed ? 0.86 : 1,
       })}
@@ -807,19 +810,19 @@ function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number })
       {item.mediaUrl ? (
         <FeedMediaFrame kind="image" url={item.mediaUrl} recyclingKey={`home-unlock:${item.id}`} radius={18} style={{ position: 'absolute', inset: 0 }} />
       ) : (
-        <LinearGradient colors={['rgba(16,185,129,0.22)', 'rgba(124,58,237,0.12)', 'rgba(8,9,18,1)']} style={{ position: 'absolute', inset: 0 }} />
+        <View style={{ position: 'absolute', inset: 0, backgroundColor: DASHBOARD_COLORS.surfaceRaised }} />
       )}
-      <LinearGradient colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.86)']} style={{ position: 'absolute', inset: 0 }} />
+      {item.mediaUrl ? <LinearGradient colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.86)']} style={{ position: 'absolute', inset: 0 }} /> : null}
       <View style={{ minHeight: 144, padding: 12, justifyContent: 'space-between', gap: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <View style={{ borderRadius: 999, backgroundColor: 'rgba(16,185,129,0.2)', borderWidth: 1, borderColor: 'rgba(52,211,153,0.32)', paddingHorizontal: 8, paddingVertical: 5 }}>
-            <Text numberOfLines={1} style={{ color: '#bbf7d0', fontSize: 11, fontWeight: '900' }}>{item.accessLabel}</Text>
+          <View style={{ borderRadius: 999, backgroundColor: DASHBOARD_COLORS.coralSoft, borderWidth: 1, borderColor: appTheme.colors.primaryStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
+            <Text numberOfLines={1} style={{ color: appTheme.colors.primaryStrong, fontSize: 11, fontWeight: '800' }}>{item.accessLabel}</Text>
           </View>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '900' }}>{item.priceLabel}</Text>
+          <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.text, fontSize: 12, fontWeight: '800' }}>{item.priceLabel}</Text>
         </View>
         <View style={{ gap: 6 }}>
-          <Text numberOfLines={2} style={{ color: '#fff', fontSize: 15, lineHeight: 18, fontWeight: '900' }}>{item.title}</Text>
-          <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.66)', fontSize: 12, lineHeight: 17, fontWeight: '600' }}>{item.body}</Text>
+          <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.text, fontSize: 15, lineHeight: 18, fontWeight: '800' }}>{item.title}</Text>
+          <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>{item.body}</Text>
         </View>
       </View>
     </Pressable>
@@ -839,7 +842,7 @@ function SectionHeader({
 }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.84} style={{ color: appTheme.colors.text, flex: 1, fontSize: compact ? 16 : 18, fontWeight: '900' }}>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.84} style={{ color: appTheme.colors.text, flex: 1, fontSize: compact ? 16 : 18, fontWeight: '800' }}>
         {title}
       </Text>
       <Pressable
@@ -848,7 +851,7 @@ function SectionHeader({
         hitSlop={10}
         onPress={onPress}
         style={({ pressed }) => ({
-          minHeight: 30,
+          minHeight: 48,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'center',
@@ -856,28 +859,9 @@ function SectionHeader({
           opacity: pressed ? 0.7 : 1,
         })}
       >
-        <Text numberOfLines={1} style={{ color: '#c084fc', fontSize: compact ? 12 : 13, fontWeight: '900' }}>{actionLabel}</Text>
-        <ChevronRight size={compact ? 15 : 16} color="#c084fc" />
+        <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.coral, fontSize: compact ? 12 : 13, fontWeight: '800' }}>{actionLabel}</Text>
+        <ChevronRight size={compact ? 15 : 16} color={DASHBOARD_COLORS.coral} />
       </Pressable>
-    </View>
-  );
-}
-
-function Panel({ children, padded = true }: { children: ReactNode; padded?: boolean }) {
-  return (
-    <View
-      style={{
-        borderRadius: 24,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: 'rgba(15,16,24,0.72)',
-        overflow: 'hidden',
-        padding: padded ? 12 : 0,
-        gap: padded ? 11 : 0,
-      }}
-    >
-      {children}
     </View>
   );
 }
@@ -894,33 +878,29 @@ function MiniStat({ icon, label }: { icon: ReactNode; label: string }) {
 function toolColors(accent: HomeToolShortcut['accent']) {
   if (accent === 'image') {
     return {
-      background: ['#123a8f', '#07152e'] as const,
-      icon: 'rgba(96,165,250,0.32)',
-      border: 'rgba(96,165,250,0.42)',
-      glow: 'rgba(37,99,235,0.28)',
+      accent: appTheme.colors.image,
+      soft: 'rgba(56,189,248,0.13)',
+      fill: 'rgba(56,189,248,0.16)',
     };
   }
   if (accent === 'video') {
     return {
-      background: ['#9f234c', '#2b0b19'] as const,
-      icon: 'rgba(251,113,133,0.34)',
-      border: 'rgba(251,113,133,0.42)',
-      glow: 'rgba(244,63,94,0.26)',
+      accent: appTheme.colors.video,
+      soft: 'rgba(251,113,133,0.13)',
+      fill: 'rgba(251,113,133,0.16)',
     };
   }
   if (accent === 'motion') {
     return {
-      background: ['#5b21b6', '#17072f'] as const,
-      icon: 'rgba(192,132,252,0.34)',
-      border: 'rgba(192,132,252,0.42)',
-      glow: 'rgba(124,58,237,0.3)',
+      accent: appTheme.colors.motion,
+      soft: 'rgba(167,139,250,0.13)',
+      fill: 'rgba(167,139,250,0.16)',
     };
   }
   return {
-    background: ['#08725f', '#06231f'] as const,
-    icon: 'rgba(52,211,153,0.3)',
-    border: 'rgba(52,211,153,0.42)',
-    glow: 'rgba(16,185,129,0.26)',
+    accent: appTheme.colors.workflow,
+    soft: 'rgba(52,211,153,0.13)',
+    fill: 'rgba(52,211,153,0.16)',
   };
 }
 
@@ -934,6 +914,5 @@ function resourceToUnlockCard(item: MarketplaceResource): UnlockCard {
     priceLabel: item.accessMode === 'free' ? 'Free' : item.priceQuote?.formatted ?? formatUsdCents(item.priceUsdCents ?? 0),
     accessLabel,
     mediaUrl: item.mediaUrl ?? item.post?.mediaUrl ?? null,
-    isPreview: false,
   };
 }

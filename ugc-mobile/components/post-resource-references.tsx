@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { appTheme } from '@/lib/theme';
 import type { PostResourceItem } from '@/lib/types';
 
 type PostResourceReferencesProps = {
@@ -85,7 +86,7 @@ export function PostResourceReferences({
 
   return (
     <View style={{ gap: 10 }}>
-      <Text selectable style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
+      <Text selectable style={{ color: appTheme.colors.text, fontSize: 16, fontWeight: '700' }}>
         References
       </Text>
       <ScrollView
@@ -114,12 +115,12 @@ export function PostResourceReferences({
                 borderRadius: 16,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.1)',
-                backgroundColor: pressed ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.28)',
+                borderColor: appTheme.colors.border,
+                backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.panel,
                 overflow: 'hidden',
               })}
             >
-              <View style={{ height: 166, backgroundColor: '#08080b', alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ height: 166, backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
                 {isImage && signedUrl && !previewFailed ? (
                   <FeedMediaFrame
                     kind="image"
@@ -133,26 +134,26 @@ export function PostResourceReferences({
                     url={signedUrl}
                   />
                 ) : isLoading ? (
-                  <ActivityIndicator color="#67ff45" />
+                  <ActivityIndicator color={appTheme.colors.primary} />
                 ) : isImage ? (
-                  <ImageIcon size={28} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+                  <ImageIcon size={28} color={appTheme.colors.faint} strokeWidth={2} />
                 ) : (
-                  <FileText size={28} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+                  <FileText size={28} color={appTheme.colors.faint} strokeWidth={2} />
                 )}
               </View>
               <View style={{ padding: 10, gap: 4 }}>
-                <Text selectable numberOfLines={2} style={{ color: '#fff', fontSize: 13, lineHeight: 17, fontWeight: '800' }}>
+                <Text selectable numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 13, lineHeight: 17, fontWeight: '700' }}>
                   {item.title}
                 </Text>
                 {item.description ? (
-                  <Text selectable numberOfLines={2} style={{ color: 'rgba(255,255,255,0.58)', fontSize: 11, lineHeight: 15 }}>
+                  <Text selectable numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>
                     {item.description}
                   </Text>
                 ) : null}
                 {!isImage && isOpenable ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <ExternalLink size={12} color="#67ff45" strokeWidth={2.4} />
-                    <Text style={{ color: '#67ff45', fontSize: 11, fontWeight: '800' }}>Open media</Text>
+                    <ExternalLink size={12} color={appTheme.colors.primary} strokeWidth={2.4} />
+                    <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '700' }}>Open media</Text>
                   </View>
                 ) : null}
               </View>

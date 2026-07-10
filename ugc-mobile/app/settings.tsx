@@ -1,8 +1,8 @@
 import { router } from 'expo-router';
-import { Bell, CreditCard, UserRound } from 'lucide-react-native';
-import { Text, View } from 'react-native';
+import { Bell, ChevronRight, CreditCard, UserRound } from 'lucide-react-native';
+import { Pressable, View } from 'react-native';
 
-import { Card, Screen, SecondaryButton, SectionTitle } from '@/components/ui';
+import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { appTheme } from '@/lib/theme';
 
@@ -14,14 +14,13 @@ export default function SettingsScreen() {
       <SectionTitle
         eyebrow="Settings"
         title="Account settings."
-        body={user ? 'Manage profile details, credits, and app preferences.' : 'Sign in to manage your Magic Booklet account.'}
+        body={user ? 'Manage profile details, credits, and app preferences.' : 'Sign in to manage your Magicbooklet account.'}
       />
 
       <SettingsCard
-        icon={<UserRound size={22} color="#d946ef" />}
+        icon={<UserRound size={22} color={appTheme.colors.primary} />}
         title="Profile"
         body={user?.email ?? 'Sign in to connect your creator profile.'}
-        actionLabel={user ? 'Open profile' : 'Sign in'}
         onPress={() => router.push(user ? '/profile' as never : '/auth' as never)}
       />
 
@@ -29,7 +28,6 @@ export default function SettingsScreen() {
         icon={<CreditCard size={22} color="#fbbf24" />}
         title="Credits"
         body={`${credits ?? 0} credits available on this account.`}
-        actionLabel="View credits"
         onPress={() => router.push('/pricing' as never)}
       />
 
@@ -37,7 +35,6 @@ export default function SettingsScreen() {
         icon={<Bell size={22} color="#22d3ee" />}
         title="Notifications"
         body="Review mobile notification history and creator updates."
-        actionLabel="Open notifications"
         onPress={() => router.push('/studio' as never)}
       />
     </Screen>
@@ -48,27 +45,30 @@ function SettingsCard({
   icon,
   title,
   body,
-  actionLabel,
   onPress,
 }: {
   icon: React.ReactNode;
   title: string;
   body: string;
-  actionLabel: string;
   onPress: () => void;
 }) {
   return (
-    <Card>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center' }}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title}. ${body}`}
+      onPress={onPress}
+      style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <Card style={{ minHeight: 92, flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
           {icon}
         </View>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Text style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '900' }}>{title}</Text>
-          <Text style={{ color: appTheme.colors.muted, lineHeight: 21 }}>{body}</Text>
+        <View style={{ flex: 1, gap: 3 }}>
+          <AppText variant="cardTitle">{title}</AppText>
+          <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
-      </View>
-      <SecondaryButton label={actionLabel} onPress={onPress} />
-    </Card>
+        <ChevronRight size={20} color={appTheme.colors.faint} />
+      </Card>
+    </Pressable>
   );
 }

@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronRight, FileText, Heart, Lock, Play, RefreshCw, Repeat2, X } from 'lucide-react-native';
+import { ChevronRight, FileText, Heart, ImageIcon, Lock, Play, RefreshCw, Repeat2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -16,7 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
-import { StatusBlock } from '@/components/ui';
+import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
@@ -268,10 +268,10 @@ export default function ShowcaseScreen() {
             <View style={{ gap: 16 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <View style={{ gap: 4, flex: 1 }}>
-                  <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.display, fontWeight: '900' }}>
+                  <Text accessibilityRole="header" selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
                     Feed
                   </Text>
-                  <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm, fontWeight: '700' }}>
+                  <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
                     {activeToolLabel ? `Creations made with ${activeToolLabel}.` : activeFilter.body}
                   </Text>
                 </View>
@@ -299,7 +299,7 @@ export default function ShowcaseScreen() {
                     accessibilityLabel={`Clear ${activeToolLabel} tool filter`}
                     onPress={clearToolFilter}
                     style={({ pressed }) => ({
-                      minHeight: 36,
+                      minHeight: appTheme.touch.compact,
                       flexDirection: 'row',
                       alignItems: 'center',
                       gap: 6,
@@ -319,11 +319,14 @@ export default function ShowcaseScreen() {
               </View>
             </View>
             {showcaseQuery.error ? (
-              <StatusBlock
-                tone="danger"
-                title="Could not load showcase"
-                body={showcaseQuery.error instanceof Error ? showcaseQuery.error.message : 'Try again.'}
-              />
+              <View style={{ gap: appTheme.spacing.gap }}>
+                <StatusBlock
+                  tone="danger"
+                  title="Could not load feed"
+                  body="Check your connection, then try again."
+                />
+                <SecondaryButton label="Retry feed" onPress={handleRefresh} />
+              </View>
             ) : null}
             {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
           </View>
@@ -391,8 +394,8 @@ function IconButton({
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
-        width: 40,
-        height: 40,
+        width: appTheme.touch.compact,
+        height: appTheme.touch.compact,
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
@@ -422,12 +425,12 @@ function FeedFilterChip({
       accessibilityState={{ selected: active }}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 36,
+        minHeight: appTheme.touch.compact,
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
-        borderColor: active ? `${appTheme.colors.image}8c` : appTheme.colors.border,
-        backgroundColor: active ? `${appTheme.colors.image}24` : appTheme.colors.panelSoft,
+        borderColor: active ? appTheme.colors.primary : appTheme.colors.border,
+        backgroundColor: active ? appTheme.colors.selected : appTheme.colors.panelSoft,
         opacity: pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: appTheme.spacing.gap,
       })}
@@ -495,7 +498,7 @@ function SkeletonPin({ height, layout }: { height: number; layout: ShowcaseGridL
 function BottomLoader() {
   return (
     <View style={{ minHeight: 52, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator color="#d946ef" />
+      <ActivityIndicator color={appTheme.colors.primary} />
     </View>
   );
 }
@@ -549,7 +552,6 @@ function MasonryPin({
         backgroundColor: appTheme.colors.panel,
         overflow: 'hidden',
         opacity: pressed ? 0.94 : 1,
-        transform: [{ scale: pressed ? 0.99 : 1 }],
       })}
     >
       <View
@@ -604,7 +606,7 @@ function MasonryPin({
                   paddingBottom: appTheme.spacing.gap,
                 }}
               >
-                <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>
+                <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
                   {card.title}
                 </Text>
               </LinearGradient>
@@ -690,7 +692,7 @@ function PinBadge({ label, accent }: { label: string; accent: string }) {
         paddingVertical: 5,
       }}
     >
-      <Text numberOfLines={1} style={{ color: '#ffffff', ...appTheme.type.caption, lineHeight: 12, fontWeight: '900' }}>
+      <Text numberOfLines={1} style={{ color: '#ffffff', ...appTheme.type.caption, lineHeight: 12, fontWeight: '800' }}>
         {label}
       </Text>
     </View>
@@ -705,7 +707,7 @@ function UnlockSummary({ unlock }: { unlock: ShowcaseMasonryCard['unlock'] }) {
     <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
         <Lock size={12} color={accent} strokeWidth={2.6} />
-        <Text numberOfLines={1} style={{ color: accent, flex: 1, ...appTheme.type.caption, fontWeight: '900' }}>
+        <Text numberOfLines={1} style={{ color: accent, flex: 1, ...appTheme.type.caption, fontWeight: '800' }}>
           {unlock.ctaLabel}
         </Text>
       </View>
@@ -730,22 +732,20 @@ function TextPinPreview({
   title: string;
 }) {
   return (
-    <LinearGradient
-      colors={['#231126', '#14101c', '#090914']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
+    <View
       style={{
         height,
         borderTopLeftRadius: 21,
         borderTopRightRadius: 21,
         borderCurve: 'continuous',
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.08)',
+        borderBottomColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.panelSoft,
         overflow: 'hidden',
         padding: 13,
       }}
     >
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}12` }} />
+      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
       <View style={{ flex: 1, justifyContent: 'space-between', gap: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           <View
@@ -762,12 +762,12 @@ function TextPinPreview({
           >
             <FileText size={14} color={accent} strokeWidth={2.4} />
           </View>
-          <Text numberOfLines={1} style={{ color: accent, flex: 1, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', fontWeight: '900' }}>
+          <Text numberOfLines={1} style={{ color: accent, flex: 1, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', fontWeight: '800' }}>
             {badge}
           </Text>
         </View>
         <View style={{ gap: 7 }}>
-          <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 15, lineHeight: 18, fontWeight: '900' }}>
+          <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 15, lineHeight: 18, fontWeight: '800' }}>
             {title}
           </Text>
           <Text numberOfLines={5} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 17, fontWeight: '700' }}>
@@ -775,7 +775,7 @@ function TextPinPreview({
           </Text>
         </View>
       </View>
-    </LinearGradient>
+    </View>
   );
 }
 
@@ -826,42 +826,23 @@ function VideoCornerPlay() {
 
 function VisualFallbackPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
   return (
-    <LinearGradient
-      colors={['#06111a', '#090914', '#17071b']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
+    <View
       style={{
         height,
         borderRadius: radius,
         borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.surfaceInset,
         overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
     >
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}14` }} />
-      <View
-        style={{
-          position: 'absolute',
-          width: 150,
-          height: 150,
-          right: -54,
-          top: -42,
-          borderRadius: 75,
-          backgroundColor: `${accent}1f`,
-        }}
-      />
-      <View
-        style={{
-          position: 'absolute',
-          left: 18,
-          top: 24,
-          width: 82,
-          height: 82,
-          borderRadius: 41,
-          borderWidth: 1,
-          borderColor: `${accent}44`,
-        }}
-      />
-    </LinearGradient>
+      <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accent}1f`, borderWidth: 1, borderColor: `${accent}55` }}>
+        <ImageIcon size={22} color={accent} strokeWidth={2} />
+      </View>
+    </View>
   );
 }
 

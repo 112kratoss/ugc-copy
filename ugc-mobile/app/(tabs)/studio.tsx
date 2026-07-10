@@ -15,7 +15,7 @@ import {
 import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppText, Card, IconButton, PrimaryButton, StatusBlock } from '@/components/ui';
+import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -114,6 +114,10 @@ export default function StudioScreen() {
   const notifications = notificationsQuery.data?.notifications ?? [];
   const unreadCount = notificationsQuery.data?.unreadCount
     ?? notifications.filter((notification) => !notification.isRead).length;
+  const actionError = markReadMutation.error
+    ?? markAllReadMutation.error
+    ?? updatePreferenceMutation.error
+    ?? enablePushMutation.error;
 
   const handlePressNotification = (notification: MobileNotification) => {
     if (!notification.isRead) {
@@ -156,7 +160,7 @@ export default function StudioScreen() {
               title="Sign in required"
               body="Sign in to review generation results, unlocks, follows, saves, remixes, and creator activity."
             />
-            <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="motion" />
+            <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
             <NotificationCategoryList />
           </>
         ) : (
@@ -170,13 +174,26 @@ export default function StudioScreen() {
               onEnable={() => enablePushMutation.mutate()}
               onTogglePush={(value) => updatePreferenceMutation.mutate({ pushEnabled: value })}
             />
+            {devicePushQuery.isError ? (
+              <View style={{ gap: appTheme.spacing.gap }}>
+                <StatusBlock tone="danger" title="Could not check push alerts" body="In-app history still works. Check your connection, then retry push setup." />
+                <SecondaryButton label="Retry push setup" onPress={() => void devicePushQuery.refetch()} />
+              </View>
+            ) : null}
+            {actionError ? (
+              <StatusBlock
+                tone="danger"
+                title="That notification change did not save"
+                body={actionError instanceof Error ? actionError.message : 'Try again.'}
+              />
+            ) : null}
             {notificationsQuery.isLoading ? (
               <LoadingState />
             ) : notificationsQuery.isError ? (
-              <StatusBlock
-                title="Could not load notifications"
-                body="Pull refresh or try again in a moment."
-              />
+              <View style={{ gap: appTheme.spacing.gap }}>
+                <StatusBlock tone="danger" title="Could not load notifications" body="Check your connection, then try again." />
+                <SecondaryButton label="Retry notifications" onPress={() => void notificationsQuery.refetch()} />
+              </View>
             ) : notifications.length > 0 ? (
               <NotificationList
                 notifications={notifications}
@@ -185,11 +202,18 @@ export default function StudioScreen() {
             ) : (
               <CaughtUpState />
             )}
-            <NotificationPreferences
-              preferences={preferencesQuery.data?.preferences ?? null}
-              disabled={preferencesQuery.isLoading || updatePreferenceMutation.isPending}
-              onToggle={(key, value) => updatePreferenceMutation.mutate({ [key]: value })}
-            />
+            {preferencesQuery.isError ? (
+              <View style={{ gap: appTheme.spacing.gap }}>
+                <StatusBlock tone="danger" title="Could not load alert preferences" body="Your current preferences have not been changed." />
+                <SecondaryButton label="Retry preferences" onPress={() => void preferencesQuery.refetch()} />
+              </View>
+            ) : (
+              <NotificationPreferences
+                preferences={preferencesQuery.data?.preferences ?? null}
+                disabled={preferencesQuery.isLoading || updatePreferenceMutation.isPending}
+                onToggle={(key, value) => updatePreferenceMutation.mutate({ [key]: value })}
+              />
+            )}
           </>
         )}
       </ScrollView>
@@ -223,7 +247,7 @@ function NotificationHeader({
         <AppText
           numberOfLines={1}
           variant="pageTitle"
-          style={{ fontSize: 34, lineHeight: 38 }}
+          accessibilityRole="header"
         >
           Notifications
         </AppText>
@@ -248,7 +272,7 @@ function NotificationHeader({
 function LoadingState() {
   return (
     <Card variant="soft" style={{ minHeight: 144, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator color="#c084fc" />
+      <ActivityIndicator color={appTheme.colors.primary} />
       <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>Loading alerts</AppText>
     </Card>
   );
@@ -308,7 +332,7 @@ function NotificationPreferences({
   return (
     <Card accent="workflow" variant="soft" padding="sm" style={{ gap: 12 }}>
       <View style={{ gap: 4 }}>
-        <AppText variant="body" style={{ fontWeight: '900' }}>Alert types</AppText>
+        <AppText variant="body" style={{ fontWeight: '700' }}>Alert types</AppText>
         <AppText variant="caption" color="muted">Choose which updates can become push alerts.</AppText>
       </View>
       <View
@@ -346,7 +370,7 @@ function NotificationPreferences({
               })}
             >
               <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                <AppText variant="body" style={{ fontWeight: '900' }}>{row.title}</AppText>
+                <AppText variant="body" style={{ fontWeight: '700' }}>{row.title}</AppText>
                 <AppText variant="caption" color="muted">{row.body}</AppText>
               </View>
               <Icon size={32} color={enabled ? '#6ee7b7' : appTheme.colors.faint} strokeWidth={2.2} />
@@ -381,7 +405,7 @@ function PushControlCard({
   let body = 'Syncing your push preference.';
   let actionLabel = 'Enable';
   let action: (() => void) | undefined;
-  let actionAccent: 'motion' | 'image' = 'motion';
+  let actionAccent: 'primary' | 'image' = 'primary';
   let showToggle = result?.status === 'registered' || result?.status === 'not-mobile';
 
   if (preferencesReady) {
@@ -411,22 +435,18 @@ function PushControlCard({
     actionAccent = 'image';
     showToggle = false;
   } else if (result?.status === 'missing-firebase-setup') {
-    title = 'Android push setup is incomplete';
-    body = 'Inbox history works, but Android delivery still needs Firebase credentials.';
-    actionLabel = 'Retry';
-    action = onEnable;
-    actionAccent = 'image';
-    showToggle = false;
+      title = 'Push delivery is unavailable in this build';
+      body = 'Your in-app history still works. Push alerts will become available after the app is updated.';
+      actionAccent = 'image';
+      showToggle = false;
   } else if (result?.status === 'missing-project-id') {
-    title = 'Push project setup is incomplete';
-    body = 'The app is missing its Expo project identifier.';
-    actionLabel = 'Retry';
-    action = onEnable;
-    actionAccent = 'image';
-    showToggle = false;
+      title = 'Push delivery is unavailable in this build';
+      body = 'Your in-app history still works. Push alerts will become available after the app is updated.';
+      actionAccent = 'image';
+      showToggle = false;
   }
 
-  const iconColor = actionAccent === 'image' ? appTheme.colors.image : appTheme.colors.motion;
+  const iconColor = actionAccent === 'image' ? appTheme.colors.image : appTheme.colors.primary;
 
   return (
     <Card
@@ -443,7 +463,7 @@ function PushControlCard({
         <BellRing size={20} color={iconColor} strokeWidth={2.4} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-        <AppText variant="body" style={{ fontWeight: '900' }}>{title}</AppText>
+        <AppText variant="body" style={{ fontWeight: '700' }}>{title}</AppText>
         <AppText variant="caption" color="muted">{body}</AppText>
       </View>
       {showToggle ? (
@@ -454,6 +474,10 @@ function PushControlCard({
           disabled={preferencesDisabled || !preferences}
           onPress={() => onTogglePush(!pushEnabled)}
           style={({ pressed }) => ({
+            minWidth: appTheme.touch.compact,
+            minHeight: appTheme.touch.compact,
+            alignItems: 'center',
+            justifyContent: 'center',
             opacity: preferencesDisabled || !preferences ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
           })}
         >
@@ -463,14 +487,14 @@ function PushControlCard({
             <ToggleLeft size={34} color={appTheme.colors.faint} strokeWidth={2.2} />
           )}
         </Pressable>
-      ) : (
+      ) : action || isPending ? (
         <CompactActionButton
           label={actionLabel}
           onPress={action}
           loading={isPending}
           accent={actionAccent}
         />
-      )}
+      ) : null}
     </Card>
   );
 }
@@ -484,9 +508,10 @@ function CompactActionButton({
   label: string;
   onPress?: () => void;
   loading?: boolean;
-  accent: 'motion' | 'image';
+  accent: 'primary' | 'image';
 }) {
-  const color = accent === 'image' ? appTheme.colors.image : appTheme.colors.motion;
+  const color = accent === 'image' ? appTheme.colors.image : appTheme.colors.primary;
+  const isPrimary = accent === 'primary';
 
   return (
     <Pressable
@@ -495,12 +520,12 @@ function CompactActionButton({
       disabled={!onPress || loading}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 40,
+        minHeight: appTheme.touch.compact,
         minWidth: 88,
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
-        backgroundColor: `${color}24`,
+        backgroundColor: isPrimary ? color : `${color}24`,
         borderWidth: 1,
         borderColor: `${color}66`,
         opacity: !onPress ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
@@ -508,9 +533,9 @@ function CompactActionButton({
       })}
     >
       {loading ? (
-        <ActivityIndicator color={color} />
+        <ActivityIndicator color={isPrimary ? appTheme.colors.onPrimary : color} />
       ) : (
-        <AppText selectable={false} variant="caption" color={color} style={{ fontWeight: '900' }} numberOfLines={1}>
+        <AppText selectable={false} variant="caption" color={isPrimary ? 'onPrimary' : color} style={{ fontWeight: '800' }} numberOfLines={1}>
           {label}
         </AppText>
       )}
@@ -525,7 +550,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={notification.title}
+      accessibilityLabel={`${notification.isRead ? '' : 'Unread. '}${notification.title}. ${notification.body}. ${formatNotificationTime(notification.updatedAt)}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: 'row',
@@ -535,7 +560,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: notification.isRead ? appTheme.colors.borderSubtle : `${meta.color}66`,
-        backgroundColor: notification.isRead ? appTheme.colors.surface : 'rgba(124,58,237,0.13)',
+        backgroundColor: notification.isRead ? appTheme.colors.surface : appTheme.colors.selected,
         padding: 14,
         opacity: pressed ? 0.78 : 1,
       })}
@@ -545,7 +570,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <AppText variant="body" style={{ flex: 1, fontWeight: '900' }} numberOfLines={2}>
+          <AppText variant="body" style={{ flex: 1, fontWeight: '700' }} numberOfLines={2}>
             {notification.title}
           </AppText>
           {!notification.isRead ? <UnreadDot color={meta.color} /> : null}
@@ -555,7 +580,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         </AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Badge label={meta.label} color={meta.color} />
-          {notification.eventCount > 1 ? <Badge label={`${notification.eventCount} updates`} color="#c084fc" /> : null}
+          {notification.eventCount > 1 ? <Badge label={`${notification.eventCount} updates`} color={appTheme.colors.primary} /> : null}
           <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>
             {formatNotificationTime(notification.updatedAt)}
           </AppText>
@@ -573,9 +598,6 @@ function UnreadDot({ color }: { color: string }) {
         height: 9,
         borderRadius: 5,
         backgroundColor: color,
-        shadowColor: color,
-        shadowOpacity: 0.7,
-        shadowRadius: 8,
       }}
     />
   );
@@ -595,7 +617,7 @@ function Badge({ label, color }: { label: string; color: string }) {
         borderColor: `${color}55`,
       }}
     >
-      <AppText variant="caption" color={color} style={{ fontWeight: '900' }}>{label}</AppText>
+      <AppText variant="caption" color={color} style={{ fontWeight: '800' }}>{label}</AppText>
     </View>
   );
 }
@@ -627,7 +649,7 @@ function NotificationCategoryList() {
               <Icon size={21} color={item.color} strokeWidth={2.4} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
-              <AppText variant="body" style={{ fontWeight: '900' }}>{item.title}</AppText>
+              <AppText variant="body" style={{ fontWeight: '800' }}>{item.title}</AppText>
               <AppText variant="bodySm" color="muted">{item.body}</AppText>
             </View>
           </Card>

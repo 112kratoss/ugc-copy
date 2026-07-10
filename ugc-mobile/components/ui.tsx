@@ -1,6 +1,8 @@
+import { useId, useState } from 'react';
 import { Link } from 'expo-router';
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   ScrollView,
   Text,
@@ -9,6 +11,7 @@ import {
   View,
   type StyleProp,
   type TextInputProps,
+  type TextProps,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
@@ -16,7 +19,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { appTheme, type ToolAccent, accentColor } from '@/lib/theme';
+import { useAnimatedState, usePressMotion } from '@/lib/motion';
+import { appTheme, type ToolAccent, accentColor, onAccentColor } from '@/lib/theme';
 
 type TextVariant = keyof typeof appTheme.type;
 type ThemeColor = keyof typeof appTheme.colors;
@@ -26,12 +30,38 @@ type IconComponent = React.ComponentType<{
   strokeWidth?: number;
 }>;
 
+function resolveMotionView() {
+  try {
+    return Animated.View;
+  } catch {
+    // Keeps shared primitives usable under minimal react-native test mocks.
+    return View;
+  }
+}
+
+const MotionView = resolveMotionView() as typeof View;
+
+type AppTextProps = Omit<TextProps, 'children' | 'numberOfLines' | 'selectable' | 'style'> & {
+  children: React.ReactNode;
+  variant?: TextVariant;
+  color?: ThemeColor | string;
+  selectable?: boolean;
+  style?: StyleProp<TextStyle>;
+  numberOfLines?: number;
+  heading?: boolean;
+};
+
 function textRole(variant: TextVariant): TextStyle {
   return appTheme.type[variant] as TextStyle;
 }
 
 function colorValue(color: ThemeColor | string) {
   return color in appTheme.colors ? appTheme.colors[color as ThemeColor] : color;
+}
+
+function isHeadingVariant(variant: TextVariant) {
+  return variant === 'display'
+    || variant === 'pageTitle';
 }
 
 export function Screen({
@@ -69,6 +99,8 @@ export function Screen({
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
       style={{ flex: 1, backgroundColor: appTheme.colors.background }}
       contentContainerStyle={{
         paddingHorizontal: appTheme.spacing.screen,
@@ -89,16 +121,14 @@ export function AppText({
   selectable = true,
   style,
   numberOfLines,
-}: {
-  children: React.ReactNode;
-  variant?: TextVariant;
-  color?: ThemeColor | string;
-  selectable?: boolean;
-  style?: StyleProp<TextStyle>;
-  numberOfLines?: number;
-}) {
+  heading = false,
+  accessibilityRole,
+  ...textProps
+}: AppTextProps) {
   return (
     <Text
+      {...textProps}
+      accessibilityRole={accessibilityRole ?? (heading || isHeadingVariant(variant) ? 'header' : undefined)}
       selectable={selectable}
       numberOfLines={numberOfLines}
       style={[textRole(variant), { color: colorValue(color) }, style]}
@@ -144,7 +174,7 @@ export function SectionHeader({
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
         <View style={{ flex: 1, gap: appTheme.spacing.compact }}>
           {eyebrow ? <Kicker>{eyebrow}</Kicker> : null}
-          <AppText variant="pageTitle">{title}</AppText>
+          <AppText heading variant="pageTitle">{title}</AppText>
         </View>
         {action ? <View style={{ flexShrink: 0 }}>{action}</View> : null}
       </View>
@@ -236,7 +266,7 @@ export function SurfaceSection({
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
         <View style={{ flex: 1, gap: 5 }}>
           {eyebrow ? <Kicker color={accent ? accentColor(accent) : 'faint'}>{eyebrow}</Kicker> : null}
-          <AppText variant="cardTitle">{title}</AppText>
+          <AppText heading variant="cardTitle">{title}</AppText>
           {body ? (
             <AppText variant="bodySm" color="muted">
               {body}
@@ -266,6 +296,7 @@ export function DisclosureSection({
   accent?: ToolAccent;
 }) {
   const color = accent ? accentColor(accent) : appTheme.colors.textSecondary;
+  const motion = usePressMotion();
 
   return (
     <SurfaceSection
@@ -274,27 +305,34 @@ export function DisclosureSection({
       body={body}
       accent={accent}
       action={(
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
-          accessibilityState={{ expanded }}
-          onPress={onToggle}
-          style={({ pressed }) => ({
-            minHeight: appTheme.touch.compact,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: `${color}55`,
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: `${color}1f`,
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-            paddingHorizontal: appTheme.spacing.gap,
-          })}
-        >
-          <AppText selectable={false} variant="label" color={color}>
-            {expanded ? 'Hide' : 'Show'}
-          </AppText>
-        </Pressable>
+        <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
+            accessibilityHint={expanded ? 'Hides this section' : 'Shows this section'}
+            accessibilityState={{ expanded }}
+            onBlur={motion.onBlur}
+            onFocus={motion.onFocus}
+            onPress={onToggle}
+            onPressIn={motion.onPressIn}
+            onPressOut={motion.onPressOut}
+            style={({ pressed }) => ({
+              minHeight: appTheme.touch.default,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+              borderColor: motion.focused ? appTheme.state.focus.color : `${color}55`,
+              borderRadius: appTheme.radii.pill,
+              backgroundColor: `${color}1f`,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+              paddingHorizontal: appTheme.spacing.card,
+            })}
+          >
+            <AppText selectable={false} variant="label" color={color}>
+              {expanded ? 'Hide' : 'Show'}
+            </AppText>
+          </Pressable>
+        </MotionView>
       )}
     >
       {expanded ? children : null}
@@ -320,36 +358,55 @@ export function ChoiceChip({
   compact?: boolean;
 }) {
   const color = accentColor(accent);
+  const motion = usePressMotion(disabled);
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: active, disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flex: grow ? 1 : undefined,
-        minHeight: compact ? 34 : appTheme.touch.compact,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: active ? `${color}8a` : appTheme.colors.border,
-        backgroundColor: active ? `${color}24` : appTheme.colors.surfaceStrong,
-        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: compact ? appTheme.spacing.gap : appTheme.spacing.card,
-      })}
+    <MotionView
+      style={[
+        grow ? { flex: 1 } : null,
+        motion.animatedStyle as StyleProp<ViewStyle>,
+      ]}
     >
-      <AppText
-        selectable={false}
-        variant={compact ? 'caption' : 'label'}
-        color={active ? appTheme.colors.text : appTheme.colors.muted}
-        numberOfLines={1}
-        style={{ fontWeight: active ? '900' : '800' }}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ selected: active, disabled }}
+        disabled={disabled}
+        onBlur={motion.onBlur}
+        onFocus={motion.onFocus}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({
+          flex: grow ? 1 : undefined,
+          minHeight: appTheme.touch.default,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+          borderColor: motion.focused
+            ? appTheme.state.focus.color
+            : active
+              ? accent === 'primary' ? appTheme.state.selected.border : `${color}8a`
+              : appTheme.colors.border,
+          backgroundColor: active
+            ? accent === 'primary' ? appTheme.state.selected.background : `${color}20`
+            : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+          opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          paddingHorizontal: compact ? appTheme.spacing.gap : appTheme.spacing.card,
+        })}
       >
-        {label}
-      </AppText>
-    </Pressable>
+        <AppText
+          selectable={false}
+          variant={compact ? 'caption' : 'label'}
+          color={active ? appTheme.colors.text : appTheme.colors.muted}
+          numberOfLines={1}
+          style={{ fontWeight: active ? '800' : '700' }}
+        >
+          {label}
+        </AppText>
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -372,6 +429,7 @@ export function MetricCard({
   trailing?: React.ReactNode;
   compact?: boolean;
 }) {
+  const motion = usePressMotion(!onPress);
   const content = (
     <>
       {icon ? (
@@ -423,16 +481,32 @@ export function MetricCard({
   }
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => ({ flex: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
-    >
-      <Card accent={accent} padding="sm" style={{ minHeight: compact ? 76 : 104 }}>
-        {content}
-      </Card>
-    </Pressable>
+    <MotionView style={[{ flex: 1 }, motion.animatedStyle as StyleProp<ViewStyle>]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value}`}
+        accessibilityHint={body}
+        onBlur={motion.onBlur}
+        onFocus={motion.onFocus}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({ flex: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      >
+        <Card
+          accent={accent}
+          padding="sm"
+          style={[
+            { minHeight: compact ? 76 : 104 },
+            motion.focused
+              ? { borderColor: appTheme.state.focus.color, borderWidth: appTheme.state.focus.width }
+              : null,
+          ]}
+        >
+          {content}
+        </Card>
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -445,33 +519,37 @@ export function ReadinessRow({
   body: string;
   state?: 'neutral' | 'ready' | 'warning' | 'danger';
 }) {
-  const color = state === 'ready'
-    ? appTheme.colors.success
+  const semantic = state === 'ready'
+    ? appTheme.semantic.success
     : state === 'warning'
-      ? appTheme.colors.commerce
+      ? appTheme.semantic.warning
       : state === 'danger'
-        ? appTheme.colors.danger
-        : appTheme.colors.muted;
+        ? appTheme.semantic.danger
+        : appTheme.semantic.neutral;
 
   return (
     <View
+      accessible
+      accessibilityLabel={`${label}. ${body}`}
+      accessibilityLiveRegion={state === 'danger' ? 'assertive' : 'polite'}
+      accessibilityRole={state === 'danger' ? 'alert' : 'summary'}
       style={{
-        minHeight: appTheme.touch.compact,
+        minHeight: appTheme.touch.default,
         flexDirection: 'row',
         alignItems: 'center',
         gap: appTheme.spacing.gap,
         borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: `${color}55`,
-        backgroundColor: `${color}16`,
+        borderColor: semantic.border,
+        backgroundColor: semantic.background,
         paddingHorizontal: appTheme.spacing.gap,
         paddingVertical: appTheme.spacing.compact,
       }}
     >
-      <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: color }} />
+      <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: semantic.foreground }} />
       <View style={{ flex: 1, gap: 2 }}>
-        <AppText selectable={false} variant="label" color={color}>
+        <AppText selectable={false} variant="label" color={semantic.foreground}>
           {label}
         </AppText>
         <AppText variant="caption" color="muted">
@@ -498,62 +576,78 @@ export function ToggleRow({
   accent?: ToolAccent;
 }) {
   const color = accentColor(accent);
+  const motion = usePressMotion(disabled);
+  const progress = useAnimatedState(value);
+  const thumbTranslate = progress?.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 18],
+  });
 
   return (
-    <Pressable
-      accessibilityRole="switch"
-      accessibilityState={{ checked: value, disabled }}
-      disabled={disabled}
-      onPress={() => onValueChange(!value)}
-      style={({ pressed }) => ({
-        minHeight: 58,
-        borderRadius: appTheme.radii.lg,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: value ? `${color}66` : appTheme.colors.border,
-        backgroundColor: value ? `${color}18` : appTheme.colors.surfaceStrong,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: appTheme.spacing.gap,
-        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: appTheme.spacing.card,
-        paddingVertical: appTheme.spacing.gap,
-      })}
-    >
-      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-        <AppText selectable={false} variant="label" color={value ? color : appTheme.colors.text}>
-          {label}
-        </AppText>
-        {body ? (
-          <AppText variant="caption" color="muted">
-            {body}
-          </AppText>
-        ) : null}
-      </View>
-      <View
-        style={{
-          width: 46,
-          height: 28,
-          borderRadius: 14,
-          borderWidth: 1,
-          borderColor: value ? `${color}88` : appTheme.colors.borderStrong,
-          backgroundColor: value ? `${color}33` : appTheme.colors.surfaceInset,
-          justifyContent: 'center',
-          paddingHorizontal: 3,
-        }}
+    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+      <Pressable
+        accessibilityRole="switch"
+        accessibilityLabel={label}
+        accessibilityHint={body}
+        accessibilityState={{ checked: value, disabled }}
+        disabled={disabled}
+        onBlur={motion.onBlur}
+        onFocus={motion.onFocus}
+        onPress={() => onValueChange(!value)}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.roomy,
+          borderRadius: appTheme.radii.lg,
+          borderCurve: 'continuous',
+          borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+          borderColor: motion.focused
+            ? appTheme.state.focus.color
+            : value ? `${color}66` : appTheme.colors.border,
+          backgroundColor: value ? `${color}16` : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: appTheme.spacing.gap,
+          opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          paddingHorizontal: appTheme.spacing.card,
+          paddingVertical: appTheme.spacing.gap,
+        })}
       >
+        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+          <AppText selectable={false} variant="label" color={value ? color : appTheme.colors.text}>
+            {label}
+          </AppText>
+          {body ? (
+            <AppText variant="caption" color="muted">
+              {body}
+            </AppText>
+          ) : null}
+        </View>
         <View
           style={{
+            width: 48,
+            height: 30,
+            borderRadius: 15,
+            borderWidth: 1,
+            borderColor: value ? `${color}88` : appTheme.colors.borderStrong,
+            backgroundColor: value ? `${color}30` : appTheme.colors.surfaceInset,
+            justifyContent: 'center',
+            paddingHorizontal: 3,
+          }}
+        >
+          <MotionView
+            style={{
             width: 22,
             height: 22,
             borderRadius: 11,
-            backgroundColor: value ? color : appTheme.colors.muted,
-            alignSelf: value ? 'flex-end' : 'flex-start',
+              backgroundColor: value ? color : appTheme.colors.muted,
+              transform: thumbTranslate ? [{ translateX: thumbTranslate }] : undefined,
           }}
-        />
-      </View>
-    </Pressable>
+          />
+        </View>
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -562,7 +656,7 @@ export function BottomActionDock({
   eyebrow = 'Publish dock',
   title,
   body,
-  accent = 'motion',
+  accent = 'primary',
   style,
 }: {
   children: React.ReactNode;
@@ -592,7 +686,7 @@ export function BottomActionDock({
     >
       <View style={{ gap: 4 }}>
         <Kicker color={color}>{eyebrow}</Kicker>
-        <AppText variant="cardTitle">{title}</AppText>
+        <AppText heading variant="cardTitle">{title}</AppText>
         {body ? (
           <AppText variant="caption" color="muted">
             {body}
@@ -609,41 +703,56 @@ export function PrimaryButton({
   onPress,
   disabled,
   loading,
-  accent = 'image',
+  accent = 'primary',
+  accessibilityHint,
 }: {
   label: string;
   onPress?: () => void;
   disabled?: boolean;
   loading?: boolean;
   accent?: ToolAccent;
+  accessibilityHint?: string;
 }) {
   const fillColor = accentColor(accent);
+  const unavailable = Boolean(disabled || loading);
   const textColor = disabled
     ? appTheme.colors.muted
-    : accent === 'image' || accent === 'amber' || accent === 'commerce'
-      ? appTheme.colors.textInverse
-      : '#ffffff';
+    : onAccentColor(accent);
+  const motion = usePressMotion(unavailable);
 
   return (
-    <Pressable
-      disabled={disabled || loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.default,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: appTheme.radii.pill,
-        backgroundColor: disabled ? appTheme.colors.panelSoft : fillColor,
-        opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-        paddingHorizontal: appTheme.spacing.panel,
-      })}
-    >
-      {loading ? (
-        <ActivityIndicator color={textColor} />
-      ) : (
-        <AppText selectable={false} variant="button" color={textColor}>{label}</AppText>
-      )}
-    </Pressable>
+    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint={accessibilityHint}
+        accessibilityLiveRegion={loading ? 'polite' : 'none'}
+        accessibilityState={{ busy: Boolean(loading), disabled: unavailable }}
+        disabled={unavailable}
+        onBlur={motion.onBlur}
+        onFocus={motion.onFocus}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.default,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          borderWidth: appTheme.state.focus.width,
+          borderColor: motion.focused ? appTheme.state.focus.color : 'transparent',
+          backgroundColor: disabled ? appTheme.colors.panelSoft : fillColor,
+          opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
+          paddingHorizontal: appTheme.spacing.panel,
+        })}
+      >
+        {loading ? (
+          <ActivityIndicator color={textColor} />
+        ) : (
+          <AppText selectable={false} variant="button" color={textColor}>{label}</AppText>
+        )}
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -651,59 +760,109 @@ export function SecondaryButton({
   label,
   onPress,
   disabled,
+  accessibilityHint,
 }: {
   label: string;
   onPress?: () => void;
   disabled?: boolean;
+  accessibilityHint?: string;
 }) {
+  const motion = usePressMotion(Boolean(disabled));
+
   return (
-    <Pressable
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.compact,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panelSoft,
-        opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-        paddingHorizontal: appTheme.spacing.card,
-      })}
-    >
-      <AppText selectable={false} variant="label" color="text">{label}</AppText>
-    </Pressable>
+    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={{ disabled: Boolean(disabled) }}
+        disabled={disabled}
+        onBlur={motion.onBlur}
+        onFocus={motion.onFocus}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.default,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+          borderColor: motion.focused ? appTheme.state.focus.color : appTheme.colors.border,
+          backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.panelSoft,
+          opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
+          paddingHorizontal: appTheme.spacing.card,
+        })}
+      >
+        <AppText selectable={false} variant="label" color="text">{label}</AppText>
+      </Pressable>
+    </MotionView>
   );
 }
 
 export function AppTextInput({
   label,
   multiline,
+  accessibilityLabel,
+  accessibilityLabelledBy,
+  accessibilityState,
+  editable,
+  onBlur,
+  onFocus,
+  placeholderTextColor = appTheme.colors.faint,
+  style,
   ...props
 }: TextInputProps & {
   label: string;
 }) {
+  const generatedId = useId();
+  const labelId = `field-label-${generatedId.replace(/:/g, '')}`;
+  const [focused, setFocused] = useState(false);
+  const disabled = editable === false;
+
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
-      <Kicker color="muted">{label}</Kicker>
+      <AppText
+        nativeID={labelId}
+        variant="label"
+        color="textSecondary"
+        style={{ letterSpacing: 0.6, textTransform: 'uppercase' }}
+      >
+        {label}
+      </AppText>
       <TextInput
-        placeholderTextColor={appTheme.colors.faint}
-        multiline={multiline}
-        textAlignVertical={multiline ? 'top' : 'center'}
-        style={{
-          minHeight: multiline ? 112 : 48,
-          borderWidth: 1,
-          borderColor: appTheme.colors.border,
-          borderRadius: appTheme.radii.md,
-          borderCurve: 'continuous',
-          backgroundColor: appTheme.colors.app,
-          color: appTheme.colors.text,
-          ...textRole('bodySm'),
-          paddingHorizontal: appTheme.spacing.gap,
-          paddingVertical: appTheme.spacing.gap,
-        }}
         {...props}
+        accessibilityLabel={accessibilityLabel ?? label}
+        accessibilityLabelledBy={accessibilityLabelledBy ?? labelId}
+        accessibilityState={{ ...accessibilityState, disabled }}
+        editable={editable}
+        multiline={multiline}
+        onBlur={(event) => {
+          setFocused(false);
+          onBlur?.(event);
+        }}
+        onFocus={(event) => {
+          setFocused(true);
+          onFocus?.(event);
+        }}
+        placeholderTextColor={placeholderTextColor}
+        selectionColor={appTheme.colors.primary}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        style={[
+          {
+            minHeight: multiline ? 120 : appTheme.touch.default,
+            borderWidth: focused ? appTheme.state.focus.width : 1,
+            borderColor: focused ? appTheme.state.focus.color : appTheme.colors.border,
+            borderRadius: appTheme.radii.md,
+            borderCurve: 'continuous',
+            backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
+            color: disabled ? appTheme.colors.muted : appTheme.colors.text,
+            ...textRole('bodySm'),
+            paddingHorizontal: appTheme.spacing.card,
+            paddingVertical: appTheme.spacing.gap,
+          },
+          style,
+        ]}
       />
     </View>
   );
@@ -724,6 +883,9 @@ export function Pill({
 
   return (
     <View
+      accessible
+      accessibilityLabel={label}
+      accessibilityRole="text"
       style={[
         {
           minHeight: 32,
@@ -756,6 +918,7 @@ export function IconButton({
   disabled,
   accent,
   style,
+  accessibilityHint,
 }: {
   icon: IconComponent;
   label: string;
@@ -763,32 +926,46 @@ export function IconButton({
   disabled?: boolean;
   accent?: ToolAccent;
   style?: StyleProp<ViewStyle>;
+  accessibilityHint?: string;
 }) {
   const color = accent ? accentColor(accent) : appTheme.colors.text;
+  const motion = usePressMotion(Boolean(disabled));
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        {
-          minHeight: appTheme.touch.compact,
-          minWidth: appTheme.touch.compact,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderWidth: 1,
-          borderColor: accent ? `${color}55` : appTheme.colors.border,
-          borderRadius: appTheme.radii.pill,
-          backgroundColor: accent ? `${color}1f` : appTheme.colors.surface,
-          opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-        },
-        style,
-      ]}
-    >
-      <Icon color={color} size={appTheme.icon.default} strokeWidth={2.2} />
-    </Pressable>
+    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={{ disabled: Boolean(disabled) }}
+        disabled={disabled}
+        onBlur={motion.onBlur}
+        onFocus={motion.onFocus}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => [
+          {
+            minHeight: appTheme.touch.default,
+            minWidth: appTheme.touch.default,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+            borderColor: motion.focused
+              ? appTheme.state.focus.color
+              : accent ? `${color}55` : appTheme.colors.border,
+            borderRadius: appTheme.radii.pill,
+            backgroundColor: accent
+              ? `${color}1f`
+              : pressed ? appTheme.colors.pressed : appTheme.colors.surface,
+            opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
+          },
+          style,
+        ]}
+      >
+        <Icon color={color} size={appTheme.icon.default} strokeWidth={2.2} />
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -828,44 +1005,74 @@ export function StatusBlock({
   title,
   body,
 }: {
-  tone?: 'neutral' | 'success' | 'danger';
+  tone?: 'neutral' | 'info' | 'success' | 'warning' | 'danger';
   title: string;
   body?: string;
 }) {
-  const color = tone === 'success' ? appTheme.colors.success : tone === 'danger' ? appTheme.colors.danger : appTheme.colors.muted;
+  const semantic = appTheme.semantic[tone];
 
   return (
-    <Card variant="soft">
-      <AppText variant="cardTitle" color={color}>
-        {title}
-      </AppText>
-      {body ? (
-        <AppText variant="bodySm" color="muted">
-          {body}
+    <View
+      accessible
+      accessibilityLabel={body ? `${title}. ${body}` : title}
+      accessibilityLiveRegion={tone === 'danger' ? 'assertive' : 'polite'}
+      accessibilityRole={tone === 'danger' ? 'alert' : 'summary'}
+    >
+      <Card
+        variant="soft"
+        style={{ borderColor: semantic.border, backgroundColor: semantic.background }}
+      >
+        <AppText variant="cardTitle" color={semantic.foreground}>
+          {title}
         </AppText>
-      ) : null}
-    </Card>
+        {body ? (
+          <AppText variant="bodySm" color="textSecondary">
+            {body}
+          </AppText>
+        ) : null}
+      </Card>
+    </View>
   );
 }
 
-export function WebLinkButton({ href, label }: { href: string; label: string }) {
+export function WebLinkButton({
+  href,
+  label,
+  accessibilityHint,
+}: {
+  href: string;
+  label: string;
+  accessibilityHint?: string;
+}) {
+  const motion = usePressMotion();
+
   return (
-    <Link href={href as never} asChild>
-      <Pressable
-        style={({ pressed }) => ({
-          minHeight: appTheme.touch.compact,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.pill,
-          borderWidth: 1,
-          borderColor: appTheme.colors.borderStrong,
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-          paddingHorizontal: appTheme.spacing.card,
-        })}
-      >
-        <AppText selectable={false} variant="label" color="text">{label}</AppText>
-      </Pressable>
-    </Link>
+    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+      <Link href={href as never} asChild>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={label}
+          accessibilityHint={accessibilityHint ?? 'Opens in your browser'}
+          onBlur={motion.onBlur}
+          onFocus={motion.onFocus}
+          onPressIn={motion.onPressIn}
+          onPressOut={motion.onPressOut}
+          style={({ pressed }) => ({
+            minHeight: appTheme.touch.default,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: appTheme.radii.pill,
+            borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+            borderColor: motion.focused ? appTheme.state.focus.color : appTheme.colors.borderStrong,
+            backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surface,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+            paddingHorizontal: appTheme.spacing.card,
+          })}
+        >
+          <AppText selectable={false} variant="label" color="text">{label}</AppText>
+        </Pressable>
+      </Link>
+    </MotionView>
   );
 }
 

@@ -15,6 +15,7 @@ const mediaCreationState = vi.hoisted(() => ({
 
 vi.mock('expo-router', () => ({
   useLocalSearchParams: () => routeState.params,
+  router: { replace: vi.fn() },
 }));
 
 vi.mock('@/components/media-creation-screen', () => ({
@@ -22,6 +23,13 @@ vi.mock('@/components/media-creation-screen', () => ({
     mediaCreationState.props = props;
     return null;
   },
+}));
+
+vi.mock('@/components/ui', () => ({
+  Screen: ({ children }: { children: unknown }) => children,
+  SectionTitle: () => null,
+  PrimaryButton: () => null,
+  SecondaryButton: () => null,
 }));
 
 import CreateToolScreen from '../app/create/[tool]';

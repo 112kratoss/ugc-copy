@@ -1,13 +1,18 @@
 import { Tabs } from 'expo-router';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
+import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 
 export default function TabLayout() {
+  const reducedMotion = useReducedMotion();
+
   return (
     <Tabs
+      backBehavior="history"
       tabBar={(props) => <MagicTabBar {...props} />}
       screenOptions={{
+        animation: reducedMotion ? 'none' : 'fade',
         headerShown: false,
         headerStyle: { backgroundColor: appTheme.colors.background },
         headerTintColor: appTheme.colors.text,
@@ -28,13 +33,13 @@ export default function TabLayout() {
       <Tabs.Screen
         name="studio"
         options={{
-          title: 'Notifications',
+          title: 'Alerts',
         }}
       />
       <Tabs.Screen
         name="showcase"
         options={{
-          title: 'Showcase',
+          title: 'Feed',
           href: null,
         }}
       />

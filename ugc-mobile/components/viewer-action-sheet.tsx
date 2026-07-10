@@ -7,6 +7,7 @@ import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
@@ -34,6 +35,7 @@ export function ViewerActionSheet({
 }) {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
+  const reducedMotion = useReducedMotion();
 
   const refreshMedia = async () => {
     await Promise.all([
@@ -257,7 +259,7 @@ export function ViewerActionSheet({
   };
 
   return (
-    <Modal animationType="slide" onRequestClose={onClose} transparent visible={visible}>
+    <Modal animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} transparent visible={visible}>
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' }}>
         <Pressable
           accessibilityRole="button"
@@ -301,7 +303,7 @@ export function ViewerActionSheet({
                     paddingTop: appTheme.spacing.gap,
                     paddingBottom: 4,
                     textTransform: 'uppercase',
-                    fontWeight: '900',
+                    fontWeight: '800',
                     letterSpacing: 0.8,
                   }}
                 >

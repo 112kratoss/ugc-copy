@@ -23,28 +23,52 @@ const paramsState = vi.hoisted(() => ({
   initialId: 'gen-2' as string | string[] | undefined,
 }));
 
-const videoState = vi.hoisted(() => ({
-  useVideoPlayer: vi.fn((_source: unknown, setup?: (player: {
+type MockVideoPlayer = {
     addListener: ReturnType<typeof vi.fn>;
     loop: boolean;
     muted: boolean;
     pause: ReturnType<typeof vi.fn>;
     play: ReturnType<typeof vi.fn>;
     playing: boolean;
+    showNowPlayingNotification: boolean;
+    staysActiveInBackground: boolean;
     volume: number;
-  }) => void) => {
-    const player = {
-      addListener: vi.fn(() => ({ remove: vi.fn() })),
-      loop: false,
-      muted: false,
-      pause: vi.fn(),
-      play: vi.fn(),
-      playing: false,
-      volume: 0,
-    };
-    setup?.(player);
-    return player;
-  }),
+};
+
+const videoState = vi.hoisted(() => {
+  const players: MockVideoPlayer[] = [];
+
+  return {
+    players,
+    useVideoPlayer: vi.fn((_source: unknown, setup?: (player: MockVideoPlayer) => void) => {
+      return React.useMemo(() => {
+        const player: MockVideoPlayer = {
+          addListener: vi.fn(() => ({ remove: vi.fn() })),
+          loop: false,
+          muted: false,
+          pause: vi.fn(),
+          play: vi.fn(),
+          playing: false,
+          showNowPlayingNotification: true,
+          staysActiveInBackground: true,
+          volume: 0,
+        };
+        setup?.(player);
+        players.push(player);
+        return player;
+      }, []);
+    }),
+  };
+});
+
+const accessibilityState = vi.hoisted(() => ({
+  enabled: false,
+  listeners: [] as Array<(enabled: boolean) => void>,
+}));
+
+const sourceQueryState = vi.hoisted(() => ({
+  isError: false,
+  refetch: vi.fn(),
 }));
 
 const alertState = vi.hoisted(() => ({
@@ -57,6 +81,17 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  AccessibilityInfo: {
+    isReduceMotionEnabled: () => Promise.resolve(accessibilityState.enabled),
+    addEventListener: (_event: string, listener: (enabled: boolean) => void) => {
+      accessibilityState.listeners.push(listener);
+      return {
+        remove: () => {
+          accessibilityState.listeners = accessibilityState.listeners.filter((item) => item !== listener);
+        },
+      };
+    },
+  },
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', {
       ...props,
@@ -143,6 +178,8 @@ vi.mock('lucide-react-native', () => ({
   Send: (props: Record<string, unknown>) => React.createElement('send-icon', props),
   Share2: (props: Record<string, unknown>) => React.createElement('share-icon', props),
   Wand2: (props: Record<string, unknown>) => React.createElement('wand-icon', props),
+  Volume2: (props: Record<string, unknown>) => React.createElement('volume-icon', props),
+  VolumeX: (props: Record<string, unknown>) => React.createElement('volume-x-icon', props),
 }));
 
 const authState = vi.hoisted(() => ({
@@ -171,6 +208,17 @@ vi.mock('@tanstack/react-query', () => ({
       };
     }
     if (queryKey[0] === 'immersive-preview-source') {
+      if (sourceQueryState.isError) {
+        return {
+          data: undefined,
+          error: new Error('Network unavailable'),
+          isError: true,
+          isFetching: false,
+          isLoading: false,
+          refetch: sourceQueryState.refetch,
+        };
+      }
+
       const data = paramsState.source === 'profile-posts'
         ? {
             ownerPosts: [
@@ -246,9 +294,10 @@ vi.mock('@tanstack/react-query', () => ({
           };
       return {
         data,
+        isError: false,
         isFetching: false,
         isLoading: false,
-        refetch: vi.fn(),
+        refetch: sourceQueryState.refetch,
       };
     }
     return {
@@ -311,6 +360,10 @@ describe('ProfileMediaFeedScreen', () => {
     alertState.alert.mockClear();
     authState.api.updatePost.mockClear();
     videoState.useVideoPlayer.mockClear();
+    videoState.players.splice(0);
+    accessibilityState.enabled = false;
+    sourceQueryState.isError = false;
+    sourceQueryState.refetch.mockClear();
     paramsState.source = 'profile-creations';
     paramsState.initialId = 'gen-2';
   });
@@ -411,7 +464,7 @@ describe('ProfileMediaFeedScreen', () => {
     );
   });
 
-  it('plays the active profile feed video with a contained frame and a single player', () => {
+  it('plays the active profile feed video muted with an accessible 48dp mute control', () => {
     const tree = renderScreen();
 
     const videoFrames = tree.root.findAll((node) =>
@@ -422,5 +475,50 @@ describe('ProfileMediaFeedScreen', () => {
     expect(videoFrames).toHaveLength(1);
     expect(videoFrames[0].props.player).toBeTruthy();
     expect(videoState.useVideoPlayer).toHaveBeenCalledTimes(1);
+
+    const player = videoState.players[0];
+    expect(player.muted).toBe(true);
+    expect(player.play).toHaveBeenCalledTimes(1);
+
+    const unmuteButton = tree.root.find((node) => (
+      String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Unmute video'
+    ));
+    expect(unmuteButton.props.style).toMatchObject({ width: 48, height: 48 });
+
+    renderer.act(() => {
+      unmuteButton.props.onPress();
+    });
+
+    expect(player.muted).toBe(false);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Mute video' })).toBeTruthy();
+  });
+
+  it('shows an honest retryable source error instead of the empty state', () => {
+    sourceQueryState.isError = true;
+
+    const tree = renderScreen();
+
+    expect(tree.root.findByProps({ accessibilityRole: 'alert' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: "Couldn't load creations" })).toBeTruthy();
+    expect(tree.root.findAllByProps({ children: 'No items found in this section.' })).toHaveLength(0);
+
+    sourceQueryState.refetch.mockClear();
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Try again' }).props.onPress();
+    });
+
+    expect(sourceQueryState.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses active video when the reduced-motion preference turns on', async () => {
+    renderScreen();
+
+    await renderer.act(async () => {
+      accessibilityState.listeners.forEach((listener) => listener(true));
+      await Promise.resolve();
+    });
+
+    expect(videoState.players.some((player) => player.pause.mock.calls.length > 0)).toBe(true);
   });
 });

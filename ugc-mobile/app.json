@@ -32,7 +32,8 @@
         "backgroundColor": "#09090b"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": true,
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "bundler": "metro",
@@ -51,7 +52,8 @@
           "icon": "./assets/images/adaptive-icon.png",
           "color": "#03040d"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
