@@ -425,7 +425,7 @@ function ImageReferencesCard({
                   <div className="flex flex-wrap items-center gap-2">
                     {element.handle ? (
                       <>
-                        <span className="rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-1 text-[11px] font-medium text-fuchsia-100">
+                        <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[11px] font-medium text-sky-100">
                           {element.handle}
                         </span>
                         <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-400">
@@ -682,7 +682,7 @@ function SourceReferenceHandleField({
           <p className="mt-2 text-sm leading-relaxed text-zinc-400">{helperText}</p>
         </div>
         {value ? (
-          <span className="rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-fuchsia-100">
+          <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-emerald-100">
             Active
           </span>
         ) : null}
@@ -939,9 +939,9 @@ function MultiShotEditor({
 
       <div className="mt-4 space-y-3">
         {shots.map((shot, index) => (
-          <div key={shot.id} className="rounded-2xl border border-purple-500/20 bg-black/20 p-3">
+          <div key={shot.id} className="rounded-2xl border border-emerald-500/20 bg-black/20 p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="text-xs uppercase tracking-[0.18em] text-purple-300">Shot {index + 1}</div>
+              <div className="text-xs uppercase tracking-[0.18em] text-emerald-300">Shot {index + 1}</div>
               {shots.length > 1 && (
                 <button
                   type="button"
@@ -1132,7 +1132,7 @@ function getPromptEnhancementTargetOption(
     title: data.title,
     mediumLabel: 'Motion',
     modelLabel: MOTION_MODELS[data.model].displayName,
-    accentClassName: 'border-violet-500/20 bg-violet-500/10 text-violet-100',
+    accentClassName: 'border-amber-500/20 bg-amber-500/10 text-amber-100',
   };
 }
 
@@ -1332,7 +1332,7 @@ function PromptNodeEnhancer({
           disabled={!canEnhance}
           className={`group inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2 text-xs font-semibold transition ${
             canEnhance
-              ? 'border-violet-500/30 bg-gradient-to-r from-violet-600/20 to-blue-600/20 text-violet-200 hover:from-violet-600/30 hover:to-blue-600/30'
+              ? 'border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]'
               : 'cursor-not-allowed border-white/5 bg-zinc-900/30 text-zinc-600'
           }`}
         >
@@ -1343,7 +1343,7 @@ function PromptNodeEnhancer({
           )}
           <span>{isEnhancing ? 'Enhancing...' : 'Enhance'}</span>
           <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${
-            canEnhance ? 'bg-violet-500/20 text-violet-300' : 'bg-zinc-800 text-zinc-600'
+            canEnhance ? 'bg-black/20 text-[var(--ui-primary-on)]' : 'bg-zinc-800 text-zinc-600'
           }`}>
             2 credits
           </span>
@@ -1636,7 +1636,7 @@ function CapabilityLimitsCard({
       ? 'border-blue-500/20 bg-blue-500/10'
       : node.type === 'video-generate'
         ? 'border-rose-500/20 bg-rose-500/10'
-        : 'border-violet-500/20 bg-violet-500/10'
+        : 'border-amber-500/20 bg-amber-500/10'
     : 'border-rose-500/30 bg-rose-500/10';
 
   return (
@@ -1974,7 +1974,7 @@ function NodeEditorContent({
                       <Upload className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full bg-[#050505] p-0.5" />
                     </div>
                   }
-                  accentClassName="text-violet-300"
+                  accentClassName="text-amber-300"
                   onSelect={async (event) => {
                     const input = event.currentTarget;
                     const file = event.target.files?.[0];

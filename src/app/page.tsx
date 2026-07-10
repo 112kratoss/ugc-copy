@@ -56,7 +56,7 @@ const LATEST_MODELS = [
     name: IMAGE_MODELS['nano-banana-pro'].displayName,
     description: 'High-fidelity stills',
     href: '/create-image?model=nano-banana-pro',
-    accent: 'border-violet-300/15 bg-violet-400/[0.07] text-violet-100',
+    accent: 'border-sky-300/15 bg-sky-400/[0.07] text-sky-100',
   },
   {
     name: VIDEO_MODELS['kling-3.0-video'].displayName,
@@ -68,7 +68,7 @@ const LATEST_MODELS = [
     name: MOTION_MODELS['kling-3.0'].displayName,
     description: 'Motion-led UGC output',
     href: '/create-motion?model=kling-3.0',
-    accent: 'border-violet-300/15 bg-violet-400/[0.07] text-violet-100',
+    accent: 'border-white/10 bg-white/[0.04] text-[var(--ui-accent-motion)]',
   },
 ] as const;
 

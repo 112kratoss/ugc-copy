@@ -1116,7 +1116,7 @@ export default function ShowcaseReelViewer({
         ) : null}
 
         {resources.allowRemix ? (
-          <div className="mt-4 rounded-2xl border border-purple-300/20 bg-purple-500/10 px-3 py-2 text-sm font-medium text-purple-100">
+          <div className="mt-4 rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] px-3 py-2 text-sm font-medium text-[var(--ui-primary-strong)]">
             Remix access is included.
           </div>
         ) : null}
@@ -1330,11 +1330,6 @@ export default function ShowcaseReelViewer({
         ) : null}
       </AnimatePresence>
 
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[14%] top-[-18%] h-[30rem] w-[30rem] rounded-full bg-purple-600/10 blur-[130px]" />
-        <div className="absolute bottom-[-18%] right-[10%] h-[30rem] w-[30rem] rounded-full bg-emerald-500/10 blur-[130px]" />
-      </div>
-
       <header className="relative z-10 flex h-14 items-center justify-between gap-3 border-b border-white/8 bg-black/40 px-3 backdrop-blur-xl sm:px-5">
         <button
           ref={reelCloseButtonRef}
@@ -1448,11 +1443,11 @@ export default function ShowcaseReelViewer({
             aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}`}
             className={`inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:flex-none ${
               isSaved
-                ? 'border-pink-400/30 bg-pink-500/15 text-pink-100'
+                ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
                 : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
             } disabled:opacity-60`}
           >
-            <Heart className={`h-5 w-5 ${isSaved ? 'fill-pink-400 text-pink-300' : ''}`} />
+            <Heart className={`h-5 w-5 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
             <AnimatePresence mode="popLayout" initial={false}>
               <motion.span
                 key={`${item.id}:${item.saveCount}`}

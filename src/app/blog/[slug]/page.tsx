@@ -65,7 +65,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
                 </Link>
 
                 <header className="mb-12">
-                    <div className="flex items-center gap-2 text-sm text-purple-400 mb-6">
+                    <div className="mb-6 flex items-center gap-2 text-sm text-[var(--ui-primary)]">
                         <Calendar className="w-4 h-4" />
                         <time dateTime={post.date}>{new Date(post.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</time>
                     </div>

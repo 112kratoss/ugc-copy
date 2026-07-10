@@ -189,8 +189,8 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     isTextOnlyPost &&
     normalizeComparableText(detail.title) !== normalizeComparableText(publicText);
   const statItems = [
-    { singular: 'Save', plural: 'Saves', value: detail.saveCount, icon: Heart, color: 'text-pink-300' },
-    { singular: 'Remix', plural: 'Remixes', value: detail.remixCount, icon: Wand2, color: 'text-purple-300' },
+    { singular: 'Save', plural: 'Saves', value: detail.saveCount, icon: Heart, color: 'text-[var(--ui-primary-strong)]' },
+    { singular: 'Remix', plural: 'Remixes', value: detail.remixCount, icon: Wand2, color: 'text-[var(--ui-primary)]' },
     { singular: 'Share', plural: 'Shares', value: detail.shareCount, icon: BarChart3, color: 'text-blue-300' },
     { singular: 'Visit', plural: 'Visits', value: detail.shareVisitCount, icon: Eye, color: 'text-emerald-300' },
   ].filter((item) => item.value > 0);

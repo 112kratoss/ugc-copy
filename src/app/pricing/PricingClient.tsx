@@ -286,7 +286,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                     }
                 },
                 theme: {
-                    color: '#a855f7',
+                    color: '#ff7a59',
                 },
             };
 
@@ -545,7 +545,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             <Link
                                 key={link.href}
                                 href={link.href}
-                                className="rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-purple-400/40 hover:bg-white/[0.05]"
+                                className="ui-focus-ring rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-[var(--ui-primary)]/40 hover:bg-white/[0.05]"
                             >
                                 <h3 className="text-xl font-semibold text-white">{link.title}</h3>
                                 <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>

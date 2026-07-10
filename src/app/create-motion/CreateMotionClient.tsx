@@ -63,7 +63,7 @@ const MOTION_MODELS = {
         displayName: 'Kling 2.6',
         description: 'Reliable motion transfer with smooth character animation',
         badge: 'Stable',
-        badgeColor: 'from-purple-500 to-pink-500',
+        badgeColor: 'from-sky-500 to-blue-500',
         maxVideoDuration: 30, // seconds
         characterOrientations: ['video', 'image'] as const,
         resolutions: ['720p', '1080p'] as const,
@@ -73,7 +73,7 @@ const MOTION_MODELS = {
         displayName: 'Kling 3.0',
         description: 'Latest model — enhanced fidelity and motion accuracy',
         badge: 'New',
-        badgeColor: 'from-violet-500 to-indigo-500',
+        badgeColor: 'from-[#ff7a59] to-orange-500',
         maxVideoDuration: 30,
         characterOrientations: ['video', 'image'] as const,
         resolutions: ['720p', '1080p'] as const,
@@ -720,11 +720,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <div className="fixed inset-0 z-0 hidden pointer-events-none">
-                <div className="absolute top-[8%] left-[-10%] h-[40%] w-[40%] rounded-full bg-violet-900/15 blur-[120px] mix-blend-screen" />
-                <div className="absolute bottom-[-10%] right-[-10%] h-[44%] w-[44%] rounded-full bg-fuchsia-900/10 blur-[140px] mix-blend-screen" />
-            </div>
-
             <MediaStudioShell
                 currentToolId="motion"
                 header={
@@ -770,7 +765,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                             disabled={isUsingOriginalResultAsReferenceVideo}
                                                             className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${isUsingOriginalResultAsReferenceVideo
                                                                 ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                                : 'border border-violet-400/20 bg-violet-500/10 text-violet-100 hover:border-violet-300/40 hover:bg-violet-500/15'}`}
+                                                                : 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15'}`}
                                                         >
                                                             <Play className="h-4 w-4" />
                                                             {isUsingOriginalResultAsReferenceVideo ? 'Using original result' : 'Use as reference video'}
@@ -796,7 +791,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     className="w-full flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-left transition hover:border-white/15 hover:bg-black/55"
                                 >
                                     <div className="flex items-center gap-3">
-                                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-violet-400/20 bg-violet-400/10 text-violet-100">
+                                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-400/10 text-sky-200">
                                             <Zap className="h-4 w-4" />
                                         </div>
                                         <div>
@@ -853,7 +848,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                                 </span>
                                                             </div>
                                                         </div>
-                                                        {isActive ? <Check className="h-4 w-4 shrink-0 text-violet-300" /> : null}
+                                                        {isActive ? <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" /> : null}
                                                     </button>
                                                 );
                                             })}
@@ -890,15 +885,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 <label
                                     htmlFor="motion-character-image-input"
                                     className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingImage
-                                        ? 'border-violet-400 bg-violet-500/10 shadow-[0_0_30px_-5px_rgba(168,85,247,0.3)]'
-                                        : 'border-zinc-700/50 hover:border-violet-500/50 hover:bg-violet-500/5'
+                                        ? 'border-sky-400 bg-sky-500/10 shadow-[0_0_30px_-5px_rgba(56,189,248,0.24)]'
+                                        : 'border-zinc-700/50 hover:border-sky-500/50 hover:bg-sky-500/5'
                                         }`}
                                     onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
                                     onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
                                     onDrop={handleImageDrop}
                                 >
                                     <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
-                                        <Upload className={`h-8 w-8 transition-colors ${isDraggingImage ? 'text-violet-300' : ''}`} />
+                                        <Upload className={`h-8 w-8 transition-colors ${isDraggingImage ? 'text-sky-300' : ''}`} />
                                         <div>
                                             <p className="text-sm font-medium text-zinc-300">
                                                 {isDraggingImage ? 'Drop image here' : 'Click or drag in the character image'}
@@ -946,15 +941,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     <label
                                         htmlFor="motion-reference-video-input"
                                         className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingVideo
-                                            ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-[0_0_30px_-5px_rgba(217,70,239,0.3)]'
-                                            : 'border-zinc-700/50 hover:border-fuchsia-500/50 hover:bg-fuchsia-500/5'
+                                            ? 'border-[#ff7a59] bg-[#ff7a59]/10 shadow-[0_0_30px_-5px_rgba(255,122,89,0.24)]'
+                                            : 'border-zinc-700/50 hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/5'
                                             }`}
                                         onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
                                         onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
                                         onDrop={handleVideoDrop}
                                     >
                                         <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
-                                            <Upload className={`h-8 w-8 transition-colors ${isDraggingVideo ? 'text-fuchsia-300' : ''}`} />
+                                            <Upload className={`h-8 w-8 transition-colors ${isDraggingVideo ? 'text-[#ff9a80]' : ''}`} />
                                             <div>
                                                 <p className="text-sm font-medium text-zinc-300">
                                                     {isDraggingVideo ? 'Drop video here' : 'Click or drag in the motion reference'}
@@ -1006,7 +1001,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 onChange={(event) => setPrompt(event.target.value)}
                                 placeholder="Describe the kind of movement, pacing, and constraints you want to preserve."
                                 maxLength={2500}
-                                className="mt-3 min-h-[140px] w-full resize-y rounded-2xl border border-white/10 bg-black/50 p-5 text-sm leading-relaxed text-white outline-none transition focus:border-violet-500/50 focus:ring-4 focus:ring-violet-500/10"
+                                className="mt-3 min-h-[140px] w-full resize-y rounded-2xl border border-white/10 bg-black/50 p-5 text-sm leading-relaxed text-white outline-none transition focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10"
                             />
                             <div className="mt-3 flex justify-end text-xs text-zinc-500">{prompt.length}/2500</div>
                         </StudioControlCard>
@@ -1021,7 +1016,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 key={option}
                                                 onClick={() => setCharacterOrientation(option)}
                                                 className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${characterOrientation === option
-                                                    ? 'border border-violet-500/30 bg-violet-500/15 text-violet-100'
+                                                    ? 'border border-sky-500/30 bg-sky-500/15 text-sky-100'
                                                     : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
                                                     }`}
                                             >
@@ -1039,7 +1034,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 key={quality}
                                                 onClick={() => setMode(quality)}
                                                 className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${mode === quality
-                                                    ? 'border border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-100'
+                                                    ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]'
                                                     : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
                                                     }`}
                                             >
@@ -1210,7 +1205,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 <button
                                                     type="button"
                                                     onClick={() => setIsPublishModalOpen(true)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-5 py-3 text-sm font-semibold text-purple-100 transition hover:border-purple-400/40 hover:bg-purple-500/15"
+                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
                                                 >
                                                     <Share2 className="h-4 w-4" />
                                                     Publish & share
@@ -1234,8 +1229,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 </div>
                             ) : isGenerating ? (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-violet-500/30 to-fuchsia-500/20">
-                                        <Loader2 className="h-7 w-7 animate-spin text-white" />
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
+                                        <Loader2 className="h-7 w-7 animate-spin text-[#ff9a80]" />
                                     </div>
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">Transferring the motion</h3>
@@ -1254,8 +1249,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-violet-500/30 to-fuchsia-500/20">
-                                        <Play className="h-7 w-7 text-white" />
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
+                                        <Play className="h-7 w-7 text-[#ff9a80]" />
                                     </div>
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">No motion run yet</h3>

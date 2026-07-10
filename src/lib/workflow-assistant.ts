@@ -885,7 +885,7 @@ export function createWorkflowAssistantGraphProposal({
         ...(seedNode.data as GroupNodeData),
         title: DEFAULT_ASSISTANT_REGION_TITLE,
         subtitle: blueprint.title,
-        color: 'violet',
+        color: 'emerald',
       }),
       regionId
     )

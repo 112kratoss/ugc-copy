@@ -28,14 +28,14 @@ export default function BlogIndex() {
                 <div className="grid gap-8">
                     {posts.map((post) => (
                         <Link key={post.slug} href={`/blog/${post.slug}`} className="group block">
-                            <article className="p-8 rounded-3xl bg-zinc-900/40 border border-white/5 backdrop-blur-sm transition-all hover:bg-zinc-900/80 hover:border-purple-500/30">
+                            <article className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-8 transition-all hover:border-[var(--ui-primary)]/30 hover:bg-[var(--ui-surface-raised)]">
                                 <div className="flex items-center gap-2 text-sm text-zinc-500 mb-3">
                                     <Calendar className="w-4 h-4" />
                                     <time dateTime={post.date}>{new Date(post.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</time>
                                 </div>
-                                <h2 className="text-2xl font-semibold mb-3 group-hover:text-purple-400 transition-colors">{post.title}</h2>
+                                <h2 className="mb-3 text-2xl font-semibold transition-colors group-hover:text-[var(--ui-primary-strong)]">{post.title}</h2>
                                 <p className="text-zinc-400 leading-relaxed max-w-2xl mb-6">{post.excerpt}</p>
-                                <div className="inline-flex items-center gap-2 text-purple-400 font-medium">
+                                <div className="inline-flex items-center gap-2 font-medium text-[var(--ui-primary)]">
                                     Read Article <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                                 </div>
                             </article>

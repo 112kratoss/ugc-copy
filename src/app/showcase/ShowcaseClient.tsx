@@ -739,7 +739,7 @@ export default function ShowcaseClient({
                                 navigateWithFilters(category, sort, tool, unlock, option.id);
                             }}
                             aria-pressed={resource === option.id}
-                            className={`ui-focus-ring min-h-11 rounded-full border px-3 text-sm font-bold transition ${resource === option.id ? 'border-violet-300/30 bg-violet-400/15 text-violet-50' : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]'}`}
+                            className={`ui-focus-ring min-h-11 rounded-full border px-3 text-sm font-bold transition ${resource === option.id ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]' : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]'}`}
                         >
                             {option.label}
                         </button>
@@ -895,7 +895,7 @@ export default function ShowcaseClient({
                                                     <CreatorIdentity creator={item.creator} compact prefetch={false} />
                                                 </div>
                                                 <div className="flex items-center gap-1 text-zinc-500 text-[11px] font-semibold">
-                                                    <Heart className={`w-3.5 h-3.5 ${isSaved ? 'fill-pink-500 text-pink-500' : ''}`} />
+                                                    <Heart className={`w-3.5 h-3.5 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
                                                     <span>{item.saveCount}</span>
                                                 </div>
                                             </div>

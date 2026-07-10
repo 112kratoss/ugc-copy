@@ -213,7 +213,7 @@ export function applyGenerationModelCatalogToRegistries(
       displayName: model.displayName,
       description: model.description,
       badge: model.badge ?? '',
-      badgeColor: existing.badgeColor ?? 'from-violet-500 to-indigo-500',
+      badgeColor: existing.badgeColor ?? 'from-[#ff7a59] to-orange-500',
       maxDuration: duration?.max ?? 30,
       maxVideoDuration: duration?.max ?? 30,
       characterOrientations: choiceValues(model, 'characterOrientation'),

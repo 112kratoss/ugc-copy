@@ -403,11 +403,11 @@ export function StudioRemixNotice({
     <StudioPanel className="p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-200">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
             <Sparkles className="h-4 w-4" />
           </div>
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-fuchsia-200/90">
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]">
               {label}
             </div>
             <p className="mt-1 text-sm text-zinc-300">{description}</p>
@@ -464,8 +464,8 @@ export function StudioGenerationStatus({
 }) {
   const progressClass = {
     blue: 'from-sky-500 to-cyan-400',
-    rose: 'from-rose-500 to-fuchsia-400',
-    violet: 'from-violet-500 to-fuchsia-500',
+    rose: 'from-rose-500 to-orange-400',
+    violet: 'from-[var(--ui-primary)] to-[#ff9b7f]',
     emerald: 'from-emerald-500 to-teal-400',
     amber: 'from-amber-500 to-orange-400',
   }[accent];

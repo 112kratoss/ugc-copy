@@ -2652,11 +2652,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <div className="fixed inset-0 z-0 hidden pointer-events-none">
-                <div className="absolute top-[10%] left-[-10%] w-[40%] h-[40%] bg-blue-900/15 blur-[120px] rounded-full mix-blend-screen" />
-                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-900/10 blur-[120px] rounded-full mix-blend-screen" />
-            </div>
-
             <MediaStudioShell
                 currentToolId="video"
                 header={
@@ -2745,7 +2740,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         <p className="text-xs text-zinc-500 mt-0.5">{modelOption.description}</p>
                                                         <div className="flex flex-wrap gap-1.5 mt-2">
                                                             {modelOption.supportsMultiShot && (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                                                                <span className="rounded-full border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-2 py-0.5 text-[10px] text-[#ffb09c]">
                                                                     Multi-shot
                                                                 </span>
                                                             )}
@@ -2768,7 +2763,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                             </span>
                                                         </div>
                                                     </div>
-                                                    {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                                                    {isActive && <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" />}
                                                 </button>
                                             );
                                         })}
@@ -2781,13 +2776,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-2 flex gap-2 backdrop-blur-sm self-start">
                                 <button
                                     onClick={() => setIsMultiShot(false)}
-                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${!currentIsMultiShot ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-zinc-500 hover:text-white'}`}
+                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${!currentIsMultiShot ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'text-zinc-500 hover:text-white'}`}
                                 >
                                     Single Shot
                                 </button>
                                 <button
                                     onClick={() => setIsMultiShot(true)}
-                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${currentIsMultiShot ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-zinc-500 hover:text-white'}`}
+                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${currentIsMultiShot ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'text-zinc-500 hover:text-white'}`}
                                 >
                                     Multi-Shot
                                 </button>
@@ -2867,7 +2862,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         onKeyUp={syncPromptCaretState}
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={2500}
-                                        className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
+                                        className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
                                     />
                                     <div className="mt-2 flex items-center justify-between gap-3 text-xs">
                                         <span className="text-zinc-600">{prompt.length}/2500</span>
@@ -2929,7 +2924,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         step="1"
                                                         value={currentDuration}
                                                         onChange={(event) => setSingleDuration(Number(event.target.value))}
-                                                        className="w-36 accent-blue-500"
+                                                        className="w-36 accent-[#ff7a59]"
                                                     />
                                                     <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/10 text-white border border-white/20">
                                                         {currentDuration} sec
@@ -2972,10 +2967,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 initial={{ opacity: 0, height: 0 }}
                                                 animate={{ opacity: 1, height: 'auto' }}
                                                 exit={{ opacity: 0, height: 0 }}
-                                                className="bg-zinc-900/30 border border-purple-500/20 rounded-3xl p-6 backdrop-blur-sm relative group"
+                                                className="group relative rounded-3xl border border-[#ff7a59]/20 bg-zinc-900/30 p-6 backdrop-blur-sm"
                                             >
                                                 <div className="flex justify-between items-center mb-3">
-                                                    <h2 className="text-xs font-bold text-purple-400 uppercase tracking-widest">Shot {index + 1}</h2>
+                                                    <h2 className="text-xs font-bold uppercase tracking-widest text-[#ff9a80]">Shot {index + 1}</h2>
                                                     {multiPrompts.length > 1 && (
                                                         <button onClick={() => removeShot(shot.id)} className="text-zinc-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100">
                                                             <Trash2 className="w-4 h-4" />
@@ -3012,7 +3007,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    onClick={() => syncShotPromptCaretState(shot)}
 	                                                    onKeyUp={() => syncShotPromptCaretState(shot)}
 	                                                    placeholder={`Describe shot ${index + 1}...`}
-	                                                    className="w-full bg-black/50 text-white rounded-2xl p-4 border border-white/10 focus:border-purple-500/50 outline-none resize-none min-h-[100px] text-sm mb-4"
+	                                                    className="mb-4 min-h-[100px] w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm text-white outline-none focus:border-[#ff7a59]/50"
 	                                                />
 	                                                {activeShotMentionQuery?.shotId === shot.id && isKlingVideoModel ? (
 	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
@@ -3055,7 +3050,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         step="1"
                                                         value={shot.duration}
                                                         onChange={(event) => updateShot(shot.id, 'duration', parseInt(event.target.value))}
-                                                        className="w-32 accent-purple-500"
+                                                        className="w-32 accent-[#ff7a59]"
                                                     />
                                                     <span className="text-xs font-bold text-white">{shot.duration}s</span>
                                                 </div>
@@ -3065,7 +3060,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
                                     <button
                                         onClick={addShot}
-                                        className="w-full py-4 border-2 border-dashed border-zinc-800 rounded-3xl text-zinc-500 font-medium flex items-center justify-center gap-2 hover:border-purple-500/50 hover:text-purple-400 hover:bg-purple-500/5 transition-all"
+                                        className="flex w-full items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-zinc-800 py-4 font-medium text-zinc-500 transition-all hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/5 hover:text-[#ff9a80]"
                                     >
                                         <Plus className="w-5 h-5" /> Add New Shot
                                     </button>
@@ -3094,7 +3089,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <button
                                         type="button"
                                         onClick={() => void setReferenceModeWithPersistence('frames')}
-                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'frames' ? 'border-blue-500/40 bg-blue-500/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
+                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'frames' ? 'border-[#ff7a59]/40 bg-[#ff7a59]/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
                                     >
                                         <div className="text-sm font-semibold">Frames</div>
                                         <div className="mt-1 text-xs leading-5 text-inherit/80">
@@ -3106,7 +3101,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <button
                                         type="button"
                                         onClick={() => void setReferenceModeWithPersistence('elements')}
-                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'elements' ? 'border-fuchsia-500/40 bg-fuchsia-500/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
+                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'elements' ? 'border-[#ff7a59]/40 bg-[#ff7a59]/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
                                     >
                                         <div className="text-sm font-semibold">Elements</div>
                                         <div className="mt-1 text-xs leading-5 text-inherit/80">
@@ -3301,7 +3296,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         )}
 
                         {showMultiShotElementNotice && (
-                            <div className="rounded-[26px] border border-purple-500/20 bg-purple-500/10 p-5">
+                            <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
                                 <p className="text-sm font-semibold text-white">Named elements are paused in multi-shot</p>
                                 <p className="mt-2 text-sm leading-6 text-zinc-300">
                                     Your saved elements stay available, but multi-shot runs use shot prompts only in v1. Switch back to single-shot to reuse those named references.
@@ -3495,7 +3490,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                     event.currentTarget.blur();
                                                                 }
                                                             }}
-                                                            className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500/40"
+                                                            className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-[#ff7a59]/40"
                                                             placeholder="Rename element"
                                                         />
                                                     </div>
@@ -3796,7 +3791,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             <button
                                                 key={option.value}
                                                 onClick={() => setMode(option.value)}
-                                                className={`p-3 rounded-xl text-sm font-medium transition-all text-left ${currentMode === option.value ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                                className={`p-3 rounded-xl text-sm font-medium transition-all text-left ${currentMode === option.value ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
                                             >
                                                 {option.label}
                                             </button>
@@ -3813,7 +3808,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             <button
                                                 key={resolutionOption}
                                                 onClick={() => setResolution(resolutionOption)}
-                                                className={`py-2 rounded-xl text-xs font-bold transition-all ${currentResolution === resolutionOption ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                                className={`py-2 rounded-xl text-xs font-bold transition-all ${currentResolution === resolutionOption ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
                                             >
                                                 {resolutionOption}
                                             </button>
@@ -3829,7 +3824,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <button
                                             key={ratio}
                                             onClick={() => setAspectRatio(ratio)}
-                                            className={`py-2 rounded-xl text-xs font-bold transition-all ${currentAspectRatio === ratio ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
+                                            className={`py-2 rounded-xl text-xs font-bold transition-all ${currentAspectRatio === ratio ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
                                         >
                                             {ratio}
                                         </button>
@@ -3842,7 +3837,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Camera</h2>
                                     <button
                                         onClick={() => setFixedLens(!fixedLens)}
-                                        className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${currentFixedLens ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
+                                        className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${currentFixedLens ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
                                     >
                                         <span className="flex items-center gap-2">
                                             <Camera className="w-4 h-4" />
@@ -4039,7 +4034,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 <button
                                                     type="button"
                                                     onClick={() => setIsPublishModalOpen(true)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-5 py-3 text-sm font-semibold text-purple-100 transition hover:border-purple-400/40 hover:bg-purple-500/15"
+                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
                                                 >
                                                     <Share2 className="h-4 w-4" />
                                                     Publish & share
@@ -4062,8 +4057,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 </div>
                             ) : isGenerating ? (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-blue-500/30 to-purple-500/20">
-                                        <Loader2 className="h-7 w-7 animate-spin text-white" />
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
+                                        <Loader2 className="h-7 w-7 animate-spin text-[#ff9a80]" />
                                     </div>
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">Rendering the current scene</h3>
@@ -4082,8 +4077,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 />
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r from-blue-500/30 to-purple-500/20">
-                                        <Video className="h-7 w-7 text-white" />
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
+                                        <Video className="h-7 w-7 text-[#ff9a80]" />
                                     </div>
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">No video yet</h3>

@@ -197,7 +197,7 @@ export default function HomeShowcasePreviewGrid({
             >
               <Heart
                 aria-hidden="true"
-                className={`h-4 w-4 ${savedItemIds.has(selectedItem.id) ? 'fill-pink-500 text-pink-500' : ''}`}
+                className={`h-4 w-4 ${savedItemIds.has(selectedItem.id) ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`}
               />
               <span aria-hidden="true">{selectedItem.saveCount}</span>
             </button>

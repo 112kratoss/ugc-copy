@@ -98,11 +98,11 @@ const HANDLE_COLORS: Record<string, string> = {
   'start-frame': '#38bdf8',
   'end-frame': '#fb7185',
   'reference-image': '#38bdf8',
-  'element-image': '#ec4899',
+  'element-image': '#ff7a59',
   video: '#22c55e',
   'reference-video': '#22c55e',
-  audio: '#a78bfa',
-  'reference-audio': '#a78bfa',
+  audio: '#f2b95e',
+  'reference-audio': '#f2b95e',
 };
 
 const HANDLE_SIZE = 12;
@@ -309,7 +309,7 @@ function NodeShell({
       ? 'border border-sky-500/35 bg-sky-500/10 text-sky-200'
       : assistantPreviewState === 'removed'
         ? 'border border-rose-500/35 bg-rose-500/10 text-rose-200'
-        : 'border border-violet-500/30 bg-violet-500/10 text-violet-200';
+        : 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
   const shellToneClassName = assistantPreviewState === 'added'
     ? 'border-emerald-400/45 bg-emerald-500/[0.05] ring-emerald-400/10'
     : assistantPreviewState === 'changed'
@@ -317,7 +317,7 @@ function NodeShell({
       : assistantPreviewState === 'removed'
         ? 'border-rose-400/45 bg-rose-500/[0.05] ring-rose-400/10 opacity-75'
         : assistantManaged
-          ? 'border-violet-500/20 ring-violet-500/[0.06]'
+          ? 'border-white/15 ring-white/[0.04]'
           : 'border-white/10 ring-white/[0.03]';
 
   return (

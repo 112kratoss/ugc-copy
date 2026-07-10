@@ -238,7 +238,7 @@ export default function NavbarClient() {
               >
                 {link.label}
                 <span
-                  className={`absolute inset-x-0 -bottom-1 h-0.5 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 transition-opacity ${
+                  className={`absolute inset-x-0 -bottom-1 h-0.5 rounded-full bg-[var(--ui-primary)] transition-opacity ${
                     isActive ? 'opacity-100' : 'opacity-0'
                   }`}
                 />
@@ -254,10 +254,10 @@ export default function NavbarClient() {
             <>
               <Link
                 href="/create"
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition-all ${
+                className={`ui-focus-ring rounded-full border px-4 py-2 text-sm font-extrabold transition-all ${
                   isCreatePath
-                    ? 'border-white/10 bg-white text-black shadow-[0_10px_30px_-18px_rgba(255,255,255,0.8)]'
-                    : 'border-white/10 bg-white/[0.05] text-white hover:bg-white/[0.1]'
+                    ? 'border-transparent bg-[var(--ui-primary-strong)] text-[var(--ui-primary-on)]'
+                    : 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]'
                 }`}
               >
                 Create
@@ -266,10 +266,10 @@ export default function NavbarClient() {
               {credits !== null ? (
                 <Link
                   href="/pricing"
-                  className="group relative rounded-full bg-gradient-to-r from-purple-500/40 to-pink-500/40 p-[1px] transition-all hover:from-purple-500 hover:to-pink-500"
+                  className="ui-focus-ring group relative rounded-full border border-amber-300/25 bg-amber-400/10 transition-colors hover:border-amber-300/40 hover:bg-amber-400/15"
                 >
-                  <span className="flex items-center gap-2 rounded-full bg-zinc-950/90 px-4 py-1.5 text-sm font-medium text-zinc-100 transition-colors group-hover:bg-zinc-950/70">
-                    <Sparkles className="h-4 w-4 text-purple-400" />
+                  <span className="flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-bold text-amber-100">
+                    <Sparkles className="h-4 w-4 text-amber-300" />
                     {credits} Credits
                   </span>
                 </Link>
@@ -335,7 +335,7 @@ export default function NavbarClient() {
           ) : (
             <Link
               href="/login?returnUrl=/create"
-              className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-black transition-transform hover:scale-[1.02] hover:bg-zinc-200"
+              className="ui-focus-ring rounded-full bg-[var(--ui-primary)] px-5 py-2 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
             >
               Start Creating
             </Link>
@@ -347,7 +347,7 @@ export default function NavbarClient() {
         {user && credits !== null ? (
           <Link
             href="/pricing"
-            className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-medium text-purple-100"
+            className="ui-focus-ring rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-bold text-amber-100"
           >
             {credits}
           </Link>
@@ -406,7 +406,7 @@ export default function NavbarClient() {
               <Link
                 href={user ? '/create' : '/login?returnUrl=/create'}
                 onClick={() => setIsMobileMenuOpen(false)}
-                className="rounded-2xl bg-white px-4 py-3 text-center text-sm font-semibold text-black transition hover:bg-zinc-200"
+                className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-4 py-3 text-center text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
               >
                 {user ? 'Create' : 'Start Creating'}
               </Link>

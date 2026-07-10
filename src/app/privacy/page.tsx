@@ -112,7 +112,7 @@ export default function PrivacyPolicy() {
                         </ul>
                         <p className="mt-4">
                             To exercise these rights, contact us at{" "}
-                            <a href={`mailto:${siteConfig.privacyEmail}`} className="text-purple-400 hover:text-purple-300">
+                            <a href={`mailto:${siteConfig.privacyEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                 {siteConfig.privacyEmail}
                             </a>
                         </p>
@@ -161,7 +161,7 @@ export default function PrivacyPolicy() {
                         <ul className="mt-4 space-y-2">
                             <li>
                                 Email:{" "}
-                                <a href={`mailto:${siteConfig.privacyEmail}`} className="text-purple-400 hover:text-purple-300">
+                                <a href={`mailto:${siteConfig.privacyEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                     {siteConfig.privacyEmail}
                                 </a>
                             </li>

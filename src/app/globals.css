@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brand-purple: #b7a0f5;
-  --color-brand-pink: #ff8e72;
+  --color-brand-coral: #ff7a59;
+  --color-brand-coral-soft: #ff8e72;
   --color-brand-blue: #73bff2;
   --color-brand-red: #ff7c8b;
   --color-brand-emerald: #67d6a7;
@@ -140,7 +140,12 @@ select {
 }
 
 .markdown-content a {
-  @apply text-purple-400 hover:text-purple-300 underline underline-offset-4;
+  @apply underline underline-offset-4 transition-colors;
+  color: var(--ui-primary);
+}
+
+.markdown-content a:hover {
+  color: var(--ui-primary-strong);
 }
 
 .hide-scrollbar {

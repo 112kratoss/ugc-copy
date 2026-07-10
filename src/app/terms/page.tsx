@@ -124,7 +124,7 @@ export default function TermsOfService() {
                         <h2 className="text-2xl font-semibold text-white mb-4">11. Contact Us</h2>
                         <p>
                             If you have any questions about these Terms, please contact us at{" "}
-                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-purple-400 hover:text-purple-300">
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                 {siteConfig.supportEmail}
                             </a>
                         </p>

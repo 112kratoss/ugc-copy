@@ -997,13 +997,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             generate: 'from-blue-600 to-cyan-600 shadow-[0_0_30px_-8px_rgba(59,130,246,0.4)]',
             progress: 'from-blue-500 to-cyan-500',
         },
-        violet: {
-            ring: 'focus:border-violet-500/50 focus:ring-violet-500/10',
-            button: 'bg-violet-500/20 text-violet-300 border-violet-500/50 shadow-[0_0_12px_-3px_rgba(139,92,246,0.4)]',
-            toggle: 'bg-violet-500',
-            generate: 'from-violet-600 to-purple-600 shadow-[0_0_30px_-8px_rgba(139,92,246,0.4)]',
-            progress: 'from-violet-500 to-purple-500',
-        },
         amber: {
             ring: 'focus:border-amber-500/50 focus:ring-amber-500/10',
             button: 'bg-amber-500/20 text-amber-200 border-amber-500/50 shadow-[0_0_12px_-3px_rgba(245,158,11,0.4)]',
@@ -1082,28 +1075,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            {/* Background glows — animated per model */}
-            <div className="fixed inset-0 z-0 hidden pointer-events-none">
-                <AnimatePresence mode="wait">
-                    {selectedModel === 'nano-banana-2' ? (
-                        <motion.div key="glow-nb2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
-                            <div className="absolute top-[-20%] right-[-10%] w-[40%] h-[40%] bg-blue-900/15 blur-[120px] rounded-full mix-blend-screen" />
-                            <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyan-900/10 blur-[120px] rounded-full mix-blend-screen" />
-                        </motion.div>
-                    ) : selectedModel === 'gpt-image-2' || selectedModel === 'grok-imagine-image' ? (
-                        <motion.div key={`glow-${selectedModel}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
-                            <div className="absolute top-[-20%] right-[-10%] h-[40%] w-[40%] rounded-full bg-amber-900/15 blur-[120px] mix-blend-screen" />
-                            <div className="absolute bottom-[-10%] left-[-10%] h-[40%] w-[40%] rounded-full bg-orange-900/10 blur-[120px] mix-blend-screen" />
-                        </motion.div>
-                    ) : (
-                        <motion.div key="glow-nbp" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }}>
-                            <div className="absolute top-[-20%] right-[-10%] w-[40%] h-[40%] bg-violet-900/15 blur-[120px] rounded-full mix-blend-screen" />
-                            <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-900/10 blur-[120px] rounded-full mix-blend-screen" />
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-            </div>
-
             <MediaStudioShell
                 currentToolId="image"
                 header={
@@ -1785,7 +1756,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                 <button
                                                     type="button"
                                                     onClick={() => setIsPublishModalOpen(true)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-5 py-3 text-sm font-semibold text-purple-100 transition hover:border-purple-400/40 hover:bg-purple-500/15"
+                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
                                                 >
                                                     <Share2 className="h-4 w-4" />
                                                     Publish & share
@@ -1831,11 +1802,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             ) : (
                                 <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
                                     <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${
-                                        model.accentColor === 'violet'
-                                            ? 'from-violet-500/30 to-purple-500/10'
-                                            : model.accentColor === 'amber'
-                                                ? 'from-amber-500/30 to-orange-500/10'
-                                                : 'from-blue-500/30 to-cyan-500/10'
+                                        model.accentColor === 'amber'
+                                            ? 'from-amber-500/30 to-orange-500/10'
+                                            : 'from-blue-500/30 to-cyan-500/10'
                                     }`}>
                                         <ImageIcon className="h-7 w-7 text-white" />
                                     </div>

@@ -77,7 +77,7 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
   return (
     <main className="ui-page pb-16 pt-5 sm:pb-24 sm:pt-8">
       <div className="studio-shell max-w-[1560px]">
-        <section className="overflow-hidden rounded-[28px] border border-white/8 bg-[#111215] shadow-[0_24px_80px_-60px_rgba(56,189,248,0.55)]">
+        <section className="overflow-hidden rounded-[28px] border border-white/8 bg-[#111215] shadow-[0_24px_80px_-60px_rgba(255,122,89,0.32)]">
           <div className="relative h-40 overflow-hidden bg-[#0b0c10] sm:h-52 lg:h-60">
             {data.profile.coverUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -87,7 +87,7 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
                 className="h-full w-full object-cover"
               />
             ) : (
-              <div className="h-full w-full bg-[linear-gradient(120deg,rgba(56,189,248,0.18),rgba(17,18,21,0.9)_44%,rgba(251,113,133,0.12))]" />
+              <div className="h-full w-full bg-[linear-gradient(120deg,rgba(255,122,89,0.15),rgba(17,18,21,0.92)_44%,rgba(242,185,94,0.08))]" />
             )}
             <div className="absolute inset-0 bg-gradient-to-t from-[#111215] via-transparent to-black/10" />
           </div>

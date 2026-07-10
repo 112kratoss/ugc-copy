@@ -1284,9 +1284,9 @@ export default function CreationsPage() {
             case 'Public':
                 return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
             case 'Unlisted':
-                return 'border-indigo-400/20 bg-indigo-500/10 text-indigo-100';
+                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
             case 'Private':
-                return 'border-violet-400/20 bg-violet-500/10 text-violet-100';
+                return 'border-white/12 bg-white/[0.05] text-zinc-200';
             case 'Archived':
                 return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
             case 'Not published':
@@ -1324,12 +1324,6 @@ export default function CreationsPage() {
                 className="hidden"
                 onChange={(event) => void handlePreviewRestoreFile(event)}
             />
-            {/* Background effects */}
-            <div className="fixed inset-0 z-0 hidden pointer-events-none">
-                <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-purple-900/15 blur-[120px] rounded-full mix-blend-screen" />
-                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-pink-900/10 blur-[120px] rounded-full mix-blend-screen" />
-            </div>
-
             <div className="studio-shell relative z-10 py-8">
                 {/* Header */}
                 <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1545,7 +1539,7 @@ export default function CreationsPage() {
                                 const Icon = item.icon;
                                 return (
                                     <div key={item.title} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4 text-left">
-                                        <Icon className="h-5 w-5 text-purple-200" />
+                                        <Icon className="h-5 w-5 text-[var(--ui-primary)]" />
                                         <div className="mt-3 text-sm font-semibold text-white">{item.title}</div>
                                         <p className="mt-1 text-xs leading-5 text-zinc-500">{item.body}</p>
                                     </div>
@@ -1553,7 +1547,7 @@ export default function CreationsPage() {
                             })}
                         </div>
                         <div className="flex flex-col gap-3 sm:flex-row">
-                            <Link href="/create" className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200">
+                            <Link href="/create" className="ui-focus-ring inline-flex items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
                                 <Wand2 className="h-4 w-4" />
                                 Choose a creator tool
                             </Link>
@@ -1684,7 +1678,7 @@ export default function CreationsPage() {
                                 const linkedPostVisibilityActionClass =
                                     nextLinkedPostVisibility === 'public'
                                         ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15'
-                                        : 'border-violet-400/25 bg-violet-500/10 text-violet-100 hover:border-violet-300/35 hover:bg-violet-500/15';
+                                        : 'border-white/12 bg-white/[0.05] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]';
                                 const hasPrimaryAction =
                                     canManageFromCreation &&
                                     workspaceState.primaryAction.type !== 'none' &&
@@ -2042,8 +2036,8 @@ export default function CreationsPage() {
                                     : post.visibility === 'public'
                                         ? 'border-sky-400/20 bg-sky-500/10 text-sky-100'
                                         : post.visibility === 'unlisted'
-                                            ? 'border-indigo-400/20 bg-indigo-500/10 text-indigo-100'
-                                            : 'border-violet-400/20 bg-violet-500/10 text-violet-100';
+                                            ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
+                                            : 'border-white/12 bg-white/[0.05] text-zinc-200';
                                 const bundleStatusClass = post.bundle?.status === 'published'
                                     ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
                                     : 'border-amber-400/20 bg-amber-500/10 text-amber-100';
@@ -2061,7 +2055,7 @@ export default function CreationsPage() {
                                 const isVisibilityUpdating = postVisibilityUpdatingKey === `${post.id}:${nextVisibility}`;
                                 const visibilityActionClass = nextVisibility === 'public'
                                     ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15'
-                                    : 'border-violet-400/25 bg-violet-500/10 text-violet-100 hover:border-violet-300/35 hover:bg-violet-500/15';
+                                    : 'border-white/12 bg-white/[0.05] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]';
 
                                 return (
                                     <article

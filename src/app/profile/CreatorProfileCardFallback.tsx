@@ -30,7 +30,7 @@ export default function CreatorProfileCardFallback({
       aria-busy={isLoading || undefined}
       className="overflow-hidden rounded-[28px] border border-white/8 bg-zinc-950/80 shadow-[0_24px_70px_rgba(0,0,0,0.35)]"
     >
-      <div className="h-24 bg-gradient-to-r from-sky-500/20 via-fuchsia-500/15 to-amber-300/15" />
+      <div className="h-24 bg-gradient-to-r from-[#19191c] via-[#202024] to-[#2a1b1a]" />
       <div className="p-5 sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex items-end gap-4">

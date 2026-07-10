@@ -94,7 +94,7 @@ export default function EnhancePromptButton({
                     disabled={!canEnhance}
                     className={`group flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-300 ${
                         canEnhance
-                            ? 'bg-gradient-to-r from-violet-600/20 to-blue-600/20 text-violet-300 border border-violet-500/30 hover:from-violet-600/30 hover:to-blue-600/30 hover:border-violet-500/50 hover:shadow-[0_0_20px_-5px_rgba(139,92,246,0.3)] active:scale-[0.97]'
+                            ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/15 active:scale-[0.97]'
                             : 'bg-zinc-900/30 text-zinc-600 border border-white/5 cursor-not-allowed'
                     }`}
                 >
@@ -106,7 +106,7 @@ export default function EnhancePromptButton({
                     <span>{isEnhancing ? loadingLabel : label}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
                         canEnhance
-                            ? 'bg-violet-500/20 text-violet-400'
+                            ? 'bg-black/25 text-[#ffc1b2]'
                             : 'bg-zinc-800 text-zinc-600'
                     }`}>
                         2 credits

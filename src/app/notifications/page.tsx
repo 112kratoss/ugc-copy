@@ -29,7 +29,7 @@ interface WebNotification {
 }
 
 const CATEGORY_META = {
-  generation: { color: 'text-violet-400 border-violet-500/20 bg-violet-500/10', Icon: Sparkles, label: 'Generation' },
+  generation: { color: 'text-[#ff9b7f] border-[#ff7a59]/25 bg-[#ff7a59]/10', Icon: Sparkles, label: 'Generation' },
   commerce: { color: 'text-amber-400 border-amber-500/20 bg-amber-500/10', Icon: CreditCard, label: 'Unlocks' },
   social: { color: 'text-rose-400 border-rose-500/20 bg-rose-500/10', Icon: Heart, label: 'Creator' },
   system: { color: 'text-cyan-400 border-cyan-500/20 bg-cyan-500/10', Icon: Bell, label: 'System' },

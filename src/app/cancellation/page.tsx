@@ -73,7 +73,7 @@ export default function CancellationAndRefundPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">6. How to Request a Refund</h2>
                         <p className="mb-4">
                             Email us at{" "}
-                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-purple-400 hover:text-purple-300">
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                 {siteConfig.supportEmail}
                             </a>{" "}
                             with:
@@ -105,7 +105,7 @@ export default function CancellationAndRefundPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">9. Contact</h2>
                         <p>
                             Questions about this policy? Email{" "}
-                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-purple-400 hover:text-purple-300">
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                 {siteConfig.supportEmail}
                             </a>
                             .

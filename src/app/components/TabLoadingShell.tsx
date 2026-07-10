@@ -1,4 +1,4 @@
-type TabLoadingShellAccent = 'blue' | 'emerald' | 'rose' | 'violet';
+type TabLoadingShellAccent = 'blue' | 'emerald' | 'rose' | 'coral';
 
 interface TabLoadingShellProps {
   title: string;
@@ -9,8 +9,8 @@ interface TabLoadingShellProps {
 const accentClasses: Record<TabLoadingShellAccent, string> = {
   blue: 'from-blue-500/22 via-sky-500/10 to-transparent text-blue-100 border-blue-300/20',
   emerald: 'from-emerald-500/22 via-teal-500/10 to-transparent text-emerald-100 border-emerald-300/20',
-  rose: 'from-rose-500/22 via-pink-500/10 to-transparent text-rose-100 border-rose-300/20',
-  violet: 'from-violet-500/22 via-purple-500/10 to-transparent text-violet-100 border-violet-300/20',
+  rose: 'from-rose-500/20 via-orange-400/[0.07] to-transparent text-rose-100 border-rose-300/20',
+  coral: 'from-[#2a1b1a] via-[#202024] to-[#19191c] text-[#fff8ed] border-white/10',
 };
 
 function SkeletonBlock({ className = '' }: { className?: string }) {

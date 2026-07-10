@@ -9,7 +9,7 @@ describe('TabLoadingShell', () => {
       <TabLoadingShell
         title="Studio"
         eyebrow="Workspace"
-        accent="violet"
+        accent="coral"
       />
     );
 

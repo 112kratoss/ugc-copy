@@ -34,12 +34,12 @@ function AssistantMessageBubble({
     <div
       className={`rounded-[24px] border px-4 py-3 ${
         isAssistant
-          ? 'border-violet-500/25 bg-violet-500/10 text-violet-50'
+          ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-zinc-100'
           : 'border-white/10 bg-white/[0.03] text-zinc-100'
       }`}
     >
       <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-        {isAssistant ? <Bot className="h-3.5 w-3.5 text-violet-200" /> : <Sparkles className="h-3.5 w-3.5 text-zinc-400" />}
+        {isAssistant ? <Bot className="h-3.5 w-3.5 text-emerald-200" /> : <Sparkles className="h-3.5 w-3.5 text-zinc-400" />}
         {isAssistant ? 'AI Builder' : 'You'}
       </div>
       <div className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</div>
@@ -82,7 +82,7 @@ function SlotIcon({ type }: { type: WorkflowCanvasNode['type'] }) {
   }
 
   if (type === 'audio-input') {
-    return <Volume2 className="h-4 w-4 text-violet-200" />;
+    return <Volume2 className="h-4 w-4 text-amber-200" />;
   }
 
   return <ImageIcon className="h-4 w-4 text-sky-200" />;
@@ -110,10 +110,10 @@ function ProposalCard({
   const totalChangedNodes = proposal.diff.nodes.added.length + proposal.diff.nodes.changed.length + proposal.diff.nodes.removed.length;
 
   return (
-    <div className="rounded-[28px] border border-violet-500/25 bg-violet-500/[0.08] p-4 shadow-[0_18px_60px_rgba(0,0,0,0.28)]">
+    <div className="rounded-[28px] border border-emerald-500/25 bg-emerald-500/[0.06] p-4 shadow-[0_18px_60px_rgba(0,0,0,0.28)]">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-violet-200">Proposal preview</div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-200">Proposal preview</div>
           <div className="mt-2 text-lg font-semibold text-white">{proposal.summary}</div>
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.16em] text-zinc-200">
             {imageModel ? <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1">Image {imageModel}</span> : null}
@@ -267,8 +267,8 @@ export function WorkflowAssistantDrawer({
             onClick={isOpen ? onClose : onOpen}
             className={`relative inline-flex h-12 w-12 items-center justify-center rounded-full border shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur transition ${
               isOpen
-                ? 'border-violet-400/45 bg-violet-500/18 text-violet-50'
-                : 'border-white/10 bg-black/72 text-zinc-200 hover:border-violet-500/30 hover:bg-violet-500/12 hover:text-violet-100'
+                ? 'border-emerald-400/45 bg-emerald-500/18 text-emerald-50'
+                : 'border-white/10 bg-black/72 text-zinc-200 hover:border-emerald-500/30 hover:bg-emerald-500/12 hover:text-emerald-100'
             }`}
           >
             <Bot className="h-5 w-5" />
@@ -285,13 +285,13 @@ export function WorkflowAssistantDrawer({
           >
             <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
               <div className="flex items-start gap-3">
-                <div className="rounded-2xl border border-violet-500/30 bg-violet-500/10 p-3 text-violet-100">
+                <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
                   <Bot className="h-5 w-5" />
                 </div>
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="text-lg font-semibold text-white">AI Builder</div>
-                    <span className="rounded-full border border-violet-500/25 bg-violet-500/10 px-2.5 py-0.5 text-[10px] uppercase tracking-[0.16em] text-violet-100">
+                    <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] uppercase tracking-[0.16em] text-emerald-100">
                       Canvas popup
                     </span>
                   </div>
@@ -311,9 +311,9 @@ export function WorkflowAssistantDrawer({
             </div>
 
             <div className="shrink-0 border-b border-white/10 px-5 py-4">
-              <div className="rounded-[24px] border border-violet-500/20 bg-violet-500/10 p-4 text-sm text-violet-50">
+              <div className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/[0.07] p-4 text-sm text-zinc-200">
                 <div className="flex items-start gap-3">
-                  <div className="rounded-full bg-black/30 p-2 text-violet-100">
+                  <div className="rounded-full bg-black/30 p-2 text-emerald-100">
                     <Wand2 className="h-4 w-4" />
                   </div>
                   <div className="leading-relaxed">
@@ -389,7 +389,7 @@ export function WorkflowAssistantDrawer({
                     type="button"
                     onClick={onSendMessage}
                     disabled={isSubmitting || !input.trim() || isSetupRequired}
-                    className="inline-flex items-center gap-2 rounded-2xl border border-violet-500/35 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-50 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex items-center gap-2 rounded-2xl border border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary)] px-4 py-2.5 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
                     {isSubmitting ? 'Generating...' : isSetupRequired ? 'Setup required' : 'Build proposal'}

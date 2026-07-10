@@ -425,9 +425,9 @@ function CreatorCard({
             type="button"
             onClick={() => onOpen(item, 0)}
             aria-label={`Open ${item.title}`}
-            className="ui-focus-ring flex h-full w-full flex-col justify-between bg-[linear-gradient(145deg,#181128,#111215_55%,#0a1118)] p-4 text-left sm:p-5"
+            className="ui-focus-ring flex h-full w-full flex-col justify-between bg-[linear-gradient(145deg,#211613,#111215_55%,#0a1118)] p-4 text-left sm:p-5"
           >
-            <FileText className="h-6 w-6 text-violet-300" />
+            <FileText className="h-6 w-6 text-[var(--ui-primary)]" />
             <span className="line-clamp-7 text-sm font-bold leading-6 text-zinc-100 sm:text-base">
               {itemDisplayText(item)}
             </span>
