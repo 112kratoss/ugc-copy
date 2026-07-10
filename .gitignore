@@ -17,6 +17,9 @@
 /.playwright-cli
 /output
 
+# local Codex audit captures
+/.codex/audits/
+
 # next.js
 /.next/
 /out/
