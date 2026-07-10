@@ -107,6 +107,7 @@ describe('immersive preview view model', () => {
       mediaKind: 'image',
       title: 'Image post',
       creatorLabel: '@luna',
+      creatorUsername: 'luna',
       saveLabel: '1.2K',
       canSave: true,
       canShare: true,
@@ -368,6 +369,13 @@ describe('immersive preview view model', () => {
   });
 
   it('builds stable viewer hrefs with source context', () => {
+    expect(immersiveViewerHref({ source: 'creator-profile', initialId: 'post-1' })).toEqual({
+      pathname: '/viewer',
+      params: {
+        source: 'creator-profile',
+        initialId: 'post-1',
+      },
+    });
     expect(immersiveViewerHref({ source: 'studio-creations', initialId: 'gen-1' })).toEqual({
       pathname: '/viewer',
       params: {

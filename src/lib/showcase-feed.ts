@@ -49,7 +49,7 @@ interface ProfileSummary {
   avatar_url: string | null;
 }
 
-interface PostRow {
+export interface PostRow {
   id: string;
   output_url: string | null;
   showcase_asset_path: string | null;

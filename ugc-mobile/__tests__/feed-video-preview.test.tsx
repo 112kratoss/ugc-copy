@@ -44,6 +44,7 @@ vi.mock('expo-linear-gradient', () => ({
 
 vi.mock('lucide-react-native', () => ({
   ImageOff: (props: Record<string, unknown>) => React.createElement('image-off', props),
+  Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
 }));
 
 vi.mock('react-native', () => ({
@@ -148,5 +149,6 @@ describe('FeedVideoPreview', () => {
     expect(videoState.player.play).not.toHaveBeenCalled();
     const videoViews = tree!.root.findAll((node) => String(node.type) === 'video-view');
     expect(videoViews).toHaveLength(0);
+    expect(tree!.root.findAll((node) => String(node.type) === 'play-icon')).toHaveLength(1);
   });
 });

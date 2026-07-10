@@ -58,6 +58,7 @@ import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKin
 import { getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
 
 type ViewerParams = {
+  creatorUsername?: string | string[];
   source?: string | string[];
   initialId?: string | string[];
 };
@@ -73,6 +74,7 @@ export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
   const initialId = normalizeParam(params.initialId);
+  const creatorUsername = normalizeParam(params.creatorUsername) || null;
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
@@ -97,15 +99,15 @@ export default function ImmersivePreviewViewerScreen() {
   });
 
   const sourceQueryKey = useMemo(
-    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId] as const,
-    [initialId, source, user?.id]
+    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? ''] as const,
+    [creatorUsername, initialId, source, user?.id]
   );
 
   const sourceQuery = useQuery({
     queryKey: sourceQueryKey,
     enabled: Boolean(source),
     initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId }),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername }),
     staleTime: 1000 * 45,
   });
 
@@ -123,6 +125,10 @@ export default function ImmersivePreviewViewerScreen() {
     () => buildViewerItems(source, sourceQuery.data, ownerInfo),
     [source, sourceQuery.data, ownerInfo]
   );
+  const openCreatorProfile = useCallback((item: ImmersivePreviewItem) => {
+    if (!item.creatorUsername) return;
+    router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
+  }, []);
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
   const overlayOpenItemId = getImmersiveVideoBlockerId({
     actionsOpenItemId,
@@ -314,6 +320,7 @@ export default function ImmersivePreviewViewerScreen() {
             height={height}
             item={item}
             onActionsOpen={() => setActionsOpenItemId(item.id)}
+            onCreatorOpen={openCreatorProfile}
             onDetailsPageOpenChange={(open) => setDetailsPageOpenItemId(open ? item.id : null)}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
             onRecreate={recreateItem}
@@ -429,6 +436,7 @@ function ImmersiveSlide({
   height,
   item,
   onActionsOpen,
+  onCreatorOpen,
   onDetailsPageOpenChange,
   onRecreate,
   onSave,
@@ -445,6 +453,7 @@ function ImmersiveSlide({
   height: number;
   item: ImmersivePreviewItem;
   onActionsOpen: () => void;
+  onCreatorOpen: (item: ImmersivePreviewItem) => void;
   onDetailsPageOpenChange: (open: boolean) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
@@ -462,6 +471,7 @@ function ImmersiveSlide({
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
   const slideHint = getImmersiveSlideHint({ item, pages, currentHorizontalIndex });
+  const canOpenCreator = Boolean(item.creatorUsername);
   const updateCurrentHorizontalIndex = useCallback((pageIndex: number) => {
     setCurrentHorizontalIndex(pageIndex);
     onDetailsPageOpenChange(isImmersiveDetailsSlidePageIndex(pages, pageIndex));
@@ -578,7 +588,11 @@ function ImmersiveSlide({
             gap: 17,
           }}
         >
-          <ViewerCreatorAvatar item={item} size={56} />
+          <ViewerCreatorAvatar
+            item={item}
+            onPress={canOpenCreator ? () => onCreatorOpen(item) : undefined}
+            size={56}
+          />
           <RailActionButton
             icon={<MoreVertical size={27} color="#ffffff" strokeWidth={2.5} />}
             label="More"
@@ -618,7 +632,7 @@ function ImmersiveSlide({
 
         {/* Bottom text descriptions */}
         <View
-          pointerEvents="none"
+          pointerEvents="box-none"
           style={{
             position: 'absolute',
             left: 18,
@@ -627,14 +641,25 @@ function ImmersiveSlide({
             gap: 8,
           }}
         >
-          <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
+          <View pointerEvents="none" style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
             <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '900' }}>
               {item.badge}
             </Text>
           </View>
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '900' }}>
-            {item.creatorLabel}
-          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${item.creatorLabel} profile`}
+            disabled={!canOpenCreator}
+            onPress={() => onCreatorOpen(item)}
+            style={({ pressed }) => ({
+              alignSelf: 'flex-start',
+              opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
+            })}
+          >
+            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '900' }}>
+              {item.creatorLabel}
+            </Text>
+          </Pressable>
           <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '900' }}>
             {item.title}
           </Text>
@@ -1537,12 +1562,33 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
   );
 }
 
-function ViewerCreatorAvatar({ item, size = 40 }: { item: ImmersivePreviewItem; size?: number }) {
+function ViewerCreatorAvatar({
+  item,
+  onPress,
+  size = 40,
+}: {
+  item: ImmersivePreviewItem;
+  onPress?: () => void;
+  size?: number;
+}) {
   const initial = item.creatorLabel.replace(/^@/, '').trim()[0]?.toUpperCase() || 'C';
   const innerSize = size - 3;
 
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, padding: 1.5, backgroundColor: 'rgba(255,255,255,0.9)' }}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${item.creatorLabel} profile`}
+      disabled={!onPress}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        padding: 1.5,
+        backgroundColor: 'rgba(255,255,255,0.9)',
+        opacity: pressed ? 0.76 : onPress ? 1 : 0.9,
+      })}
+    >
       <View style={{ flex: 1, overflow: 'hidden', borderRadius: innerSize / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: '#27272a' }}>
         {item.creatorAvatar ? (
           <Image source={{ uri: item.creatorAvatar }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
@@ -1550,7 +1596,7 @@ function ViewerCreatorAvatar({ item, size = 40 }: { item: ImmersivePreviewItem; 
           <Text style={{ color: '#fff', fontSize: size > 44 ? 20 : 15, fontWeight: '900' }}>{initial}</Text>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 

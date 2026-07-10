@@ -330,8 +330,11 @@ export interface ShowcaseAssetSummary {
   priceUsdCents: number;
   previewText: string;
   allowRemix: boolean;
+  salesCount?: number;
   resourceKinds?: string[];
   priceQuote?: { formatted?: string; amountSubunits?: number; currency?: string };
+  lockedPreview?: PostResourceBundleLockedPreview | null;
+  itemCounts?: Partial<Record<string, number>>;
 }
 
 export interface ShowcaseMediaItem {
@@ -388,6 +391,40 @@ export interface ShowcaseFeedResponse {
 export interface ShowcasePostResponse {
   success: boolean;
   item: ShowcaseFeedItem;
+}
+
+export interface CreatorProfileResponse {
+  profile: {
+    id: string;
+    username: string;
+    displayName: string;
+    bio: string | null;
+    avatarUrl: string | null;
+    coverUrl: string | null;
+    websiteUrl: string | null;
+    twitterHandle: string | null;
+    instagramHandle: string | null;
+    tiktokHandle: string | null;
+    location: string | null;
+  };
+  stats: {
+    publicCreations: number;
+    totalSaves: number;
+    totalRemixes: number;
+    unlocks: number;
+    totalUnlockSales: number;
+    toolsUsed: Array<{ slug: string; label: string; count: number }>;
+  };
+  items: ShowcaseFeedItem[];
+  pageInfo: {
+    hasMore: boolean;
+    nextLimit: number | null;
+    limit: number;
+  };
+  viewer: {
+    isOwner: boolean;
+    isFollowing: boolean;
+  };
 }
 
 export type PostResourceKind = 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';

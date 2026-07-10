@@ -10,10 +10,27 @@ function resolveApiBaseUrl() {
   return process.env.EXPO_PUBLIC_API_BASE_URL ?? 'https://magicbooklet.com';
 }
 
+function resolveSupabaseUrl() {
+  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+
+  if (!supabaseUrl || isWebRuntime() || !isAndroidRuntime()) {
+    return supabaseUrl;
+  }
+
+  return supabaseUrl.replace(
+    /^(https?:\/\/)(localhost|127\.0\.0\.1)(?=[:/]|$)/,
+    (_match, protocol: string) => `${protocol}10.0.2.2`
+  );
+}
+
+function isAndroidRuntime() {
+  return process.env.EXPO_OS === 'android';
+}
+
 export const env = {
   siteUrl: process.env.EXPO_PUBLIC_SITE_URL ?? 'https://magicbooklet.com',
   apiBaseUrl: resolveApiBaseUrl(),
-  supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
+  supabaseUrl: resolveSupabaseUrl(),
   supabasePublishableKey: process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '',
   revenueCatIosApiKey: process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY ?? '',
   revenueCatAndroidApiKey: process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY ?? '',

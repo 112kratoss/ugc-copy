@@ -6,6 +6,7 @@ import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-d
 
 export type PreviewViewerSource =
   | 'showcase-feed'
+  | 'creator-profile'
   | 'home-community'
   | 'profile-saved'
   | 'profile-posts'
@@ -70,6 +71,7 @@ export interface ImmersivePreviewItem {
   previewKind?: 'text';
   creatorLabel: string;
   creatorAvatar: string | null;
+  creatorUsername?: string | null;
   badge: string;
   saveLabel: string;
   saveCount: number;
@@ -99,9 +101,11 @@ export interface ImmersivePreviewItem {
 }
 
 export function immersiveViewerHref({
+  creatorUsername,
   source,
   initialId,
 }: {
+  creatorUsername?: string | null;
   source: PreviewViewerSource;
   initialId: string;
 }) {
@@ -110,6 +114,7 @@ export function immersiveViewerHref({
     params: {
       source,
       initialId,
+      ...(creatorUsername ? { creatorUsername } : {}),
     },
   };
 }
@@ -269,6 +274,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel,
     creatorAvatar: item.creator.avatar,
+    creatorUsername: item.creator.username?.trim() || null,
     badge: showcaseBadge(item),
     saveLabel: formatCompactCount(item.saveCount),
     saveCount: item.saveCount,

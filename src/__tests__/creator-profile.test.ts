@@ -46,9 +46,27 @@ type PostRow = {
   archived_at?: string | null;
 };
 
+type PostMediaRow = {
+  id: string;
+  post_id: string;
+  storage_path: string | null;
+  preview_storage_path: string | null;
+  preview_thumbhash: string | null;
+  preview_status: 'pending' | 'processing' | 'ready' | 'failed';
+  external_url: string | null;
+  media_kind: 'image' | 'video';
+  content_type: string | null;
+  original_name: string | null;
+  width: number | null;
+  height: number | null;
+  duration_seconds: number | null;
+  sort_order: number;
+};
+
 let profilesState: ProfileRow[] = [];
 let generationsState: GenerationRow[] = [];
 let postsState: PostRow[] = [];
+let postMediaState: PostMediaRow[] = [];
 let postsMissingSourceToolSlugColumn = false;
 
 function createServiceClientMock() {
@@ -73,6 +91,10 @@ function createServiceClientMock() {
                     return { data: profile, error: null };
                   },
                 };
+              },
+              async in(column: string, values: unknown[]) {
+                const rows = profilesState.filter((row) => values.includes((row as Record<string, unknown>)[column]));
+                return { data: rows, error: null };
               },
             };
           },
@@ -168,6 +190,25 @@ function createServiceClientMock() {
                   )
                   .slice(0, limit);
                 return { data: rows, error: null };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'post_media') {
+        return {
+          select() {
+            return {
+              in(column: string, values: unknown[]) {
+                return {
+                  async order() {
+                    const rows = postMediaState
+                      .filter((row) => values.includes((row as Record<string, unknown>)[column]))
+                      .sort((left, right) => left.sort_order - right.sort_order);
+                    return { data: rows, error: null };
+                  },
+                };
               },
             };
           },
@@ -285,6 +326,24 @@ describe('creator profile data loader', () => {
         visibility: 'public',
       },
     ];
+    postMediaState = [
+      {
+        id: 'media-1',
+        post_id: 'post-1',
+        storage_path: 'showcase/post-1/original.png',
+        preview_storage_path: 'showcase/post-1/preview.webp',
+        preview_thumbhash: 'thumbhash',
+        preview_status: 'ready',
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/png',
+        original_name: 'original.png',
+        width: 1080,
+        height: 1350,
+        duration_seconds: null,
+        sort_order: 0,
+      },
+    ];
     postsMissingSourceToolSlugColumn = false;
   });
 
@@ -300,6 +359,11 @@ describe('creator profile data loader', () => {
     expect(data?.profile.displayName).toBe('creator-name');
     expect(data?.items).toHaveLength(1);
     expect(data?.items[0].creator.username).toBe('creator-name');
+    expect(data?.items[0].mediaItems?.[0]).toMatchObject({
+      previewUrl: 'https://cdn.example.com/showcase/post-1/preview.webp',
+      previewThumbhash: 'thumbhash',
+      gridReady: true,
+    });
     expect(data?.stats.totalSaves).toBe(12);
     expect(data?.pageInfo.hasMore).toBe(false);
   });

@@ -20,7 +20,11 @@ import {
   isSupabaseConfigured,
   supabase,
 } from './supabase';
-import { isInvalidRefreshTokenError } from './supabase-auth-recovery';
+import {
+  isInvalidRefreshTokenError,
+  isNetworkRequestFailedError,
+  supabaseNetworkFailureMessage,
+} from './supabase-auth-recovery';
 
 export type AuthMode = 'login' | 'signup';
 
@@ -191,9 +195,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
 
-    await initializeSupabaseAuth();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    try {
+      await initializeSupabaseAuth();
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } catch (error) {
+      throw normalizeSupabaseAuthError(error);
+    }
+
     await refreshProfile();
     router.replace('/(tabs)');
   };
@@ -203,9 +212,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
 
-    await initializeSupabaseAuth();
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
+    try {
+      await initializeSupabaseAuth();
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+    } catch (error) {
+      throw normalizeSupabaseAuthError(error);
+    }
+
     await refreshProfile();
     router.replace('/(tabs)/profile');
   };
@@ -219,8 +233,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Apple sign-in is available on iOS only.');
     }
 
-    await initializeSupabaseAuth();
-    await signInWithNativeApple(supabase);
+    try {
+      await initializeSupabaseAuth();
+      await signInWithNativeApple(supabase);
+    } catch (error) {
+      throw normalizeSupabaseAuthError(error);
+    }
+
     await refreshProfile();
     router.replace(mode === 'signup' ? '/(tabs)/profile' : '/(tabs)');
   };
@@ -265,6 +284,18 @@ async function recoverInvalidAuthSession(error: unknown) {
 
   await clearPersistedSupabaseAuthSession();
   return true;
+}
+
+function normalizeSupabaseAuthError(error: unknown) {
+  if (isNetworkRequestFailedError(error)) {
+    return new Error(supabaseNetworkFailureMessage(env.supabaseUrl));
+  }
+
+  if (error instanceof Error) {
+    return error;
+  }
+
+  return new Error('Authentication failed.');
 }
 
 export function useAuth() {

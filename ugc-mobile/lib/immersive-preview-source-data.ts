@@ -10,6 +10,7 @@ import {
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import type {
   GenerationListItem,
+  CreatorProfileResponse,
   OwnerPostsResponse,
   ProfileResponse,
   ShowcaseFeedItem,
@@ -21,6 +22,7 @@ type QueryValue = string | number | boolean | null | undefined;
 
 export const VIEWER_SOURCES: PreviewViewerSource[] = [
   'showcase-feed',
+  'creator-profile',
   'home-community',
   'profile-saved',
   'profile-posts',
@@ -40,6 +42,7 @@ export interface ImmersivePreviewApi {
     params?: Record<string, QueryValue>,
     options?: { auth?: boolean }
   ) => Promise<ShowcaseFeedResponse>;
+  getCreatorProfile: (username: string, params?: Record<string, QueryValue>) => Promise<CreatorProfileResponse>;
   getSavedMedia: (params?: Record<string, QueryValue>) => Promise<ShowcaseFeedResponse>;
   getShowcasePost: (postId: string) => Promise<ShowcasePostResponse>;
   listGenerations: (includeCompleted?: boolean) => Promise<{ generations: GenerationListItem[] }>;
@@ -77,10 +80,12 @@ export async function loadImmersiveSourceData({
   api,
   source,
   initialId,
+  creatorUsername,
 }: {
   api: ImmersivePreviewApi;
   source: PreviewViewerSource;
   initialId: string;
+  creatorUsername?: string | null;
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
     const [generationResponse, ownerPostResponse] = await Promise.all([
@@ -110,6 +115,25 @@ export async function loadImmersiveSourceData({
     }
 
     return { showcaseItems };
+  }
+
+  if (source === 'creator-profile') {
+    if (creatorUsername) {
+      const response = await api.getCreatorProfile(creatorUsername, { limit: 48 });
+      let showcaseItems = response.items;
+
+      if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
+        const detail = await api.getShowcasePost(initialId).catch(() => null);
+        if (detail?.item) {
+          showcaseItems = [detail.item, ...showcaseItems];
+        }
+      }
+
+      return { showcaseItems };
+    }
+
+    const detail = initialId ? await api.getShowcasePost(initialId).catch(() => null) : null;
+    return { showcaseItems: detail?.item ? [detail.item] : [] };
   }
 
   const response = await api.getShowcaseFeed({ limit: 48, sort: 'recent' });
@@ -144,6 +168,11 @@ export function readCachedImmersiveSourceData(
     return sourceDataContains(data, initialId) ? data : undefined;
   }
 
+  if (source === 'creator-profile') {
+    const data = cachedCreatorProfileItems(queryClient);
+    return sourceDataContains(data, initialId) ? data : undefined;
+  }
+
   const data = cachedShowcaseItems(queryClient, source, userId);
   return sourceDataContains(data, initialId) ? data : undefined;
 }
@@ -175,6 +204,20 @@ function cachedShowcaseItems(queryClient: QueryClient, source: PreviewViewerSour
 
   const deduped = dedupeById(items);
   const showcaseItems = source === 'profile-saved' ? deduped.filter((item) => item.isSaved) : deduped;
+  return showcaseItems.length ? { showcaseItems } : undefined;
+}
+
+function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceData | undefined {
+  const items: ShowcaseFeedItem[] = [];
+  const creatorQueries = queryClient.getQueriesData<CreatorProfileResponse>({ queryKey: ['creator-profile'] });
+
+  for (const [, data] of creatorQueries) {
+    if (data?.items.length) {
+      items.push(...data.items);
+    }
+  }
+
+  const showcaseItems = dedupeById(items);
   return showcaseItems.length ? { showcaseItems } : undefined;
 }
 

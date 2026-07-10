@@ -3,21 +3,19 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { FileText, Heart, Images, Lock, Play, RefreshCw, Repeat2 } from 'lucide-react-native';
+import { ChevronRight, FileText, Heart, Lock, Play, RefreshCw, Repeat2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FeedMediaFrame } from '@/components/feed-media-frame';
-import { FeedVideoPreview } from '@/components/feed-video-preview';
+import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
@@ -44,8 +42,9 @@ import {
 } from '@/lib/showcase-feed-view-model';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
+import { hasShowcasePreviewMedia } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
 
@@ -86,6 +85,9 @@ const FEED_FILTERS: Array<{
     params: { resource: 'remix' },
   },
 ];
+
+const CREATOR_ROW_TAP_START_OFFSET = 0;
+const CREATOR_ROW_TAP_END_OFFSET = 68;
 
 const SKELETON_HEIGHTS = [
   [196, 230, 244],
@@ -193,6 +195,12 @@ export default function ShowcaseScreen() {
     router.push(immersiveViewerHref({ source: 'showcase-feed', initialId: item.id }) as never);
   };
 
+  const openCreator = (item: ShowcaseFeedItem) => {
+    const username = item.creator.username?.trim();
+    if (!username) return;
+    router.push(`/creators/${encodeURIComponent(username)}` as never);
+  };
+
   const renderCard: ListRenderItem<ShowcaseMasonryCard> = ({ item, target }) => {
     return (
       <MasonryCardCell layout={gridLayout}>
@@ -200,6 +208,7 @@ export default function ShowcaseScreen() {
           card={item}
           layout={gridLayout}
           activeVideoIds={target === 'Cell' ? visibleActiveVideoIds : []}
+          onOpenCreator={openCreator}
           onOpenPost={openPost}
           onScrollToggle={setIsSwipingMedia}
         />
@@ -443,159 +452,18 @@ function BottomLoader() {
   );
 }
 
-function CardMediaCarousel({
-  mediaItems,
-  height,
-  radius,
-  accent,
-  activeVideoIds,
-  cardId,
-  onPress,
-  width,
-  onScrollToggle,
-}: {
-  mediaItems: ShowcaseMediaItem[];
-  height: number;
-  radius: number;
-  accent: string;
-  activeVideoIds: string[];
-  cardId: string;
-  onPress: () => void;
-  width: number;
-  onScrollToggle?: (scrolling: boolean) => void;
-}) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-
-  return (
-    <View style={{ height, width, overflow: 'hidden' }}>
-      <ScrollView
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onScrollBeginDrag={() => onScrollToggle?.(true)}
-        onScrollEndDrag={() => onScrollToggle?.(false)}
-        onMomentumScrollEnd={(event) => {
-          const index = Math.round(event.nativeEvent.contentOffset.x / width);
-          setCurrentIndex(index);
-          onScrollToggle?.(false);
-        }}
-        style={{ flex: 1 }}
-      >
-        {mediaItems.map((item, index) => {
-          const isVideo = item.mediaKind === 'video';
-          const isActiveVideo = isVideo && activeVideoIds.includes(cardId) && currentIndex === index;
-
-          return (
-            <Pressable
-              key={item.id}
-              onPress={onPress}
-              style={{ width, height }}
-            >
-              {isVideo ? (
-                isActiveVideo ? (
-                  <FeedVideoPreview
-                    url={item.url}
-                    previewUrl={item.previewUrl}
-                    previewCacheKey={item.preview?.cacheKey ?? item.previewCacheKey}
-                    previewThumbhash={item.preview?.thumbhash ?? item.previewThumbhash}
-                    active={true}
-                    height={height}
-                    radius={radius}
-                    accent={accent}
-                  />
-                ) : (
-                  <FeedVideoPreview
-                    url={item.url}
-                    previewUrl={item.previewUrl}
-                    previewCacheKey={item.preview?.cacheKey ?? item.previewCacheKey}
-                    previewThumbhash={item.preview?.thumbhash ?? item.previewThumbhash}
-                    active={false}
-                    height={height}
-                    radius={radius}
-                    accent={accent}
-                  />
-                )
-              ) : (
-                <FeedMediaFrame
-                  kind="image"
-                  url={item.preview?.previewUrl ?? item.previewUrl ?? item.url}
-                  backdropUrl={item.previewUrl}
-                  cacheKey={item.preview?.cacheKey ?? item.previewCacheKey}
-                  thumbhash={item.preview?.thumbhash ?? item.previewThumbhash}
-                  transition={120}
-                  recyclingKey={`showcase:${cardId}:${item.id}`}
-                  radius={radius}
-                  style={{ width: '100%', height: '100%' }}
-                />
-              )}
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-
-      {/* Top right indicator */}
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          right: 10,
-          top: 10,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 4,
-          borderRadius: 12,
-          borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.1)',
-          backgroundColor: 'rgba(3,3,6,0.68)',
-          paddingHorizontal: 8,
-          paddingVertical: 4,
-        }}
-      >
-        <Images size={12} color="#ffffff" />
-        <Text style={{ color: '#ffffff', fontSize: 10, fontWeight: '800' }}>
-          {currentIndex + 1}/{mediaItems.length}
-        </Text>
-      </View>
-
-      {/* Bottom dots */}
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          bottom: 10,
-          left: 0,
-          right: 0,
-          flexDirection: 'row',
-          justifyContent: 'center',
-          gap: 5,
-        }}
-      >
-        {mediaItems.map((_, index) => (
-          <View
-            key={index}
-            style={{
-              height: 5,
-              width: index === currentIndex ? 12 : 5,
-              borderRadius: 2.5,
-              backgroundColor: index === currentIndex ? '#ffffff' : 'rgba(255,255,255,0.45)',
-            }}
-          />
-        ))}
-      </View>
-    </View>
-  );
-}
-
 function MasonryPin({
   card,
   layout,
   activeVideoIds,
   onOpenPost,
+  onOpenCreator,
   onScrollToggle,
 }: {
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
   activeVideoIds: string[];
+  onOpenCreator: (item: ShowcaseFeedItem) => void;
   onOpenPost: (item: ShowcaseFeedItem) => void;
   onScrollToggle?: (scrolling: boolean) => void;
 }) {
@@ -606,133 +474,138 @@ function MasonryPin({
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
-  const mediaItems = card.item.mediaItems ?? [];
-  const hasMultipleMedia = mediaItems.length > 1;
+  const routeCardPress = (locationY: number) => {
+    const inCreatorRow = locationY >= mediaHeight + CREATOR_ROW_TAP_START_OFFSET
+      && locationY <= mediaHeight + CREATOR_ROW_TAP_END_OFFSET;
+
+    if (inCreatorRow) {
+      if (card.item.creator.username?.trim()) {
+        onOpenCreator(card.item);
+      }
+      return;
+    }
+
+    onOpenPost(card.item);
+  };
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${card.title}. ${card.badge}${card.unlock ? `. ${card.unlock.summary}` : ''}`}
-      onPress={() => onOpenPost(card.item)}
+      accessibilityLabel={`${card.title}. ${card.badge}${card.unlock ? `. ${card.unlock.summary}` : ''}. ${creatorLabel}`}
+      onPress={(event) => routeCardPress(event.nativeEvent.locationY)}
       style={({ pressed }) => ({
         borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: pressed ? `${accent}66` : appTheme.colors.border,
+        borderColor: appTheme.colors.border,
         backgroundColor: appTheme.colors.panel,
         overflow: 'hidden',
-        opacity: pressed ? 0.88 : 1,
-        transform: [{ scale: pressed ? 0.985 : 1 }],
+        opacity: pressed ? 0.94 : 1,
+        transform: [{ scale: pressed ? 0.99 : 1 }],
       })}
     >
       <View
         style={{
+          height: mediaHeight,
           overflow: 'hidden',
-        backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
-      }}
+          backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
+        }}
       >
-        {card.previewKind === 'text' ? (
-          <TextPinPreview
-            accent={accent}
-            badge={card.badge}
-            height={mediaHeight}
-            prompt={card.prompt}
-            title={card.title}
-          />
-        ) : hasMultipleMedia ? (
-          <CardMediaCarousel
-            mediaItems={mediaItems}
-            height={mediaHeight}
-            radius={layout.mediaRadius}
-            accent={accent}
-            activeVideoIds={activeVideoIds}
-            cardId={card.id}
-            width={columnWidth}
-            onPress={() => onOpenPost(card.item)}
-            onScrollToggle={onScrollToggle}
-          />
-        ) : card.mediaUrl && !isVideoCard ? (
-          <FeedMediaFrame
-            kind="image"
-            url={card.previewUrl ?? card.mediaUrl}
-            backdropUrl={card.previewUrl}
-            cacheKey={card.previewCacheKey}
-            thumbhash={card.previewThumbhash}
-            transition={120}
-            recyclingKey={`showcase:${card.id}`}
-            radius={layout.mediaRadius}
-            style={{
-              width: '100%',
-              height: mediaHeight,
-            }}
-          />
-        ) : showActiveVideo && card.mediaUrl ? (
-          <FeedVideoPreview
-            url={card.mediaUrl}
-            previewUrl={card.previewUrl}
-            previewCacheKey={card.previewCacheKey}
-            previewThumbhash={card.previewThumbhash}
-            active
-            height={mediaHeight}
-            radius={layout.mediaRadius}
-            accent={accent}
-          />
-        ) : isVideoCard ? (
-          card.mediaUrl ? (
-            <FeedVideoPreview
-              url={card.mediaUrl}
-              previewUrl={card.previewUrl}
-              previewCacheKey={card.previewCacheKey}
-              previewThumbhash={card.previewThumbhash}
-              active={false}
-              height={mediaHeight}
-              radius={layout.mediaRadius}
+          {card.previewKind === 'text' ? (
+            <TextPinPreview
               accent={accent}
+              badge={card.badge}
+              height={mediaHeight}
+              prompt={card.prompt}
+              title={card.title}
+            />
+          ) : hasShowcasePreviewMedia(card.item) ? (
+            <ShowcaseMediaPreview
+              item={card.item}
+              height={mediaHeight}
+              accent={accent}
+              width={columnWidth}
+              radius={layout.mediaRadius}
+              recyclingKey={`showcase:${card.id}`}
+              videoActivation={showActiveVideo ? 'visible' : 'never'}
+              onPress={() => onOpenPost(card.item)}
+              onScrollToggle={onScrollToggle}
             />
           ) : (
-            <VideoPinPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
-          )
-        ) : (
-          <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
-        )}
-        {card.previewKind === 'media' ? (
-          <>
-            <PinBadge label={card.badge} accent={accent} />
-            <LinearGradient
-              pointerEvents="none"
-              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.74)', 'rgba(0,0,0,0.92)']}
-              locations={[0, 0.58, 1]}
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: 0,
-                minHeight: 88,
-                justifyContent: 'flex-end',
-                paddingHorizontal: appTheme.spacing.gap,
-                paddingBottom: appTheme.spacing.gap,
-              }}
-            >
-              <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>
-                {card.title}
-              </Text>
-            </LinearGradient>
-            {isVideoCard ? <VideoCornerPlay /> : null}
-          </>
-        ) : null}
+            isVideoCard ? (
+              <VideoPinPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
+            ) : (
+              <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
+            )
+          )}
+          {card.previewKind === 'media' ? (
+            <>
+              <PinBadge label={card.badge} accent={accent} />
+              <LinearGradient
+                pointerEvents="none"
+                colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.74)', 'rgba(0,0,0,0.92)']}
+                locations={[0, 0.58, 1]}
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  minHeight: 88,
+                  justifyContent: 'flex-end',
+                  paddingHorizontal: appTheme.spacing.gap,
+                  paddingBottom: appTheme.spacing.gap,
+                }}
+              >
+                <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>
+                  {card.title}
+                </Text>
+              </LinearGradient>
+              {isVideoCard ? <VideoCornerPlay /> : null}
+            </>
+          ) : null}
       </View>
 
       <View style={{ gap: appTheme.spacing.compact, paddingHorizontal: 10, paddingTop: 9, paddingBottom: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${creatorLabel} profile`}
+            accessibilityHint="Opens this creator's profile"
+            disabled={!card.item.creator.username}
+            hitSlop={{ top: 4, right: 12, bottom: 4, left: 0 }}
+            onPress={(event) => {
+              event.stopPropagation();
+              onOpenCreator(card.item);
+            }}
+            style={({ pressed }) => ({
+              flex: 1,
+              minHeight: 48,
+              minWidth: 0,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 7,
+              paddingRight: 2,
+              opacity: pressed ? 0.72 : 1,
+              zIndex: 2,
+              elevation: 2,
+            })}
+          >
             <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />
             <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '800' }}>
               {creatorLabel}
             </Text>
-          </View>
+            <ChevronRight size={15} color={appTheme.colors.faint} strokeWidth={2.5} />
+          </Pressable>
           <PinStat icon={<Heart size={16} color={appTheme.colors.text} strokeWidth={2.4} />} label={card.saveLabel} />
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: appTheme.spacing.compact,
+          }}
+        >
           {card.unlock ? (
             <UnlockSummary unlock={card.unlock} />
           ) : (

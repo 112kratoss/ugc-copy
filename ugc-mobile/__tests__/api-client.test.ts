@@ -231,6 +231,79 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  it('loads creator profiles by encoded username with optional query params', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      profile: {
+        id: 'creator-1',
+        username: 'luna studio',
+        displayName: 'Luna Studio',
+        bio: 'Creator portfolio',
+        avatarUrl: null,
+        coverUrl: null,
+        websiteUrl: null,
+        twitterHandle: null,
+        instagramHandle: null,
+        tiktokHandle: null,
+        location: null,
+      },
+      stats: {
+        publicCreations: 0,
+        totalSaves: 0,
+        totalRemixes: 0,
+        unlocks: 0,
+        totalUnlockSales: 0,
+        toolsUsed: [],
+      },
+      items: [],
+      pageInfo: {
+        hasMore: false,
+        nextLimit: null,
+        limit: 48,
+      },
+      viewer: {
+        isOwner: false,
+        isFollowing: false,
+      },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.getCreatorProfile('luna studio', { limit: 48 });
+
+    expect(response.profile.displayName).toBe('Luna Studio');
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/creators/luna%20studio?limit=48');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('loads and updates creator follow state through the profile follow API', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ following: false }))
+      .mockResolvedValueOnce(jsonResponse({ following: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.getCreatorFollowState('creator-1')).resolves.toEqual({ following: false });
+    await expect(api.setCreatorFollowing('creator-1', true)).resolves.toEqual({ following: true });
+
+    const [getUrl, getInit] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(getUrl).toBe('https://magicbooklet.test/api/profile/follow?followingId=creator-1');
+    expect((getInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+
+    const [postUrl, postInit] = fetcher.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    expect(postUrl).toBe('https://magicbooklet.test/api/profile/follow');
+    expect(postInit.method).toBe('POST');
+    expect(JSON.parse(String(postInit.body))).toEqual({ followingId: 'creator-1', following: true });
+    expect((postInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
   it('deduplicates explicitly anonymous showcase feed requests inside the content cache window', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       items: [],

@@ -79,6 +79,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="viewer" options={{ headerShown: false }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false }} />
+                <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Seller Dashboard' }} />

@@ -1,6 +1,7 @@
 import { useVideoPlayer } from 'expo-video';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
+import { Play } from 'lucide-react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { appTheme } from '@/lib/theme';
@@ -43,7 +44,32 @@ export function FeedVideoPreview({
       );
     }
 
-    return <View style={{ height, borderRadius: radius, backgroundColor: '#050506' }} />;
+    return (
+      <View
+        style={{
+          height,
+          borderRadius: radius,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: '#050506',
+        }}
+      >
+        <View
+          style={{
+            width: 46,
+            height: 46,
+            borderRadius: 23,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 1,
+            borderColor: `${accent}66`,
+            backgroundColor: `${accent}22`,
+          }}
+        >
+          <Play size={19} color="#ffffff" fill="#ffffff" />
+        </View>
+      </View>
+    );
   }
 
   return (

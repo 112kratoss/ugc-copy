@@ -1,6 +1,7 @@
 import type {
   AppVersionResponse,
   CreatePostResponse,
+  CreatorProfileResponse,
   GenerationListItem,
   GenerationStartResponse,
   GenerationStatusResponse,
@@ -356,6 +357,15 @@ export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher =
         return { success: true, item };
       }
     },
+    getCreatorProfile: (username: string, params?: Record<string, QueryValue>) =>
+      request<CreatorProfileResponse>(`/api/creators/${encodeURIComponent(username)}${buildQuery(params)}`),
+    getCreatorFollowState: (followingId: string) =>
+      request<{ following: boolean }>(`/api/profile/follow${buildQuery({ followingId })}`),
+    setCreatorFollowing: (followingId: string, following: boolean) =>
+      request<{ following: boolean }>('/api/profile/follow', {
+        method: 'POST',
+        body: JSON.stringify({ followingId, following }),
+      }),
     saveShowcasePost: (postId: string, options: SaveShowcasePostOptions) =>
       request<SaveShowcasePostResponse>('/api/showcase/save', {
         method: 'POST',

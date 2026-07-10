@@ -3,15 +3,12 @@ import 'server-only';
 import { cache } from 'react';
 
 import {
-  deriveTitleFromBody,
-  getMarketplaceAssetSummaryMap,
   getPostMediaKind,
   isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
   isMissingPostSourceToolSlugColumnError,
   isMissingPostsSchemaError,
   normalizeLegacyPostFormat,
-  resolvePostMediaUrl,
 } from '@/lib/posts-server';
 import { getCreatorDisplayName, normalizeUsername } from '@/lib/profile';
 import {
@@ -19,16 +16,14 @@ import {
   resolveStoredMediaUrl,
 } from '@/lib/server-helpers';
 import { getPostResourceBundlePriceQuote } from '@/lib/post-resource-bundles-server';
-import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
   MAGICBOOKLET_SOURCE_KIND,
-  normalizeShowcaseSourceKind,
   type RawShowcaseSourceKind,
   type ShowcaseFeedItem,
   type ShowcaseItemCategory,
   type ShowcasePostFormat,
 } from '@/lib/showcase';
-import { slugifySourceTool } from '@/lib/source-tools';
+import { resolvePostRowsToFeedItems } from '@/lib/showcase-feed';
 
 interface CreatorPostRow {
   id: string;
@@ -42,10 +37,11 @@ interface CreatorPostRow {
   save_count: number | null;
   remix_count: number | null;
   created_at: string;
+  user_id: string | null;
   generation_id: string | null;
   source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
-  source_tool_slug?: string | null;
+  source_tool_slug: string | null;
   review_status?: 'visible' | 'flagged' | 'hidden' | null;
 }
 
@@ -256,6 +252,7 @@ export const getCreatorProfilePageData = cache(async (
           ...row,
           body: null,
           post_format: normalizeLegacyPostFormat(row.category),
+          user_id: profile.id,
           source_tool_slug: row.source_tool_slug ?? null,
         }));
       } else {
@@ -266,6 +263,7 @@ export const getCreatorProfilePageData = cache(async (
 
         visibleRows = ((withoutSourceToolSlugResult.data ?? []) as unknown as Array<Omit<CreatorPostRow, 'source_tool_slug'>>).map((row) => ({
           ...row,
+          user_id: profile.id,
           source_tool_slug: (row as CreatorPostRow).source_tool_slug ?? null,
         }));
       }
@@ -328,6 +326,8 @@ export const getCreatorProfilePageData = cache(async (
         ...row,
         body: null,
         post_format: normalizeLegacyPostFormat(row.category),
+        user_id: profile.id,
+        source_tool_slug: row.source_tool_slug ?? null,
       }));
     } else {
       if (result.error) {
@@ -335,7 +335,11 @@ export const getCreatorProfilePageData = cache(async (
         throw result.error;
       }
 
-      visibleRows = (result.data ?? []) as unknown as CreatorPostRow[];
+      visibleRows = ((result.data ?? []) as unknown as Array<Omit<CreatorPostRow, 'user_id' | 'source_tool_slug'>>).map((row) => ({
+        ...row,
+        user_id: profile.id,
+        source_tool_slug: (row as CreatorPostRow).source_tool_slug ?? null,
+      }));
     }
   } catch (error) {
     if (!isMissingPostsSchemaError(error)) {
@@ -458,96 +462,14 @@ export const getCreatorProfilePageData = cache(async (
   hasMore = visibleRows.length > limit;
   visibleRows = visibleRows.slice(0, limit);
 
-  const assetMap = await getMarketplaceAssetSummaryMap(
-    visibleRows.map((post) => post.id),
-    adminSupabase
-  );
-  await attachLocalizedAssetPrices(assetMap, options?.countryCode);
-  const generationIds = Array.from(new Set(visibleRows.map((post) => post.generation_id).filter(Boolean))) as string[];
-  const modelMap = new Map<string, string>();
-
-  if (generationIds.length > 0) {
-    const { data: models, error: modelsError } = await adminSupabase
-      .from('generations')
-      .select('id, model')
-      .in('id', generationIds);
-
-    if (modelsError) {
-      console.error('Failed to fetch creator generation models:', modelsError);
-    } else {
-      for (const row of models ?? []) {
-        if (typeof row.id === 'string' && typeof row.model === 'string') {
-          modelMap.set(row.id, row.model);
-        }
-      }
+  const items = await resolvePostRowsToFeedItems(visibleRows, adminSupabase);
+  const localizedAssets = new Map<string, NonNullable<ShowcaseFeedItem['asset']>>();
+  for (const item of items) {
+    if (item.asset) {
+      localizedAssets.set(item.id, item.asset);
     }
   }
-
-  const resolvedItems = await Promise.all(
-    visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
-      const mediaUrl = await resolvePostMediaUrl(adminSupabase, post);
-      if (post.post_format !== 'text' && !mediaUrl) {
-        return null;
-      }
-
-      const asset = assetMap.get(post.id) ?? null;
-      const body = post.body?.trim() || '';
-      const model = post.generation_id
-        ? modelMap.get(post.generation_id) ?? MAGICBOOKLET_SOURCE_KIND
-        : post.source_kind === 'manual'
-          ? 'manual'
-          : post.source_tool ?? 'external';
-
-      const sourceKind = normalizeShowcaseSourceKind(post.source_kind);
-      const remix = resolvePostRemixCapability({
-        generationId: post.generation_id,
-        postFormat: post.post_format,
-        category: post.category,
-        sourceKind,
-        resourceBundle: asset
-          ? {
-              viewerCanAccess: false,
-              allowRemix: asset.allowRemix,
-              items: asset.lockedPreview?.itemPreviews ?? [],
-            }
-          : null,
-      });
-
-      return {
-        id: post.id,
-        mediaUrl,
-        mediaKind: getPostMediaKind(post.category, post.post_format),
-        model,
-        title: post.title?.trim() || deriveTitleFromBody(body) || (post.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation'),
-        prompt: post.prompt || '',
-        body,
-        category: resolveItemCategory(post.category),
-        postFormat: post.post_format,
-        saveCount: post.save_count || 0,
-        remixCount: post.remix_count || 0,
-        createdAt: post.created_at,
-        creator: {
-          id: profile.id,
-          username: profile.username,
-          name: getCreatorDisplayName({
-            displayName: profile.display_name,
-            username: profile.username,
-          }),
-          avatar: profile.avatar_url,
-        },
-        sourceKind,
-        sourceTool: post.source_tool,
-        sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
-        generationId: post.generation_id,
-        asset,
-        canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
-        remixCapability: remix.capability,
-        remixTarget: remix.target,
-      };
-    })
-  );
-
-  const items = resolvedItems.filter((item): item is ShowcaseFeedItem => item !== null);
+  await attachLocalizedAssetPrices(localizedAssets, options?.countryCode);
   const toolCounts = new Map<string, { label: string; count: number }>();
   for (const item of items) {
     if (!item.sourceToolSlug) {
