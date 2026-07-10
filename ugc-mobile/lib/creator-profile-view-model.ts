@@ -1,7 +1,7 @@
 import { hasShowcaseVideoWithoutPreview } from './showcase-media';
 import type { CreatorProfileResponse, ShowcaseAssetSummary, ShowcaseFeedItem } from './types';
 
-export type CreatorProfileTab = 'posts' | 'unlocks' | 'tools';
+export type CreatorProfileTab = 'creations' | 'unlocks' | 'tools';
 
 export type CreatorProfileVideoPreviewLayout = {
   height: number;
@@ -9,7 +9,7 @@ export type CreatorProfileVideoPreviewLayout = {
 };
 
 export const CREATOR_PROFILE_TABS: Array<{ id: CreatorProfileTab; label: string }> = [
-  { id: 'posts', label: 'Posts' },
+  { id: 'creations', label: 'Creations' },
   { id: 'unlocks', label: 'Unlocks' },
   { id: 'tools', label: 'Tools' },
 ];
@@ -17,7 +17,7 @@ export const CREATOR_PROFILE_TABS: Array<{ id: CreatorProfileTab; label: string 
 export function normalizeCreatorProfileTab(value: string | string[] | undefined): CreatorProfileTab {
   const rawValue = Array.isArray(value) ? value[0] : value;
   const tab = rawValue?.toLowerCase();
-  return tab === 'unlocks' || tab === 'tools' ? tab : 'posts';
+  return tab === 'unlocks' || tab === 'tools' ? tab : 'creations';
 }
 
 export function creatorProfileTabItems(items: ShowcaseFeedItem[], tab: CreatorProfileTab) {
@@ -30,6 +30,26 @@ export function creatorProfileTabItems(items: ShowcaseFeedItem[], tab: CreatorPr
   }
 
   return items;
+}
+
+export function flattenCreatorProfilePages(pages: CreatorProfileResponse[] | undefined) {
+  const seen = new Set<string>();
+  const items: ShowcaseFeedItem[] = [];
+
+  for (const page of pages ?? []) {
+    for (const item of page.items) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      items.push(item);
+    }
+  }
+
+  return items;
+}
+
+export function getNextCreatorProfileOffset(lastPage: CreatorProfileResponse) {
+  if (!lastPage.pageInfo.hasMore) return undefined;
+  return typeof lastPage.pageInfo.nextOffset === 'number' ? lastPage.pageInfo.nextOffset : undefined;
 }
 
 export function creatorInitial(profile: CreatorProfileResponse['profile']) {

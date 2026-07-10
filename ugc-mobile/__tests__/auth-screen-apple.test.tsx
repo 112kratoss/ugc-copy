@@ -31,6 +31,7 @@ vi.mock('expo-router', () => ({
     back: vi.fn(),
     replace: vi.fn(),
   },
+  useLocalSearchParams: () => ({}),
 }));
 
 vi.mock('react-native', () => ({

@@ -6,6 +6,8 @@ import {
   creatorProfileSocialLinks,
   creatorProfileTabItems,
   creatorProfileUnlockSummary,
+  flattenCreatorProfilePages,
+  getNextCreatorProfileOffset,
   normalizeCreatorProfileTab,
   selectActiveCreatorProfileVideoId,
 } from '../lib/creator-profile-view-model';
@@ -59,18 +61,52 @@ function profile(overrides: Partial<CreatorProfileResponse['profile']> = {}): Cr
 
 describe('creator profile view model', () => {
   it('normalizes tabs and exposes expected v1 tabs', () => {
-    expect(CREATOR_PROFILE_TABS.map((tab) => tab.id)).toEqual(['posts', 'unlocks', 'tools']);
+    expect(CREATOR_PROFILE_TABS.map((tab) => tab.id)).toEqual(['creations', 'unlocks', 'tools']);
     expect(normalizeCreatorProfileTab('unlocks')).toBe('unlocks');
     expect(normalizeCreatorProfileTab(['tools'])).toBe('tools');
-    expect(normalizeCreatorProfileTab('unknown')).toBe('posts');
+    expect(normalizeCreatorProfileTab('posts')).toBe('creations');
+    expect(normalizeCreatorProfileTab('unknown')).toBe('creations');
   });
 
   it('filters unlock tab items without changing post tab order', () => {
     const posts = [item('post-1'), item('post-2', true), item('post-3', true)];
 
-    expect(creatorProfileTabItems(posts, 'posts').map((post) => post.id)).toEqual(['post-1', 'post-2', 'post-3']);
+    expect(creatorProfileTabItems(posts, 'creations').map((post) => post.id)).toEqual(['post-1', 'post-2', 'post-3']);
     expect(creatorProfileTabItems(posts, 'unlocks').map((post) => post.id)).toEqual(['post-2', 'post-3']);
     expect(creatorProfileTabItems(posts, 'tools')).toEqual([]);
+  });
+
+  it('flattens paginated profile items without duplicate posts', () => {
+    const response = (items: ShowcaseFeedItem[], offset: number, nextOffset: number | null): CreatorProfileResponse => ({
+      profile: profile(),
+      stats: {
+        publicCreations: 3,
+        totalSaves: 0,
+        totalRemixes: 0,
+        unlocks: 0,
+        totalUnlockSales: 0,
+        toolsUsed: [],
+      },
+      items,
+      pageInfo: {
+        hasMore: nextOffset !== null,
+        nextLimit: nextOffset === null ? null : 24,
+        nextOffset,
+        limit: 24,
+        offset,
+      },
+      viewer: { isOwner: false, isFollowing: false },
+    });
+    const firstPage = response([item('post-1'), item('post-2')], 0, 24);
+    const secondPage = response([item('post-2'), item('post-3')], 24, null);
+
+    expect(flattenCreatorProfilePages([firstPage, secondPage]).map((post) => post.id)).toEqual([
+      'post-1',
+      'post-2',
+      'post-3',
+    ]);
+    expect(getNextCreatorProfileOffset(firstPage)).toBe(24);
+    expect(getNextCreatorProfileOffset(secondPage)).toBeUndefined();
   });
 
   it('builds copy-safe social links and initials for creator profiles', () => {

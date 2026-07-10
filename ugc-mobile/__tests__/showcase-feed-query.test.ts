@@ -9,6 +9,7 @@ import {
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getShowcaseFeedPageParams,
+  normalizeShowcaseToolFilter,
   resolveMobileShowcaseFeedFilterId,
 } from '../lib/showcase-feed-query';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
@@ -123,6 +124,10 @@ describe('showcase feed query helpers', () => {
     expect(resolveMobileShowcaseFeedFilterId(['paid', 'free'])).toBe('paid');
     expect(resolveMobileShowcaseFeedFilterId('missing')).toBe('all');
     expect(resolveMobileShowcaseFeedFilterId(undefined)).toBe('all');
+    expect(normalizeShowcaseToolFilter('runway')).toBe('runway');
+    expect(normalizeShowcaseToolFilter([' midjourney ', 'ignored'])).toBe('midjourney');
+    expect(normalizeShowcaseToolFilter('all')).toBeNull();
+    expect(normalizeShowcaseToolFilter('')).toBeNull();
   });
 
   it('returns nextOffset only while the API has more pages', () => {

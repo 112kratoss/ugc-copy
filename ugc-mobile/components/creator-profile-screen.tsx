@@ -1,9 +1,11 @@
+import { FlashList, type ViewToken } from '@shopify/flash-list';
 import { useIsFocused } from '@react-navigation/native';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import {
+  ChevronRight,
   ExternalLink,
   FileText,
   Globe,
@@ -12,6 +14,7 @@ import {
   Layers3,
   Lock,
   MapPin,
+  Pencil,
   Play,
   RefreshCw,
   Repeat2,
@@ -19,12 +22,11 @@ import {
   UserCheck,
   UserPlus,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Linking,
   Pressable,
-  ScrollView,
   Share,
   Text,
   useWindowDimensions,
@@ -40,9 +42,8 @@ import {
   creatorInitial,
   creatorProfileSocialLinks,
   creatorProfileTabItems,
-  creatorProfileUnlockSummary,
-  selectActiveCreatorProfileVideoId,
-  type CreatorProfileVideoPreviewLayout,
+  flattenCreatorProfilePages,
+  getNextCreatorProfileOffset,
   type CreatorProfileTab,
 } from '@/lib/creator-profile-view-model';
 import { env } from '@/lib/env';
@@ -50,16 +51,25 @@ import { formatCompactCount } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
-import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
+import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 
-const PROFILE_QUERY_LIMIT = 48;
+const PROFILE_PAGE_SIZE = 24;
 const GRID_GAP = 10;
+const LOAD_MORE_COOLDOWN_MS = 800;
+
+type CreatorTool = CreatorProfileResponse['stats']['toolsUsed'][number];
+type CreatorListItem =
+  | { kind: 'header'; key: 'header' }
+  | { kind: 'tabs'; key: 'tabs' }
+  | { kind: 'post'; key: string; item: ShowcaseFeedItem }
+  | { kind: 'tool'; key: string; tool: CreatorTool }
+  | { kind: 'empty'; key: 'empty'; tab: CreatorProfileTab };
 
 export function CreatorProfileScreen({
-  initialTab = 'posts',
+  initialTab = 'creations',
   username,
 }: {
   initialTab?: CreatorProfileTab;
@@ -68,90 +78,96 @@ export function CreatorProfileScreen({
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
+  const previousFocusRef = useRef(isFocused);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [activeTab, setActiveTab] = useState<CreatorProfileTab>(initialTab);
-  const [gridTop, setGridTop] = useState<number | null>(null);
-  const [scrollOffsetY, setScrollOffsetY] = useState(0);
-  const [scrollViewportHeight, setScrollViewportHeight] = useState(0);
-  const [videoTileLayouts, setVideoTileLayouts] = useState<Record<string, CreatorProfileVideoPreviewLayout>>({});
+  const [activeVideoItemId, setActiveVideoItemId] = useState<string | null>(null);
+  const [followError, setFollowError] = useState<string | null>(null);
+  const loadingMoreRef = useRef(false);
+  const lastLoadMoreAtRef = useRef(0);
+  const lastLoadMoreItemCountRef = useRef(0);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 14 : 16;
-  const gridWidth = contentWidth - horizontalPadding * 2;
-  const tileWidth = Math.floor((gridWidth - GRID_GAP) / 2);
-  const profileQuery = useQuery({
-    queryKey: ['creator-profile', username],
+  const tileWidth = Math.floor((contentWidth - horizontalPadding * 2 - GRID_GAP) / 2);
+  const queryKey = useMemo(() => ['creator-profile', 'infinite', username] as const, [username]);
+  const profileQuery = useInfiniteQuery({
+    queryKey,
     enabled: Boolean(username),
-    queryFn: () => api.getCreatorProfile(username, { limit: PROFILE_QUERY_LIMIT }),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.getCreatorProfile(username, {
+      limit: PROFILE_PAGE_SIZE,
+      offset: pageParam,
+    }),
+    getNextPageParam: getNextCreatorProfileOffset,
     staleTime: 1000 * 60,
   });
-  const data = profileQuery.data;
-  const currentTabItems = useMemo(
-    () => creatorProfileTabItems(data?.items ?? [], activeTab),
-    [activeTab, data?.items]
-  );
-  const selectedVideoItemId = useMemo(
-    () => selectActiveCreatorProfileVideoId(
-      currentTabItems,
-      videoTileLayouts,
-      gridTop,
-      scrollOffsetY,
-      scrollViewportHeight
-    ),
-    [currentTabItems, gridTop, scrollOffsetY, scrollViewportHeight, videoTileLayouts]
-  );
-  const activeVideoItemId = isFocused ? selectedVideoItemId : null;
-  const socialLinks = useMemo(
-    () => data ? creatorProfileSocialLinks(data.profile) : [],
-    [data]
-  );
+  const data = profileQuery.data?.pages[0];
+  const items = useMemo(() => flattenCreatorProfilePages(profileQuery.data?.pages), [profileQuery.data?.pages]);
+  const currentTabItems = useMemo(() => creatorProfileTabItems(items, activeTab), [activeTab, items]);
+  const socialLinks = useMemo(() => data ? creatorProfileSocialLinks(data.profile) : [], [data]);
+  const listItems = useMemo<CreatorListItem[]>(() => {
+    const content: CreatorListItem[] = activeTab === 'tools'
+      ? (data?.stats.toolsUsed ?? []).map((tool) => ({ kind: 'tool', key: `tool:${tool.slug}`, tool }))
+      : currentTabItems.map((item) => ({ kind: 'post', key: `post:${item.id}`, item }));
+
+    return [
+      { kind: 'header', key: 'header' },
+      { kind: 'tabs', key: 'tabs' },
+      ...(content.length ? content : [{ kind: 'empty', key: 'empty', tab: activeTab } as const]),
+    ];
+  }, [activeTab, currentTabItems, data?.stats.toolsUsed]);
 
   useEffect(() => {
-    setGridTop(null);
-    setVideoTileLayouts({});
+    if (isFocused && !previousFocusRef.current) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+    previousFocusRef.current = isFocused;
+  }, [isFocused, queryClient, queryKey]);
+
+  useEffect(() => {
+    setActiveVideoItemId(null);
+    loadingMoreRef.current = false;
+    lastLoadMoreAtRef.current = 0;
+    lastLoadMoreItemCountRef.current = 0;
   }, [activeTab, username]);
 
-  const recordVideoTileLayout = (id: string, layout: CreatorProfileVideoPreviewLayout) => {
-    setVideoTileLayouts((current) => {
-      const previous = current[id];
-      if (previous?.y === layout.y && previous.height === layout.height) return current;
-      return { ...current, [id]: layout };
-    });
-  };
   const followMutation = useMutation({
     mutationFn: (following: boolean) => api.setCreatorFollowing(data?.profile.id ?? '', following),
     onMutate: async (following) => {
-      await queryClient.cancelQueries({ queryKey: ['creator-profile', username] });
-      const previous = queryClient.getQueryData<CreatorProfileResponse>(['creator-profile', username]);
-      queryClient.setQueryData<CreatorProfileResponse>(['creator-profile', username], (current) => current ? {
+      setFollowError(null);
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<InfiniteData<CreatorProfileResponse>>(queryKey);
+      queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => current ? {
         ...current,
-        viewer: {
-          ...current.viewer,
-          isFollowing: following,
-        },
+        pages: current.pages.map((page) => ({
+          ...page,
+          viewer: { ...page.viewer, isFollowing: following },
+        })),
       } : current);
       return { previous };
     },
     onError: (_error, _following, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(['creator-profile', username], context.previous);
-      }
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+      setFollowError('Could not update follow. Your previous state was restored.');
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['creator-profile', username] });
+      void queryClient.invalidateQueries({ queryKey });
     },
   });
 
   const handleFollowPress = () => {
     if (!data) return;
     if (!user) {
-      router.push('/auth' as never);
+      router.push({
+        pathname: '/auth',
+        params: { returnTo: `/creators/${encodeURIComponent(data.profile.username)}` },
+      } as never);
       return;
     }
-    if (data.viewer.isOwner) return;
-    followMutation.mutate(!data.viewer.isFollowing);
+    if (!data.viewer.isOwner) followMutation.mutate(!data.viewer.isFollowing);
   };
 
   const handleShareProfile = async () => {
@@ -173,8 +189,45 @@ export function CreatorProfileScreen({
     }) as never);
   };
 
-  const notFound = isNotFoundError(profileQuery.error);
+  const requestNextPage = useCallback(() => {
+    const now = Date.now();
+    if (
+      activeTab === 'tools'
+      || !profileQuery.hasNextPage
+      || profileQuery.isFetchingNextPage
+      || profileQuery.isLoading
+      || loadingMoreRef.current
+      || lastLoadMoreItemCountRef.current === items.length
+      || now - lastLoadMoreAtRef.current < LOAD_MORE_COOLDOWN_MS
+    ) return;
 
+    loadingMoreRef.current = true;
+    lastLoadMoreAtRef.current = now;
+    lastLoadMoreItemCountRef.current = items.length;
+    void profileQuery.fetchNextPage().finally(() => {
+      loadingMoreRef.current = false;
+    });
+  }, [activeTab, items.length, profileQuery]);
+
+  const handleRefresh = () => {
+    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMoreAtRef.current = 0;
+    queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {
+      if (!current?.pages.length) return current;
+      return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
+    });
+    void profileQuery.refetch();
+  };
+
+  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<CreatorListItem>> }) => {
+    const nextActiveVideo = viewableItems.find((token) =>
+      token.isViewable && token.item?.kind === 'post' && hasShowcaseVideoWithoutPreview(token.item.item)
+    );
+    setActiveVideoItemId(nextActiveVideo?.item?.kind === 'post' ? nextActiveVideo.item.item.id : null);
+  }, []);
+  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 55, minimumViewTime: 160 }), []);
+
+  const notFound = isNotFoundError(profileQuery.error);
   if (profileQuery.isLoading && !data) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.background }}>
@@ -193,165 +246,185 @@ export function CreatorProfileScreen({
           title={notFound ? 'Creator not found' : 'Could not load creator'}
           body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again from the feed.'}
         />
+        {!notFound ? (
+          <Pressable onPress={() => void profileQuery.refetch()} style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ color: appTheme.colors.text, ...appTheme.type.button }}>Retry</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
 
-  return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      style={{ flex: 1, backgroundColor: appTheme.colors.background }}
-      contentContainerStyle={{
-        width: '100%',
-        maxWidth: 430,
-        alignSelf: 'center',
-        paddingTop: topInset + 12,
-        paddingHorizontal: horizontalPadding,
-        paddingBottom: bottomInset + 36,
-        gap: 18,
-      }}
-      onLayout={(event) => setScrollViewportHeight(event.nativeEvent.layout.height)}
-      onScroll={(event) => setScrollOffsetY(event.nativeEvent.contentOffset.y)}
-      scrollEventThrottle={16}
-      showsVerticalScrollIndicator={false}
-    >
-      <Stack.Screen options={{ title: `@${data.profile.username}` }} />
-      <CreatorHeader
-        data={data}
-        isFollowLoading={followMutation.isPending}
-        onFollowPress={handleFollowPress}
-        onShareProfile={handleShareProfile}
-        socialLinks={socialLinks}
-      />
-      <CreatorStats data={data} />
-      <CreatorTabs
-        activeTab={activeTab}
-        data={data}
-        onChange={setActiveTab}
-      />
-      {activeTab === 'tools' ? (
-        <ToolsList tools={data.stats.toolsUsed} />
-      ) : (
-        <View onLayout={(event) => setGridTop(event.nativeEvent.layout.y)}>
-          <CreatorGrid
-            activeVideoItemId={activeVideoItemId}
-            items={currentTabItems}
-            onOpenItem={openProfileItem}
-            onVideoTileLayout={recordVideoTileLayout}
-            tab={activeTab}
-            tileWidth={tileWidth}
+  const renderItem = ({ item }: { item: CreatorListItem }) => {
+    if (item.kind === 'header') {
+      return (
+        <View style={{ paddingBottom: 14 }}>
+          <CreatorHeader
+            data={data}
+            followError={followError}
+            isFollowLoading={followMutation.isPending}
+            onEditProfile={() => router.push('/edit-profile' as never)}
+            onFollowPress={handleFollowPress}
+            onShareProfile={handleShareProfile}
+            socialLinks={socialLinks}
           />
         </View>
-      )}
-      {profileQuery.isRefetching ? (
-        <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-          <RefreshCw size={18} color={appTheme.colors.muted} />
+      );
+    }
+    if (item.kind === 'tabs') {
+      return (
+        <View style={{ backgroundColor: appTheme.colors.background, paddingBottom: 12 }}>
+          <CreatorTabs activeTab={activeTab} data={data} onChange={setActiveTab} />
         </View>
-      ) : null}
-    </ScrollView>
+      );
+    }
+    if (item.kind === 'tool') {
+      return <CreatorToolRow tool={item.tool} />;
+    }
+    if (item.kind === 'empty') {
+      return (
+        <EmptyState
+          icon={item.tab === 'unlocks' ? <Lock size={28} color={appTheme.colors.faint} /> : item.tab === 'tools' ? <Layers3 size={28} color={appTheme.colors.faint} /> : <ImageIcon size={28} color={appTheme.colors.faint} />}
+          title={item.tab === 'unlocks' ? 'No unlocks yet' : item.tab === 'tools' ? 'No tagged tools yet' : 'No creations yet'}
+          body={item.tab === 'unlocks'
+            ? 'Reusable prompts, files, notes, and remix access will appear here.'
+            : item.tab === 'tools'
+              ? 'Tools will appear when this creator tags where a creation was made.'
+              : 'Published creator work will appear here.'}
+        />
+      );
+    }
+
+    return (
+      <View style={{ paddingHorizontal: GRID_GAP / 2, paddingBottom: GRID_GAP }}>
+        <CreatorPostTile
+          activeVideoPreview={isFocused && activeVideoItemId === item.item.id}
+          item={item.item}
+          onPress={() => openProfileItem(item.item)}
+          width={tileWidth}
+        />
+      </View>
+    );
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <Stack.Screen options={{ title: `@${data.profile.username}` }} />
+      <FlashList
+        data={listItems}
+        drawDistance={900}
+        extraData={`${activeTab}:${activeVideoItemId ?? ''}:${isFocused}`}
+        getItemType={(item) => item.kind}
+        keyExtractor={(item) => item.key}
+        numColumns={2}
+        onEndReached={requestNextPage}
+        onEndReachedThreshold={0.35}
+        onRefresh={handleRefresh}
+        onViewableItemsChanged={onViewableItemsChanged}
+        overrideItemLayout={(layout, item) => {
+          if (item.kind !== 'post') layout.span = 2;
+        }}
+        refreshing={profileQuery.isRefetching && !profileQuery.isFetchingNextPage}
+        renderItem={renderItem}
+        showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[1]}
+        viewabilityConfig={viewabilityConfig}
+        style={{ flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', backgroundColor: appTheme.colors.background }}
+        contentContainerStyle={{
+          paddingTop: topInset + 12,
+          paddingHorizontal: horizontalPadding,
+          paddingBottom: bottomInset + 36,
+        }}
+        ListFooterComponent={
+          profileQuery.isFetchingNextPage ? (
+            <View style={{ minHeight: 72, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator color={appTheme.colors.image} />
+            </View>
+          ) : profileQuery.isFetchNextPageError ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading creations"
+              onPress={() => void profileQuery.fetchNextPage()}
+              style={({ pressed }) => ({ minHeight: 72, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <RefreshCw size={17} color={appTheme.colors.danger} />
+              <Text style={{ color: appTheme.colors.danger, ...appTheme.type.label }}>Could not load more. Retry</Text>
+            </Pressable>
+          ) : null
+        }
+      />
+    </View>
   );
 }
 
 function CreatorHeader({
   data,
+  followError,
   isFollowLoading,
+  onEditProfile,
   onFollowPress,
   onShareProfile,
   socialLinks,
 }: {
   data: CreatorProfileResponse;
+  followError: string | null;
   isFollowLoading: boolean;
+  onEditProfile: () => void;
   onFollowPress: () => void;
   onShareProfile: () => void;
   socialLinks: Array<{ label: string; url: string }>;
 }) {
   const profile = data.profile;
   const initial = creatorInitial(profile);
-  const hasCover = Boolean(profile.coverUrl);
 
   return (
-    <View
-      style={{
-        overflow: 'hidden',
-        borderRadius: 28,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.panel,
-      }}
-    >
-      {hasCover ? (
-        <View style={{ height: 136, backgroundColor: '#0b1020' }}>
-          <Image source={{ uri: profile.coverUrl as string }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-          <LinearGradient colors={['rgba(0,0,0,0.05)', 'rgba(9,9,11,0.92)']} style={{ position: 'absolute', inset: 0 }} />
-        </View>
-      ) : null}
+    <View style={{ overflow: 'hidden', borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
+      <View style={{ height: 136, backgroundColor: '#0b0c10' }}>
+        {profile.coverUrl ? (
+          <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+        ) : (
+          <LinearGradient colors={['rgba(56,189,248,0.28)', '#111215', 'rgba(251,113,133,0.18)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ position: 'absolute', inset: 0 }} />
+        )}
+        <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(17,18,21,0.96)']} style={{ position: 'absolute', inset: 0 }} />
+      </View>
 
-      <View style={{ padding: 16, paddingTop: hasCover ? 0 : 16, gap: 14 }}>
-        <View style={{ marginTop: hasCover ? -42 : 0, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
-          <CreatorAvatar avatarUrl={profile.avatarUrl} initial={initial} size={hasCover ? 86 : 72} />
+      <View style={{ padding: 16, paddingTop: 0, gap: 14 }}>
+        <View style={{ marginTop: -42, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
+          <CreatorAvatar avatarUrl={profile.avatarUrl} initial={initial} size={86} />
           <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
+            {data.viewer.isOwner ? (
+              <EditProfileButton onPress={onEditProfile} />
+            ) : (
+              <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
+            )}
             <CircleAction label="Share profile" onPress={onShareProfile}>
               <Share2 size={18} color={appTheme.colors.text} strokeWidth={2.4} />
             </CircleAction>
-            {data.viewer.isOwner ? (
-              <View style={{
-                minHeight: 48,
-                borderRadius: appTheme.radii.pill,
-                borderWidth: 1,
-                borderColor: appTheme.colors.border,
-                paddingHorizontal: 16,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: appTheme.colors.surface,
-              }}>
-                <Text style={{ color: appTheme.colors.muted, ...appTheme.type.label }}>Your profile</Text>
-              </View>
-            ) : (
-              <FollowButton
-                following={data.viewer.isFollowing}
-                loading={isFollowLoading}
-                onPress={onFollowPress}
-              />
-            )}
           </View>
         </View>
 
         <View style={{ gap: 6 }}>
-          <Text
-            selectable
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.74}
-            style={{ color: appTheme.colors.text, fontSize: 29, lineHeight: 34, fontWeight: '900' }}
-          >
+          <Text selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: appTheme.colors.text, fontSize: 29, lineHeight: 34, fontWeight: '900' }}>
             {profile.displayName}
           </Text>
-          <Text selectable numberOfLines={1} style={{ color: appTheme.colors.image, ...appTheme.type.bodySm, fontWeight: '900' }}>
-            @{profile.username}
-          </Text>
+          <Text selectable numberOfLines={1} style={{ color: appTheme.colors.image, ...appTheme.type.bodySm, fontWeight: '900' }}>@{profile.username}</Text>
           {profile.location ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
               <MapPin size={14} color={appTheme.colors.muted} strokeWidth={2.3} />
-              <Text selectable numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
-                {profile.location}
-              </Text>
+              <Text selectable numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{profile.location}</Text>
             </View>
           ) : null}
-          {profile.bio ? (
-            <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
-              {profile.bio}
-            </Text>
-          ) : null}
+          {profile.bio ? <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{profile.bio}</Text> : null}
+          {followError ? <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.danger, ...appTheme.type.caption }}>{followError}</Text> : null}
         </View>
 
         {socialLinks.length ? (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {socialLinks.map((link) => (
-              <SocialChip key={link.label} label={link.label} url={link.url} />
-            ))}
+            {socialLinks.map((link) => <SocialChip key={link.label} label={link.label} url={link.url} />)}
           </View>
         ) : null}
+
+        <CreatorStats data={data} />
       </View>
     </View>
   );
@@ -366,83 +439,38 @@ function CreatorStats({ data }: { data: CreatorProfileResponse }) {
   ];
 
   return (
-    <View style={{ flexDirection: 'row', gap: 8 }}>
-      {stats.map((stat) => (
-        <View
-          key={stat.label}
-          style={{
-            flex: 1,
-            minHeight: 76,
-            borderRadius: 18,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: appTheme.colors.borderSubtle,
-            backgroundColor: appTheme.colors.surface,
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 4,
-            paddingHorizontal: 4,
-          }}
-        >
-          <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontVariant: ['tabular-nums'] }}>
-            {formatCompactCount(stat.value)}
-          </Text>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
-            {stat.label}
-          </Text>
+    <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: appTheme.colors.borderSubtle, paddingTop: 14 }}>
+      {stats.map((stat, index) => (
+        <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: appTheme.colors.borderSubtle, paddingHorizontal: 2 }}>
+          <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '900', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
         </View>
       ))}
     </View>
   );
 }
 
-function CreatorTabs({
-  activeTab,
-  data,
-  onChange,
-}: {
-  activeTab: CreatorProfileTab;
-  data: CreatorProfileResponse;
-  onChange: (tab: CreatorProfileTab) => void;
-}) {
+function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileTab; data: CreatorProfileResponse; onChange: (tab: CreatorProfileTab) => void }) {
   const counts: Record<CreatorProfileTab, number> = {
-    posts: data.items.length,
-    unlocks: data.items.filter((item) => item.asset).length,
+    creations: data.stats.publicCreations,
+    unlocks: data.stats.unlocks,
     tools: data.stats.toolsUsed.length,
   };
 
   return (
-    <View style={{ flexDirection: 'row', gap: 8, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceInset, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.overlayStrong, padding: 4 }}>
       {CREATOR_PROFILE_TABS.map((tab) => {
         const active = activeTab === tab.id;
         return (
           <Pressable
             key={tab.id}
-            accessibilityRole="button"
+            accessibilityRole="tab"
             accessibilityState={{ selected: active }}
             onPress={() => onChange(tab.id)}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 48,
-              borderRadius: appTheme.radii.pill,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: active ? appTheme.colors.text : 'transparent',
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-              paddingHorizontal: 8,
-            })}
+            style={({ pressed }) => ({ flex: 1, minHeight: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? appTheme.colors.text : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
           >
-            <Text
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.75}
-              style={{
-                color: active ? appTheme.colors.textInverse : appTheme.colors.muted,
-                ...appTheme.type.label,
-                fontWeight: '900',
-              }}
-            >
-              {tab.label} {counts[tab.id] > 0 ? formatCompactCount(counts[tab.id]) : ''}
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? appTheme.colors.textInverse : appTheme.colors.muted, ...appTheme.type.label, fontWeight: '900' }}>
+              {tab.label} {formatCompactCount(counts[tab.id])}
             </Text>
           </Pressable>
         );
@@ -451,118 +479,26 @@ function CreatorTabs({
   );
 }
 
-function CreatorGrid({
-  activeVideoItemId,
-  items,
-  onOpenItem,
-  onVideoTileLayout,
-  tab,
-  tileWidth,
-}: {
-  activeVideoItemId: string | null;
-  items: ShowcaseFeedItem[];
-  onOpenItem: (item: ShowcaseFeedItem) => void;
-  onVideoTileLayout: (id: string, layout: CreatorProfileVideoPreviewLayout) => void;
-  tab: CreatorProfileTab;
-  tileWidth: number;
-}) {
-  if (!items.length) {
-    return (
-      <EmptyState
-        icon={tab === 'unlocks' ? <Lock size={28} color={appTheme.colors.faint} /> : <ImageIcon size={28} color={appTheme.colors.faint} />}
-        title={tab === 'unlocks' ? 'No unlocks yet' : 'No public posts yet'}
-        body={tab === 'unlocks'
-          ? 'Unlockable prompts, files, notes, and remix access will appear here.'
-          : 'Published creator posts will appear here.'}
-      />
-    );
-  }
-
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: GRID_GAP }}>
-      {items.map((item) => (
-        <CreatorPostTile
-          activeVideoPreview={activeVideoItemId === item.id}
-          key={item.id}
-          item={item}
-          onVideoLayout={onVideoTileLayout}
-          width={tileWidth}
-          onPress={() => onOpenItem(item)}
-        />
-      ))}
-    </View>
-  );
-}
-
-function CreatorPostTile({
-  activeVideoPreview,
-  item,
-  onPress,
-  onVideoLayout,
-  width,
-}: {
-  activeVideoPreview: boolean;
-  item: ShowcaseFeedItem;
-  onPress: () => void;
-  onVideoLayout: (id: string, layout: CreatorProfileVideoPreviewLayout) => void;
-  width: number;
-}) {
+function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeVideoPreview: boolean; item: ShowcaseFeedItem; onPress: () => void; width: number }) {
   const isTextPost = isTextOnlyShowcasePost(item);
   const displayText = getShowcasePostDisplayText(item);
-  const height = Math.round(width * 1.28);
+  const height = Math.round(width * 1.25);
   const accent = accentColor(item.category === 'video' ? 'video' : item.category === 'text' ? 'motion' : 'image');
-  const hasVideo = item.mediaKind === 'video'
-    || item.category === 'video'
-    || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
-  const unlockSummary = creatorProfileUnlockSummary(item.asset);
-  const needsVideoFrame = hasShowcaseVideoWithoutPreview(item);
+  const hasVideo = item.mediaKind === 'video' || item.category === 'video' || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${item.title || 'creator post'}`}
-      onLayout={needsVideoFrame ? (event) => onVideoLayout(item.id, event.nativeEvent.layout) : undefined}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-        transform: [{ scale: pressed ? 0.985 : 1 }],
-      })}
-    >
-      <View
-        style={{
-          minHeight: height + 82,
-          overflow: 'hidden',
-          borderRadius: 20,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: item.asset ? `${appTheme.colors.commerce}66` : appTheme.colors.borderSubtle,
-          backgroundColor: appTheme.colors.panel,
-        }}
-      >
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator creation'}`} onPress={onPress} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1, transform: [{ scale: pressed ? 0.985 : 1 }] })}>
+      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
         <View style={{ height, backgroundColor: '#050506' }}>
           {isTextPost ? (
-            <LinearGradient colors={['#1d1431', '#111215']} style={{ flex: 1, padding: 13, justifyContent: 'space-between' }}>
+            <LinearGradient colors={['#181128', '#111215', '#0a1118']} style={{ flex: 1, padding: 13, justifyContent: 'space-between' }}>
               <FileText size={22} color={accent} />
-              <Text numberOfLines={6} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
-                {displayText}
-              </Text>
+              <Text numberOfLines={7} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
             </LinearGradient>
           ) : hasShowcasePreviewMedia(item) ? (
-            <ShowcaseMediaPreview
-              accent={accent}
-              height={height}
-              item={item}
-              onPress={onPress}
-              radius={0}
-              recyclingKey={`creator-profile:${item.id}`}
-              videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'}
-              width={width}
-            />
+            <ShowcaseMediaPreview accent={accent} height={height} item={item} onPress={onPress} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-              <ImageIcon size={30} color={appTheme.colors.faint} />
-            </View>
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={30} color={appTheme.colors.faint} /></View>
           )}
           {hasVideo ? (
             <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.overlay }}>
@@ -570,27 +506,20 @@ function CreatorPostTile({
             </View>
           ) : null}
           {item.asset ? (
-            <View style={{ position: 'absolute', top: 8, left: 8, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
+            <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
               <Lock size={12} color={appTheme.colors.commerce} />
-              <Text style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '900' }}>
+              <Text numberOfLines={1} style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '900' }}>
                 {item.asset.accessMode === 'free' ? 'Free' : item.asset.priceQuote?.formatted ?? 'Unlock'}
               </Text>
             </View>
           ) : null}
         </View>
 
-        <View style={{ padding: 10, gap: 7 }}>
-          <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>
-            {item.title || displayText}
+        <View style={{ minHeight: 92, padding: 10, gap: 6 }}>
+          <Text numberOfLines={2} style={{ minHeight: 38, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '900' }}>{item.title || displayText}</Text>
+          <Text numberOfLines={1} style={{ minHeight: 15, color: appTheme.colors.faint, ...appTheme.type.caption }}>
+            {item.sourceTool ? `Made with ${item.sourceTool}` : ' '}
           </Text>
-          {unlockSummary ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Lock size={12} color={appTheme.colors.commerce} strokeWidth={2.5} />
-              <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '800' }}>
-                {unlockSummary}
-              </Text>
-            </View>
-          ) : null}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
             <TileStat icon={<Heart size={13} color={appTheme.colors.muted} />} label={formatCompactCount(item.saveCount)} />
             <TileStat icon={<Repeat2 size={13} color={appTheme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
@@ -601,208 +530,78 @@ function CreatorPostTile({
   );
 }
 
-function ToolsList({ tools }: { tools: CreatorProfileResponse['stats']['toolsUsed'] }) {
-  if (!tools.length) {
-    return (
-      <EmptyState
-        icon={<Layers3 size={28} color={appTheme.colors.faint} />}
-        title="No tagged tools yet"
-        body="Tools will appear when this creator tags where portfolio pieces were made."
-      />
-    );
-  }
-
-  return (
-    <View style={{ gap: 10 }}>
-      {tools.map((tool) => (
-        <View
-          key={tool.slug}
-          style={{
-            minHeight: 72,
-            borderRadius: 20,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: appTheme.colors.borderSubtle,
-            backgroundColor: appTheme.colors.panel,
-            padding: 14,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
-          <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.image}22` }}>
-            <Layers3 size={20} color={appTheme.colors.image} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text selectable numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
-              {tool.label}
-            </Text>
-            <Text selectable numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
-              Used in {formatCompactCount(tool.count)} portfolio piece{tool.count === 1 ? '' : 's'}
-            </Text>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function FollowButton({
-  following,
-  loading,
-  onPress,
-}: {
-  following: boolean;
-  loading: boolean;
-  onPress: () => void;
-}) {
+function CreatorToolRow({ tool }: { tool: CreatorTool }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ busy: loading, selected: following }}
-      disabled={loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 48,
-        borderRadius: appTheme.radii.pill,
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'row',
-        gap: 7,
-        borderWidth: 1,
-        borderColor: following ? appTheme.colors.borderStrong : appTheme.colors.text,
-        backgroundColor: following ? appTheme.colors.surface : appTheme.colors.text,
-        opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 16,
-      })}
+      accessibilityLabel={`View creations made with ${tool.label}`}
+      onPress={() => router.push({ pathname: '/(tabs)/showcase', params: { tool: tool.slug } } as never)}
+      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
-      {loading ? (
-        <ActivityIndicator size="small" color={following ? appTheme.colors.text : appTheme.colors.textInverse} />
-      ) : following ? (
-        <UserCheck size={16} color={appTheme.colors.text} />
-      ) : (
-        <UserPlus size={16} color={appTheme.colors.textInverse} />
-      )}
-      <Text style={{ color: following ? appTheme.colors.text : appTheme.colors.textInverse, ...appTheme.type.label, fontWeight: '900' }}>
-        {following ? 'Following' : 'Follow'}
-      </Text>
+      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.image}22` }}>
+        <Layers3 size={20} color={appTheme.colors.image} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>{tool.label}</Text>
+        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{formatCompactCount(tool.count)} creation{tool.count === 1 ? '' : 's'}</Text>
+      </View>
+      <ChevronRight size={19} color={appTheme.colors.faint} />
+    </Pressable>
+  );
+}
+
+function EditProfileButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: appTheme.colors.text, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
+      <Pencil size={15} color={appTheme.colors.textInverse} />
+      <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.label, fontWeight: '900' }}>Edit</Text>
+    </Pressable>
+  );
+}
+
+function FollowButton({ following, loading, onPress }: { following: boolean; loading: boolean; onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, selected: following }} disabled={loading} onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, borderWidth: following ? 1 : 0, borderColor: appTheme.colors.borderStrong, backgroundColor: following ? appTheme.colors.surface : appTheme.colors.text, opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 16 })}>
+      {loading ? <ActivityIndicator size="small" color={following ? appTheme.colors.text : appTheme.colors.textInverse} /> : following ? <UserCheck size={16} color={appTheme.colors.text} /> : <UserPlus size={16} color={appTheme.colors.textInverse} />}
+      <Text style={{ color: following ? appTheme.colors.text : appTheme.colors.textInverse, ...appTheme.type.label, fontWeight: '900' }}>{following ? 'Following' : 'Follow'}</Text>
     </Pressable>
   );
 }
 
 function SocialChip({ label, url }: { label: string; url: string }) {
   return (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityLabel={`Open ${label}`}
-      onPress={() => {
-        void Linking.openURL(url);
-      }}
-      style={({ pressed }) => ({
-        minHeight: 44,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.surface,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 11,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
+    <Pressable accessibilityRole="link" accessibilityLabel={`Open ${label}`} onPress={() => void Linking.openURL(url)} style={({ pressed }) => ({ minHeight: 44, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       {label === 'Website' ? <Globe size={14} color={appTheme.colors.text} /> : <ExternalLink size={14} color={appTheme.colors.text} />}
-      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.label }}>
-        {label}
-      </Text>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.label }}>{label}</Text>
     </Pressable>
   );
 }
 
-function CircleAction({ children, label, onPress }: { children: React.ReactNode; label: string; onPress: () => void }) {
+function CircleAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panelSoft,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      {children}
-    </Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
   );
 }
 
-function CreatorAvatar({
-  avatarUrl,
-  initial,
-  size,
-}: {
-  avatarUrl: string | null;
-  initial: string;
-  size: number;
-}) {
+function CreatorAvatar({ avatarUrl, initial, size }: { avatarUrl: string | null; initial: string; size: number }) {
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, padding: 3, backgroundColor: appTheme.colors.background }}>
-      <LinearGradient colors={[appTheme.colors.image, appTheme.colors.motion, appTheme.colors.commerce]} style={{ flex: 1, borderRadius: size / 2, padding: 2 }}>
-        <View style={{ flex: 1, overflow: 'hidden', borderRadius: size / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panel }}>
-          {avatarUrl ? (
-            <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-          ) : (
-            <Text selectable style={{ color: appTheme.colors.text, fontSize: 26, fontWeight: '900' }}>
-              {initial}
-            </Text>
-          )}
+    <View style={{ width: size, height: size, borderRadius: 24, padding: 3, backgroundColor: appTheme.colors.panel }}>
+      <LinearGradient colors={[appTheme.colors.image, appTheme.colors.motion, appTheme.colors.commerce]} style={{ flex: 1, borderRadius: 21, padding: 2 }}>
+        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panel }}>
+          {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: appTheme.colors.text, fontSize: 26, fontWeight: '900' }}>{initial}</Text>}
         </View>
       </LinearGradient>
     </View>
   );
 }
 
-function TileStat({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      {icon}
-      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontVariant: ['tabular-nums'] }}>
-        {label}
-      </Text>
-    </View>
-  );
+function TileStat({ icon, label }: { icon: ReactNode; label: string }) {
+  return <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>{icon}<Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontVariant: ['tabular-nums'] }}>{label}</Text></View>;
 }
 
-function EmptyState({
-  body,
-  icon,
-  title,
-}: {
-  body: string;
-  icon: React.ReactNode;
-  title: string;
-}) {
+function EmptyState({ body, icon, title }: { body: string; icon: ReactNode; title: string }) {
   return (
-    <View
-      style={{
-        minHeight: 156,
-        borderRadius: 22,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surface,
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 18,
-        gap: 8,
-      }}
-    >
+    <View style={{ minHeight: 190, alignItems: 'center', justifyContent: 'center', padding: 18, gap: 8 }}>
       {icon}
       <AppText variant="cardTitle" style={{ textAlign: 'center' }}>{title}</AppText>
       <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>{body}</AppText>

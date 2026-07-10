@@ -3,6 +3,7 @@ import 'server-only';
 import { cache } from 'react';
 
 import {
+  getMarketplaceAssetSummaryMap,
   getPostMediaKind,
   isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
@@ -12,10 +13,10 @@ import {
 } from '@/lib/posts-server';
 import { getCreatorDisplayName, normalizeUsername } from '@/lib/profile';
 import {
-  createServiceClient,
-  resolveStoredMediaUrl,
-} from '@/lib/server-helpers';
-import { getPostResourceBundlePriceQuote } from '@/lib/post-resource-bundles-server';
+  getPostResourceBundlePriceQuote,
+  getPublicGenerationRecipeAssetSummaryMap,
+} from '@/lib/post-resource-bundles-server';
+import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   type RawShowcaseSourceKind,
@@ -23,44 +24,8 @@ import {
   type ShowcaseItemCategory,
   type ShowcasePostFormat,
 } from '@/lib/showcase';
-import { resolvePostRowsToFeedItems } from '@/lib/showcase-feed';
-
-interface CreatorPostRow {
-  id: string;
-  output_url: string | null;
-  showcase_asset_path: string | null;
-  prompt: string | null;
-  title: string | null;
-  body: string | null;
-  category: ShowcaseItemCategory;
-  post_format: ShowcasePostFormat;
-  save_count: number | null;
-  remix_count: number | null;
-  created_at: string;
-  user_id: string | null;
-  generation_id: string | null;
-  source_kind: RawShowcaseSourceKind;
-  source_tool: string | null;
-  source_tool_slug: string | null;
-  review_status?: 'visible' | 'flagged' | 'hidden' | null;
-}
-
-interface LegacyCreatorPostRow {
-  id: string;
-  output_url: string | null;
-  showcase_asset_path: string | null;
-  prompt: string | null;
-  title: string | null;
-  category: ShowcaseItemCategory;
-  save_count: number | null;
-  remix_count: number | null;
-  created_at: string;
-  generation_id: string | null;
-  source_kind: RawShowcaseSourceKind;
-  source_tool: string | null;
-  source_tool_slug?: string | null;
-  review_status?: 'visible' | 'flagged' | 'hidden' | null;
-}
+import { resolvePostRowsToFeedItems, type PostRow } from '@/lib/showcase-feed';
+import { slugifySourceTool } from '@/lib/source-tools';
 
 interface LegacyCreatorGenerationRow {
   id: string;
@@ -73,6 +38,20 @@ interface LegacyCreatorGenerationRow {
   remix_count: number | null;
   created_at: string;
   model: string;
+}
+
+interface CreatorProfileRow {
+  id: string;
+  username: string | null;
+  display_name: string | null;
+  bio: string | null;
+  avatar_url: string | null;
+  cover_url: string | null;
+  website_url: string | null;
+  twitter_handle: string | null;
+  instagram_handle: string | null;
+  tiktok_handle: string | null;
+  location: string | null;
 }
 
 export interface CreatorProfilePageData {
@@ -101,14 +80,23 @@ export interface CreatorProfilePageData {
   pageInfo: {
     hasMore: boolean;
     nextLimit: number | null;
+    nextOffset: number | null;
     limit: number;
+    offset: number;
   };
 }
+
+const CREATOR_PAGE_SIZE = 24;
+const CREATOR_PAGE_SIZE_MAX = 48;
+const CREATOR_STATS_BATCH_SIZE = 500;
+const CREATOR_ASSET_BATCH_SIZE = 100;
+
+type CreatorServiceClient = ReturnType<typeof createServiceClient>;
+type CreatorPostQueryMode = 'page' | 'stats';
 
 function resolveItemCategory(category: string | null): ShowcaseItemCategory {
   if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
   if (category === 'text') return 'text';
-
   return 'image';
 }
 
@@ -116,9 +104,7 @@ async function attachLocalizedAssetPrices(
   assetMap: Map<string, NonNullable<ShowcaseFeedItem['asset']>>,
   countryCode?: string | null
 ) {
-  if (assetMap.size === 0) {
-    return;
-  }
+  if (assetMap.size === 0) return;
 
   await Promise.all(
     Array.from(assetMap.values()).map(async (asset) => {
@@ -127,21 +113,338 @@ async function attachLocalizedAssetPrices(
   );
 }
 
-export const getCreatorProfilePageData = cache(async (
-  rawUsername: string,
-  options?: { limit?: number; countryCode?: string | null }
-): Promise<CreatorProfilePageData | null> => {
-  const username = normalizeUsername(rawUsername);
-  if (!username) {
-    return null;
+function asNullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function normalizeCreatorPostRow(
+  row: Record<string, unknown>,
+  profileId: string,
+  includeTextColumns: boolean
+): PostRow {
+  const category = (asNullableString(row.category) ?? 'image') as ShowcaseItemCategory;
+  const postFormat: ShowcasePostFormat = includeTextColumns
+    && (row.post_format === 'text' || row.post_format === 'media' || row.post_format === 'mixed')
+    ? row.post_format
+    : normalizeLegacyPostFormat(category);
+  const sourceTool = asNullableString(row.source_tool);
+
+  return {
+    id: String(row.id),
+    output_url: asNullableString(row.output_url),
+    showcase_asset_path: asNullableString(row.showcase_asset_path),
+    prompt: asNullableString(row.prompt),
+    title: asNullableString(row.title),
+    body: asNullableString(row.body),
+    category,
+    post_format: postFormat,
+    save_count: typeof row.save_count === 'number' ? row.save_count : 0,
+    remix_count: typeof row.remix_count === 'number' ? row.remix_count : 0,
+    created_at: asNullableString(row.created_at) ?? new Date(0).toISOString(),
+    user_id: profileId,
+    generation_id: asNullableString(row.generation_id),
+    source_kind: (asNullableString(row.source_kind) ?? 'external') as RawShowcaseSourceKind,
+    source_tool: sourceTool,
+    source_tool_slug: asNullableString(row.source_tool_slug) ?? slugifySourceTool(sourceTool),
+    review_status: row.review_status === 'visible' || row.review_status === 'flagged' || row.review_status === 'hidden'
+      ? row.review_status
+      : null,
+  };
+}
+
+async function fetchCreatorPostRows({
+  adminSupabase,
+  mode,
+  offset,
+  profileId,
+  take,
+}: {
+  adminSupabase: CreatorServiceClient;
+  mode: CreatorPostQueryMode;
+  offset: number;
+  profileId: string;
+  take: number;
+}): Promise<PostRow[] | null> {
+  let includeSourceToolSlug = true;
+  let includeReviewStatus = true;
+  let includeTextColumns = mode === 'page';
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const columns = mode === 'page'
+      ? [
+          'id',
+          'output_url',
+          'showcase_asset_path',
+          'prompt',
+          'title',
+          includeTextColumns ? 'body' : null,
+          'category',
+          includeTextColumns ? 'post_format' : null,
+          'save_count',
+          'remix_count',
+          'created_at',
+          'generation_id',
+          'source_kind',
+          'source_tool',
+          includeSourceToolSlug ? 'source_tool_slug' : null,
+          includeReviewStatus ? 'review_status' : null,
+        ]
+      : [
+          'id',
+          'prompt',
+          'category',
+          'save_count',
+          'remix_count',
+          'created_at',
+          'generation_id',
+          'source_kind',
+          'source_tool',
+          includeSourceToolSlug ? 'source_tool_slug' : null,
+          includeReviewStatus ? 'review_status' : null,
+        ];
+
+    let query = adminSupabase
+      .from('posts')
+      .select(columns.filter(Boolean).join(', '))
+      .eq('user_id', profileId)
+      .eq('visibility', 'public')
+      .is('archived_at', null);
+
+    if (includeReviewStatus) {
+      query = query.neq('review_status', 'hidden');
+    }
+
+    const result = await query
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + Math.max(0, take - 1));
+
+    if (!result.error) {
+      return ((result.data ?? []) as unknown as Record<string, unknown>[]).map((row) =>
+        normalizeCreatorPostRow(row, profileId, includeTextColumns)
+      );
+    }
+
+    let shouldRetry = false;
+    if (includeSourceToolSlug && isMissingPostSourceToolSlugColumnError(result.error)) {
+      includeSourceToolSlug = false;
+      shouldRetry = true;
+    }
+    if (includeReviewStatus && isMissingPostReviewStatusColumnError(result.error)) {
+      includeReviewStatus = false;
+      shouldRetry = true;
+    }
+    if (includeTextColumns && isMissingPostTextColumnsError(result.error)) {
+      includeTextColumns = false;
+      shouldRetry = true;
+    }
+    if (shouldRetry) continue;
+    if (isMissingPostsSchemaError(result.error)) return null;
+
+    console.error('Failed to fetch creator posts:', result.error);
+    throw result.error;
   }
 
-  const requestedLimit = Number.isFinite(options?.limit) ? Math.round(options?.limit ?? 24) : 24;
-  const limit = Math.min(96, Math.max(24, requestedLimit));
-  const queryLimit = limit + 1;
+  throw new Error('Failed to resolve the available creator post schema.');
+}
+
+async function loadAllCreatorPostMetricRows(
+  adminSupabase: CreatorServiceClient,
+  profileId: string
+): Promise<PostRow[] | null> {
+  const rows: PostRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const batch = await fetchCreatorPostRows({
+      adminSupabase,
+      mode: 'stats',
+      offset,
+      profileId,
+      take: CREATOR_STATS_BATCH_SIZE,
+    });
+    if (batch === null) return null;
+
+    rows.push(...batch);
+    if (batch.length < CREATOR_STATS_BATCH_SIZE) return rows;
+    offset += batch.length;
+  }
+}
+
+function normalizeLegacyGenerationRow(row: Record<string, unknown>): LegacyCreatorGenerationRow {
+  return {
+    id: String(row.id),
+    output_url: asNullableString(row.output_url),
+    showcase_asset_path: asNullableString(row.showcase_asset_path),
+    prompt: asNullableString(row.prompt),
+    title: asNullableString(row.title),
+    category: asNullableString(row.category) as ShowcaseItemCategory | null,
+    save_count: typeof row.save_count === 'number' ? row.save_count : 0,
+    remix_count: typeof row.remix_count === 'number' ? row.remix_count : 0,
+    created_at: asNullableString(row.created_at) ?? new Date(0).toISOString(),
+    model: asNullableString(row.model) ?? MAGICBOOKLET_SOURCE_KIND,
+  };
+}
+
+async function fetchLegacyGenerationRows({
+  adminSupabase,
+  mode,
+  offset,
+  profileId,
+  take,
+}: {
+  adminSupabase: CreatorServiceClient;
+  mode: CreatorPostQueryMode;
+  offset: number;
+  profileId: string;
+  take: number;
+}): Promise<LegacyCreatorGenerationRow[]> {
+  const fullSelect = 'id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, model';
+  const legacySelect = 'id, output_url, prompt, title, category, save_count, remix_count, created_at, model';
+  const statsSelect = 'id, save_count, remix_count, created_at';
+  const runQuery = (columns: string) => adminSupabase
+    .from('generations')
+    .select(columns)
+    .eq('user_id', profileId)
+    .eq('is_public', true)
+    .eq('status', 'succeeded')
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .range(offset, offset + Math.max(0, take - 1));
+
+  let result = await runQuery(mode === 'page' ? fullSelect : statsSelect);
+  if (mode === 'page' && result.error?.code === '42703') {
+    result = await runQuery(legacySelect);
+  }
+  if (result.error) {
+    console.error('Failed to fetch legacy creator generations:', result.error);
+    throw result.error;
+  }
+
+  return ((result.data ?? []) as unknown as Record<string, unknown>[]).map(normalizeLegacyGenerationRow);
+}
+
+async function loadAllLegacyGenerationMetricRows(
+  adminSupabase: CreatorServiceClient,
+  profileId: string
+): Promise<LegacyCreatorGenerationRow[]> {
+  const rows: LegacyCreatorGenerationRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const batch = await fetchLegacyGenerationRows({
+      adminSupabase,
+      mode: 'stats',
+      offset,
+      profileId,
+      take: CREATOR_STATS_BATCH_SIZE,
+    });
+    rows.push(...batch);
+    if (batch.length < CREATOR_STATS_BATCH_SIZE) return rows;
+    offset += batch.length;
+  }
+}
+
+async function loadCreatorAssetSummaries(rows: PostRow[], adminSupabase: CreatorServiceClient) {
+  const assets = new Map<string, NonNullable<ShowcaseFeedItem['asset']>>();
+
+  for (let index = 0; index < rows.length; index += CREATOR_ASSET_BATCH_SIZE) {
+    const batch = rows.slice(index, index + CREATOR_ASSET_BATCH_SIZE);
+    const marketplaceAssets = await getMarketplaceAssetSummaryMap(batch.map((row) => row.id), adminSupabase);
+    for (const [postId, asset] of marketplaceAssets) assets.set(postId, asset);
+
+    const recipeAssets = await getPublicGenerationRecipeAssetSummaryMap(
+      batch.filter((row) => !marketplaceAssets.has(row.id)),
+      adminSupabase
+    );
+    for (const [postId, asset] of recipeAssets) assets.set(postId, asset);
+  }
+
+  return assets;
+}
+
+async function summarizeCreatorPosts(
+  rows: PostRow[],
+  adminSupabase: CreatorServiceClient
+): Promise<CreatorProfilePageData['stats']> {
+  const assets = await loadCreatorAssetSummaries(rows, adminSupabase);
+  const toolCounts = new Map<string, { label: string; count: number }>();
+
+  for (const row of rows) {
+    const slug = row.source_tool_slug ?? slugifySourceTool(row.source_tool);
+    if (!slug) continue;
+    const existing = toolCounts.get(slug);
+    toolCounts.set(slug, {
+      label: existing?.label ?? row.source_tool ?? slug,
+      count: (existing?.count ?? 0) + 1,
+    });
+  }
+
+  return {
+    publicCreations: rows.length,
+    totalSaves: rows.reduce((sum, row) => sum + (row.save_count ?? 0), 0),
+    totalRemixes: rows.reduce((sum, row) => sum + (row.remix_count ?? 0), 0),
+    unlocks: assets.size,
+    totalUnlockSales: Array.from(assets.values()).reduce((sum, asset) => sum + (asset.salesCount ?? 0), 0),
+    toolsUsed: Array.from(toolCounts.entries())
+      .map(([slug, value]) => ({ slug, ...value }))
+      .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label)),
+  };
+}
+
+function creatorPageInfo({
+  hasMore,
+  limit,
+  offset,
+}: {
+  hasMore: boolean;
+  limit: number;
+  offset: number;
+}): CreatorProfilePageData['pageInfo'] {
+  return {
+    hasMore,
+    limit,
+    offset,
+    nextOffset: hasMore ? offset + limit : null,
+    nextLimit: hasMore ? Math.min(96, offset + limit + CREATOR_PAGE_SIZE) : null,
+  };
+}
+
+function profileSummary(profile: CreatorProfileRow, fallbackUsername: string) {
+  return {
+    id: profile.id,
+    username: profile.username ?? fallbackUsername,
+    displayName: getCreatorDisplayName({
+      displayName: profile.display_name,
+      username: profile.username,
+    }),
+    bio: profile.bio,
+    avatarUrl: profile.avatar_url,
+    coverUrl: profile.cover_url,
+    websiteUrl: profile.website_url,
+    twitterHandle: profile.twitter_handle,
+    instagramHandle: profile.instagram_handle,
+    tiktokHandle: profile.tiktok_handle,
+    location: profile.location,
+  };
+}
+
+export const getCreatorProfilePageData = cache(async (
+  rawUsername: string,
+  options?: { limit?: number; offset?: number; countryCode?: string | null }
+): Promise<CreatorProfilePageData | null> => {
+  const username = normalizeUsername(rawUsername);
+  if (!username) return null;
+
+  const requestedLimit = Number.isFinite(options?.limit)
+    ? Math.round(options?.limit ?? CREATOR_PAGE_SIZE)
+    : CREATOR_PAGE_SIZE;
+  const requestedOffset = Number.isFinite(options?.offset) ? Math.round(options?.offset ?? 0) : 0;
+  const limit = Math.min(CREATOR_PAGE_SIZE_MAX, Math.max(1, requestedLimit));
+  const offset = Math.max(0, requestedOffset);
 
   const adminSupabase = createServiceClient();
-  const { data: profile, error: profileError } = await adminSupabase
+  const { data, error: profileError } = await adminSupabase
     .from('profiles')
     .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location')
     .eq('username', username)
@@ -152,244 +455,39 @@ export const getCreatorProfilePageData = cache(async (
     throw profileError;
   }
 
-  if (!profile) {
-    return null;
-  }
+  const profile = data as unknown as CreatorProfileRow | null;
+  if (!profile) return null;
 
-  let visibleRows: CreatorPostRow[] = [];
-  let legacyItems: ShowcaseFeedItem[] | null = null;
-  let hasMore = false;
+  const pageRows = await fetchCreatorPostRows({
+    adminSupabase,
+    mode: 'page',
+    offset,
+    profileId: profile.id,
+    take: limit + 1,
+  });
 
-  try {
-    const result = await adminSupabase
-      .from('posts')
-      .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, generation_id, source_kind, source_tool, source_tool_slug, review_status')
-      .eq('user_id', profile.id)
-      .eq('visibility', 'public')
-      .is('archived_at', null)
-      .neq('review_status', 'hidden')
-      .order('created_at', { ascending: false })
-      .limit(queryLimit);
-
-    if (isMissingPostSourceToolSlugColumnError(result.error) || isMissingPostReviewStatusColumnError(result.error)) {
-      const includeSourceToolSlug = !isMissingPostSourceToolSlugColumnError(result.error);
-      const includeReviewStatus = !isMissingPostReviewStatusColumnError(result.error);
-      const withoutSourceToolSlugBaseQuery = adminSupabase
-        .from('posts')
-        .select(
-          [
-            'id',
-            'output_url',
-            'showcase_asset_path',
-            'prompt',
-            'title',
-            'body',
-            'category',
-            'post_format',
-            'save_count',
-            'remix_count',
-            'created_at',
-            'generation_id',
-            'source_kind',
-            'source_tool',
-            includeSourceToolSlug ? 'source_tool_slug' : null,
-            includeReviewStatus ? 'review_status' : null,
-          ].filter(Boolean).join(', ')
-        )
-        .eq('user_id', profile.id)
-        .eq('visibility', 'public')
-        .is('archived_at', null);
-
-      const withoutSourceToolSlugResult = includeReviewStatus
-        ? await withoutSourceToolSlugBaseQuery
-          .neq('review_status', 'hidden')
-          .order('created_at', { ascending: false })
-          .limit(queryLimit)
-        : await withoutSourceToolSlugBaseQuery
-          .order('created_at', { ascending: false })
-          .limit(queryLimit);
-
-      if (isMissingPostTextColumnsError(withoutSourceToolSlugResult.error)) {
-        const legacyBaseQuery = adminSupabase
-          .from('posts')
-          .select(
-            [
-              'id',
-              'output_url',
-              'showcase_asset_path',
-              'prompt',
-              'title',
-              'category',
-              'save_count',
-              'remix_count',
-              'created_at',
-              'generation_id',
-              'source_kind',
-              'source_tool',
-              includeSourceToolSlug ? 'source_tool_slug' : null,
-              includeReviewStatus ? 'review_status' : null,
-            ].filter(Boolean).join(', ')
-          )
-          .eq('user_id', profile.id)
-          .eq('visibility', 'public')
-          .is('archived_at', null);
-
-        const legacyResult = includeReviewStatus
-          ? await legacyBaseQuery
-            .neq('review_status', 'hidden')
-            .order('created_at', { ascending: false })
-            .limit(queryLimit)
-          : await legacyBaseQuery
-            .order('created_at', { ascending: false })
-            .limit(queryLimit);
-
-        if (legacyResult.error) {
-          console.error('Failed to fetch creator posts:', legacyResult.error);
-          throw legacyResult.error;
-        }
-
-        visibleRows = ((legacyResult.data ?? []) as unknown as LegacyCreatorPostRow[]).map((row) => ({
-          ...row,
-          body: null,
-          post_format: normalizeLegacyPostFormat(row.category),
-          user_id: profile.id,
-          source_tool_slug: row.source_tool_slug ?? null,
-        }));
-      } else {
-        if (withoutSourceToolSlugResult.error) {
-          console.error('Failed to fetch creator posts:', withoutSourceToolSlugResult.error);
-          throw withoutSourceToolSlugResult.error;
-        }
-
-        visibleRows = ((withoutSourceToolSlugResult.data ?? []) as unknown as Array<Omit<CreatorPostRow, 'source_tool_slug'>>).map((row) => ({
-          ...row,
-          user_id: profile.id,
-          source_tool_slug: (row as CreatorPostRow).source_tool_slug ?? null,
-        }));
-      }
-    } else if (isMissingPostTextColumnsError(result.error)) {
-      const legacyQuery = adminSupabase
-        .from('posts')
-        .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, generation_id, source_kind, source_tool, source_tool_slug, review_status')
-        .eq('user_id', profile.id)
-        .eq('visibility', 'public')
-        .is('archived_at', null)
-        .neq('review_status', 'hidden');
-
-      let legacyResult: { data: unknown[] | null; error: unknown } = await legacyQuery
-        .order('created_at', { ascending: false })
-        .limit(queryLimit);
-
-      if (isMissingPostSourceToolSlugColumnError(legacyResult.error) || isMissingPostReviewStatusColumnError(legacyResult.error)) {
-        const includeSourceToolSlug = !isMissingPostSourceToolSlugColumnError(legacyResult.error);
-        const includeReviewStatus = !isMissingPostReviewStatusColumnError(legacyResult.error);
-        const legacyFallbackBaseQuery = adminSupabase
-          .from('posts')
-          .select(
-            [
-              'id',
-              'output_url',
-              'showcase_asset_path',
-              'prompt',
-              'title',
-              'category',
-              'save_count',
-              'remix_count',
-              'created_at',
-              'generation_id',
-              'source_kind',
-              'source_tool',
-              includeSourceToolSlug ? 'source_tool_slug' : null,
-              includeReviewStatus ? 'review_status' : null,
-            ].filter(Boolean).join(', ')
-          )
-          .eq('user_id', profile.id)
-          .eq('visibility', 'public')
-          .is('archived_at', null);
-
-        legacyResult = includeReviewStatus
-          ? await legacyFallbackBaseQuery
-            .neq('review_status', 'hidden')
-            .order('created_at', { ascending: false })
-            .limit(queryLimit)
-          : await legacyFallbackBaseQuery
-            .order('created_at', { ascending: false })
-            .limit(queryLimit);
-      }
-
-      if (legacyResult.error) {
-        console.error('Failed to fetch creator posts:', legacyResult.error);
-        throw legacyResult.error;
-      }
-
-      visibleRows = ((legacyResult.data ?? []) as unknown as LegacyCreatorPostRow[]).map((row) => ({
-        ...row,
-        body: null,
-        post_format: normalizeLegacyPostFormat(row.category),
-        user_id: profile.id,
-        source_tool_slug: row.source_tool_slug ?? null,
-      }));
-    } else {
-      if (result.error) {
-        console.error('Failed to fetch creator posts:', result.error);
-        throw result.error;
-      }
-
-      visibleRows = ((result.data ?? []) as unknown as Array<Omit<CreatorPostRow, 'user_id' | 'source_tool_slug'>>).map((row) => ({
-        ...row,
-        user_id: profile.id,
-        source_tool_slug: (row as CreatorPostRow).source_tool_slug ?? null,
-      }));
-    }
-  } catch (error) {
-    if (!isMissingPostsSchemaError(error)) {
-      throw error;
-    }
-
-    const selectWithAsset = 'id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, model';
-    const selectWithoutAsset = 'id, output_url, prompt, title, category, save_count, remix_count, created_at, model';
-    const legacyWithAssetResult = await adminSupabase
-      .from('generations')
-      .select(selectWithAsset)
-      .eq('user_id', profile.id)
-      .eq('is_public', true)
-      .eq('status', 'succeeded')
-      .order('created_at', { ascending: false })
-      .limit(queryLimit);
-
-    const legacyResult = legacyWithAssetResult.error?.code === '42703'
-      ? await adminSupabase
-        .from('generations')
-        .select(selectWithoutAsset)
-        .eq('user_id', profile.id)
-        .eq('is_public', true)
-        .eq('status', 'succeeded')
-        .order('created_at', { ascending: false })
-        .limit(queryLimit)
-      : legacyWithAssetResult;
-
-    if (legacyResult.error) {
-      console.error('Failed to fetch legacy creator generations:', legacyResult.error);
-      throw legacyResult.error;
-    }
-
-    const allRows = (legacyResult.data ?? []) as LegacyCreatorGenerationRow[];
-    hasMore = allRows.length > limit;
-    const rows = allRows.slice(0, limit);
+  if (pageRows === null) {
+    const [legacyPageRows, legacyMetricRows] = await Promise.all([
+      fetchLegacyGenerationRows({
+        adminSupabase,
+        mode: 'page',
+        offset,
+        profileId: profile.id,
+        take: limit + 1,
+      }),
+      loadAllLegacyGenerationMetricRows(adminSupabase, profile.id),
+    ]);
+    const hasMore = legacyPageRows.length > limit;
     const resolvedLegacyItems = await Promise.all<ShowcaseFeedItem | null>(
-      rows.map(async (generation) => {
+      legacyPageRows.slice(0, limit).map(async (generation) => {
         const mediaUrl = generation.showcase_asset_path
           ? adminSupabase.storage.from('showcase_media').getPublicUrl(generation.showcase_asset_path).data.publicUrl
           : generation.output_url
             ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
             : null;
-
-        if (!mediaUrl) {
-          return null;
-        }
+        if (!mediaUrl) return null;
 
         const category = resolveItemCategory(generation.category);
-
         return {
           id: generation.id,
           mediaUrl,
@@ -421,98 +519,40 @@ export const getCreatorProfilePageData = cache(async (
         } satisfies ShowcaseFeedItem;
       })
     );
-    legacyItems = resolvedLegacyItems.filter((item): item is ShowcaseFeedItem => item !== null);
-  }
 
-  if (legacyItems) {
     return {
-      profile: {
-        id: profile.id,
-        username: profile.username ?? username,
-        displayName: getCreatorDisplayName({
-          displayName: profile.display_name,
-          username: profile.username,
-        }),
-        bio: profile.bio,
-        avatarUrl: profile.avatar_url,
-        coverUrl: profile.cover_url,
-        websiteUrl: profile.website_url,
-        twitterHandle: profile.twitter_handle,
-        instagramHandle: profile.instagram_handle,
-        tiktokHandle: profile.tiktok_handle,
-        location: profile.location,
-      },
+      profile: profileSummary(profile, username),
       stats: {
-        publicCreations: legacyItems.length,
-        totalSaves: legacyItems.reduce((sum, item) => sum + item.saveCount, 0),
-        totalRemixes: legacyItems.reduce((sum, item) => sum + item.remixCount, 0),
+        publicCreations: legacyMetricRows.length,
+        totalSaves: legacyMetricRows.reduce((sum, item) => sum + (item.save_count ?? 0), 0),
+        totalRemixes: legacyMetricRows.reduce((sum, item) => sum + (item.remix_count ?? 0), 0),
         unlocks: 0,
         totalUnlockSales: 0,
         toolsUsed: [],
       },
-      items: legacyItems,
-      pageInfo: {
-        hasMore,
-        nextLimit: hasMore ? Math.min(96, limit + 24) : null,
-        limit,
-      },
+      items: resolvedLegacyItems.filter((item): item is ShowcaseFeedItem => item !== null),
+      pageInfo: creatorPageInfo({ hasMore, limit, offset }),
     };
   }
 
-  hasMore = visibleRows.length > limit;
-  visibleRows = visibleRows.slice(0, limit);
+  const hasMore = pageRows.length > limit;
+  const visibleRows = pageRows.slice(0, limit);
+  const metricRows = await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows;
+  const [items, stats] = await Promise.all([
+    resolvePostRowsToFeedItems(visibleRows, adminSupabase),
+    summarizeCreatorPosts(metricRows, adminSupabase),
+  ]);
 
-  const items = await resolvePostRowsToFeedItems(visibleRows, adminSupabase);
   const localizedAssets = new Map<string, NonNullable<ShowcaseFeedItem['asset']>>();
   for (const item of items) {
-    if (item.asset) {
-      localizedAssets.set(item.id, item.asset);
-    }
+    if (item.asset) localizedAssets.set(item.id, item.asset);
   }
   await attachLocalizedAssetPrices(localizedAssets, options?.countryCode);
-  const toolCounts = new Map<string, { label: string; count: number }>();
-  for (const item of items) {
-    if (!item.sourceToolSlug) {
-      continue;
-    }
-
-    const existing = toolCounts.get(item.sourceToolSlug);
-    toolCounts.set(item.sourceToolSlug, {
-      label: existing?.label ?? item.sourceTool ?? item.sourceToolSlug,
-      count: (existing?.count ?? 0) + 1,
-    });
-  }
 
   return {
-    profile: {
-      id: profile.id,
-      username: profile.username ?? username,
-      displayName: getCreatorDisplayName({
-        displayName: profile.display_name,
-        username: profile.username,
-      }),
-      bio: profile.bio,
-      avatarUrl: profile.avatar_url,
-      coverUrl: profile.cover_url,
-      websiteUrl: profile.website_url,
-      twitterHandle: profile.twitter_handle,
-      instagramHandle: profile.instagram_handle,
-      tiktokHandle: profile.tiktok_handle,
-      location: profile.location,
-    },
-    stats: {
-      publicCreations: items.length,
-      totalSaves: items.reduce((sum, item) => sum + item.saveCount, 0),
-      totalRemixes: items.reduce((sum, item) => sum + item.remixCount, 0),
-      unlocks: items.filter((item) => item.asset).length,
-      totalUnlockSales: items.reduce((sum, item) => sum + (item.asset?.salesCount ?? 0), 0),
-      toolsUsed: Array.from(toolCounts.entries()).map(([slug, value]) => ({ slug, ...value })),
-    },
+    profile: profileSummary(profile, username),
+    stats,
     items,
-    pageInfo: {
-      hasMore,
-      nextLimit: hasMore ? Math.min(96, limit + 24) : null,
-      limit,
-    },
+    pageInfo: creatorPageInfo({ hasMore, limit, offset }),
   };
 });

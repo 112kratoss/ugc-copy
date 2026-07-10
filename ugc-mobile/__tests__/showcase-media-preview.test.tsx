@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 vi.mock('react-native', () => ({
+  AccessibilityInfo: {
+    isReduceMotionEnabled: vi.fn(async () => false),
+    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+  },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
@@ -105,6 +109,25 @@ describe('ShowcaseMediaPreview', () => {
     const [frame] = findAllByNodeType(tree, 'feed-media-frame');
     expect(frame.props.kind).toBe('image');
     expect(frame.props.url).toBe('https://cdn.example.com/original.jpg');
+  });
+
+  it('falls back to the original image when a generated preview fails', () => {
+    const tree = renderPreview(
+      <ShowcaseMediaPreview
+        accent="#60a5fa"
+        height={180}
+        item={item({ mediaItems: [media({ previewUrl: 'https://cdn.example.com/preview.webp' })] })}
+        radius={12}
+        recyclingKey="creator-profile:post-1"
+        width={160}
+      />
+    );
+
+    expect(findAllByNodeType(tree, 'feed-media-frame')[0].props.url).toBe('https://cdn.example.com/preview.webp');
+    renderer.act(() => {
+      findAllByNodeType(tree, 'feed-media-frame')[0].props.onImageError();
+    });
+    expect(findAllByNodeType(tree, 'feed-media-frame')[0].props.url).toBe('https://cdn.example.com/original.jpg');
   });
 
   it('uses the feed video preview with the supplied poster', () => {

@@ -66,6 +66,11 @@ export function resolveMobileShowcaseFeedFilterId(
   return 'all';
 }
 
+export function normalizeShowcaseToolFilter(value: string | string[] | null | undefined) {
+  const tool = (Array.isArray(value) ? value[0] : value)?.trim();
+  return tool && tool !== DEFAULT_FEED_FILTERS.tool ? tool : null;
+}
+
 export function getShowcaseFeedPageParams(params: ShowcaseFeedPageParams = {}): ShowcaseFeedApiParams {
   const category = params.category ?? DEFAULT_FEED_FILTERS.category;
   const resource = params.resource ?? DEFAULT_FEED_FILTERS.resource;

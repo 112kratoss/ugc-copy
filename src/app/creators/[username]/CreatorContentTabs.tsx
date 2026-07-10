@@ -1,473 +1,507 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import type { ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowRight,
-  BookText,
-  CalendarDays,
+  AlertCircle,
+  FileText,
   Heart,
-  ImageIcon,
+  Images,
   Layers3,
-  ShoppingBag,
-  Video,
-  Wand2,
+  Loader2,
+  LockKeyhole,
+  RefreshCw,
+  Repeat2,
 } from 'lucide-react';
-import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
+
+import { useAuth } from '@/app/components/AuthProvider';
+import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
-import {
-  describePostResourceKinds,
-  getBundleAccessLabel,
-  getPostResourceKindLabel,
-  isPostResourceKind,
-  type PostResourceKind,
-} from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
-type TabType = 'collection' | 'unlocks' | 'tools';
-type CreatorItem = CreatorProfilePageData['items'][number];
+type CreatorTab = 'creations' | 'unlocks' | 'tools';
 
-interface CreatorContentTabsProps {
-  items: CreatorProfilePageData['items'];
-  tools?: CreatorProfilePageData['stats']['toolsUsed'];
-  profilePath?: string;
-  pageInfo?: CreatorProfilePageData['pageInfo'];
-}
-
-const tabHashes: Record<TabType, string> = {
-  collection: '#creator-collection',
+const PAGE_SIZE = 24;
+const tabHashes: Record<CreatorTab, string> = {
+  creations: '#creator-creations',
   unlocks: '#creator-unlocks',
   tools: '#creator-tools',
 };
 
-const categoryLabels: Record<CreatorItem['category'], string> = {
-  image: 'Image',
-  video: 'Video',
-  text: 'Tip',
-};
-
-function getTabFromHash(hash: string): TabType {
-  if (hash === tabHashes.unlocks) {
-    return 'unlocks';
-  }
-
-  if (hash === tabHashes.tools) {
-    return 'tools';
-  }
-
-  return 'collection';
+function getTabFromHash(hash: string): CreatorTab {
+  if (hash === tabHashes.unlocks) return 'unlocks';
+  if (hash === tabHashes.tools) return 'tools';
+  return 'creations';
 }
 
-function getItemSourceLabel(item: CreatorItem) {
-  return item.sourceTool || item.model || null;
+function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
+  if (item.mediaItems?.length) return item.mediaItems;
+  if (!item.mediaUrl || !item.mediaKind) return [];
+
+  return [{
+    id: `${item.id}:cover`,
+    url: item.mediaUrl,
+    mediaKind: item.mediaKind,
+    contentType: null,
+    originalName: null,
+    width: null,
+    height: null,
+    durationSeconds: null,
+    sortOrder: 0,
+  }];
 }
 
-function getItemResourceKinds(item: CreatorItem): PostResourceKind[] {
-  return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
+function itemDisplayText(item: ShowcaseFeedItem) {
+  return item.body?.trim() || item.prompt?.trim() || item.title || 'Creator note';
 }
 
-function getCategoryLabel(category: CreatorItem['category']) {
-  return categoryLabels[category] ?? 'Creation';
-}
-
-function getAssetAccessLabel(asset: NonNullable<CreatorItem['asset']>): string {
-  if (asset.priceQuote) {
+function assetLabel(item: ShowcaseFeedItem) {
+  if (!item.asset) return null;
+  if (item.asset.priceQuote) {
     return formatBundleAccessLabel({
-      accessMode: asset.accessMode,
-      priceQuote: asset.priceQuote,
+      accessMode: item.asset.accessMode,
+      priceQuote: item.asset.priceQuote,
     });
   }
-
-  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+  return getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents);
 }
 
-function getItemSummary(item: CreatorItem) {
-  const publicText = item.body?.trim() || item.prompt?.trim();
-  if (publicText) {
-    return publicText;
-  }
-
-  const tool = getItemSourceLabel(item);
-  const resourceKinds = getItemResourceKinds(item);
-  const unlock = item.asset
-    ? resourceKinds.length > 0
-      ? describePostResourceKinds(resourceKinds)
-      : `${getAssetAccessLabel(item.asset)} attached.`
-    : 'Public portfolio piece.';
-
-  return [
-    tool ? `Made with ${tool}` : null,
-    `${getCategoryLabel(item.category)} creation`,
-    unlock,
-  ].filter(Boolean).join(' / ');
-}
-
-function formatPortfolioDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(value));
-}
-
-function getTabTitle(tab: TabType) {
-  switch (tab) {
-    case 'unlocks':
-      return 'Unlocks';
-    case 'tools':
-      return 'Tools used';
-    default:
-      return 'Collection';
-  }
-}
-
-function getTabDescription(tab: TabType) {
-  switch (tab) {
-    case 'unlocks':
-      return 'Reusable prompts, workflows, files, notes, and remix access attached to this portfolio.';
-    case 'tools':
-      return 'Source tools this creator tags across public portfolio pieces.';
-    default:
-      return 'A browsable archive of public creations, tips, references, and experiments.';
-  }
-}
-
-export function CreatorContentTabs({ items, tools = [], profilePath = '', pageInfo }: CreatorContentTabsProps) {
+export function CreatorContentTabs({
+  initialData,
+  profilePath,
+}: {
+  initialData: CreatorProfilePageData;
+  profilePath: string;
+}) {
+  const router = useRouter();
   const pathname = usePathname();
-  const unlockItems = items.filter((item) => item.asset);
-  const [activeTab, setActiveTab] = useState<TabType>(() =>
-    typeof window !== 'undefined' ? getTabFromHash(window.location.hash) : 'collection'
+  const searchParams = useSearchParams();
+  const { session, user } = useAuth();
+  const [activeTab, setActiveTab] = useState<CreatorTab>(() =>
+    typeof window === 'undefined' ? 'creations' : getTabFromHash(window.location.hash)
   );
-  const [selectedItem, setSelectedItem] = useState<CreatorItem | null>(null);
-  const creatorReturnPath = `${pathname}${tabHashes[activeTab]}`;
+  const [pageInfo, setPageInfo] = useState(initialData.pageInfo);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [observerSupported, setObserverSupported] = useState(true);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
+    const value = Number(searchParams.get('media'));
+    return Number.isInteger(value) && value >= 0 ? value : 0;
+  });
+  const loadingMoreRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('post') ? 'direct' : null);
+  const directPostRequestRef = useRef<string | null>(null);
+  const {
+    items,
+    setItems,
+    savedItemIds,
+    setSavedItemIds,
+    savingItemIds,
+    toggleSave,
+  } = useOptimisticPostSave({
+    initialItems: initialData.items,
+    accessToken: session?.access_token ?? null,
+    isSignedIn: Boolean(user && session?.access_token),
+    onAuthRequired: () => router.push(`/login?returnUrl=${encodeURIComponent(profilePath)}`),
+    onError: (error) => console.error('Creator profile save failed:', error),
+    sourceSurface: 'creator-profile',
+  });
+
+  const unlockItems = useMemo(() => items.filter((item) => Boolean(item.asset)), [items]);
   const visibleItems = activeTab === 'unlocks' ? unlockItems : items;
+  const viewerItems = selectedItemId && !visibleItems.some((item) => item.id === selectedItemId)
+    ? items
+    : visibleItems;
   const tabs = [
-    { id: 'collection' as const, label: 'Collection', count: items.length },
-    { id: 'unlocks' as const, label: 'Unlocks', count: unlockItems.length },
-    { id: 'tools' as const, label: 'Tools', count: tools.length },
+    { id: 'creations' as const, label: 'Creations', count: initialData.stats.publicCreations },
+    { id: 'unlocks' as const, label: 'Unlocks', count: initialData.stats.unlocks },
+    { id: 'tools' as const, label: 'Tools', count: initialData.stats.toolsUsed.length },
   ];
-  const buildCreatorDetailPath = (id: string, section?: string) =>
-    buildShowcaseDetailPath(id, {
-      from: 'creator',
-      returnTo: creatorReturnPath,
-      section,
-    });
+
+  const updateLocation = useCallback((postId: string | null, mode: 'push' | 'replace', mediaIndex = 0) => {
+    const params = new URLSearchParams(window.location.search);
+    if (postId) {
+      params.set('post', postId);
+      if (mediaIndex > 0) params.set('media', String(mediaIndex));
+      else params.delete('media');
+    } else {
+      params.delete('post');
+      params.delete('media');
+    }
+
+    const query = params.size ? `?${params.toString()}` : '';
+    const nextUrl = `${pathname}${query}${tabHashes[activeTab]}`;
+    if (mode === 'push') window.history.pushState(null, '', nextUrl);
+    else window.history.replaceState(null, '', nextUrl);
+  }, [activeTab, pathname]);
+
+  const selectViewerItem = useCallback((id: string) => {
+    setSelectedMediaIndex(0);
+    setSelectedItemId(id);
+    updateLocation(id, 'replace', 0);
+  }, [updateLocation]);
+
+  const openViewer = useCallback((item: ShowcaseFeedItem, mediaIndex = 0) => {
+    reelHistoryModeRef.current = 'pushed';
+    setSelectedMediaIndex(mediaIndex);
+    setSelectedItemId(item.id);
+    updateLocation(item.id, 'push', mediaIndex);
+  }, [updateLocation]);
+
+  const closeViewer = useCallback(() => {
+    setSelectedItemId(null);
+    if (reelHistoryModeRef.current === 'pushed') {
+      reelHistoryModeRef.current = null;
+      window.history.back();
+      return;
+    }
+    reelHistoryModeRef.current = null;
+    updateLocation(null, 'replace');
+  }, [updateLocation]);
 
   useEffect(() => {
-    const handleHashChange = () => {
+    const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const postId = params.get('post');
+      const mediaIndex = Number(params.get('media'));
+      setSelectedItemId(postId);
+      setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
+      reelHistoryModeRef.current = postId ? 'direct' : null;
       setActiveTab(getTabFromHash(window.location.hash));
     };
-
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('popstate', handlePopState);
+    };
   }, []);
 
-  const handleTabSelect = (tab: TabType) => {
-    setActiveTab(tab);
+  useEffect(() => {
+    const postId = searchParams.get('post');
+    if (!postId) {
+      directPostRequestRef.current = null;
+      return;
+    }
+    if (items.some((item) => item.id === postId)) {
+      setSelectedItemId(postId);
+      return;
+    }
+    if (directPostRequestRef.current === postId) return;
+    directPostRequestRef.current = postId;
 
-    if (typeof window !== 'undefined') {
-      window.history.replaceState(null, '', `${pathname}${tabHashes[tab]}`);
+    const controller = new AbortController();
+    void fetch(`/api/showcase/posts/${encodeURIComponent(postId)}`, {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      signal: controller.signal,
+    }).then(async (response) => {
+      const payload = await response.json();
+      const item = payload?.item as ShowcaseFeedItem | undefined;
+      if (!response.ok || !item || item.creator.username !== initialData.profile.username) {
+        throw new Error(payload?.error || 'Creator post not found.');
+      }
+      setItems((current) => current.some((candidate) => candidate.id === item.id) ? current : [...current, item]);
+      setSelectedItemId(item.id);
+    }).catch((error) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error('Failed to load creator post:', error);
+      }
+    });
+
+    return () => controller.abort();
+  }, [initialData.profile.username, items, searchParams, session?.access_token, setItems]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || !pageInfo.hasMore || pageInfo.nextOffset === null) return;
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    setLoadError(null);
+
+    try {
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(pageInfo.nextOffset),
+      });
+      const response = await fetch(
+        `/api/creators/${encodeURIComponent(initialData.profile.username)}?${params.toString()}`,
+        session?.access_token ? { headers: { Authorization: `Bearer ${session.access_token}` } } : undefined
+      );
+      const nextPage = await response.json() as CreatorProfilePageData;
+      if (!response.ok || !Array.isArray(nextPage.items)) {
+        throw new Error('Could not load more creations.');
+      }
+
+      setItems((current) => [
+        ...current,
+        ...nextPage.items.filter((item) => !current.some((candidate) => candidate.id === item.id)),
+      ]);
+      setSavedItemIds((current) => {
+        const next = new Set(current);
+        nextPage.items.forEach((item) => {
+          if (item.isSaved) next.add(item.id);
+        });
+        return next;
+      });
+      setPageInfo(nextPage.pageInfo);
+    } catch (error) {
+      console.error('Failed to load more creator posts:', error);
+      setLoadError(error instanceof Error ? error.message : 'Could not load more creations.');
+    } finally {
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [initialData.profile.username, pageInfo.hasMore, pageInfo.nextOffset, session?.access_token, setItems, setSavedItemIds]);
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') {
+      setObserverSupported(false);
+      return;
+    }
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !pageInfo.hasMore || activeTab === 'tools') return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+    }, { rootMargin: '900px 0px' });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [activeTab, loadMore, pageInfo.hasMore]);
+
+  const handleTabSelect = (tab: CreatorTab) => {
+    setActiveTab(tab);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('post');
+    params.delete('media');
+    const query = params.size ? `?${params.toString()}` : '';
+    window.history.replaceState(null, '', `${pathname}${query}${tabHashes[tab]}`);
+  };
+
+  const handleRemix = async (id: string) => {
+    if (!user || !session?.access_token) {
+      router.push(`/login?returnUrl=${encodeURIComponent(profilePath)}`);
+      return;
+    }
+    try {
+      const response = await fetch('/api/showcase/remix', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ generationId: id }),
+      });
+      const payload = await response.json();
+      if (response.ok && payload.redirectTo) router.push(payload.redirectTo);
+    } catch (error) {
+      console.error('Creator profile remix failed:', error);
     }
   };
 
+  const buildDetailPath = (id: string, section?: string) => buildShowcaseDetailPath(id, {
+    from: 'creator',
+    returnTo: `${profilePath}${tabHashes[activeTab]}`,
+    section,
+  });
+
   return (
-    <section id="creator-collection" className="mt-10 scroll-mt-24">
-      <div id="creator-unlocks" className="scroll-mt-24" />
-      <div id="creator-tools" className="scroll-mt-24" />
-
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <div className="text-xs font-semibold text-zinc-500">Portfolio archive</div>
-          <h2 className="mt-2 text-2xl font-semibold text-white">{getTabTitle(activeTab)}</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{getTabDescription(activeTab)}</p>
-        </div>
-
-        <div className="flex gap-2 overflow-x-auto rounded-full border border-white/8 bg-white/[0.03] p-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => handleTabSelect(tab.id)}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition ${
-                activeTab === tab.id
-                  ? 'bg-white text-black'
-                  : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'
-              }`}
-            >
-              {tab.label}
-              <span className={`rounded-full px-2 py-0.5 text-xs ${
-                activeTab === tab.id ? 'bg-black/10 text-black' : 'bg-white/[0.06] text-zinc-400'
-              }`}>
-                {tab.count}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        {(activeTab === 'collection' || activeTab === 'unlocks') && (
-          <>
-            {visibleItems.length === 0 ? (
-              <div className="rounded-[28px] border border-white/8 bg-zinc-950/60 p-8 text-center text-zinc-400 sm:p-10">
-                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-300">
-                  {activeTab === 'unlocks' ? <ShoppingBag className="h-5 w-5" /> : <Layers3 className="h-5 w-5" />}
-                </div>
-                <h3 className="mt-4 text-lg font-semibold text-white">
-                  {activeTab === 'unlocks' ? 'No portfolio unlocks yet' : 'No public collection pieces yet'}
-                </h3>
-                <p className="mx-auto mt-2 max-w-xl text-sm leading-6">
-                  {activeTab === 'unlocks'
-                    ? 'Unlocks will appear here when this creator attaches reusable prompts, workflows, files, notes, or remix access to public posts.'
-                    : 'Published creations, tips, and references will collect here as this creator builds their public portfolio.'}
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="columns-1 gap-5 space-y-5 sm:columns-2 xl:columns-3">
-                  {visibleItems.map((item) => {
-                  const resourceKinds = getItemResourceKinds(item);
-                  const source = getItemSourceLabel(item);
-                  const isTextPost = item.postFormat === 'text';
-
-                  return (
-                    <article
-                      key={item.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedItem(item)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          setSelectedItem(item);
-                        }
-                      }}
-                      className="group mb-5 break-inside-avoid overflow-hidden rounded-[26px] border border-white/8 bg-zinc-950/72 shadow-[0_20px_70px_-56px_rgba(255,255,255,0.45)] transition hover:border-violet-300/25"
-                    >
-                      <div className="relative bg-black">
-                        {isTextPost ? (
-                          <TextPostPreviewCard
-                            title={item.title}
-                            summary={getItemSummary(item)}
-                            sourceLabel={source}
-                            dateLabel={formatPortfolioDate(item.createdAt)}
-                            saveCount={item.saveCount}
-                            remixCount={item.remixCount}
-                            unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
-                            resourceKinds={resourceKinds}
-                            className="rounded-none border-0 border-b border-white/8 shadow-none"
-                          />
-                        ) : item.mediaKind === 'video' && item.mediaUrl ? (
-                          <video
-                            src={item.mediaUrl}
-                            muted
-                            loop
-                            playsInline
-                            autoPlay
-                            className="aspect-[4/5] w-full object-cover"
-                          />
-                        ) : item.mediaUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={item.mediaUrl} alt={item.title} className="aspect-[4/5] w-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                        ) : (
-                          <div className="flex aspect-[4/5] items-center justify-center bg-zinc-950 text-zinc-500">
-                            <ImageIcon className="h-10 w-10" />
-                          </div>
-                        )}
-
-                        {!isTextPost ? (
-                          <div className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-black/20 bg-black/60 px-3 py-1 text-xs font-medium text-zinc-100 backdrop-blur">
-                            {item.mediaKind === 'video' ? <Video className="h-3.5 w-3.5" /> : <BookText className="h-3.5 w-3.5" />}
-                            {getCategoryLabel(item.category)}
-                          </div>
-                        ) : null}
-
-                        {!isTextPost && source ? (
-                          <div className="absolute right-3 top-3 max-w-[70%] truncate rounded-full border border-black/20 bg-black/60 px-3 py-1 text-xs font-medium text-zinc-100 backdrop-blur">
-                            {source}
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <div className={`space-y-4 p-5 ${isTextPost ? 'pt-4' : ''}`}>
-                        {!isTextPost ? (
-                        <div>
-                          <div className="flex items-start justify-between gap-3">
-                            <h3 className="min-w-0 text-lg font-semibold text-white transition group-hover:text-violet-200">
-                              {item.title}
-                            </h3>
-                            <span className="shrink-0 text-xs text-zinc-500">
-                              {formatPortfolioDate(item.createdAt)}
-                            </span>
-                          </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {item.asset ? (
-                              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-100">
-                                <ShoppingBag className="h-3.5 w-3.5" />
-                                {getAssetAccessLabel(item.asset)}
-                              </span>
-                            ) : null}
-                            {resourceKinds.map((kind) => (
-                              <span
-                                key={`${item.id}-${kind}`}
-                                className="rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1 text-[11px] font-medium text-zinc-300"
-                              >
-                                {getPostResourceKindLabel(kind)}
-                              </span>
-                            ))}
-                          </div>
-
-                          <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-400">
-                            {getItemSummary(item)}
-                          </p>
-                        </div>
-                        ) : null}
-
-                        {!isTextPost ? (
-                        <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-500">
-                          <span className="inline-flex items-center gap-1.5">
-                            <CalendarDays className="h-3.5 w-3.5" />
-                            {formatPortfolioDate(item.createdAt)}
-                          </span>
-                          <span className="inline-flex items-center gap-1.5" aria-label={`${item.saveCount} saves`}>
-                            <Heart className="h-3.5 w-3.5" aria-hidden="true" />
-                            <span aria-hidden="true">{item.saveCount}</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1.5" aria-label={`${item.remixCount} remixes`}>
-                            <Wand2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            <span aria-hidden="true">{item.remixCount}</span>
-                          </span>
-                        </div>
-                        ) : null}
-
-                        <div className="flex flex-wrap gap-2">
-                          <PublicShareButton
-                            generationId={item.id}
-                            title={item.title}
-                            description={item.body || item.prompt}
-                            sourceSurface="creator-profile"
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                          />
-                          <Link
-                            href={buildCreatorDetailPath(item.id)}
-                            onClick={(event) => event.stopPropagation()}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-                          >
-                            Open page
-                          </Link>
-                          {item.asset ? (
-                            <Link
-                              href={buildCreatorDetailPath(item.id, 'resources')}
-                              onClick={(event) => event.stopPropagation()}
-                              className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
-                            >
-                              View unlock
-                              <ArrowRight className="h-4 w-4" />
-                            </Link>
-                          ) : null}
-                        </div>
-                      </div>
-                    </article>
-                  );
-                  })}
-                </div>
-                {activeTab === 'collection' && pageInfo?.hasMore && pageInfo.nextLimit ? (
-                  <div className="mt-8 flex justify-center">
-                    <Link
-                      href={`${profilePath}?limit=${pageInfo.nextLimit}${tabHashes.collection}`}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
-                    >
-                      Load more collection
-                      <ArrowRight className="h-4 w-4" />
-                    </Link>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </>
-        )}
-
-        {activeTab === 'tools' && (
-          tools.length === 0 ? (
-            <div className="rounded-[28px] border border-white/8 bg-zinc-950/60 p-8 text-center text-zinc-400 sm:p-10">
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-300">
-                <Layers3 className="h-5 w-5" />
-              </div>
-              <h3 className="mt-4 text-lg font-semibold text-white">No tagged source tools yet</h3>
-              <p className="mx-auto mt-2 max-w-xl text-sm leading-6">
-                Tools will appear here when this creator tags where portfolio pieces were made.
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {tools.map((tool) => (
-                <Link
-                  key={tool.slug}
-                  href={`/showcase?tool=${encodeURIComponent(tool.slug)}`}
-                  className="rounded-[24px] border border-white/8 bg-zinc-950/70 p-5 transition hover:border-sky-400/30 hover:bg-zinc-900/70"
-                >
-                  <div className="inline-flex items-center gap-2 rounded-full border border-sky-300/15 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-100">
-                    <Layers3 className="h-3.5 w-3.5" />
-                    Source tool
-                  </div>
-                  <div className="mt-4 text-xl font-semibold text-white">{tool.label}</div>
-                  <div className="mt-2 text-sm text-zinc-400">{tool.count} portfolio piece{tool.count === 1 ? '' : 's'}</div>
-                </Link>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      <MediaDetailsPreviewModal
-        isOpen={Boolean(selectedItem)}
-        onClose={() => setSelectedItem(null)}
-        mediaType={
-          selectedItem
-            ? selectedItem.postFormat === 'text'
-              ? 'text'
-              : selectedItem.mediaKind === 'video'
-                ? 'video'
-                : 'image'
-            : 'image'
-        }
-        src={selectedItem?.mediaUrl ?? null}
-        alt={selectedItem?.title ?? 'Creator creation preview'}
-        title={selectedItem?.title ?? 'Creator creation'}
-        prompt={selectedItem?.prompt ?? ''}
-        body={selectedItem?.body ?? ''}
-        creator={selectedItem?.creator}
-        actions={selectedItem ? (
-          <>
-            <PublicShareButton
-              generationId={selectedItem.id}
-              title={selectedItem.title}
-              description={selectedItem.body || selectedItem.prompt}
-              sourceSurface="creator-profile"
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-            />
-            <Link
-              href={buildCreatorDetailPath(selectedItem.id)}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-            >
-              Open page
-            </Link>
-            {selectedItem.asset ? (
-              <Link
-                href={buildCreatorDetailPath(selectedItem.id, 'resources')}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
+    <section className="mt-7" aria-label="Creator portfolio">
+      <div className="sticky top-16 z-20 -mx-1 rounded-[20px] border border-white/8 bg-black/80 p-1.5 shadow-lg backdrop-blur-xl sm:top-20 sm:mx-0">
+        <div className="grid grid-cols-3 gap-1" role="tablist" aria-label="Creator profile sections">
+          {tabs.map((tab) => {
+            const selected = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => handleTabSelect(tab.id)}
+                className={`ui-focus-ring min-h-11 rounded-[15px] px-2 text-sm font-bold transition ${
+                  selected ? 'bg-white text-black' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'
+                }`}
               >
-                View unlock
-              </Link>
-            ) : null}
-          </>
-        ) : null}
+                {tab.label} <span className={selected ? 'text-black/55' : 'text-zinc-600'}>{tab.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-6">
+        {activeTab === 'tools' ? (
+          <ToolsGrid tools={initialData.stats.toolsUsed} />
+        ) : visibleItems.length > 0 ? (
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">
+            {visibleItems.map((item) => (
+              <CreatorCard key={item.id} item={item} onOpen={openViewer} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            icon={activeTab === 'unlocks' ? <LockKeyhole className="h-6 w-6" /> : <Images className="h-6 w-6" />}
+            title={activeTab === 'unlocks' ? 'No unlocks yet' : 'No creations yet'}
+            body={activeTab === 'unlocks'
+              ? 'Reusable prompts, files, notes, and remix access will appear here.'
+              : 'Published creator work will appear here.'}
+          />
+        )}
+      </div>
+
+      {activeTab !== 'tools' && pageInfo.hasMore ? (
+        <div ref={sentinelRef} className="flex min-h-24 items-center justify-center py-6" aria-live="polite">
+          {loadError ? (
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="inline-flex items-center gap-2 text-sm font-semibold text-rose-300">
+                <AlertCircle className="h-4 w-4" />
+                {loadError}
+              </div>
+              <button type="button" onClick={() => void loadMore()} className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/12 bg-white/[0.05] px-4 text-sm font-bold text-white">
+                <RefreshCw className="h-4 w-4" /> Retry
+              </button>
+            </div>
+          ) : isLoadingMore ? (
+            <div className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-400">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading creations
+            </div>
+          ) : !observerSupported ? (
+            <button type="button" onClick={() => void loadMore()} className="ui-focus-ring min-h-11 rounded-full border border-white/12 bg-white/[0.05] px-5 text-sm font-bold text-white">
+              Load more creations
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <ShowcaseReelViewer
+        isOpen={Boolean(selectedItemId)}
+        items={viewerItems}
+        selectedItemId={selectedItemId}
+        initialMediaIndex={selectedMediaIndex}
+        savedItemIds={savedItemIds}
+        savingItemIds={savingItemIds}
+        accessToken={session?.access_token ?? null}
+        hasMoreItems={pageInfo.hasMore}
+        isLoadingMoreItems={isLoadingMore}
+        onLoadMoreItems={loadMore}
+        onClose={closeViewer}
+        onSelectItemId={selectViewerItem}
+        onMediaIndexChange={(index) => {
+          setSelectedMediaIndex(index);
+          if (selectedItemId) updateLocation(selectedItemId, 'replace', index);
+        }}
+        onToggleSave={toggleSave}
+        onRemix={handleRemix}
+        buildDetailPath={buildDetailPath}
       />
     </section>
+  );
+}
+
+function CreatorCard({
+  item,
+  onOpen,
+}: {
+  item: ShowcaseFeedItem;
+  onOpen: (item: ShowcaseFeedItem, mediaIndex?: number) => void;
+}) {
+  const mediaItems = getItemMediaItems(item);
+  const isText = item.postFormat === 'text';
+  const unlockLabel = assetLabel(item);
+
+  return (
+    <article className="group min-w-0 overflow-hidden rounded-[20px] border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">
+      <div className="relative aspect-[4/5] overflow-hidden bg-black">
+        {isText ? (
+          <button
+            type="button"
+            onClick={() => onOpen(item, 0)}
+            aria-label={`Open ${item.title}`}
+            className="ui-focus-ring flex h-full w-full flex-col justify-between bg-[linear-gradient(145deg,#181128,#111215_55%,#0a1118)] p-4 text-left sm:p-5"
+          >
+            <FileText className="h-6 w-6 text-violet-300" />
+            <span className="line-clamp-7 text-sm font-bold leading-6 text-zinc-100 sm:text-base">
+              {itemDisplayText(item)}
+            </span>
+          </button>
+        ) : mediaItems.length > 0 ? (
+          <ShowcaseMediaCarousel
+            mediaItems={mediaItems}
+            title={item.title}
+            mode="feed"
+            onOpen={(mediaIndex) => onOpen(item, mediaIndex)}
+            className="h-full"
+          />
+        ) : (
+          <button type="button" onClick={() => onOpen(item, 0)} className="ui-focus-ring flex h-full w-full items-center justify-center text-zinc-600" aria-label={`Open ${item.title}`}>
+            <Images className="h-9 w-9" />
+          </button>
+        )}
+
+        {unlockLabel ? (
+          <div className="pointer-events-none absolute left-2.5 top-2.5 z-[5] inline-flex max-w-[75%] items-center gap-1.5 rounded-full border border-amber-300/20 bg-black/75 px-2.5 py-1 text-[11px] font-black text-amber-300 backdrop-blur-md">
+            <LockKeyhole className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{unlockLabel}</span>
+          </div>
+        ) : null}
+      </div>
+
+      <button type="button" onClick={() => onOpen(item, 0)} className="ui-focus-ring block w-full p-3 text-left sm:p-4" aria-label={`Open ${item.title}`}>
+        <h3 className="line-clamp-2 min-h-10 text-sm font-black leading-5 text-white sm:text-base sm:leading-6">
+          {item.title || itemDisplayText(item)}
+        </h3>
+        <div className="mt-2 min-h-4 truncate text-[11px] font-semibold text-zinc-500 sm:text-xs">
+          {item.sourceTool ? `Made with ${item.sourceTool}` : '\u00a0'}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs font-semibold text-zinc-500">
+          <span className="inline-flex items-center gap-1.5"><Heart className="h-3.5 w-3.5" /> {item.saveCount}</span>
+          <span className="inline-flex items-center gap-1.5"><Repeat2 className="h-3.5 w-3.5" /> {item.remixCount}</span>
+        </div>
+      </button>
+    </article>
+  );
+}
+
+function ToolsGrid({ tools }: { tools: CreatorProfilePageData['stats']['toolsUsed'] }) {
+  if (!tools.length) {
+    return <EmptyState icon={<Layers3 className="h-6 w-6" />} title="No tagged tools yet" body="Tools will appear when this creator tags where a creation was made." />;
+  }
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {tools.map((tool) => (
+        <Link
+          key={tool.slug}
+          href={`/showcase?tool=${encodeURIComponent(tool.slug)}`}
+          className="ui-focus-ring flex min-h-20 items-center gap-3 rounded-[18px] border border-white/8 bg-[#111215] px-4 transition hover:border-sky-300/25 hover:bg-[#15161a]"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-400/10 text-sky-300">
+            <Layers3 className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate font-bold text-white">{tool.label}</span>
+            <span className="mt-1 block text-xs font-semibold text-zinc-500">{tool.count} creation{tool.count === 1 ? '' : 's'}</span>
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+  return (
+    <div className="flex min-h-56 flex-col items-center justify-center border-y border-white/8 px-6 text-center">
+      <div className="text-zinc-500">{icon}</div>
+      <h2 className="mt-4 text-lg font-bold text-white">{title}</h2>
+      <p className="mt-2 max-w-md text-sm leading-6 text-zinc-500">{body}</p>
+    </div>
   );
 }

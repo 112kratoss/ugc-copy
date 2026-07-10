@@ -42,7 +42,9 @@ function createProfileData(profileId = 'creator-1') {
     pageInfo: {
       hasMore: false,
       nextLimit: null,
+      nextOffset: null,
       limit: 48,
+      offset: 0,
     },
   };
 }
@@ -53,7 +55,7 @@ describe('creator profile route adapter service', () => {
     const createUserClientMock = vi.fn();
 
     const response = await getCreatorProfileRouteResponse({
-      request: new Request('http://localhost/api/creators/luna?limit=48', {
+      request: new Request('http://localhost/api/creators/luna?limit=48&offset=24', {
         headers: {
           'x-request-id': 'creator-profile-anon-1',
           'x-vercel-ip-country': 'IN',
@@ -77,6 +79,7 @@ describe('creator profile route adapter service', () => {
     expect(createUserClientMock).not.toHaveBeenCalled();
     expect(getCreatorProfilePageDataMock).toHaveBeenCalledWith('luna', {
       limit: 48,
+      offset: 24,
       countryCode: 'IN',
     });
   });

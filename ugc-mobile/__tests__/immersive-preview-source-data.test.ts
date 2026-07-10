@@ -55,7 +55,9 @@ function creatorProfile(items: ShowcaseFeedItem[]): CreatorProfileResponse {
     pageInfo: {
       hasMore: false,
       nextLimit: null,
+      nextOffset: null,
       limit: 48,
+      offset: 0,
     },
     viewer: {
       isOwner: false,
@@ -95,6 +97,20 @@ describe('immersive preview source data', () => {
 
     expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-1')).toEqual({
       showcaseItems: [item],
+    });
+  });
+
+  it('reads and deduplicates pages from the infinite creator profile cache', () => {
+    const queryClient = new QueryClient();
+    const first = creatorProfile([showcaseItem('post-1'), showcaseItem('post-2')]);
+    const second = creatorProfile([showcaseItem('post-2'), showcaseItem('post-3')]);
+    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], {
+      pages: [first, second],
+      pageParams: [0, 48],
+    });
+
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-3')).toEqual({
+      showcaseItems: [first.items[0], first.items[1], second.items[1]],
     });
   });
 });

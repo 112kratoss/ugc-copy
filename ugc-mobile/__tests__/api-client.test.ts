@@ -258,7 +258,9 @@ describe('mobile api client caching', () => {
       pageInfo: {
         hasMore: false,
         nextLimit: null,
+        nextOffset: null,
         limit: 48,
+        offset: 0,
       },
       viewer: {
         isOwner: false,

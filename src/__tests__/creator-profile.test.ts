@@ -128,6 +128,21 @@ function createServiceClientMock() {
               order() {
                 return this;
               },
+              async range(from: number, to: number) {
+                const rows = generationsState
+                  .filter((row) =>
+                    Object.entries(filters).every(([key, value]) =>
+                      key.startsWith('neq:')
+                        ? ((row as Record<string, unknown>)[key.slice(4)] ?? null) !== value
+                        : key === 'archived_at' && value === null
+                        ? ((row as Record<string, unknown>)[key] ?? null) === null
+                        : (row as Record<string, unknown>)[key] === value
+                    )
+                  )
+                  .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))
+                  .slice(from, to + 1);
+                return { data: rows, error: null };
+              },
               async limit(limit: number) {
                 const rows = generationsState
                   .filter((row) =>
@@ -166,6 +181,31 @@ function createServiceClientMock() {
               },
               order() {
                 return this;
+              },
+              async range(from: number, to: number) {
+                if (postsMissingSourceToolSlugColumn && fields?.includes('source_tool_slug')) {
+                  return {
+                    data: null,
+                    error: {
+                      code: '42703',
+                      message: 'column posts.source_tool_slug does not exist',
+                    },
+                  };
+                }
+
+                const rows = postsState
+                  .filter((row) =>
+                    Object.entries(filters).every(([key, value]) =>
+                      key.startsWith('neq:')
+                        ? ((row as Record<string, unknown>)[key.slice(4)] ?? null) !== value
+                        : key === 'archived_at' && value === null
+                        ? ((row as Record<string, unknown>)[key] ?? null) === null
+                        : (row as Record<string, unknown>)[key] === value
+                    )
+                  )
+                  .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))
+                  .slice(from, to + 1);
+                return { data: rows, error: null };
               },
               async limit(limit: number) {
                 if (postsMissingSourceToolSlugColumn && fields?.includes('source_tool_slug')) {
@@ -366,6 +406,30 @@ describe('creator profile data loader', () => {
     });
     expect(data?.stats.totalSaves).toBe(12);
     expect(data?.pageInfo.hasMore).toBe(false);
+    expect(data?.pageInfo).toMatchObject({ limit: 24, offset: 0, nextOffset: null });
+  });
+
+  it('returns stable offset pages while keeping full-profile statistics', async () => {
+    postsState = Array.from({ length: 5 }, (_, index) => ({
+      ...postsState[0],
+      id: `post-${index + 1}`,
+      generation_id: null,
+      output_url: `generated_images/user-1/file-${index + 1}.jpg`,
+      created_at: `2026-03-${String(20 - index).padStart(2, '0')}T10:00:00.000Z`,
+      save_count: index + 1,
+    }));
+    postMediaState = [];
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const firstPage = await getCreatorProfilePageData('Creator-Name', { limit: 2, offset: 0 });
+    const secondPage = await getCreatorProfilePageData('Creator-Name', { limit: 2, offset: 2 });
+
+    expect(firstPage?.items.map((item) => item.id)).toEqual(['post-1', 'post-2']);
+    expect(secondPage?.items.map((item) => item.id)).toEqual(['post-3', 'post-4']);
+    expect(firstPage?.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2, limit: 2, offset: 0 });
+    expect(secondPage?.pageInfo).toMatchObject({ hasMore: true, nextOffset: 4, limit: 2, offset: 2 });
+    expect(firstPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
+    expect(secondPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
   });
 
   it('hides posts that moderation has marked hidden', async () => {

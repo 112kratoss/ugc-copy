@@ -42,10 +42,21 @@ export default function ShowcaseMediaCarousel({
     return cover?.width && cover?.height ? cover.width / cover.height : null;
   });
   const [isInViewport, setIsInViewport] = useState(mode !== 'feed');
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [failedPreviewIds, setFailedPreviewIds] = useState<Set<string>>(() => new Set());
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const shouldAutoPlayVideo = autoPlayVideo && (mode !== 'feed' || isInViewport);
+  const shouldAutoPlayVideo = autoPlayVideo && !prefersReducedMotion && (mode !== 'feed' || isInViewport);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    updatePreference();
+    mediaQuery.addEventListener?.('change', updatePreference);
+    return () => mediaQuery.removeEventListener?.('change', updatePreference);
+  }, []);
 
   useEffect(() => {
     const carousel = carouselRef.current;
@@ -104,12 +115,15 @@ export default function ShowcaseMediaCarousel({
   const isDetail = mode === 'detail';
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
+  const feedPreviewUrl = mode === 'feed' && activeItem.previewUrl && !failedPreviewIds.has(activeItem.id)
+    ? activeItem.previewUrl
+    : null;
 
   return (
     <div ref={carouselRef} className={className}>
       <div
         className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-[22px]' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''}`}
-        style={isReel ? undefined : { aspectRatio: coverAspectRatio ?? (isDetail ? '16 / 10' : '4 / 5') }}
+        style={isReel ? undefined : { aspectRatio: mode === 'feed' ? '4 / 5' : coverAspectRatio ?? '16 / 10' }}
         onClick={(event) => {
           if (!onOpen || event.target instanceof HTMLElement && event.target.closest('button, video[controls]')) {
             return;
@@ -145,6 +159,7 @@ export default function ShowcaseMediaCarousel({
                 ref={activeVideoRef}
                 key={activeItem.id}
                 src={activeItem.url}
+                poster={feedPreviewUrl ?? undefined}
                 muted={!showControls}
                 controls={showControls}
                 autoPlay={shouldAutoPlayVideo}
@@ -157,7 +172,7 @@ export default function ShowcaseMediaCarousel({
                   }
                   onMediaReady?.(activeIndex);
                 }}
-                className="h-full w-full object-contain"
+                className={`h-full w-full ${mode === 'feed' ? 'object-cover' : 'object-contain'}`}
               />
               {!showControls ? (
                 <span className="pointer-events-none absolute bottom-3 left-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md">
@@ -169,17 +184,22 @@ export default function ShowcaseMediaCarousel({
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={activeItem.id}
-              src={activeItem.url}
+              src={feedPreviewUrl ?? activeItem.url}
               alt={title}
               loading={isDetail ? 'eager' : 'lazy'}
               decoding="async"
               onLoad={(event) => {
-                if (activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
+                if (mode !== 'feed' && activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
                   setCoverAspectRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
                 }
                 onMediaReady?.(activeIndex);
               }}
-              className="h-full w-full object-contain"
+              onError={() => {
+                if (feedPreviewUrl) {
+                  setFailedPreviewIds((current) => new Set(current).add(activeItem.id));
+                }
+              }}
+              className={`h-full w-full ${mode === 'feed' ? 'object-cover' : 'object-contain'}`}
             />
           )}
         </div>

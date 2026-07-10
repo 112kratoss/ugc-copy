@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Stack, router } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -8,7 +8,7 @@ import { useState } from 'react';
 
 import { useAuth } from '@/lib/auth';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
-import { leaveAuthScreen } from '@/lib/auth-navigation';
+import { completeAuthScreen, leaveAuthScreen } from '@/lib/auth-navigation';
 
 const workspace = {
   background: '#03040d',
@@ -22,6 +22,7 @@ const workspace = {
 };
 
 export default function AuthScreen() {
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
   const { signInWithPassword, signUpWithPassword, signInWithApple, isAuthConfigured, missingEnvKeys } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
@@ -44,6 +45,7 @@ export default function AuthScreen() {
       } else {
         await signUpWithPassword(email.trim(), password);
       }
+      completeAuthScreen(router, returnTo);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Authentication failed.');
     } finally {
@@ -56,6 +58,7 @@ export default function AuthScreen() {
     setError(null);
     try {
       await signInWithApple(mode);
+      completeAuthScreen(router, returnTo);
     } catch (nextError) {
       if (!isAppleAuthCanceled(nextError)) {
         setError(nextError instanceof Error ? nextError.message : 'Apple sign-in failed.');

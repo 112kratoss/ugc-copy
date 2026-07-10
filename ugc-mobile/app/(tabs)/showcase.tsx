@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronRight, FileText, Heart, Lock, Play, RefreshCw, Repeat2 } from 'lucide-react-native';
+import { ChevronRight, FileText, Heart, Lock, Play, RefreshCw, Repeat2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -29,6 +29,7 @@ import {
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getShowcaseFeedPageParams,
+  normalizeShowcaseToolFilter,
   resolveMobileShowcaseFeedFilterId,
   type MobileShowcaseFeedFilterId,
   type ShowcaseFeedFilters,
@@ -99,7 +100,7 @@ const FEED_HORIZONTAL_PADDING = appTheme.spacing.screen;
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
-  const routeParams = useLocalSearchParams<{ filter?: string | string[] }>();
+  const routeParams = useLocalSearchParams<{ filter?: string | string[]; tool?: string | string[] }>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -108,9 +109,16 @@ export default function ShowcaseScreen() {
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const gridLayout = getShowcaseGridLayout(width);
   const routeFilterId = resolveMobileShowcaseFeedFilterId(routeParams.filter);
+  const routeTool = normalizeShowcaseToolFilter(routeParams.tool);
   const [activeFilterId, setActiveFilterId] = useState<FeedFilterId>(routeFilterId);
+  const [activeTool, setActiveTool] = useState<string | null>(routeTool);
   const activeFilter = FEED_FILTERS.find((filter) => filter.id === activeFilterId) ?? FEED_FILTERS[0];
-  const queryKey = useMemo(() => createShowcaseFeedQueryKey(activeFilter.params), [activeFilter]);
+  const queryFilters = useMemo<ShowcaseFeedFilters>(() => ({
+    ...activeFilter.params,
+    ...(activeTool ? { tool: activeTool } : {}),
+  }), [activeFilter, activeTool]);
+  const queryKey = useMemo(() => createShowcaseFeedQueryKey(queryFilters), [queryFilters]);
+  const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
@@ -130,7 +138,7 @@ export default function ShowcaseScreen() {
     queryKey,
     initialPageParam: 0,
     queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
-      ...activeFilter.params,
+      ...queryFilters,
       offset: pageParam,
     })),
     getNextPageParam: getNextShowcaseFeedOffset,
@@ -147,11 +155,20 @@ export default function ShowcaseScreen() {
   }, [routeFilterId]);
 
   useEffect(() => {
+    setActiveTool((current) => current === routeTool ? current : routeTool);
+  }, [routeTool]);
+
+  useEffect(() => {
     setActiveVideoIds([]);
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMoreItemCountRef.current = 0;
-  }, [activeFilterId]);
+  }, [activeFilterId, activeTool]);
+
+  const clearToolFilter = () => {
+    setActiveTool(null);
+    router.setParams({ tool: undefined } as never);
+  };
 
   const requestNextPage = () => {
     const now = Date.now();
@@ -255,7 +272,7 @@ export default function ShowcaseScreen() {
                     Feed
                   </Text>
                   <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm, fontWeight: '700' }}>
-                    {activeFilter.body}
+                    {activeToolLabel ? `Creations made with ${activeToolLabel}.` : activeFilter.body}
                   </Text>
                 </View>
                 <IconButton
@@ -276,6 +293,29 @@ export default function ShowcaseScreen() {
                     onPress={() => setActiveFilterId(filter.id)}
                   />
                 ))}
+                {activeToolLabel ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Clear ${activeToolLabel} tool filter`}
+                    onPress={clearToolFilter}
+                    style={({ pressed }) => ({
+                      minHeight: 36,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      borderRadius: appTheme.radii.pill,
+                      borderWidth: 1,
+                      borderColor: appTheme.colors.commerce,
+                      backgroundColor: `${appTheme.colors.commerce}1f`,
+                      opacity: pressed ? appTheme.opacity.pressed : 1,
+                      paddingLeft: appTheme.spacing.gap,
+                      paddingRight: 9,
+                    })}
+                  >
+                    <Text style={{ color: appTheme.colors.text, ...appTheme.type.label }}>{activeToolLabel}</Text>
+                    <X size={15} color={appTheme.colors.text} />
+                  </Pressable>
+                ) : null}
               </View>
             </View>
             {showcaseQuery.error ? (
@@ -290,7 +330,9 @@ export default function ShowcaseScreen() {
         }
         ListEmptyComponent={
           !isFirstLoad && !showcaseQuery.error && !hasItems ? (
-            <StatusBlock title="No posts loaded" body={`No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
+            <StatusBlock title="No posts loaded" body={activeToolLabel
+              ? `No posts made with ${activeToolLabel} matched this view.`
+              : `No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
           ) : null
         }
         ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
@@ -299,6 +341,12 @@ export default function ShowcaseScreen() {
       </View>
     </WorkspaceSideMenuGestureLayer>
   );
+}
+
+function formatToolLabel(slug: string) {
+  return slug
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function getVisibleCardItems(viewableItems: Array<ViewToken<ShowcaseMasonryCard>>) {

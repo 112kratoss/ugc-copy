@@ -91,11 +91,13 @@ async function handleCreatorProfileGET(
     const { username } = await context.params;
     const searchParams = new URL(request.url).searchParams;
     const requestedLimit = parsePositiveInt(searchParams.get('limit'), 24);
+    const requestedOffset = parsePositiveInt(searchParams.get('offset'), 0);
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
     const viewerUserId = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
 
     const data = await dependencies.getCreatorProfilePageData(username, {
       limit: requestedLimit,
+      offset: requestedOffset,
       countryCode: request.headers.get('x-vercel-ip-country'),
     });
 

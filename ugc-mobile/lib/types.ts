@@ -372,6 +372,10 @@ export interface ShowcaseFeedItem {
   createdAt: string;
   creator: ShowcaseCreator;
   isSaved?: boolean;
+  sourceKind?: 'post' | 'generation';
+  sourceTool?: string | null;
+  sourceToolSlug?: string | null;
+  sourceTools?: SourceToolSelection[];
   generationId: string | null;
   asset: ShowcaseAssetSummary | null;
   canRemix: boolean;
@@ -419,7 +423,9 @@ export interface CreatorProfileResponse {
   pageInfo: {
     hasMore: boolean;
     nextLimit: number | null;
+    nextOffset: number | null;
     limit: number;
+    offset: number;
   };
   viewer: {
     isOwner: boolean;

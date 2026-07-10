@@ -7,6 +7,7 @@ import {
   type ImmersivePreviewItem,
   type PreviewViewerSource,
 } from '@/lib/immersive-preview-view-model';
+import { flattenCreatorProfilePages } from '@/lib/creator-profile-view-model';
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import type {
   GenerationListItem,
@@ -209,10 +210,12 @@ function cachedShowcaseItems(queryClient: QueryClient, source: PreviewViewerSour
 
 function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceData | undefined {
   const items: ShowcaseFeedItem[] = [];
-  const creatorQueries = queryClient.getQueriesData<CreatorProfileResponse>({ queryKey: ['creator-profile'] });
+  const creatorQueries = queryClient.getQueriesData<CreatorProfileResponse | InfiniteData<CreatorProfileResponse>>({ queryKey: ['creator-profile'] });
 
   for (const [, data] of creatorQueries) {
-    if (data?.items.length) {
+    if (data && 'pages' in data) {
+      items.push(...flattenCreatorProfilePages(data.pages));
+    } else if (data?.items.length) {
       items.push(...data.items);
     }
   }

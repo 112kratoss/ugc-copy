@@ -116,12 +116,12 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
   if (isOwner === null) {
     return (
       <div className="flex items-center gap-3">
+        <div className="h-11 w-24 animate-pulse rounded-full bg-white/10" />
         <ProfileShareButton
           username={profile.username}
           displayName={profile.displayName}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
         />
-        <div className="h-10 w-24 animate-pulse rounded-full bg-white/10" />
       </div>
     );
   }
@@ -194,15 +194,10 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
-        <ProfileShareButton
-          username={profile.username}
-          displayName={profile.displayName}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
-        />
         {isOwner ? (
           <button
             onClick={() => setIsEditing(true)}
-            className="inline-flex items-center gap-2 rounded-full border border-purple-500/50 bg-purple-500/10 px-5 py-2.5 text-sm font-semibold text-purple-200 transition-all hover:border-purple-500 hover:bg-purple-500/20 hover:text-white"
+            className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200"
           >
             <Edit2 className="h-4 w-4" />
             Edit Profile
@@ -214,16 +209,21 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
             disabled={isFollowLoading}
             aria-pressed={isFollowing}
             aria-busy={isFollowLoading}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition ${
+            className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-5 text-sm font-bold transition ${
               isFollowing
                 ? 'border border-white/15 bg-white/10 text-white hover:bg-white/15'
-                : 'border border-white/10 bg-white/[0.06] text-zinc-100 hover:border-white/20 hover:bg-white/[0.1]'
+                : 'bg-white text-black hover:bg-zinc-200'
             } disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100`}
           >
             {isFollowLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {followButtonLabel}
           </button>
         )}
+        <ProfileShareButton
+          username={profile.username}
+          displayName={profile.displayName}
+          className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 text-sm font-bold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-70"
+        />
       </div>
       {followError ? (
         <p className="mt-2 text-sm text-rose-300">{followError}</p>

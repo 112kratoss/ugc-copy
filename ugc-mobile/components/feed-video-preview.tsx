@@ -25,15 +25,23 @@ export function FeedVideoPreview({
   radius: number;
   accent: string;
 }) {
+  const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
+  const usablePreviewUrl = previewUrl && previewUrl !== failedPosterUrl ? previewUrl : null;
+
+  useEffect(() => {
+    setFailedPosterUrl(null);
+  }, [previewUrl, url]);
+
   if (!active) {
-    if (previewUrl) {
+    if (usablePreviewUrl) {
       return (
       <FeedMediaFrame
         kind="image"
-        url={previewUrl}
-        backdropUrl={previewUrl}
+        url={usablePreviewUrl}
+        backdropUrl={usablePreviewUrl}
         cacheKey={previewCacheKey}
         thumbhash={previewThumbhash}
+        onImageError={() => setFailedPosterUrl(usablePreviewUrl)}
         radius={radius}
         borderWidth={1}
         borderColor={`${accent}4d`}
@@ -75,7 +83,7 @@ export function FeedVideoPreview({
   return (
     <ActiveFeedVideoPreview
       url={url}
-      previewUrl={previewUrl}
+      previewUrl={usablePreviewUrl}
       previewCacheKey={previewCacheKey}
       previewThumbhash={previewThumbhash}
       height={height}

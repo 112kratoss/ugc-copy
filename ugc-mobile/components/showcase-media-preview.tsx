@@ -1,6 +1,6 @@
 import { Images } from 'lucide-react-native';
-import { useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AccessibilityInfo, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
@@ -33,6 +33,8 @@ export function ShowcaseMediaPreview({
   width,
 }: ShowcaseMediaPreviewProps) {
   const mediaItems = getShowcasePreviewMediaItems(item);
+  const reduceMotionEnabled = useReduceMotionEnabled();
+  const resolvedVideoActivation = reduceMotionEnabled ? 'never' : videoActivation;
 
   if (!mediaItems.length) return null;
 
@@ -44,7 +46,7 @@ export function ShowcaseMediaPreview({
         item={mediaItems[0]}
         radius={radius}
         recyclingKey={recyclingKey}
-        videoActivation={videoActivation}
+        videoActivation={resolvedVideoActivation}
         width={width}
       />
     );
@@ -59,7 +61,7 @@ export function ShowcaseMediaPreview({
       onScrollToggle={onScrollToggle}
       radius={radius}
       recyclingKey={recyclingKey}
-      videoActivation={videoActivation}
+      videoActivation={resolvedVideoActivation}
       width={width}
     />
   );
@@ -187,18 +189,24 @@ function ShowcaseMediaSlide({
   width: number;
 }) {
   const previewUrl = getShowcaseMediaPreviewUrl(item);
+  const [failedPreviewUrl, setFailedPreviewUrl] = useState<string | null>(null);
+  const usablePreviewUrl = previewUrl && previewUrl !== failedPreviewUrl ? previewUrl : null;
   const previewCacheKey = item.preview?.cacheKey ?? item.previewCacheKey;
   const previewThumbhash = item.preview?.thumbhash ?? item.previewThumbhash;
+
+  useEffect(() => {
+    setFailedPreviewUrl(null);
+  }, [item.id, previewUrl]);
 
   if (item.mediaKind === 'video') {
     return (
       <View style={{ width, height }}>
         <FeedVideoPreview
           url={item.url}
-          previewUrl={previewUrl}
+          previewUrl={usablePreviewUrl}
           previewCacheKey={previewCacheKey}
           previewThumbhash={previewThumbhash}
-          active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !previewUrl)}
+          active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !usablePreviewUrl)}
           height={height}
           radius={radius}
           accent={accent}
@@ -210,14 +218,35 @@ function ShowcaseMediaSlide({
   return (
     <FeedMediaFrame
       kind="image"
-      url={previewUrl ?? item.url}
-      backdropUrl={previewUrl}
+      url={usablePreviewUrl ?? item.url}
+      backdropUrl={usablePreviewUrl ?? item.url}
       cacheKey={previewCacheKey}
       thumbhash={previewThumbhash}
+      onImageError={() => {
+        if (usablePreviewUrl) setFailedPreviewUrl(usablePreviewUrl);
+      }}
       transition={120}
       recyclingKey={recyclingKey}
       radius={radius}
       style={{ width, height }}
     />
   );
+}
+
+function useReduceMotionEnabled() {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
+      if (mounted) setEnabled(value);
+    });
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setEnabled);
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  return enabled;
 }
