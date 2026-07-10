@@ -7,7 +7,7 @@ function resolveApiBaseUrl() {
     return process.env.EXPO_PUBLIC_WEB_API_BASE_URL;
   }
 
-  return process.env.EXPO_PUBLIC_API_BASE_URL ?? 'https://magicbooklet.com';
+  return resolveAndroidLoopbackUrl(process.env.EXPO_PUBLIC_API_BASE_URL ?? 'https://magicbooklet.com');
 }
 
 function resolveSupabaseUrl() {
@@ -17,7 +17,15 @@ function resolveSupabaseUrl() {
     return supabaseUrl;
   }
 
-  return supabaseUrl.replace(
+  return resolveAndroidLoopbackUrl(supabaseUrl);
+}
+
+function resolveAndroidLoopbackUrl(url: string) {
+  if (!url || isWebRuntime() || !isAndroidRuntime()) {
+    return url;
+  }
+
+  return url.replace(
     /^(https?:\/\/)(localhost|127\.0\.0\.1)(?=[:/]|$)/,
     (_match, protocol: string) => `${protocol}10.0.2.2`
   );

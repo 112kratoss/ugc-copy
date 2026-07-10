@@ -54,6 +54,28 @@ describe('mobile env helpers', () => {
     expect(env.apiBaseUrl).toBe('https://magicbooklet.com');
   });
 
+  it('maps local API URLs to the Android emulator host', async () => {
+    vi.stubEnv('EXPO_OS', 'android');
+    vi.stubEnv('EXPO_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3000');
+    vi.resetModules();
+
+    const { env } = await import('../lib/env');
+
+    expect(env.apiBaseUrl).toBe('http://10.0.2.2:3000');
+  });
+
+  it('does not remap local API URLs in browser preview', async () => {
+    vi.stubEnv('EXPO_OS', 'android');
+    vi.stubEnv('EXPO_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3000');
+    vi.stubEnv('EXPO_PUBLIC_WEB_API_BASE_URL', 'http://localhost:3000');
+    vi.stubGlobal('window', { document: {} });
+    vi.resetModules();
+
+    const { env } = await import('../lib/env');
+
+    expect(env.apiBaseUrl).toBe('http://localhost:3000');
+  });
+
   it('maps local Supabase URLs to the Android emulator host', async () => {
     vi.stubEnv('EXPO_OS', 'android');
     vi.stubEnv('EXPO_PUBLIC_SUPABASE_URL', 'http://127.0.0.1:54321');

@@ -323,7 +323,7 @@ export default function ShowcaseScreen() {
                 <StatusBlock
                   tone="danger"
                   title="Could not load feed"
-                  body="Check your connection, then try again."
+                  body={showcaseFeedErrorBody(showcaseQuery.error)}
                 />
                 <SecondaryButton label="Retry feed" onPress={handleRefresh} />
               </View>
@@ -350,6 +350,14 @@ function formatToolLabel(slug: string) {
   return slug
     .replace(/[-_]+/g, ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function showcaseFeedErrorBody(error: unknown) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return 'Check your connection, then try again.';
 }
 
 function getVisibleCardItems(viewableItems: Array<ViewToken<ShowcaseMasonryCard>>) {
