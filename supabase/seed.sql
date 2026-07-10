@@ -1,0 +1,2 @@
+-- Local seed data can be added here.
+-- Keep production user data out of the local seed unless it has been anonymized.
