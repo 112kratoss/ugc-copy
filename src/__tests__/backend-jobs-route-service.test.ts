@@ -33,6 +33,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
   const serviceClient = { service: 'supabase' };
   const createServiceClient = vi.fn();
   const runBackendAlertDeliveryJob = vi.fn();
+  const runFeedMaintenanceBackendJob = vi.fn();
   const runGenerationCompletionsBackendJob = vi.fn();
   const runMediaPreviewRepairBackendJob = vi.fn();
   const runMobilePushReceiptsBackendJob = vi.fn();
@@ -42,6 +43,8 @@ describe('runBackendJobsSchedulerForRoute', () => {
     createServiceClient.mockReturnValue(serviceClient);
     runBackendAlertDeliveryJob.mockReset();
     runBackendAlertDeliveryJob.mockResolvedValue(succeededResult('backend-alert-delivery'));
+    runFeedMaintenanceBackendJob.mockReset();
+    runFeedMaintenanceBackendJob.mockResolvedValue(succeededResult('feed-maintenance'));
     runGenerationCompletionsBackendJob.mockReset();
     runGenerationCompletionsBackendJob.mockResolvedValue(succeededResult('generation-completions'));
     runMediaPreviewRepairBackendJob.mockReset();
@@ -62,11 +65,13 @@ describe('runBackendJobsSchedulerForRoute', () => {
         createServiceClient,
         getDueBackendJobs: () => [
           backendJob('backend-alert-delivery'),
+          backendJob('feed-maintenance'),
           backendJob('generation-completions'),
           backendJob('media-preview-repair'),
           backendJob('mobile-push-receipts'),
         ],
         runBackendAlertDeliveryJob,
+        runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
@@ -78,9 +83,10 @@ describe('runBackendJobsSchedulerForRoute', () => {
       body: {
         success: true,
         scheduler: '/api/cron/backend-jobs',
-        dueJobs: ['backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
+        dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
         results: [
           expect.objectContaining({ job: 'backend-alert-delivery', status: 'succeeded' }),
+          expect.objectContaining({ job: 'feed-maintenance', status: 'succeeded' }),
           expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
           expect.objectContaining({ job: 'media-preview-repair', status: 'succeeded' }),
           expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
@@ -96,6 +102,12 @@ describe('runBackendJobsSchedulerForRoute', () => {
     });
     expect(runGenerationCompletionsBackendJob).toHaveBeenCalledWith({
       requestId: 'bom1::scheduler-42:generation-completions',
+      startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+    expect(runFeedMaintenanceBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-42:feed-maintenance',
       startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
       serviceClient,
       triggerRoute: '/api/cron/backend-jobs',
@@ -122,6 +134,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
         createServiceClient,
         getDueBackendJobs: () => [],
         runBackendAlertDeliveryJob,
+        runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
@@ -139,6 +152,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
     });
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(runBackendAlertDeliveryJob).not.toHaveBeenCalled();
+    expect(runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
@@ -166,6 +180,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
           backendJob('media-preview-repair'),
         ],
         runBackendAlertDeliveryJob,
+        runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,

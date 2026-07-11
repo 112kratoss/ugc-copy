@@ -278,4 +278,34 @@ describe('ViewerActionSheet permanent delete', () => {
     expect(onDetails).not.toHaveBeenCalled();
     expect(onUnlockRemix).toHaveBeenCalled();
   });
+
+  it('adds recommendation feedback actions only when callbacks are supplied', () => {
+    const onClose = vi.fn();
+    const onNotInterested = vi.fn();
+    const onHideCreator = vi.fn();
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <ViewerActionSheet
+          item={manualOwnerPostItem({ sourceType: 'showcase', availableActions: ['share'] })}
+          onClose={onClose}
+          onDetails={vi.fn()}
+          onHideCreator={onHideCreator}
+          onNotInterested={onNotInterested}
+          onRecreate={vi.fn()}
+          onShare={vi.fn()}
+          onSourceRefresh={vi.fn()}
+          visible
+        />
+      );
+    });
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Not interested').props.onPress());
+    expect(onClose).toHaveBeenCalled();
+    expect(onNotInterested).toHaveBeenCalledOnce();
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Hide this creator').props.onPress());
+    expect(onHideCreator).toHaveBeenCalledOnce();
+  });
 });

@@ -1,5 +1,6 @@
 export type BackendJobName =
   | 'backend-alert-delivery'
+  | 'feed-maintenance'
   | 'generation-completions'
   | 'media-preview-repair'
   | 'mobile-push-receipts';
@@ -168,6 +169,15 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'alert_delivery_not_configured',
     maxMissedRunsBeforeDegraded: 4,
+  }),
+  defineBackendJob({
+    name: 'feed-maintenance',
+    route: '/api/cron/feed-maintenance',
+    schedule: '20 * * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_feed_maintenance_work',
+    maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({
     name: 'generation-completions',

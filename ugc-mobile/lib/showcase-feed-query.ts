@@ -3,7 +3,7 @@ import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
 export const SHOWCASE_FEED_PAGE_SIZE = 12;
 export const SHOWCASE_FEED_STALE_TIME_MS = 5 * 60 * 1000;
 
-export type ShowcaseFeedSort = 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
+export type ShowcaseFeedSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
 export type ShowcaseFeedCategory = 'all' | ShowcaseFeedItem['category'];
 export type ShowcaseFeedUnlock = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseFeedResource = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
@@ -18,7 +18,15 @@ export interface ShowcaseFeedFilters {
 }
 
 export interface ShowcaseFeedPageParams extends ShowcaseFeedFilters {
+  cursor?: string | null;
+  feedSessionId?: string | null;
   limit?: number;
+  offset?: number;
+}
+
+export interface ShowcaseFeedPageParam {
+  cursor?: string;
+  feedSessionId?: string;
   offset?: number;
 }
 
@@ -27,15 +35,17 @@ export type ShowcaseFeedApiParams = Record<string, number | string>;
 const DEFAULT_FEED_FILTERS = {
   category: 'all',
   resource: 'all',
-  sort: 'recent',
+  sort: 'for-you',
   tool: 'all',
   unlock: 'all',
 } as const;
 
-export function createShowcaseFeedQueryKey(filters: ShowcaseFeedFilters = {}) {
+export function createShowcaseFeedQueryKey(
+  filters: ShowcaseFeedFilters = {},
+  viewerUserId?: string | null
+) {
   return [
-    'showcase-feed',
-    'infinite',
+    ...createShowcaseFeedViewerQueryKey(viewerUserId),
     {
       category: filters.category ?? DEFAULT_FEED_FILTERS.category,
       resource: filters.resource ?? DEFAULT_FEED_FILTERS.resource,
@@ -44,6 +54,10 @@ export function createShowcaseFeedQueryKey(filters: ShowcaseFeedFilters = {}) {
       unlock: filters.unlock ?? DEFAULT_FEED_FILTERS.unlock,
     },
   ] as const;
+}
+
+export function createShowcaseFeedViewerQueryKey(viewerUserId?: string | null) {
+  return ['showcase-feed', 'infinite', viewerUserId?.trim() || 'anonymous'] as const;
 }
 
 export function createShowcasePostQueryKey(postId: string | undefined, userId: string | null | undefined) {
@@ -79,9 +93,15 @@ export function getShowcaseFeedPageParams(params: ShowcaseFeedPageParams = {}): 
   const unlock = params.unlock ?? DEFAULT_FEED_FILTERS.unlock;
   const query: ShowcaseFeedApiParams = {
     limit: params.limit ?? SHOWCASE_FEED_PAGE_SIZE,
-    offset: params.offset ?? 0,
     sort,
   };
+
+  if (params.cursor) {
+    query.cursor = params.cursor;
+    if (params.feedSessionId) query.feedSessionId = params.feedSessionId;
+  } else {
+    query.offset = params.offset ?? 0;
+  }
 
   if (category !== 'all') query.category = category;
   if (resource !== 'all') query.resource = resource;
@@ -120,4 +140,30 @@ export function findShowcaseFeedItemById(pages: ShowcaseFeedResponse[] | undefin
 export function getNextShowcaseFeedOffset(lastPage: ShowcaseFeedResponse): number | null {
   if (!lastPage.pageInfo?.hasMore) return null;
   return typeof lastPage.pageInfo.nextOffset === 'number' ? lastPage.pageInfo.nextOffset : null;
+}
+
+export function getNextShowcaseFeedPageParam(lastPage: ShowcaseFeedResponse): ShowcaseFeedPageParam | null {
+  const cursor = lastPage.nextCursor ?? lastPage.pageInfo?.nextCursor;
+  if (cursor && lastPage.pageInfo?.hasMore !== false) {
+    return {
+      cursor,
+      ...(lastPage.feedSessionId ? { feedSessionId: lastPage.feedSessionId } : {}),
+    };
+  }
+
+  const offset = getNextShowcaseFeedOffset(lastPage);
+  return offset === null ? null : { offset };
+}
+
+export function getShowcaseFeedSessionContext(pages: ShowcaseFeedResponse[] | undefined) {
+  let feedSessionId: string | null = null;
+  let algorithmVersion: string | null = null;
+
+  for (const page of pages ?? []) {
+    feedSessionId ??= page.feedSessionId?.trim() || null;
+    algorithmVersion ??= page.algorithmVersion?.trim() || null;
+    if (feedSessionId && algorithmVersion) break;
+  }
+
+  return { feedSessionId, algorithmVersion };
 }

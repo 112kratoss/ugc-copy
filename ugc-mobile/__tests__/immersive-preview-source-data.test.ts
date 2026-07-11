@@ -113,4 +113,54 @@ describe('immersive preview source data', () => {
       showcaseItems: [first.items[0], first.items[1], second.items[1]],
     });
   });
+
+  it('preserves the originating ranked feed order and session in the viewer cache', () => {
+    const queryClient = new QueryClient();
+    const rankedItems = [showcaseItem('post-2'), showcaseItem('post-1'), showcaseItem('post-3')];
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'user-1', { sort: 'for-you' }], {
+      pages: [{
+        items: rankedItems,
+        feedSessionId: 'session-1',
+        algorithmVersion: 'hybrid-v1',
+        nextCursor: null,
+      }],
+      pageParams: [{ offset: 0 }],
+    });
+
+    expect(readCachedImmersiveSourceData(
+      queryClient,
+      'showcase-feed',
+      'user-1',
+      'post-1',
+      'session-1'
+    )).toEqual({
+      showcaseItems: rankedItems,
+      feedSessionId: 'session-1',
+      algorithmVersion: 'hybrid-v1',
+    });
+  });
+
+  it('does not reuse an anonymous ranked session for a signed-in viewer', () => {
+    const queryClient = new QueryClient();
+    const anonymousItem = { ...showcaseItem('post-1'), title: 'Anonymous ranking' };
+    const signedInItem = { ...showcaseItem('post-1'), title: 'Signed-in ranking' };
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'anonymous', { sort: 'for-you' }], {
+      pages: [{ items: [anonymousItem], feedSessionId: 'anonymous-session' }],
+      pageParams: [{ offset: 0 }],
+    });
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'user-1', { sort: 'for-you' }], {
+      pages: [{ items: [signedInItem], feedSessionId: 'user-session' }],
+      pageParams: [{ offset: 0 }],
+    });
+
+    expect(readCachedImmersiveSourceData(
+      queryClient,
+      'showcase-feed',
+      'user-1',
+      'post-1'
+    )).toMatchObject({
+      showcaseItems: [{ title: 'Signed-in ranking' }],
+      feedSessionId: 'user-session',
+    });
+  });
 });

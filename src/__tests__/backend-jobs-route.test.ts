@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
   runBackendAlertDeliveryJob: vi.fn(),
+  runFeedMaintenanceBackendJob: vi.fn(),
   runGenerationCompletionsBackendJob: vi.fn(),
   runMediaPreviewRepairBackendJob: vi.fn(),
   runMobilePushReceiptsBackendJob: vi.fn(),
@@ -30,6 +31,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
     ...actual,
     runBackendAlertDeliveryJob: (...args: unknown[]) => (
       mocks.runBackendAlertDeliveryJob(...args)
+    ),
+    runFeedMaintenanceBackendJob: (...args: unknown[]) => (
+      mocks.runFeedMaintenanceBackendJob(...args)
     ),
     runGenerationCompletionsBackendJob: (...args: unknown[]) => (
       mocks.runGenerationCompletionsBackendJob(...args)
@@ -60,6 +64,18 @@ describe('/api/cron/backend-jobs route', () => {
       skipped: true,
       reason: 'alert_delivery_not_configured',
       summary: { configured: false },
+    });
+    mocks.runFeedMaintenanceBackendJob.mockReset();
+    mocks.runFeedMaintenanceBackendJob.mockResolvedValue({
+      success: true,
+      job: 'feed-maintenance',
+      route: '/api/cron/feed-maintenance',
+      status: 'succeeded',
+      summary: {
+        postStatsRefreshed: 1,
+        userInterestProfilesRefreshed: 1,
+        retention: { skipped: false },
+      },
     });
     mocks.runGenerationCompletionsBackendJob.mockReset();
     mocks.runGenerationCompletionsBackendJob.mockResolvedValue({
@@ -103,6 +119,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(response.headers.get('x-request-id')).toBe('cron-reject-1');
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
     expect(mocks.runBackendAlertDeliveryJob).not.toHaveBeenCalled();
+    expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
@@ -233,11 +250,36 @@ describe('/api/cron/backend-jobs route', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
+    expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
       dueJobs: ['backend-alert-delivery', 'generation-completions', 'mobile-push-receipts'],
+    });
+  });
+
+  it('runs feed maintenance on the staggered hourly scheduler tick', async () => {
+    vi.setSystemTime(new Date('2026-06-22T10:20:00.000Z'));
+
+    const { GET } = await import('@/app/api/cron/backend-jobs/route');
+    const response = await GET(new Request('http://localhost/api/cron/backend-jobs', {
+      headers: {
+        authorization: 'Bearer secret-123',
+        'x-request-id': 'scheduler-feed-20',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runFeedMaintenanceBackendJob).toHaveBeenCalledWith({
+      requestId: 'scheduler-feed-20:feed-maintenance',
+      startedAtMs: Date.parse('2026-06-22T10:20:00.000Z'),
+      serviceClient: { service: 'supabase' },
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+    expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts'],
     });
   });
 

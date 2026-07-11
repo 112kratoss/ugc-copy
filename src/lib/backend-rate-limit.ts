@@ -204,6 +204,18 @@ export const SHOWCASE_PREVIEW_READ_URL_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const SHOWCASE_FEED_EVENT_RATE_LIMIT = {
+  scope: 'showcase-feed:event',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT = {
+  scope: 'showcase-feed:for-you-read',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT = {
   scope: 'post-resource-file:upload',
   limit: 30,

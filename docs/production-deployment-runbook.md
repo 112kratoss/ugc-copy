@@ -156,7 +156,7 @@ Expect a configured environment, a current build id, no stale scheduler, no sett
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `generation-completions`, `media-preview-repair`, and `mobile-push-receipts`.
+Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `media-preview-repair`, and `mobile-push-receipts`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

@@ -383,6 +383,20 @@ describe('immersive preview view model', () => {
         initialId: 'gen-1',
       },
     });
+    expect(immersiveViewerHref({
+      source: 'showcase-feed',
+      initialId: 'post-2',
+      feedSessionId: 'session-1',
+      algorithmVersion: 'hybrid-v1',
+    })).toEqual({
+      pathname: '/viewer',
+      params: {
+        source: 'showcase-feed',
+        initialId: 'post-2',
+        feedSessionId: 'session-1',
+        algorithmVersion: 'hybrid-v1',
+      },
+    });
   });
 
   describe('action builder available and disabled actions', () => {

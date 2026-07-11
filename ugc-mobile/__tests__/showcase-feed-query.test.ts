@@ -4,11 +4,14 @@ import {
   SHOWCASE_FEED_PAGE_SIZE,
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
+  createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
   findShowcaseFeedItemById,
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
+  getNextShowcaseFeedPageParam,
   getShowcaseFeedPageParams,
+  getShowcaseFeedSessionContext,
   normalizeShowcaseToolFilter,
   resolveMobileShowcaseFeedFilterId,
 } from '../lib/showcase-feed-query';
@@ -43,12 +46,24 @@ describe('showcase feed query helpers', () => {
     expect(getShowcaseFeedPageParams()).toEqual({
       limit: 12,
       offset: 0,
-      sort: 'recent',
+      sort: 'for-you',
     });
     expect(createShowcaseFeedQueryKey()).toEqual([
       'showcase-feed',
       'infinite',
-      { category: 'all', resource: 'all', sort: 'recent', tool: 'all', unlock: 'all' },
+      'anonymous',
+      { category: 'all', resource: 'all', sort: 'for-you', tool: 'all', unlock: 'all' },
+    ]);
+    expect(createShowcaseFeedQueryKey({}, 'user-1')).toEqual([
+      'showcase-feed',
+      'infinite',
+      'user-1',
+      { category: 'all', resource: 'all', sort: 'for-you', tool: 'all', unlock: 'all' },
+    ]);
+    expect(createShowcaseFeedViewerQueryKey('user-1')).toEqual([
+      'showcase-feed',
+      'infinite',
+      'user-1',
     ]);
   });
 
@@ -115,7 +130,8 @@ describe('showcase feed query helpers', () => {
     expect(createShowcaseFeedQueryKey({ unlock: 'free', resource: 'remix' })).toEqual([
       'showcase-feed',
       'infinite',
-      { category: 'all', resource: 'remix', sort: 'recent', tool: 'all', unlock: 'free' },
+      'anonymous',
+      { category: 'all', resource: 'remix', sort: 'for-you', tool: 'all', unlock: 'free' },
     ]);
   });
 
@@ -146,5 +162,43 @@ describe('showcase feed query helpers', () => {
     ).toBeNull();
 
     expect(getNextShowcaseFeedOffset({ items: [] })).toBeNull();
+  });
+
+  it('continues ranked feeds with an opaque cursor and session while retaining offset fallback', () => {
+    const rankedPage: ShowcaseFeedResponse = {
+      items: [],
+      feedSessionId: 'session-1',
+      algorithmVersion: 'hybrid-v1',
+      nextCursor: 'opaque-cursor',
+      pageInfo: { hasMore: true, nextOffset: 12 },
+    };
+
+    expect(getNextShowcaseFeedPageParam(rankedPage)).toEqual({
+      cursor: 'opaque-cursor',
+      feedSessionId: 'session-1',
+    });
+    expect(getShowcaseFeedPageParams({
+      cursor: 'opaque-cursor',
+      feedSessionId: 'session-1',
+    })).toEqual({
+      limit: 12,
+      sort: 'for-you',
+      cursor: 'opaque-cursor',
+      feedSessionId: 'session-1',
+    });
+    expect(getNextShowcaseFeedPageParam({
+      items: [],
+      pageInfo: { hasMore: true, nextOffset: 24 },
+    })).toEqual({ offset: 24 });
+  });
+
+  it('reads stable session metadata from paginated ranked responses', () => {
+    expect(getShowcaseFeedSessionContext([
+      { items: [], feedSessionId: 'session-1', algorithmVersion: 'hybrid-v1' },
+      { items: [], feedSessionId: 'session-1', nextCursor: null },
+    ])).toEqual({
+      feedSessionId: 'session-1',
+      algorithmVersion: 'hybrid-v1',
+    });
   });
 });

@@ -41,6 +41,7 @@ import {
   type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
 import { slugifySourceTool } from '@/lib/source-tools';
+import { getPersonalizedShowcaseFeedPage } from '@/lib/showcase-feed-personalization';
 
 interface ProfileSummary {
   id: string;
@@ -236,6 +237,54 @@ async function fetchPostRows(
   return (result.data ?? []) as PostRow[];
 }
 
+async function fetchPostRowsByIds(postIds: string[]): Promise<PostRow[] | null> {
+  if (postIds.length === 0) return [];
+
+  const adminSupabase = createServiceClient();
+  const result = await adminSupabase
+    .from('posts')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .in('id', postIds)
+    .eq('visibility', 'public')
+    .is('archived_at', null);
+
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+    const legacyResult = await adminSupabase
+      .from('posts')
+      .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
+      .in('id', postIds)
+      .eq('visibility', 'public')
+      .is('archived_at', null);
+    if (legacyResult.error) {
+      if (isMissingPostsSchemaError(legacyResult.error)) return null;
+      throw legacyResult.error;
+    }
+    const rowById = new Map(((legacyResult.data ?? []) as LegacyPostRow[]).map((row) => [row.id, row]));
+    return postIds.flatMap((postId) => {
+      const row = rowById.get(postId);
+      return row ? [{
+        ...row,
+        body: null,
+        creation_mode: null,
+        post_format: normalizeLegacyPostFormat(row.category),
+        source_tool_slug: slugifySourceTool(row.source_tool),
+        review_status: 'visible',
+      }] : [];
+    });
+  }
+
+  if (result.error) {
+    if (isMissingPostsSchemaError(result.error)) return null;
+    throw result.error;
+  }
+
+  const rowById = new Map(((result.data ?? []) as PostRow[]).map((row) => [row.id, row]));
+  return postIds.flatMap((postId) => {
+    const row = rowById.get(postId);
+    return row ? [row] : [];
+  });
+}
+
 function itemMatchesFeedFilters(
   item: ShowcaseFeedItem,
   category: ShowcaseCategory,
@@ -314,7 +363,7 @@ export async function resolvePostRowsToFeedItems(
   rows: PostRow[],
   adminSupabase: ReturnType<typeof createServiceClient>
 ): Promise<ShowcaseFeedItem[]> {
-  const visibleRows = rows.filter((row) => row.review_status !== 'hidden');
+  const visibleRows = rows.filter((row) => !row.review_status || row.review_status === 'visible');
   const userIds = Array.from(new Set(visibleRows.map((row) => row.user_id).filter(Boolean))) as string[];
   const generationIds = Array.from(new Set(visibleRows.map((row) => row.generation_id).filter(Boolean))) as string[];
 
@@ -489,7 +538,7 @@ export async function resolvePostRowsToFeedItems(
         remixCount: post.remix_count || 0,
         createdAt: post.created_at,
         creator: {
-          id: profile?.id ?? null,
+          id: profile?.id ?? post.user_id ?? null,
           username: profile?.username ?? null,
           name: getCreatorDisplayName({
             displayName: profile?.display_name ?? null,
@@ -771,7 +820,7 @@ async function getLegacyShowcaseFeedPageBase(
           remixCount: generation.remix_count || 0,
           createdAt: generation.created_at,
           creator: {
-            id: profile?.id ?? null,
+            id: profile?.id ?? generation.user_id ?? null,
             username: profile?.username ?? null,
             name: getCreatorDisplayName({
               displayName: profile?.display_name ?? null,
@@ -838,6 +887,9 @@ export async function getShowcaseFeedPage(options: {
   offset: number;
   limit: number;
   viewerUserId?: string | null;
+  anonymousKeyHash?: string | null;
+  cursor?: string | null;
+  requestId?: string | null;
   tool?: string | null;
   unlock?: ShowcaseUnlockFilter;
   resource?: ShowcaseResourceFilter;
@@ -850,9 +902,45 @@ export async function getShowcaseFeedPage(options: {
   const toolSlug = slugifySourceTool(options.tool);
   const unlockFilter = options.unlock ?? 'all';
   const resourceFilter = options.resource ?? 'all';
-  const baseFeed = options.bypassCache
-    ? await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
-    : await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
+  const baseFeed = sort === 'for-you'
+    ? await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: options.anonymousKeyHash ?? null,
+      cursor: options.cursor ?? null,
+      filters: {
+        category,
+        toolSlug,
+        unlockFilter,
+        resourceFilter,
+      },
+      hydratePostIds: async (postIds) => {
+        const rows = await fetchPostRowsByIds(postIds);
+        if (rows === null) return [];
+        const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+        return items.filter((item) => (
+          (!toolSlug || item.sourceToolSlug === toolSlug)
+          && itemMatchesFeedFilters(item, category, unlockFilter, resourceFilter)
+        ));
+      },
+      fallbackItems: async (target) => {
+        const page = await getShowcaseFeedPageBase(
+          category,
+          'recent',
+          0,
+          target,
+          toolSlug,
+          unlockFilter,
+          resourceFilter,
+        );
+        return page.items;
+      },
+      limit,
+      offset,
+      serviceClient: adminSupabase,
+      viewerUserId,
+    })
+    : options.bypassCache
+      ? await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
+      : await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
   const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
   const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
 

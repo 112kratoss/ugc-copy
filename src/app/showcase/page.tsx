@@ -42,7 +42,7 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
     const hasNonDefaultVariant =
         hasUnknownQuery ||
         (typeof rawCategory === 'string' && category !== 'all') ||
-        (typeof rawSort === 'string' && sort !== 'recent') ||
+        (typeof rawSort === 'string' && sort !== 'for-you') ||
         typeof rawTool === 'string' ||
         (typeof rawUnlock === 'string' && normalizeShowcaseUnlockFilter(rawUnlock) !== 'all') ||
         (typeof rawResource === 'string' && normalizeShowcaseResourceFilter(rawResource) !== 'all') ||

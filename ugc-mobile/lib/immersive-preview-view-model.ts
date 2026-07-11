@@ -71,6 +71,7 @@ export interface ImmersivePreviewItem {
   previewKind?: 'text';
   creatorLabel: string;
   creatorAvatar: string | null;
+  creatorId?: string | null;
   creatorUsername?: string | null;
   badge: string;
   saveLabel: string;
@@ -98,14 +99,19 @@ export interface ImmersivePreviewItem {
   isManualOwnerPost?: boolean;
   availableActions: string[];
   disabledActions: Record<string, string>;
+  recommendation?: ShowcaseFeedItem['recommendation'];
 }
 
 export function immersiveViewerHref({
+  algorithmVersion,
   creatorUsername,
+  feedSessionId,
   source,
   initialId,
 }: {
+  algorithmVersion?: string | null;
   creatorUsername?: string | null;
+  feedSessionId?: string | null;
   source: PreviewViewerSource;
   initialId: string;
 }) {
@@ -114,6 +120,8 @@ export function immersiveViewerHref({
     params: {
       source,
       initialId,
+      ...(feedSessionId ? { feedSessionId } : {}),
+      ...(algorithmVersion ? { algorithmVersion } : {}),
       ...(creatorUsername ? { creatorUsername } : {}),
     },
   };
@@ -274,6 +282,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel,
     creatorAvatar: item.creator.avatar,
+    creatorId: item.creator.id,
     creatorUsername: item.creator.username?.trim() || null,
     badge: showcaseBadge(item),
     saveLabel: formatCompactCount(item.saveCount),
@@ -325,6 +334,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
       'open-original',
     ],
     disabledActions: {},
+    recommendation: item.recommendation,
   };
 }
 

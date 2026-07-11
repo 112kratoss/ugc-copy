@@ -131,7 +131,7 @@ export function HomeDashboard() {
   }, [isFocused, user?.id]);
 
   const showcaseQuery = useInfiniteQuery({
-    queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }),
+    queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }, user?.id),
     initialPageParam: 0,
     queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({ offset: pageParam, sort: 'recent' })),
     getNextPageParam: getNextShowcaseFeedOffset,

@@ -588,6 +588,20 @@ describe('showcase feed', () => {
     expect(nextCacheState.invocations).toHaveLength(1);
   });
 
+  it('keeps the post owner id when a public creator profile is missing', async () => {
+    profilesState = [];
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].creator.id).toBe('user-1');
+  });
+
   it('bypasses the feed base cache when requested for personalized refreshes', async () => {
     const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
     const page = await getShowcaseFeedPage({
@@ -1220,5 +1234,33 @@ describe('showcase feed', () => {
       mediaKind: 'video',
       previewUrl: 'https://proxy.example.com/generated_videos/user-1/legacy-video.preview.webp',
     });
+  });
+
+  it('keeps the generation owner id in legacy fallback rows without a profile', async () => {
+    postsSchemaMissingState = true;
+    profilesState = [];
+    resourceBundlesState = [];
+    generationModelsState = [{
+      id: 'legacy-image',
+      model: 'nano-banana-2',
+      output_url: 'generated_images/user-2/legacy-image.jpg',
+      category: 'image',
+      prompt: 'A public image generation.',
+      title: 'Legacy Image',
+      created_at: '2026-03-18T10:00:00.000Z',
+      user_id: 'user-2',
+      is_public: true,
+      status: 'succeeded',
+    }];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].creator.id).toBe('user-2');
   });
 });

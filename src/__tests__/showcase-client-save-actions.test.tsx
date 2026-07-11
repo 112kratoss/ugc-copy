@@ -8,6 +8,15 @@ import type { SourceToolOption } from '@/lib/source-tools';
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const authState = vi.hoisted(() => ({
+  session: {
+    access_token: 'test-token',
+    user: { id: 'user-1' },
+  } as { access_token: string; user: { id: string } } | null,
+  user: { id: 'user-1' } as { id: string } | null,
+  credits: 25,
+  isLoading: false,
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
@@ -40,15 +49,7 @@ vi.mock('next/link', () => ({
 }));
 
 vi.mock('@/app/components/AuthProvider', () => ({
-  useAuth: () => ({
-    session: {
-      access_token: 'test-token',
-      user: { id: 'user-1' },
-    },
-    user: { id: 'user-1' },
-    credits: 25,
-    isLoading: false,
-  }),
+  useAuth: () => authState,
 }));
 
 vi.mock('framer-motion', () => ({
@@ -128,6 +129,7 @@ describe('ShowcaseClient save actions', () => {
   const intersectionObservers: Array<{
     observe: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
+    observedTargets: Element[];
     trigger: (isIntersecting?: boolean) => void;
   }> = [];
 
@@ -135,6 +137,13 @@ describe('ShowcaseClient save actions', () => {
     window.history.replaceState(null, '', '/showcase');
     mockPush.mockReset();
     mockReplace.mockReset();
+    authState.session = {
+      access_token: 'test-token',
+      user: { id: 'user-1' },
+    };
+    authState.user = { id: 'user-1' };
+    authState.credits = 25;
+    authState.isLoading = false;
     intersectionObservers.length = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -155,11 +164,12 @@ describe('ShowcaseClient save actions', () => {
       value: vi.fn(),
     });
     vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(callback: IntersectionObserverCallback) {
+      const observedTargets: Element[] = [];
       const observer = {
         root: null,
         rootMargin: '0px',
         thresholds: [0],
-        observe: vi.fn(),
+        observe: vi.fn((target: Element) => { observedTargets.push(target); }),
         unobserve: vi.fn(),
         disconnect: vi.fn(),
         takeRecords: vi.fn(() => []),
@@ -168,6 +178,7 @@ describe('ShowcaseClient save actions', () => {
       intersectionObservers.push({
         observe: observer.observe,
         disconnect: observer.disconnect,
+        observedTargets,
         trigger: (isIntersecting = true) => {
           callback([
             {
@@ -215,6 +226,40 @@ describe('ShowcaseClient save actions', () => {
         sourceSurface: 'showcase',
       }),
     }));
+    await waitFor(() => {
+      const eventRequest = vi.mocked(fetch).mock.calls.find(([input, request]) => {
+        if (String(input) !== '/api/showcase/feed/events') return false;
+        return JSON.parse(String(request?.body)).eventType === 'save';
+      });
+      expect(eventRequest).toBeDefined();
+    });
+  });
+
+  it('records an unsave only after the save API confirms removal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => ['post-1'],
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ success: true, isSaved: false, saveCount: 3, changed: true }),
+      };
+    }));
+
+    renderShowcase(createShowcaseItem({ isSaved: true }));
+    fireEvent.click(screen.getByRole('button', { name: /remove save from campaign frame/i }));
+
+    await waitFor(() => {
+      const eventRequest = vi.mocked(fetch).mock.calls.find(([input, request]) => {
+        if (String(input) !== '/api/showcase/feed/events') return false;
+        return JSON.parse(String(request?.body)).eventType === 'unsave';
+      });
+      expect(eventRequest).toBeDefined();
+    });
   });
 
   it('rolls the showcase card save state back when the API fails', async () => {
@@ -616,5 +661,262 @@ describe('ShowcaseClient save actions', () => {
         },
       }),
     });
+  });
+
+  it('replaces the server fallback with a signed-in For You session and continues by cursor', async () => {
+    const fallbackItem = createShowcaseItem({
+      id: 'post-fallback',
+      title: 'Server fallback',
+      generationId: 'gen-fallback',
+    });
+    const personalizedItem = createShowcaseItem({
+      id: 'post-ranked',
+      title: 'Ranked for you',
+      generationId: 'gen-ranked',
+      recommendation: {
+        deliveryId: 'delivery-ranked',
+        position: 0,
+        reason: 'Based on your saves',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+    const continuedItem = createShowcaseItem({
+      id: 'post-continued',
+      title: 'More for you',
+      generationId: 'gen-continued',
+      recommendation: {
+        deliveryId: 'delivery-continued',
+        position: 1,
+        reason: 'Fresh creator',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+    const feedFetch = vi.fn(async (url: string) => {
+      if (url.includes('cursor=cursor-1')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [continuedItem],
+            feedSessionId: 'session-1',
+            pageInfo: {
+              hasMore: false,
+              nextOffset: null,
+              nextCursor: null,
+              limit: 12,
+              offset: 12,
+            },
+          }),
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          items: [personalizedItem],
+          feedSessionId: 'session-1',
+          pageInfo: {
+            hasMore: true,
+            nextOffset: null,
+            nextCursor: 'cursor-1',
+            limit: 12,
+            offset: 0,
+          },
+        }),
+      };
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return feedFetch(url);
+      }
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => [],
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ success: true }),
+      };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(fallbackItem, { hasMore: true, nextOffset: 12 })}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    expect(await screen.findByText('Ranked for you')).toBeInTheDocument();
+    expect(screen.queryByText('Server fallback')).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
+      headers: { Authorization: 'Bearer test-token' },
+    }));
+
+    await waitFor(() => {
+      expect(intersectionObservers.some((observer) => observer.observedTargets.some(
+        (target) => target.getAttribute('aria-hidden') === 'true'
+      ))).toBe(true);
+    });
+    const sentinelObserver = intersectionObservers.findLast((observer) => observer.observedTargets.some(
+      (target) => target.getAttribute('aria-hidden') === 'true'
+    ));
+    sentinelObserver?.trigger(true);
+
+    expect(await screen.findByText('More for you')).toBeInTheDocument();
+    expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
+  });
+
+  it('refreshes the For You fallback for an anonymous viewer to establish a feed session', async () => {
+    authState.session = null;
+    authState.user = null;
+    const anonymousItem = createShowcaseItem({
+      id: 'post-anonymous-ranked',
+      title: 'Anonymous discovery',
+      generationId: 'gen-anonymous-ranked',
+      recommendation: {
+        deliveryId: 'delivery-anonymous',
+        position: 0,
+        reason: 'Popular with new creators',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/showcase/feed?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [anonymousItem],
+            feedSessionId: 'anonymous-session-1',
+            pageInfo: {
+              hasMore: false,
+              nextOffset: null,
+              nextCursor: null,
+              limit: 12,
+              offset: 0,
+            },
+          }),
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ success: true }),
+      };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ title: 'Server fallback' }))}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    expect(await screen.findByText('Anonymous discovery')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
+      headers: undefined,
+    }));
+  });
+
+  it('optimistically removes a post after Not interested and records ranked feedback', async () => {
+    const rankedItem = createShowcaseItem({
+      recommendation: {
+        deliveryId: 'delivery-1',
+        position: 3,
+        reason: 'Because you save product photography',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+    const rankedFeed = {
+      ...createFeed(rankedItem),
+      feedSessionId: 'feed-session-1',
+    };
+
+    render(
+      <ShowcaseClient
+        initialFeed={rankedFeed}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /not interested/i }));
+
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent(/show you fewer posts like that/i);
+
+    const eventRequest = vi.mocked(fetch).mock.calls.find(([input]) => (
+      String(input) === '/api/showcase/feed/events'
+    ));
+    expect(eventRequest).toBeDefined();
+    expect(JSON.parse(String(eventRequest?.[1]?.body))).toEqual(expect.objectContaining({
+      feedSessionId: 'feed-session-1',
+      deliveryId: 'delivery-1',
+      postId: 'post-1',
+      eventType: 'not_interested',
+      position: 3,
+      sourceSurface: 'showcase',
+    }));
+  });
+
+  it('describes successful anonymous feedback as limited to this visit', async () => {
+    authState.session = null;
+    authState.user = null;
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /not interested/i }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/post removed for this visit/i);
+  });
+
+  it('restores an optimistically hidden post when feedback cannot be saved', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let resolveFeedback: (response: { ok: boolean }) => void = () => undefined;
+    const feedbackResponse = new Promise<{ ok: boolean }>((resolve) => {
+      resolveFeedback = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/showcase/feed/events') {
+        return feedbackResponse;
+      }
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return {
+          ok: true,
+          json: async () => [],
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ success: true }),
+      };
+    }));
+
+    renderShowcase(createShowcaseItem());
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /not interested/i }));
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+
+    resolveFeedback({ ok: false });
+
+    expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/post was restored/i);
   });
 });

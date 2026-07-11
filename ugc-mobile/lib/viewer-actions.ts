@@ -140,16 +140,23 @@ export function getViewerActionLabel(action: string) {
       return 'View details';
     case 'download':
       return 'Download media';
+    case 'not-interested':
+      return 'Not interested';
+    case 'hide-creator':
+      return 'Hide this creator';
     default:
       return action.charAt(0).toUpperCase() + action.slice(1).replaceAll('-', ' ');
   }
 }
 
 export function isDestructiveViewerAction(action: string) {
-  return action === 'unsave' || action === 'archive' || action === 'delete-post';
+  return action === 'unsave' || action === 'archive' || action === 'delete-post' || action === 'hide-creator';
 }
 
 export function getViewerActionGroupLabel(action: string) {
+  if (action === 'not-interested' || action === 'hide-creator') {
+    return 'Feed controls';
+  }
   if (
     action === 'publish'
     || action === 'view-linked'

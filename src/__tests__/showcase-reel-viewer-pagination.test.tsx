@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
@@ -208,6 +208,126 @@ describe('ShowcaseReelViewer pagination', () => {
     await waitFor(() => {
       expect(loadMoreItems).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('records reel open, qualified impression, and dwell events with delivery context', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true })));
+    vi.stubGlobal('fetch', fetchMock);
+    const rankedItem = createShowcaseItem({
+      recommendation: {
+        deliveryId: 'delivery-1',
+        position: 4,
+        reason: 'Inspired by your saves',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+
+    try {
+      const { unmount } = render(
+        <ShowcaseReelViewer
+          isOpen
+          items={[rankedItem]}
+          selectedItemId="post-1"
+          savedItemIds={new Set()}
+          savingItemIds={new Set()}
+          accessToken="token-1"
+          feedSessionId="session-1"
+          hasMoreItems={false}
+          isLoadingMoreItems={false}
+          onLoadMoreItems={vi.fn()}
+          onClose={vi.fn()}
+          onSelectItemId={vi.fn()}
+          onToggleSave={vi.fn()}
+          onRemix={vi.fn()}
+          buildDetailPath={(id) => `/showcase/${id}`}
+        />
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(1250);
+        await Promise.resolve();
+      });
+      unmount();
+
+      const eventBodies = fetchMock.mock.calls
+        .filter(([input]) => String(input) === '/api/showcase/feed/events')
+        .map(([, request]) => JSON.parse(String(request?.body)) as Record<string, unknown>);
+      expect(eventBodies.map((body) => body.eventType)).toEqual(['open', 'impression', 'dwell']);
+      expect(eventBodies).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          feedSessionId: 'session-1',
+          deliveryId: 'delivery-1',
+          position: 4,
+          sourceSurface: 'showcase-reel',
+        }),
+        expect.objectContaining({
+          eventType: 'dwell',
+          durationMs: 1250,
+        }),
+      ]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records a quick skip instead of dwell when a reel closes before qualification', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true })));
+    vi.stubGlobal('fetch', fetchMock);
+    const rankedItem = createShowcaseItem({
+      recommendation: {
+        deliveryId: 'delivery-1',
+        position: 4,
+        reason: 'Inspired by your saves',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+
+    try {
+      const { unmount } = render(
+        <ShowcaseReelViewer
+          isOpen
+          items={[rankedItem]}
+          selectedItemId="post-1"
+          savedItemIds={new Set()}
+          savingItemIds={new Set()}
+          accessToken={null}
+          feedSessionId="session-1"
+          hasMoreItems={false}
+          isLoadingMoreItems={false}
+          onLoadMoreItems={vi.fn()}
+          onClose={vi.fn()}
+          onSelectItemId={vi.fn()}
+          onToggleSave={vi.fn()}
+          onRemix={vi.fn()}
+          buildDetailPath={(id) => `/showcase/${id}`}
+        />
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+        await Promise.resolve();
+        vi.advanceTimersByTime(400);
+      });
+      unmount();
+
+      const eventBodies = fetchMock.mock.calls
+        .filter(([input]) => String(input) === '/api/showcase/feed/events')
+        .map(([, request]) => JSON.parse(String(request?.body)) as Record<string, unknown>);
+      expect(eventBodies.map((body) => body.eventType)).toEqual(['open', 'quick_skip']);
+      expect(eventBodies).toContainEqual(expect.objectContaining({
+        eventType: 'quick_skip',
+        durationMs: 400,
+        sourceSurface: 'showcase-reel',
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('moves horizontally through media without changing the selected post', () => {

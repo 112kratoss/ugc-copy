@@ -11,7 +11,7 @@ import type { VisualMediaDescriptor } from '@/lib/media-descriptor';
 export const SHOWCASE_PAGE_SIZE = 12;
 
 export type ShowcaseCategory = 'all' | 'image' | 'video' | 'text';
-export type ShowcaseSort = 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
+export type ShowcaseSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
 export type ShowcaseUnlockFilter = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseResourceFilter = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all'>;
@@ -102,11 +102,13 @@ export interface ShowcaseFeedItem {
     remixCapability?: PostRemixCapability;
     remixTarget?: PostRemixTarget;
     savedAt?: string;
+    recommendation?: ShowcaseRecommendationContext;
 }
 
 interface ShowcaseFeedPageInfo {
     hasMore: boolean;
     nextOffset: number | null;
+    nextCursor?: string | null;
     limit: number;
     offset: number;
 }
@@ -115,7 +117,43 @@ export interface ShowcaseFeedPage {
     items: ShowcaseFeedItem[];
     pageInfo: ShowcaseFeedPageInfo;
     availableTools?: Array<{ slug: string; label: string; count: number }>;
+    feedSessionId?: string | null;
+    algorithmVersion?: string;
 }
+
+export type ShowcaseFeedCandidateSource =
+    | 'affinity'
+    | 'following'
+    | 'fresh'
+    | 'trending'
+    | 'exploration'
+    | 'semantic';
+
+export interface ShowcaseRecommendationContext {
+    deliveryId: string;
+    position: number;
+    reason: string;
+    algorithmVersion: string;
+    candidateSource?: ShowcaseFeedCandidateSource;
+}
+
+export type ShowcaseFeedEventType =
+    | 'impression'
+    | 'open'
+    | 'dwell'
+    | 'media_progress'
+    | 'quick_skip'
+    | 'save'
+    | 'unsave'
+    | 'share'
+    | 'follow'
+    | 'remix_start'
+    | 'remix_complete'
+    | 'resource_open'
+    | 'purchase'
+    | 'not_interested'
+    | 'hide_creator'
+    | 'report';
 
 export function isGenerationRecipeAssetId(value: string | null | undefined): boolean {
     return Boolean(value?.startsWith(GENERATION_RECIPE_ASSET_ID_PREFIX));
@@ -212,11 +250,16 @@ export function getShowcaseMediaKind(
 }
 
 export function normalizeShowcaseSort(value: string | null | undefined): ShowcaseSort {
-    if (value === 'top-saves' || value === 'top-remixes' || value === 'top-sales') {
+    if (
+        value === 'recent'
+        || value === 'top-saves'
+        || value === 'top-remixes'
+        || value === 'top-sales'
+    ) {
         return value;
     }
 
-    return 'recent';
+    return 'for-you';
 }
 
 export function normalizeShowcaseUnlockFilter(value: string | null | undefined): ShowcaseUnlockFilter {

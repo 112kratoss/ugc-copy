@@ -16,6 +16,8 @@ export function ViewerActionSheet({
   item,
   onClose,
   onDetails,
+  onHideCreator,
+  onNotInterested,
   onRecreate,
   onShare,
   onDeleted,
@@ -26,6 +28,8 @@ export function ViewerActionSheet({
   item: ImmersivePreviewItem;
   onClose: () => void;
   onDetails: () => void;
+  onHideCreator?: () => void;
+  onNotInterested?: () => void;
   onRecreate: () => void;
   onShare: () => void;
   onDeleted?: (postId: string) => void;
@@ -36,6 +40,11 @@ export function ViewerActionSheet({
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const reducedMotion = useReducedMotion();
+  const actions = [
+    ...item.availableActions,
+    ...(onNotInterested ? ['not-interested'] : []),
+    ...(onHideCreator ? ['hide-creator'] : []),
+  ];
 
   const refreshMedia = async () => {
     await Promise.all([
@@ -253,6 +262,14 @@ export function ViewerActionSheet({
       }
       return;
     }
+    if (action === 'not-interested') {
+      onNotInterested?.();
+      return;
+    }
+    if (action === 'hide-creator') {
+      onHideCreator?.();
+      return;
+    }
     if (action === 'view-details') {
       onDetails();
     }
@@ -292,7 +309,7 @@ export function ViewerActionSheet({
             }}
           />
           <ScrollView showsVerticalScrollIndicator={false}>
-            {groupViewerActions(item.availableActions).map((group) => (
+            {groupViewerActions(actions).map((group) => (
               <View key={group.label} style={{ paddingBottom: appTheme.spacing.compact }}>
                 <AppText
                   selectable={false}

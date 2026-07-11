@@ -90,6 +90,15 @@ describe('collectBackendHealth', () => {
             error_message: null,
           },
           {
+            job_name: 'feed-maintenance',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:20:00.000Z',
+            finished_at: '2026-06-21T09:20:03.000Z',
+            duration_ms: 3000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'media-preview-repair',
             status: 'succeeded',
             started_at: '2026-06-21T09:45:00.000Z',
@@ -149,13 +158,18 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 456,
-      coveredJobCount: 4,
+      logicalDailyInvocations: 480,
+      coveredJobCount: 5,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'backend-alert-delivery',
           cadenceMinutes: 10,
           dailyInvocations: 144,
+        }),
+        expect.objectContaining({
+          name: 'feed-maintenance',
+          cadenceMinutes: 60,
+          dailyInvocations: 24,
         }),
         expect.objectContaining({
           name: 'generation-completions',
@@ -174,7 +188,7 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(4);
+    expect(health.jobs).toHaveLength(5);
     expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,
@@ -184,6 +198,11 @@ describe('collectBackendHealth', () => {
       status: 'ok',
       dailyInvocations: 144,
       expectedMaxAgeMinutes: 30,
+    });
+    expect(health.jobs.find((job) => job.name === 'feed-maintenance')).toMatchObject({
+      status: 'ok',
+      dailyInvocations: 24,
+      expectedMaxAgeMinutes: 120,
     });
     expect(health.jobs.find((job) => job.name === 'media-preview-repair')).toMatchObject({
       status: 'ok',
@@ -226,6 +245,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:59:01.000Z',
             duration_ms: 1000,
             skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
+          {
+            job_name: 'feed-maintenance',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:20:00.000Z',
+            finished_at: '2026-06-21T09:20:03.000Z',
+            duration_ms: 3000,
+            skip_reason: null,
             error_message: null,
           },
           {
@@ -518,6 +546,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:59:01.000Z',
             duration_ms: 1000,
             skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
+          {
+            job_name: 'feed-maintenance',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:20:00.000Z',
+            finished_at: '2026-06-21T09:20:03.000Z',
+            duration_ms: 3000,
+            skip_reason: null,
             error_message: null,
           },
           {

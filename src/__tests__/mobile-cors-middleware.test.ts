@@ -38,6 +38,7 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
     expect(response.headers.get('Access-Control-Allow-Headers')).toContain('X-Magicbooklet-Api-Version');
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('X-Magicbooklet-Installation-Id');
     expect(response.headers.get('Access-Control-Expose-Headers')).toContain('X-Magicbooklet-Min-App-Version');
   });
 

@@ -8,7 +8,11 @@ import {
   type PreviewViewerSource,
 } from '@/lib/immersive-preview-view-model';
 import { flattenCreatorProfilePages } from '@/lib/creator-profile-view-model';
-import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
+import {
+  createShowcaseFeedViewerQueryKey,
+  flattenShowcaseFeedPages,
+  getShowcaseFeedSessionContext,
+} from '@/lib/showcase-feed-query';
 import type {
   GenerationListItem,
   CreatorProfileResponse,
@@ -36,6 +40,8 @@ export type ImmersiveSourceData = {
   showcaseItems?: ShowcaseFeedItem[];
   generations?: GenerationListItem[];
   ownerPosts?: OwnerPostsResponse['posts'];
+  feedSessionId?: string | null;
+  algorithmVersion?: string | null;
 };
 
 export interface ImmersivePreviewApi {
@@ -137,7 +143,7 @@ export async function loadImmersiveSourceData({
     return { showcaseItems: detail?.item ? [detail.item] : [] };
   }
 
-  const response = await api.getShowcaseFeed({ limit: 48, sort: 'recent' });
+  const response = await api.getShowcaseFeed({ limit: 48, sort: 'for-you' });
   let showcaseItems = response.items;
 
   if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
@@ -147,14 +153,19 @@ export async function loadImmersiveSourceData({
     }
   }
 
-  return { showcaseItems };
+  return {
+    showcaseItems,
+    feedSessionId: response.feedSessionId ?? null,
+    algorithmVersion: response.algorithmVersion ?? null,
+  };
 }
 
 export function readCachedImmersiveSourceData(
   queryClient: QueryClient,
   source: PreviewViewerSource,
   userId: string | undefined,
-  initialId: string
+  initialId: string,
+  feedSessionId?: string | null
 ): ImmersiveSourceData | undefined {
   if (isGenerationSource(source)) {
     const data = {
@@ -174,7 +185,7 @@ export function readCachedImmersiveSourceData(
     return sourceDataContains(data, initialId) ? data : undefined;
   }
 
-  const data = cachedShowcaseItems(queryClient, source, userId);
+  const data = cachedShowcaseItems(queryClient, source, userId, initialId, feedSessionId);
   return sourceDataContains(data, initialId) ? data : undefined;
 }
 
@@ -183,28 +194,41 @@ export function readCachedProfile(queryClient: QueryClient, userId: string | und
     ?? queryClient.getQueryData<ProfileResponse>(['home-profile', userId]);
 }
 
-function cachedShowcaseItems(queryClient: QueryClient, source: PreviewViewerSource, userId: string | undefined): ImmersiveSourceData | undefined {
-  const items: ShowcaseFeedItem[] = [];
-
+function cachedShowcaseItems(
+  queryClient: QueryClient,
+  source: PreviewViewerSource,
+  userId: string | undefined,
+  initialId: string,
+  feedSessionId?: string | null
+): ImmersiveSourceData | undefined {
   if (source === 'profile-saved') {
     const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
-    if (saved?.items.length) {
-      items.push(...saved.items);
-    }
-  } else {
-    const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
-    if (saved?.items.length) {
-      items.push(...saved.items);
-    }
+    const showcaseItems = saved?.items.filter((item) => item.isSaved) ?? [];
+    return showcaseItems.length ? { showcaseItems } : undefined;
   }
 
-  const feedQueries = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: ['showcase-feed'] });
-  for (const [, data] of feedQueries) {
-    items.push(...flattenShowcaseFeedPages(data?.pages));
+  const feedQueries = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
+    queryKey: createShowcaseFeedViewerQueryKey(userId),
+  });
+  const rankedSources = feedQueries
+    .map(([, data]) => data)
+    .filter((data): data is InfiniteData<ShowcaseFeedResponse> => Boolean(data?.pages.length));
+  const selected = rankedSources.find((data) => Boolean(
+    feedSessionId && data.pages.some((page) => page.feedSessionId === feedSessionId)
+  )) ?? rankedSources.find((data) => flattenShowcaseFeedPages(data.pages).some((item) => item.id === initialId));
+
+  if (selected) {
+    const showcaseItems = flattenShowcaseFeedPages(selected.pages);
+    const context = getShowcaseFeedSessionContext(selected.pages);
+    return showcaseItems.length ? {
+      showcaseItems,
+      feedSessionId: context.feedSessionId,
+      algorithmVersion: context.algorithmVersion,
+    } : undefined;
   }
 
-  const deduped = dedupeById(items);
-  const showcaseItems = source === 'profile-saved' ? deduped.filter((item) => item.isSaved) : deduped;
+  const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
+  const showcaseItems = dedupeById(saved?.items ?? []);
   return showcaseItems.length ? { showcaseItems } : undefined;
 }
 

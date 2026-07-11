@@ -7,6 +7,7 @@ import { AppState, Platform } from 'react-native';
 import { env, getMissingMobileEnvKeys } from './env';
 import { signInWithNativeApple } from './apple-auth';
 import { createApiClient, type MagicbookletApiClient } from './api-client';
+import { getFeedInstallationId } from './feed-installation-id';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { getProfileCreditsOrNull } from './auth-profile';
 import {
@@ -85,6 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => createApiClient({
       baseUrl: env.apiBaseUrl,
       getAccessToken,
+      getInstallationId: getFeedInstallationId,
       clientInfo: {
         appVersion: Constants.expoConfig?.version ?? '0.0.0',
         apiVersion: 1,

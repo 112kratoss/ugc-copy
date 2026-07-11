@@ -355,6 +355,50 @@ export interface ShowcaseMediaItem {
   sortOrder: number;
 }
 
+export interface ShowcaseRecommendationMetadata {
+  deliveryId: string;
+  position: number;
+  reason?: string | null;
+  algorithmVersion?: string | null;
+}
+
+export type ShowcaseFeedEventType =
+  | 'impression'
+  | 'open'
+  | 'dwell'
+  | 'media_progress'
+  | 'quick_skip'
+  | 'save'
+  | 'unsave'
+  | 'share'
+  | 'follow'
+  | 'remix_start'
+  | 'remix_complete'
+  | 'resource_open'
+  | 'purchase'
+  | 'not_interested'
+  | 'hide_creator'
+  | 'report';
+
+export interface ShowcaseFeedEventRequest {
+  clientEventId: string;
+  feedSessionId?: string;
+  deliveryId?: string;
+  postId: string;
+  eventType: ShowcaseFeedEventType;
+  position?: number;
+  durationMs?: number;
+  progress?: number;
+  sourceSurface: 'showcase' | 'showcase-reel';
+  metadata?: Record<string, unknown>;
+}
+
+export interface ShowcaseFeedEventResponse {
+  success: boolean;
+  accepted?: boolean;
+  duplicate?: boolean;
+}
+
 export interface ShowcaseFeedItem {
   id: string;
   mediaUrl: string | null;
@@ -380,14 +424,19 @@ export interface ShowcaseFeedItem {
   asset: ShowcaseAssetSummary | null;
   canRemix: boolean;
   savedAt?: string;
+  recommendation?: ShowcaseRecommendationMetadata | null;
 }
 
 export interface ShowcaseFeedResponse {
   items: ShowcaseFeedItem[];
+  feedSessionId?: string | null;
+  algorithmVersion?: string | null;
+  nextCursor?: string | null;
   pageInfo?: {
     hasMore: boolean;
     limit?: number;
-    nextOffset: number | null;
+    nextOffset?: number | null;
+    nextCursor?: string | null;
     offset?: number;
   };
 }

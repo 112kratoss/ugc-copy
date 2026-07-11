@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { getShowcaseFeedRouteResponse } from '@/lib/showcase-feed-route-adapter-service';
 import type { getShowcaseFeedPage } from '@/lib/showcase-feed';
 
@@ -35,7 +36,7 @@ describe('showcase feed route adapter service', () => {
     const withProviderFetchRequestId = vi.fn((_requestId: string, operation: () => Promise<Response>) => operation());
 
     const response = await getShowcaseFeedRouteResponse({
-      request: new Request('http://localhost/api/showcase/feed?limit=99&tool=all&offset=12', {
+      request: new Request('http://localhost/api/showcase/feed?limit=99&tool=all&offset=12&sort=recent', {
         headers: {
           'x-request-id': 'feed-adapter-anon-1',
           'x-vercel-ip-country': 'IN',
@@ -63,12 +64,63 @@ describe('showcase feed route adapter service', () => {
       offset: 12,
       limit: 24,
       viewerUserId: null,
+      anonymousKeyHash: null,
+      cursor: null,
+      requestId: 'feed-adapter-anon-1',
       tool: null,
       unlock: 'all',
       resource: 'all',
       countryCode: 'IN',
       bypassCache: false,
     });
+  });
+
+  it('uses a private session-backed response for the default anonymous For You feed', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true,
+      limit: 60,
+      remaining: 59,
+      retryAfterSeconds: 0,
+      resetAt: new Date().toISOString(),
+    }));
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed', {
+        headers: { 'x-request-id': 'feed-adapter-smart-1' },
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit,
+        getFeedNetworkKeyHash: vi.fn(() => 'anonymous-network-hash'),
+        resolveFeedAnonymousIdentity: vi.fn(() => ({
+          anonymousKeyHash: 'anonymous-feed-hash',
+          cookieValueToSet: `fid_${'a'.repeat(64)}`,
+          source: 'web-cookie',
+        })),
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('set-cookie')).toContain('__Host-magicbooklet-feed-id=fid_');
+    expect(response.headers.get('set-cookie')).toContain('HttpOnly');
+    expect(response.headers.get('set-cookie')).toContain('Secure');
+    expect(response.headers.get('set-cookie')).toContain('SameSite=lax');
+    expect(enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      scope: 'showcase-feed:for-you-read',
+      key: 'anonymous-network-hash',
+    }));
+    expect(enforceBackendRateLimit.mock.invocationCallOrder[0]).toBeLessThan(
+      getShowcaseFeedPageMock.mock.invocationCallOrder[0]
+    );
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      anonymousKeyHash: 'anonymous-feed-hash',
+      bypassCache: true,
+      requestId: 'feed-adapter-smart-1',
+      sort: 'for-you',
+      viewerUserId: null,
+    }));
   });
 
   it('uses viewer auth for personalized feed requests and disables shared caching', async () => {
@@ -94,6 +146,7 @@ describe('showcase feed route adapter service', () => {
     expect(response.headers.has('Authorization')).toBe(false);
     expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      anonymousKeyHash: null,
       bypassCache: true,
       category: 'video',
       resource: 'prompt',
@@ -101,6 +154,59 @@ describe('showcase feed route adapter service', () => {
       unlock: 'paid',
       viewerUserId: 'viewer-1',
     }));
+  });
+
+  it('returns 429 before expensive For You ranking when the read budget is exhausted', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+    const resetAt = new Date(Date.now() + 30_000).toISOString();
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed'),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => {
+          throw new BackendRateLimitError({
+            allowed: false,
+            limit: 60,
+            remaining: 0,
+            retryAfterSeconds: 30,
+            resetAt,
+          });
+        }),
+        getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+        resolveFeedAnonymousIdentity: vi.fn(() => ({
+          anonymousKeyHash: 'anonymous-feed-hash',
+          cookieValueToSet: null,
+          source: 'web-cookie' as const,
+        })),
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('30');
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(getShowcaseFeedPageMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid authorization header before ranking or session writes', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+    const enforceBackendRateLimit = vi.fn();
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed', {
+        headers: { Authorization: 'Bearer expired-token' },
+      }),
+      dependencies: {
+        createUserClient: vi.fn(() => createUserClient(null)),
+        enforceBackendRateLimit,
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Authentication required.' });
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(getShowcaseFeedPageMock).not.toHaveBeenCalled();
   });
 
   it('sanitizes raw unlock resources before responding', async () => {
@@ -151,6 +257,14 @@ describe('showcase feed route adapter service', () => {
     const response = await getShowcaseFeedRouteResponse({
       request: new Request('http://localhost/api/showcase/feed'),
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 60,
+          remaining: 59,
+          retryAfterSeconds: 0,
+          resetAt: new Date().toISOString(),
+        })),
         getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
       },
     });

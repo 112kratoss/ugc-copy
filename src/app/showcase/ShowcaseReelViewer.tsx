@@ -26,6 +26,11 @@ import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useAuth } from '@/app/components/AuthProvider';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
+  ShowcaseFeedbackMenu,
+  sendShowcaseFeedEvent,
+  type ShowcaseFeedbackAction,
+} from '@/app/showcase/ShowcaseFeedInteraction';
+import {
   formatPostResourceBundleCountSummary,
   getBundleAccessLabel,
   getPostResourceKindLabel,
@@ -64,11 +69,14 @@ interface ShowcaseReelViewerProps {
   onMediaIndexChange?: (index: number) => void;
   onToggleSave: (id: string) => void | Promise<void>;
   onRemix: (id: string) => void | Promise<void>;
+  feedSessionId?: string | null;
+  onFeedback?: (item: ShowcaseFeedItem, action: ShowcaseFeedbackAction) => void | Promise<void>;
   buildDetailPath: (id: string, section?: string) => string;
 }
 
 type ReelTransitionDirection = 'next' | 'previous' | 'neutral';
 type ReelUnlockAction = 'free' | 'cash' | 'tokens' | null;
+const QUALIFIED_REEL_VIEW_DURATION_MS = 1000;
 
 interface ReelBundleResources {
   promptText: string | null;
@@ -107,6 +115,7 @@ function formatDate(value: string): string {
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
+    timeZone: 'UTC',
   }).format(new Date(value));
 }
 
@@ -229,10 +238,12 @@ export default function ShowcaseReelViewer({
   onMediaIndexChange,
   onToggleSave,
   onRemix,
+  feedSessionId,
+  onFeedback,
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
   const router = useRouter();
-  const { session, credits, updateCredits } = useAuth();
+  const { session, user, credits, updateCredits } = useAuth();
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const wheelCooldownRef = useRef(0);
   const detailsScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -266,6 +277,9 @@ export default function ShowcaseReelViewer({
   const item = selectedIndex >= 0 ? items[selectedIndex] : null;
   const previousItem = selectedIndex > 0 ? items[selectedIndex - 1] : null;
   const nextItem = selectedIndex >= 0 && selectedIndex < items.length - 1 ? items[selectedIndex + 1] : null;
+  const selectedFeedItemId = item?.id ?? null;
+  const feedEventItemRef = useRef<ShowcaseFeedItem | null>(item);
+  feedEventItemRef.current = item;
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
   const mediaItems = item ? getItemMediaItems(item) : [];
@@ -459,6 +473,56 @@ export default function ShowcaseReelViewer({
 
     detailsScrollerRef.current?.scrollTo({ top: 0 });
   }, [isOpen, item?.id]);
+
+  useEffect(() => {
+    const trackedItem = feedEventItemRef.current;
+    if (!isOpen || !trackedItem || trackedItem.id !== selectedFeedItemId) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    let openWasSent = false;
+    const sendOpenTimer = window.setTimeout(() => {
+      openWasSent = true;
+      void sendShowcaseFeedEvent({
+        item: trackedItem,
+        eventType: 'open',
+        sourceSurface: 'showcase-reel',
+        accessToken,
+        feedSessionId,
+        fallbackPosition: selectedIndex,
+      }).catch(() => undefined);
+    }, 0);
+    const sendImpressionTimer = window.setTimeout(() => {
+      void sendShowcaseFeedEvent({
+        item: trackedItem,
+        eventType: 'impression',
+        sourceSurface: 'showcase-reel',
+        accessToken,
+        feedSessionId,
+        fallbackPosition: selectedIndex,
+      }).catch(() => undefined);
+    }, QUALIFIED_REEL_VIEW_DURATION_MS);
+
+    return () => {
+      window.clearTimeout(sendOpenTimer);
+      window.clearTimeout(sendImpressionTimer);
+      const durationMs = Date.now() - startedAt;
+      if (!openWasSent || durationMs < 250) {
+        return;
+      }
+
+      void sendShowcaseFeedEvent({
+        item: trackedItem,
+        eventType: durationMs < QUALIFIED_REEL_VIEW_DURATION_MS ? 'quick_skip' : 'dwell',
+        sourceSurface: 'showcase-reel',
+        accessToken,
+        feedSessionId,
+        fallbackPosition: selectedIndex,
+        durationMs,
+      }).catch(() => undefined);
+    };
+  }, [accessToken, feedSessionId, isOpen, selectedFeedItemId, selectedIndex]);
 
   useEffect(() => {
     if (!isOpen || selectedIndex < 0 || !nextItem || !hasMoreItems || isLoadingMoreItems) {
@@ -1348,8 +1412,18 @@ export default function ShowcaseReelViewer({
           </div>
         </div>
 
-        <div className="hidden items-center gap-2 text-xs text-zinc-500 sm:flex">
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1">Arrow keys</span>
+        <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <span className="hidden rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 sm:inline-flex">Arrow keys</span>
+          {onFeedback ? (
+            <ShowcaseFeedbackMenu
+              itemTitle={item.title}
+              creatorName={item.creator.name}
+              canHideCreator={Boolean(item.creator.id && item.creator.id !== user?.id)}
+              sessionOnly={!user}
+              onSelect={(action) => onFeedback(item, action)}
+              buttonClassName="h-10 w-10 bg-white/[0.04] shadow-none"
+            />
+          ) : null}
         </div>
       </header>
 
@@ -1467,6 +1541,16 @@ export default function ShowcaseReelViewer({
             description={item.body || item.prompt}
             sourceSurface="showcase"
             accessToken={accessToken ?? null}
+            onShared={() => {
+              void sendShowcaseFeedEvent({
+                item,
+                eventType: 'share',
+                sourceSurface: 'showcase-reel',
+                accessToken,
+                feedSessionId,
+                fallbackPosition: selectedIndex,
+              }).catch(() => undefined);
+            }}
             label="Share"
             className="inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:flex-none"
           />

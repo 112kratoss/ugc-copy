@@ -199,6 +199,57 @@ describe('mobile api client caching', () => {
     expect((secondInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  it('posts idempotent ranked-feed events with recommendation context', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, accepted: true }));
+    const installationId = `fid_${'c'.repeat(64)}`;
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      getInstallationId: async () => installationId,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const body = {
+      clientEventId: 'showcase:event-1',
+      feedSessionId: 'session-1',
+      deliveryId: 'delivery-1',
+      postId: 'post-1',
+      eventType: 'impression' as const,
+      position: 4,
+      durationMs: 1000,
+      sourceSurface: 'showcase' as const,
+    };
+    await expect(api.recordShowcaseFeedEvent(body)).resolves.toEqual({ success: true, accepted: true });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(String(url)).toBe('https://magicbooklet.test/api/showcase/feed/events');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual(body);
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect((init.headers as Headers).get('x-magicbooklet-installation-id')).toBe(installationId);
+  });
+
+  it('adds the same persistent installation identity to ranked feed pages but not unrelated APIs', async () => {
+    const installationId = `fid_${'d'.repeat(64)}`;
+    const getInstallationId = vi.fn(async () => installationId);
+    const fetcher = vi.fn(async () => jsonResponse({ items: [], pageInfo: { hasMore: false } }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => null,
+      getInstallationId,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getShowcaseFeed({ sort: 'for-you' });
+    await api.getProfile();
+
+    const [, feedInit] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const [, profileInit] = fetcher.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    expect((feedInit.headers as Headers).get('x-magicbooklet-installation-id')).toBe(installationId);
+    expect((profileInit.headers as Headers).has('x-magicbooklet-installation-id')).toBe(false);
+    expect(getInstallationId).toHaveBeenCalledTimes(1);
+  });
+
   it('loads authenticated remix source bundles with post context', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       generation: {

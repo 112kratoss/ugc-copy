@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   getBackendJobRequestId,
   runBackendAlertDeliveryJob,
+  runFeedMaintenanceBackendJob,
   runGenerationCompletionsBackendJob,
   runMediaPreviewRepairBackendJob,
   runMobilePushReceiptsBackendJob,
@@ -23,6 +24,7 @@ type BackendJobsRouteDependencies = {
   getBackendJobRequestId?: (request: Request) => string;
   getDueBackendJobs?: (timestampMs: number) => BackendJobDefinition[];
   runBackendAlertDeliveryJob?: typeof runBackendAlertDeliveryJob;
+  runFeedMaintenanceBackendJob?: typeof runFeedMaintenanceBackendJob;
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
   runMediaPreviewRepairBackendJob?: typeof runMediaPreviewRepairBackendJob;
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
@@ -56,6 +58,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
     getDueBackendJobs: dependencies?.getDueBackendJobs ?? getDueBackendJobs,
     runBackendAlertDeliveryJob: dependencies?.runBackendAlertDeliveryJob
       ?? runBackendAlertDeliveryJob,
+    runFeedMaintenanceBackendJob: dependencies?.runFeedMaintenanceBackendJob
+      ?? runFeedMaintenanceBackendJob,
     runGenerationCompletionsBackendJob: dependencies?.runGenerationCompletionsBackendJob
       ?? runGenerationCompletionsBackendJob,
     runMediaPreviewRepairBackendJob: dependencies?.runMediaPreviewRepairBackendJob
@@ -84,6 +88,8 @@ async function runDueBackendJob(
   switch (job.name) {
     case 'backend-alert-delivery':
       return options.dependencies.runBackendAlertDeliveryJob(runOptions);
+    case 'feed-maintenance':
+      return options.dependencies.runFeedMaintenanceBackendJob(runOptions);
     case 'generation-completions':
       return options.dependencies.runGenerationCompletionsBackendJob(runOptions);
     case 'media-preview-repair':

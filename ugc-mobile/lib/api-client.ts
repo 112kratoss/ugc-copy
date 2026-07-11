@@ -27,6 +27,8 @@ import type {
   PostResourceAttachment,
   PostResourceBundleInput,
   RemixSourceBundle,
+  ShowcaseFeedEventRequest,
+  ShowcaseFeedEventResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
   SourceToolOption,
@@ -55,6 +57,7 @@ export class ApiError extends Error {
 export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
+  getInstallationId?: () => Promise<string | null>;
   clientInfo?: MobileClientInfo;
   fetcher?: typeof fetch;
 }
@@ -86,6 +89,7 @@ export interface SaveShowcasePostResponse {
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const REQUEST_ID_HEADER = 'x-request-id';
+const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/$/, '');
@@ -189,7 +193,13 @@ async function parseResponse(response: Response) {
   return response.text();
 }
 
-export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher = fetch }: ApiClientOptions) {
+export function createApiClient({
+  baseUrl,
+  getAccessToken,
+  getInstallationId,
+  clientInfo,
+  fetcher = fetch,
+}: ApiClientOptions) {
   const root = normalizeBaseUrl(baseUrl);
   const responseCache = new Map<string, {
     expiresAt: number;
@@ -225,6 +235,10 @@ export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher =
       }
       if (!headers.has(REQUEST_ID_HEADER)) {
         headers.set(REQUEST_ID_HEADER, createMobileRequestId());
+      }
+      if (path.startsWith('/api/showcase/feed') && getInstallationId && !headers.has(FEED_INSTALLATION_ID_HEADER)) {
+        const installationId = await getInstallationId().catch(() => null);
+        if (installationId) headers.set(FEED_INSTALLATION_ID_HEADER, installationId);
       }
       if (clientInfo) {
         if (!headers.has('x-magicbooklet-client')) headers.set('x-magicbooklet-client', 'mobile');
@@ -333,6 +347,11 @@ export function createApiClient({ baseUrl, getAccessToken, clientInfo, fetcher =
       request<ShowcaseFeedResponse>(`/api/showcase/feed${buildQuery(params)}`, {}, {
         ...(options.auth === false ? { cacheTtlMs: CONTENT_CACHE_TTL_MS } : {}),
         ...options,
+      }),
+    recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
+      request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
+        method: 'POST',
+        body: JSON.stringify(body),
       }),
     getSavedMedia: (params?: Record<string, QueryValue>) =>
       request<ShowcaseFeedResponse>(`/api/showcase/saved-media${buildQuery(params)}`),

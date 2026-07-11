@@ -15,6 +15,11 @@ interface UseOptimisticPostSaveOptions<TItem extends SaveablePostItem> {
   isSignedIn: boolean;
   onAuthRequired: () => void;
   onError: (error: unknown) => void;
+  onSuccess?: (result: {
+    id: string;
+    isSaved: boolean;
+    sourceSurface: string;
+  }) => void | Promise<void>;
   sourceSurface: string;
 }
 
@@ -81,6 +86,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   isSignedIn,
   onAuthRequired,
   onError,
+  onSuccess,
   sourceSurface,
 }: UseOptimisticPostSaveOptions<TItem>) {
   const [items, setItems] = useState<TItem[]>(initialItems);
@@ -143,7 +149,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     };
   }, [accessToken, initialItems, savedStateLookupIds.length, savedStateLookupKey]);
 
-  const toggleSave = async (id: string) => {
+  const toggleSave = async (id: string, actionSourceSurface = sourceSurface) => {
     if (!isSignedIn || !accessToken) {
       onAuthRequired();
       return;
@@ -171,7 +177,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
         body: JSON.stringify({
           postId: id,
           shouldSave: nextSaved,
-          sourceSurface,
+          sourceSurface: actionSourceSurface,
         }),
       });
 
@@ -186,6 +192,16 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
 
       if (typeof data.saveCount === 'number') {
         setItems((previous) => setSaveCount(previous, id, data.saveCount as number));
+      }
+
+      try {
+        await onSuccess?.({
+          id,
+          isSaved: typeof data.isSaved === 'boolean' ? data.isSaved : nextSaved,
+          sourceSurface: actionSourceSurface,
+        });
+      } catch {
+        // Feed telemetry is best effort and must never roll back a successful save.
       }
     } catch (error) {
       onError(error);

@@ -3,11 +3,13 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronRight, FileText, Heart, ImageIcon, Lock, Play, RefreshCw, Repeat2, X } from 'lucide-react-native';
+import { ChevronRight, FileText, Heart, ImageIcon, Lock, MoreVertical, Play, RefreshCw, Repeat2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AccessibilityInfo,
+  Alert,
   Pressable,
   Text,
   useWindowDimensions,
@@ -16,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
+import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
@@ -25,15 +28,30 @@ import { isShowcaseVideoPreviewCandidate, selectActiveShowcaseVideoIds } from '@
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
+  createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
   flattenShowcaseFeedPages,
-  getNextShowcaseFeedOffset,
+  getNextShowcaseFeedPageParam,
   getShowcaseFeedPageParams,
+  getShowcaseFeedSessionContext,
   normalizeShowcaseToolFilter,
   resolveMobileShowcaseFeedFilterId,
   type MobileShowcaseFeedFilterId,
   type ShowcaseFeedFilters,
+  type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
+import {
+  SHOWCASE_PLAYBACK_VIEWABILITY,
+  SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
+  buildShowcaseFeedEventRequest,
+  canRecordShowcaseFeedEvent,
+  filterAnonymousSessionShowcaseFeedItems,
+  forgetAnonymousShowcaseFeedRemoval,
+  getQualifiedImpressionKey,
+  rememberAnonymousShowcaseFeedRemoval,
+  removeShowcaseFeedItemsFromInfiniteData,
+  type ShowcaseFeedEventDetails,
+} from '@/lib/showcase-feed-events';
 import {
   buildShowcaseMasonry,
   getShowcaseGridLayout,
@@ -45,7 +63,7 @@ import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
 import { hasShowcasePreviewMedia } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
+import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
 
@@ -58,7 +76,7 @@ const FEED_FILTERS: Array<{
   {
     id: 'all',
     label: 'All',
-    body: 'Fresh creator posts with unlocks mixed in.',
+    body: 'Creator posts ranked around what helps you make next.',
     params: {},
   },
   {
@@ -117,34 +135,111 @@ export default function ShowcaseScreen() {
     ...activeFilter.params,
     ...(activeTool ? { tool: activeTool } : {}),
   }), [activeFilter, activeTool]);
-  const queryKey = useMemo(() => createShowcaseFeedQueryKey(queryFilters), [queryFilters]);
+  const queryKey = useMemo(
+    () => createShowcaseFeedQueryKey(queryFilters, user?.id),
+    [queryFilters, user?.id]
+  );
+  const viewerFeedQueryKey = useMemo(
+    () => createShowcaseFeedViewerQueryKey(user?.id),
+    [user?.id]
+  );
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
+  const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
-  const viewabilityConfig = useMemo(() => ({
-    itemVisiblePercentThreshold: 55,
-    minimumViewTime: 180,
-  }), []);
-  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+  const qualifiedImpressionsRef = useRef(new Set<string>());
+  const feedEventRuntimeRef = useRef({
+    api,
+    isFocused,
+    feedSessionId: null as string | null,
+    algorithmVersion: null as string | null,
+  });
+  const recordFeedEvent = useCallback((
+    item: ShowcaseFeedItem,
+    eventType: ShowcaseFeedEventType,
+    details: ShowcaseFeedEventDetails = {}
+  ) => {
+    if (!canRecordShowcaseFeedEvent({
+      postId: item.id,
+      recommendation: item.recommendation,
+    }, eventType)) return;
+    const runtime = feedEventRuntimeRef.current;
+    const request = buildShowcaseFeedEventRequest({
+      postId: item.id,
+      recommendation: item.recommendation,
+    }, eventType, {
+      feedSessionId: runtime.feedSessionId,
+      algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
+      sourceSurface: 'showcase',
+    }, details);
+    void runtime.api.recordShowcaseFeedEvent(request).catch(() => null);
+  }, []);
+  const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     const visibleItems = getVisibleCardItems(viewableItems);
     const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
     setActiveVideoIds((current) => (sameStringList(current, nextVideoIds) ? current : nextVideoIds));
   }, []);
+  const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+    if (!feedEventRuntimeRef.current.isFocused) return;
+    for (const token of viewableItems) {
+      if (!token.isViewable || !token.item) continue;
+      const item = token.item.item;
+      const key = getQualifiedImpressionKey({
+        postId: item.id,
+        recommendation: item.recommendation,
+      }, feedEventRuntimeRef.current.feedSessionId);
+      if (qualifiedImpressionsRef.current.has(key)) continue;
+      qualifiedImpressionsRef.current.add(key);
+      recordFeedEvent(item, 'impression', {
+        durationMs: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime,
+        ...(typeof item.recommendation?.position !== 'number' && typeof token.index === 'number'
+          ? { position: token.index }
+          : {}),
+        metadata: {
+          visiblePercentThreshold: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.itemVisiblePercentThreshold,
+          qualification: 'viewability',
+        },
+      });
+    }
+  }, [recordFeedEvent]);
+  const viewabilityConfigCallbackPairs = useRef([
+    {
+      viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
+      onViewableItemsChanged: onPlaybackViewableItemsChanged,
+    },
+    {
+      viewabilityConfig: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
+      onViewableItemsChanged: onQualifiedViewableItemsChanged,
+    },
+  ]).current;
   const showcaseQuery = useInfiniteQuery({
     queryKey,
-    initialPageParam: 0,
+    initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
     queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
       ...queryFilters,
-      offset: pageParam,
+      ...pageParam,
     })),
-    getNextPageParam: getNextShowcaseFeedOffset,
+    getNextPageParam: getNextShowcaseFeedPageParam,
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
   });
-  const showcaseItems = useMemo(() => flattenShowcaseFeedPages(showcaseQuery.data?.pages), [showcaseQuery.data?.pages]);
+  const feedSession = useMemo(
+    () => getShowcaseFeedSessionContext(showcaseQuery.data?.pages),
+    [showcaseQuery.data?.pages]
+  );
+  feedEventRuntimeRef.current = {
+    api,
+    isFocused,
+    feedSessionId: feedSession.feedSessionId,
+    algorithmVersion: feedSession.algorithmVersion,
+  };
+  const showcaseItems = useMemo(() => {
+    const flattened = flattenShowcaseFeedPages(showcaseQuery.data?.pages);
+    return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
+  }, [showcaseQuery.data?.pages, user]);
   const cards = useMemo(() => buildShowcaseMasonry(showcaseItems), [showcaseItems]);
   const hasItems = showcaseItems.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
@@ -160,6 +255,8 @@ export default function ShowcaseScreen() {
 
   useEffect(() => {
     setActiveVideoIds([]);
+    setFeedbackItem(null);
+    qualifiedImpressionsRef.current.clear();
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMoreItemCountRef.current = 0;
@@ -205,11 +302,70 @@ export default function ShowcaseScreen() {
   };
 
   const openPost = (item: ShowcaseFeedItem) => {
+    recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
       item,
     });
-    router.push(immersiveViewerHref({ source: 'showcase-feed', initialId: item.id }) as never);
+    router.push(immersiveViewerHref({
+      source: 'showcase-feed',
+      initialId: item.id,
+      feedSessionId: feedSession.feedSessionId,
+      algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
+    }) as never);
+  };
+
+  const applyFeedFeedback = (eventType: 'not_interested' | 'hide_creator') => {
+    const item = feedbackItem;
+    if (!item) return;
+    if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) {
+      return;
+    }
+    const target = eventType === 'hide_creator'
+      ? { creatorId: item.creator.id }
+      : { postId: item.id };
+    const cachedFeeds = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
+      queryKey: viewerFeedQueryKey,
+    });
+
+    if (!user) rememberAnonymousShowcaseFeedRemoval(target);
+
+    setFeedbackItem(null);
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: viewerFeedQueryKey },
+      (current) => removeShowcaseFeedItemsFromInfiniteData(current, target)
+    );
+    const runtime = feedEventRuntimeRef.current;
+    const request = buildShowcaseFeedEventRequest({
+      postId: item.id,
+      recommendation: item.recommendation,
+    }, eventType, {
+      feedSessionId: runtime.feedSessionId,
+      algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
+      sourceSurface: 'showcase',
+    });
+
+    void runtime.api.recordShowcaseFeedEvent(request)
+      .then(() => AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
+        ? user
+          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your feed.`
+          : `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden for this visit.`
+        : user
+          ? 'Post removed. Your feed will adapt.'
+          : 'Post removed for this visit.'))
+      .catch(() => {
+        if (!user) forgetAnonymousShowcaseFeedRemoval(target);
+        cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
+          queryClient.setQueryData(cachedQueryKey, cachedData);
+        });
+        Alert.alert(
+          'Couldn’t update your feed',
+          'The post was restored. Check your connection and try again.'
+        );
+        void AccessibilityInfo.announceForAccessibility(
+          'Couldn’t update your feed. The post was restored.'
+        );
+      });
   };
 
   const openCreator = (item: ShowcaseFeedItem) => {
@@ -226,6 +382,7 @@ export default function ShowcaseScreen() {
           layout={gridLayout}
           activeVideoIds={target === 'Cell' ? visibleActiveVideoIds : []}
           onOpenCreator={openCreator}
+          onFeedbackOpen={setFeedbackItem}
           onOpenPost={openPost}
           onScrollToggle={setIsSwipingMedia}
         />
@@ -249,7 +406,6 @@ export default function ShowcaseScreen() {
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.32}
         onRefresh={handleRefresh}
-        onViewableItemsChanged={onViewableItemsChanged}
         refreshing={isRefreshing}
         renderItem={renderCard}
         scrollEnabled={!isSwipingMedia}
@@ -339,7 +495,19 @@ export default function ShowcaseScreen() {
           ) : null
         }
         ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
-        viewabilityConfig={viewabilityConfig}
+        viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
+        />
+        <FeedFeedbackSheet
+          creatorLabel={feedbackItem ? formatCreatorLabel(feedbackItem.creator.username || feedbackItem.creator.name) : '@creator'}
+          hideCreatorDisabled={Boolean(
+            feedbackItem && (!feedbackItem.creator.id || feedbackItem.creator.id === user?.id)
+          )}
+          onClose={() => setFeedbackItem(null)}
+          onHideCreator={() => applyFeedFeedback('hide_creator')}
+          onNotInterested={() => applyFeedFeedback('not_interested')}
+          postTitle={feedbackItem?.title || feedbackItem?.prompt || 'This post'}
+          sessionOnly={!user}
+          visible={Boolean(feedbackItem)}
         />
       </View>
     </WorkspaceSideMenuGestureLayer>
@@ -515,6 +683,7 @@ function MasonryPin({
   card,
   layout,
   activeVideoIds,
+  onFeedbackOpen,
   onOpenPost,
   onOpenCreator,
   onScrollToggle,
@@ -522,6 +691,7 @@ function MasonryPin({
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
   activeVideoIds: string[];
+  onFeedbackOpen: (item: ShowcaseFeedItem) => void;
   onOpenCreator: (item: ShowcaseFeedItem) => void;
   onOpenPost: (item: ShowcaseFeedItem) => void;
   onScrollToggle?: (scrolling: boolean) => void;
@@ -655,6 +825,28 @@ function MasonryPin({
             <ChevronRight size={15} color={appTheme.colors.faint} strokeWidth={2.5} />
           </Pressable>
           <PinStat icon={<Heart size={16} color={appTheme.colors.text} strokeWidth={2.4} />} label={card.saveLabel} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Feed controls for ${card.title}`}
+            accessibilityHint="Hide this post or this creator from recommendations"
+            hitSlop={4}
+            onPress={(event) => {
+              event.stopPropagation();
+              onFeedbackOpen(card.item);
+            }}
+            style={({ pressed }) => ({
+              width: 42,
+              height: 42,
+              marginRight: -7,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: appTheme.radii.pill,
+              backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <MoreVertical size={17} color={appTheme.colors.muted} strokeWidth={2.5} />
+          </Pressable>
         </View>
         <View
           style={{

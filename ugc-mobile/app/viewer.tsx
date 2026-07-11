@@ -8,7 +8,7 @@ import { useVideoPlayer } from 'expo-video';
 import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
@@ -25,6 +25,7 @@ import {
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
+import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
 import {
   buildImmersiveSlidePages,
   getImmersiveSlideHint,
@@ -53,17 +54,32 @@ import {
   type ShowcaseSaveStateResult,
 } from '@/lib/showcase-save-cache';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
+import {
+  SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
+  buildShowcaseFeedEventRequest,
+  canRecordShowcaseFeedEvent,
+  filterAnonymousSessionShowcaseFeedItems,
+  forgetAnonymousShowcaseFeedRemoval,
+  getQualifiedImpressionKey,
+  rememberAnonymousShowcaseFeedRemoval,
+  removeShowcaseFeedItems,
+  removeShowcaseFeedItemsFromInfiniteData,
+  type ShowcaseFeedEventDetails,
+} from '@/lib/showcase-feed-events';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
-import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
 
 type ViewerParams = {
+  algorithmVersion?: string | string[];
   creatorUsername?: string | string[];
+  feedSessionId?: string | string[];
   source?: string | string[];
   initialId?: string | string[];
 };
 
 type SaveMutationVariables = {
+  item: ImmersivePreviewItem;
   postId: string;
   previousSaveCount: number;
   shouldSave: boolean;
@@ -75,6 +91,8 @@ export default function ImmersivePreviewViewerScreen() {
   const source = normalizeViewerSource(params.source);
   const initialId = normalizeParam(params.initialId);
   const creatorUsername = normalizeParam(params.creatorUsername) || null;
+  const routeFeedSessionId = normalizeParam(params.feedSessionId) || null;
+  const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
@@ -84,11 +102,14 @@ export default function ImmersivePreviewViewerScreen() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [initialPositionReady, setInitialPositionReady] = useState(false);
   const [detailsPageOpenItemId, setDetailsPageOpenItemId] = useState<string | null>(null);
   const [detailsSheetOpenItemId, setDetailsSheetOpenItemId] = useState<string | null>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [unlockRemixOpenItemId, setUnlockRemixOpenItemId] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
+  const qualifiedImpressionsRef = useRef(new Set<string>());
+  const skipInitialRankedFeedRefreshRef = useRef(Boolean(routeFeedSessionId));
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -99,32 +120,48 @@ export default function ImmersivePreviewViewerScreen() {
   });
 
   const sourceQueryKey = useMemo(
-    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? ''] as const,
-    [creatorUsername, initialId, source, user?.id]
+    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? '', routeFeedSessionId ?? ''] as const,
+    [creatorUsername, initialId, routeFeedSessionId, source, user?.id]
+  );
+  const viewerFeedQueryKey = useMemo(
+    () => createShowcaseFeedViewerQueryKey(user?.id),
+    [user?.id]
   );
 
   const sourceQuery = useQuery({
     queryKey: sourceQueryKey,
     enabled: Boolean(source),
-    initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
+    initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId, routeFeedSessionId),
     queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername }),
     staleTime: 1000 * 45,
   });
 
   useEffect(() => {
     if (!isFocused) return;
+    if (source === 'showcase-feed' && skipInitialRankedFeedRefreshRef.current) {
+      skipInitialRankedFeedRefreshRef.current = false;
+      return;
+    }
     void sourceQuery.refetch?.();
-  }, [isFocused, sourceQuery.refetch]);
+  }, [isFocused, source, sourceQuery.refetch]);
 
   const ownerInfo = useMemo(() => ({
     creatorLabel: user ? getProfileHandle(profileQuery.data, user.email) : '@creator',
     creatorAvatar: profileQuery.data?.avatarUrl ?? null,
   }), [profileQuery.data, user]);
 
-  const items = useMemo(
-    () => buildViewerItems(source, sourceQuery.data, ownerInfo),
-    [source, sourceQuery.data, ownerInfo]
-  );
+  const items = useMemo(() => {
+    const builtItems = buildViewerItems(source, sourceQuery.data, ownerInfo);
+    if (user || source !== 'showcase-feed') return builtItems;
+
+    const visiblePostIds = new Set(
+      filterAnonymousSessionShowcaseFeedItems(sourceQuery.data?.showcaseItems ?? [])
+        .map((item) => item.id)
+    );
+    return builtItems.filter((item) => (
+      !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
+    ));
+  }, [source, sourceQuery.data, ownerInfo, user]);
   const openCreatorProfile = useCallback((item: ImmersivePreviewItem) => {
     if (!item.creatorUsername) return;
     router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
@@ -140,19 +177,88 @@ export default function ImmersivePreviewViewerScreen() {
     ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
     : null;
   const activeItem = items[activeIndex];
+  const feedSessionId = sourceQuery.data?.feedSessionId ?? routeFeedSessionId ?? null;
+  const algorithmVersion = sourceQuery.data?.algorithmVersion ?? routeAlgorithmVersion ?? null;
+  const submitViewerFeedEvent = useCallback((
+    item: ImmersivePreviewItem,
+    eventType: ShowcaseFeedEventType,
+    details: ShowcaseFeedEventDetails = {}
+  ) => {
+    if (!item.showcasePostId) return Promise.resolve();
+    if (!canRecordShowcaseFeedEvent({
+      postId: item.showcasePostId,
+      recommendation: item.recommendation,
+    }, eventType)) return Promise.resolve();
+    const request = buildShowcaseFeedEventRequest({
+      postId: item.showcasePostId,
+      recommendation: item.recommendation,
+    }, eventType, {
+      feedSessionId,
+      algorithmVersion: item.recommendation?.algorithmVersion ?? algorithmVersion,
+      sourceSurface: 'showcase-reel',
+    }, details);
+    return api.recordShowcaseFeedEvent(request).then(() => undefined);
+  }, [algorithmVersion, api, feedSessionId]);
+  const recordViewerFeedEvent = useCallback((
+    item: ImmersivePreviewItem,
+    eventType: ShowcaseFeedEventType,
+    details: ShowcaseFeedEventDetails = {}
+  ) => {
+    void submitViewerFeedEvent(item, eventType, details).catch(() => null);
+  }, [submitViewerFeedEvent]);
   const unlockRemixItem = useMemo(
     () => items.find((item) => item.id === unlockRemixOpenItemId) ?? null,
     [items, unlockRemixOpenItemId]
   );
 
   useEffect(() => {
-    if (!items.length) return;
+    if (!items.length || initialPositionReady) return;
     const frame = requestAnimationFrame(() => {
       setActiveIndex(initialIndex);
       listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
+      setInitialPositionReady(true);
     });
     return () => cancelAnimationFrame(frame);
-  }, [initialIndex, items.length]);
+  }, [initialIndex, initialPositionReady, items.length]);
+
+  useEffect(() => {
+    if (!initialPositionReady || !isFocused || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
+    const item = activeItem;
+    const postId = activeItem.showcasePostId;
+    const impressionKey = getQualifiedImpressionKey({
+      postId,
+      recommendation: item.recommendation,
+    }, feedSessionId);
+    const startedAt = Date.now();
+    const recordQualifiedImpression = () => {
+      if (qualifiedImpressionsRef.current.has(impressionKey)) return;
+      qualifiedImpressionsRef.current.add(impressionKey);
+      recordViewerFeedEvent(item, 'impression', {
+        durationMs: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime,
+        metadata: {
+          visiblePercentThreshold: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.itemVisiblePercentThreshold,
+          qualification: 'active-reel',
+        },
+      });
+    };
+    const timer = setTimeout(
+      recordQualifiedImpression,
+      SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime
+    );
+
+    return () => {
+      clearTimeout(timer);
+      const durationMs = Date.now() - startedAt;
+      if (durationMs >= SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime) {
+        recordQualifiedImpression();
+      }
+      recordViewerFeedEvent(
+        item,
+        durationMs < SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime ? 'quick_skip' : 'dwell',
+        { durationMs }
+      );
+    };
+  }, [activeItem?.id, feedSessionId, initialPositionReady, isFocused, recordViewerFeedEvent, source]);
 
   const reconcileShowcaseSave = useCallback((
     result: ShowcaseSaveStateResult,
@@ -161,7 +267,7 @@ export default function ImmersivePreviewViewerScreen() {
     queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) =>
       applyShowcaseSaveStateToSourceData(data, result, options)
     );
-    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: ['showcase-feed'] }, (data) =>
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: viewerFeedQueryKey }, (data) =>
       applyShowcaseSaveStateToInfiniteFeed(data, result)
     );
     queryClient.setQueriesData<ShowcasePostResponse>({ queryKey: ['showcase-post', result.postId] }, (data) =>
@@ -172,7 +278,7 @@ export default function ImmersivePreviewViewerScreen() {
         removeWhenUnsaved: true,
       })
     );
-  }, [queryClient, sourceQueryKey, user?.id]);
+  }, [queryClient, sourceQueryKey, user?.id, viewerFeedQueryKey]);
 
   const saveMutation = useMutation({
     mutationFn: ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
@@ -209,6 +315,9 @@ export default function ImmersivePreviewViewerScreen() {
         hapticFeedback: Haptics.selectionAsync,
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
+      if (source === 'showcase-feed') {
+        recordViewerFeedEvent(variables.item, result.isSaved ? 'save' : 'unsave');
+      }
     },
   });
 
@@ -219,6 +328,7 @@ export default function ImmersivePreviewViewerScreen() {
       return;
     }
     saveMutation.mutate({
+      item,
       postId: item.showcasePostId,
       previousSaveCount: item.saveCount,
       shouldSave: !item.isSaved,
@@ -229,13 +339,17 @@ export default function ImmersivePreviewViewerScreen() {
   const shareItem = async (item: ImmersivePreviewItem) => {
     if (!item.canShare) return;
     const url = item.sharePath ? `${env.siteUrl}${item.sharePath}` : null;
-    await Share.share({
+    const shareResult = await Share.share({
       title: item.title,
       message: url ? `${item.title}\n${url}` : `${item.title}\n${item.displayText}`,
       url: url ?? undefined,
     });
+    if (shareResult.action !== Share.sharedAction) return;
     if (item.showcasePostId) {
       await api.shareShowcasePost(item.showcasePostId, 'native-share').catch(() => null);
+      if (source === 'showcase-feed') {
+        recordViewerFeedEvent(item, 'share');
+      }
     }
   };
 
@@ -247,6 +361,9 @@ export default function ImmersivePreviewViewerScreen() {
 
     if (item.sourceType === 'showcase' && item.showcasePostId) {
       const response = await api.remixShowcasePost(item.showcasePostId);
+      if (source === 'showcase-feed') {
+        recordViewerFeedEvent(item, 'remix_start');
+      }
       const nativeHref = getNativeRemixCreateHref({
         redirectTo: response.redirectTo,
         recreateTool: item.recreateTool,
@@ -267,6 +384,66 @@ export default function ImmersivePreviewViewerScreen() {
       prompt: item.recreatePrompt,
     });
     router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
+  };
+
+  const dismissRecommendation = (
+    item: ImmersivePreviewItem,
+    eventType: 'not_interested' | 'hide_creator'
+  ) => {
+    if (!item.showcasePostId) return;
+    if (eventType === 'hide_creator' && (!item.creatorId || item.creatorId === user?.id)) return;
+    const target = eventType === 'hide_creator' && item.creatorId
+      ? { creatorId: item.creatorId }
+      : { postId: item.showcasePostId };
+    const remainingItems = removeShowcaseFeedItems(sourceQuery.data?.showcaseItems ?? [], target);
+    const previousSourceData = queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey);
+    const cachedFeeds = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
+      queryKey: viewerFeedQueryKey,
+    });
+    const previousActiveIndex = activeIndex;
+
+    if (!user) rememberAnonymousShowcaseFeedRemoval(target);
+
+    setActionsOpenItemId(null);
+    queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) => data ? {
+      ...data,
+      showcaseItems: removeShowcaseFeedItems(data.showcaseItems ?? [], target),
+    } : data);
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: viewerFeedQueryKey },
+      (data) => removeShowcaseFeedItemsFromInfiniteData(data, target)
+    );
+    if (remainingItems.length) {
+      setActiveIndex((current) => Math.min(current, remainingItems.length - 1));
+    }
+    void submitViewerFeedEvent(item, eventType)
+      .then(() => {
+        void AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
+          ? user
+            ? `${item.creatorLabel} hidden from your feed.`
+            : `${item.creatorLabel} hidden for this visit.`
+          : user
+            ? 'Post removed. Your feed will adapt.'
+            : 'Post removed for this visit.');
+        if (!remainingItems.length) {
+          requestAnimationFrame(leaveViewer);
+        }
+      })
+      .catch(() => {
+        if (!user) forgetAnonymousShowcaseFeedRemoval(target);
+        queryClient.setQueryData(sourceQueryKey, previousSourceData);
+        cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
+          queryClient.setQueryData(cachedQueryKey, cachedData);
+        });
+        setActiveIndex(previousActiveIndex);
+        Alert.alert(
+          'Couldn’t update your feed',
+          'The post was restored. Check your connection and try again.'
+        );
+        void AccessibilityInfo.announceForAccessibility(
+          'Couldn’t update your feed. The post was restored.'
+        );
+      });
   };
 
   if (!items.length && sourceQuery.isLoading) {
@@ -399,6 +576,15 @@ export default function ImmersivePreviewViewerScreen() {
             setDetailsSheetOpenItemId(activeItem.id);
           }}
           onRecreate={() => void recreateItem(activeItem)}
+          onNotInterested={source === 'showcase-feed' && activeItem.sourceType === 'showcase'
+            ? () => dismissRecommendation(activeItem, 'not_interested')
+            : undefined}
+          onHideCreator={source === 'showcase-feed'
+            && activeItem.sourceType === 'showcase'
+            && Boolean(activeItem.creatorId)
+            && activeItem.creatorId !== user?.id
+            ? () => dismissRecommendation(activeItem, 'hide_creator')
+            : undefined}
           onShare={() => void shareItem(activeItem)}
           onUnlockRemix={() => {
             setActionsOpenItemId(null);

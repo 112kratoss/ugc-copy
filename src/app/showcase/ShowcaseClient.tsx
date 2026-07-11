@@ -13,6 +13,14 @@ import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
 import {
+    QualifiedImpressionBoundary,
+    ShowcaseFeedbackMenu,
+    getShowcaseFeedSessionId,
+    sendShowcaseFeedEvent,
+    type ShowcaseEventSourceSurface,
+    type ShowcaseFeedbackAction,
+} from '@/app/showcase/ShowcaseFeedInteraction';
+import {
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
     type ShowcaseFeedItem,
@@ -46,11 +54,24 @@ const CATEGORIES: Array<{
 ];
 
 const SORTS: Array<{ id: ShowcaseSort; label: string }> = [
+    { id: 'for-you', label: 'For you' },
     { id: 'recent', label: 'Recent' },
     { id: 'top-saves', label: 'Saved' },
     { id: 'top-remixes', label: 'Remixed' },
     { id: 'top-sales', label: 'Sales' },
 ];
+
+const DEFAULT_SHOWCASE_SORT: ShowcaseSort = 'for-you';
+
+const SHOWCASE_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+});
+
+function formatShowcaseDate(value: string): string {
+    return SHOWCASE_DATE_FORMATTER.format(new Date(value));
+}
 
 const UNLOCK_FILTERS: Array<{ id: ShowcaseUnlockFilter; label: string }> = [
     { id: 'all', label: 'All' },
@@ -178,6 +199,17 @@ function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
     }];
 }
 
+function filterSessionHiddenItems(
+    feedItems: ShowcaseFeedItem[],
+    hiddenPostIds: Set<string>,
+    hiddenCreatorIds: Set<string>
+) {
+    return feedItems.filter((item) => (
+        !hiddenPostIds.has(item.id)
+        && (!item.creator.id || !hiddenCreatorIds.has(item.creator.id))
+    ));
+}
+
 export default function ShowcaseClient({
     initialFeed,
     initialCategory,
@@ -192,6 +224,8 @@ export default function ShowcaseClient({
     const searchParams = useSearchParams();
     const { session, user, isLoading: isAuthLoading } = useAuth();
     const [isPending, startTransition] = useTransition();
+    const feedItemsForEventsRef = useRef<ShowcaseFeedItem[]>(initialFeed.items);
+    const feedSessionIdForEventsRef = useRef<string | null>(getShowcaseFeedSessionId(initialFeed));
     const {
         items,
         setItems,
@@ -205,6 +239,22 @@ export default function ShowcaseClient({
         isSignedIn: Boolean(user && session?.access_token),
         onAuthRequired: () => router.push('/login?returnUrl=/showcase'),
         onError: (error) => console.error('Save failed:', error),
+        onSuccess: ({ id, isSaved, sourceSurface }) => {
+            const savedItem = feedItemsForEventsRef.current.find((candidate) => candidate.id === id);
+            const itemPosition = feedItemsForEventsRef.current.findIndex((candidate) => candidate.id === id);
+            if (!savedItem) {
+                return;
+            }
+
+            return sendShowcaseFeedEvent({
+                item: savedItem,
+                eventType: isSaved ? 'save' : 'unsave',
+                sourceSurface: sourceSurface === 'showcase-reel' ? 'showcase-reel' : 'showcase',
+                accessToken: session?.access_token ?? null,
+                feedSessionId: feedSessionIdForEventsRef.current,
+                fallbackPosition: itemPosition >= 0 ? itemPosition : undefined,
+            });
+        },
         sourceSurface: 'showcase',
     });
     const [category, setCategory] = useState(initialCategory);
@@ -214,19 +264,30 @@ export default function ShowcaseClient({
     const [resource, setResource] = useState<ShowcaseResourceFilter>(initialResource);
     const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
     const [pageInfo, setPageInfo] = useState(initialFeed.pageInfo);
+    const [feedSessionId, setFeedSessionId] = useState(() => getShowcaseFeedSessionId(initialFeed));
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+    const [feedbackNotice, setFeedbackNotice] = useState<{
+        tone: 'success' | 'error';
+        message: string;
+    } | null>(null);
     const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
         const value = Number(searchParams.get('media'));
         return Number.isInteger(value) && value >= 0 ? value : 0;
     });
     const isLoadingMoreRef = useRef(false);
+    const anonymousHiddenPostIdsRef = useRef(new Set<string>());
+    const anonymousHiddenCreatorIdsRef = useRef(new Set<string>());
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
     );
     const directPostRequestRef = useRef<string | null>(null);
+    const selectedItemIdRef = useRef<string | null>(selectedItemId);
+    selectedItemIdRef.current = selectedItemId;
+    feedItemsForEventsRef.current = items;
+    feedSessionIdForEventsRef.current = feedSessionId;
 
     const currentShowcasePath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
@@ -371,8 +432,16 @@ export default function ShowcaseClient({
     }, []);
 
     useEffect(() => {
-        setItems(initialFeed.items);
+        const visibleInitialItems = user
+            ? initialFeed.items
+            : filterSessionHiddenItems(
+                initialFeed.items,
+                anonymousHiddenPostIdsRef.current,
+                anonymousHiddenCreatorIdsRef.current
+            );
+        setItems(visibleInitialItems);
         setPageInfo(initialFeed.pageInfo);
+        setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
         setIsLoadingMore(false);
         setLoadMoreError(null);
         isLoadingMoreRef.current = false;
@@ -381,8 +450,92 @@ export default function ShowcaseClient({
         setTool(initialTool ?? 'all');
         setUnlock(initialUnlock);
         setResource(initialResource);
-        setSavedItemIds(new Set(initialFeed.items.filter((item) => item.isSaved).map((item) => item.id)));
-    }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds]);
+        setSavedItemIds(new Set(visibleInitialItems.filter((item) => item.isSaved).map((item) => item.id)));
+    }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds, user]);
+
+    useEffect(() => {
+        if (isAuthLoading || sort !== DEFAULT_SHOWCASE_SORT) {
+            return;
+        }
+
+        const controller = new AbortController();
+        const params = new URLSearchParams({
+            limit: String(SHOWCASE_PAGE_SIZE),
+        });
+        setNonDefaultParam(params, 'category', category, 'all');
+        setNonDefaultParam(params, 'tool', tool, 'all');
+        setNonDefaultParam(params, 'unlock', unlock, 'all');
+        setNonDefaultParam(params, 'resource', resource, 'all');
+
+        void fetch(`/api/showcase/feed?${params.toString()}`, {
+            headers: session?.access_token
+                ? { Authorization: `Bearer ${session.access_token}` }
+                : undefined,
+            signal: controller.signal,
+        })
+            .then(async (response) => {
+                if (!response.ok) {
+                    throw new Error(`Personalized feed request failed with ${response.status}`);
+                }
+
+                return response.json() as Promise<ShowcaseFeedPage>;
+            })
+            .then((personalizedFeed) => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+
+                const visiblePersonalizedItems = user
+                    ? personalizedFeed.items
+                    : filterSessionHiddenItems(
+                        personalizedFeed.items,
+                        anonymousHiddenPostIdsRef.current,
+                        anonymousHiddenCreatorIdsRef.current
+                    );
+                const selectedItem = selectedItemIdRef.current
+                    ? feedItemsForEventsRef.current.find((candidate) => candidate.id === selectedItemIdRef.current) ?? null
+                    : null;
+                setItems(selectedItem && !visiblePersonalizedItems.some((candidate) => candidate.id === selectedItem.id)
+                    ? [...visiblePersonalizedItems, selectedItem]
+                    : visiblePersonalizedItems);
+                setPageInfo(personalizedFeed.pageInfo);
+                setFeedSessionId(getShowcaseFeedSessionId(personalizedFeed));
+                setSavedItemIds(new Set(
+                    visiblePersonalizedItems.filter((item) => item.isSaved).map((item) => item.id)
+                ));
+                setLoadMoreError(null);
+                isLoadingMoreRef.current = false;
+                setIsLoadingMore(false);
+            })
+            .catch((error) => {
+                if (!controller.signal.aborted) {
+                    console.error('Failed to refresh personalized showcase feed:', error);
+                }
+            });
+
+        return () => controller.abort();
+    }, [
+        category,
+        initialFeed,
+        isAuthLoading,
+        resource,
+        session?.access_token,
+        setItems,
+        setSavedItemIds,
+        sort,
+        tool,
+        unlock,
+        user,
+    ]);
+
+    useEffect(() => {
+        if (feedbackNotice?.tone !== 'success') {
+            return;
+        }
+
+        const timeout = window.setTimeout(() => setFeedbackNotice(null), 4500);
+        return () => window.clearTimeout(timeout);
+    }, [feedbackNotice]);
 
     const navigateWithFilters = (
         nextCategory: ShowcaseCategory,
@@ -397,7 +550,7 @@ export default function ShowcaseClient({
             params.set('category', nextCategory);
         }
 
-        if (nextSort !== 'recent') {
+        if (nextSort !== DEFAULT_SHOWCASE_SORT) {
             params.set('sort', nextSort);
         }
 
@@ -421,7 +574,13 @@ export default function ShowcaseClient({
     };
 
     const loadMore = useCallback(async () => {
-        if (isLoadingMoreRef.current || !pageInfo.hasMore || pageInfo.nextOffset === null) {
+        const nextCursor = sort === DEFAULT_SHOWCASE_SORT ? pageInfo.nextCursor ?? null : null;
+        const nextOffset = pageInfo.nextOffset;
+        if (
+            isLoadingMoreRef.current
+            || !pageInfo.hasMore
+            || (sort === DEFAULT_SHOWCASE_SORT ? !nextCursor : nextOffset === null)
+        ) {
             return;
         }
 
@@ -430,12 +589,14 @@ export default function ShowcaseClient({
         setLoadMoreError(null);
 
         try {
-            const params = new URLSearchParams({
-                offset: String(pageInfo.nextOffset),
-                limit: String(SHOWCASE_PAGE_SIZE),
-            });
+            const params = new URLSearchParams({ limit: String(SHOWCASE_PAGE_SIZE) });
+            if (sort === DEFAULT_SHOWCASE_SORT && nextCursor) {
+                params.set('cursor', nextCursor);
+            } else if (nextOffset !== null) {
+                params.set('offset', String(nextOffset));
+            }
             setNonDefaultParam(params, 'category', category, 'all');
-            setNonDefaultParam(params, 'sort', sort, 'recent');
+            setNonDefaultParam(params, 'sort', sort, DEFAULT_SHOWCASE_SORT);
             setNonDefaultParam(params, 'tool', tool, 'all');
             setNonDefaultParam(params, 'unlock', unlock, 'all');
             setNonDefaultParam(params, 'resource', resource, 'all');
@@ -450,15 +611,26 @@ export default function ShowcaseClient({
             }
 
             const nextFeed: ShowcaseFeedPage = await response.json();
+            const visibleNextItems = user
+                ? nextFeed.items
+                : filterSessionHiddenItems(
+                    nextFeed.items,
+                    anonymousHiddenPostIdsRef.current,
+                    anonymousHiddenCreatorIdsRef.current
+                );
 
             setItems((currentItems) => [
                 ...currentItems,
-                ...nextFeed.items.filter((item) => !currentItems.some((current) => current.id === item.id)),
+                ...visibleNextItems.filter((item) => !currentItems.some((current) => current.id === item.id)),
             ]);
             setPageInfo(nextFeed.pageInfo);
+            const nextFeedSessionId = getShowcaseFeedSessionId(nextFeed);
+            if (nextFeedSessionId) {
+                setFeedSessionId(nextFeedSessionId);
+            }
             setSavedItemIds((currentSavedIds) => {
                 const nextSavedIds = new Set(currentSavedIds);
-                nextFeed.items.forEach((item) => {
+                visibleNextItems.forEach((item) => {
                     if (item.isSaved) {
                         nextSavedIds.add(item.id);
                     }
@@ -475,6 +647,7 @@ export default function ShowcaseClient({
     }, [
         category,
         pageInfo.hasMore,
+        pageInfo.nextCursor,
         pageInfo.nextOffset,
         resource,
         session?.access_token,
@@ -483,6 +656,7 @@ export default function ShowcaseClient({
         sort,
         tool,
         unlock,
+        user,
     ]);
 
     useEffect(() => {
@@ -506,7 +680,10 @@ export default function ShowcaseClient({
         };
     }, [isLoadingInitialFeed, loadMore, pageInfo.hasMore]);
 
-    const handleRemix = async (id: string) => {
+    const handleRemix = async (
+        id: string,
+        sourceSurface: ShowcaseEventSourceSurface = 'showcase'
+    ) => {
         if (!user || !session?.access_token) {
             router.push('/login?returnUrl=/showcase');
             return;
@@ -524,10 +701,122 @@ export default function ShowcaseClient({
             const data = await response.json();
 
             if (data.success && data.redirectTo) {
+                const remixedItem = feedItemsForEventsRef.current.find((candidate) => candidate.id === id);
+                if (remixedItem) {
+                    void sendShowcaseFeedEvent({
+                        item: remixedItem,
+                        eventType: 'remix_start',
+                        sourceSurface,
+                        accessToken: session.access_token,
+                        feedSessionId: feedSessionIdForEventsRef.current,
+                        fallbackPosition: feedItemsForEventsRef.current.findIndex(
+                            (candidate) => candidate.id === id
+                        ),
+                        metadata: {
+                            redirectTo: data.redirectTo,
+                        },
+                    }).catch(() => undefined);
+                }
                 router.push(data.redirectTo);
             }
         } catch (error) {
             console.error('Remix failed:', error);
+        }
+    };
+
+    const handleFeedFeedback = async (
+        feedbackItem: ShowcaseFeedItem,
+        action: ShowcaseFeedbackAction,
+        sourceSurface: ShowcaseEventSourceSurface
+    ) => {
+        if (
+            action === 'hide_creator'
+            && (!feedbackItem.creator.id || feedbackItem.creator.id === user?.id)
+        ) {
+            return;
+        }
+
+        const itemPosition = items.findIndex((candidate) => candidate.id === feedbackItem.id);
+        const removedItems = items
+            .map((candidate, index) => ({ item: candidate, index }))
+            .filter(({ item: candidate }) => action === 'hide_creator'
+                ? candidate.creator.id === feedbackItem.creator.id
+                : candidate.id === feedbackItem.id);
+
+        if (removedItems.length === 0) {
+            return;
+        }
+
+        if (!user) {
+            if (action === 'hide_creator' && feedbackItem.creator.id) {
+                anonymousHiddenCreatorIdsRef.current.add(feedbackItem.creator.id);
+            } else {
+                anonymousHiddenPostIdsRef.current.add(feedbackItem.id);
+            }
+        }
+
+        const removedIds = new Set(removedItems.map(({ item: candidate }) => candidate.id));
+        const remainingItems = items.filter((candidate) => !removedIds.has(candidate.id));
+        setFeedbackNotice(null);
+        setItems(remainingItems);
+
+        if (selectedItemId && removedIds.has(selectedItemId)) {
+            const replacementItem = remainingItems[Math.min(
+                Math.max(itemPosition, 0),
+                Math.max(remainingItems.length - 1, 0)
+            )] ?? null;
+
+            if (replacementItem) {
+                selectPreviewItem(replacementItem.id);
+            } else {
+                closePreview();
+            }
+        }
+
+        try {
+            await sendShowcaseFeedEvent({
+                item: feedbackItem,
+                eventType: action,
+                sourceSurface,
+                accessToken: session?.access_token ?? null,
+                feedSessionId,
+                fallbackPosition: itemPosition >= 0 ? itemPosition : undefined,
+                metadata: {
+                    creatorId: feedbackItem.creator.id,
+                },
+            });
+            setFeedbackNotice({
+                tone: 'success',
+                message: !user
+                    ? action === 'hide_creator'
+                        ? `Posts from ${feedbackItem.creator.name} are hidden for this visit.`
+                        : 'Post removed for this visit.'
+                    : action === 'hide_creator'
+                        ? `Posts from ${feedbackItem.creator.name} are now hidden.`
+                        : 'Thanks. We’ll show you fewer posts like that.',
+            });
+        } catch (error) {
+            console.error('Failed to save showcase feedback:', error);
+            if (!user) {
+                if (action === 'hide_creator' && feedbackItem.creator.id) {
+                    anonymousHiddenCreatorIdsRef.current.delete(feedbackItem.creator.id);
+                } else {
+                    anonymousHiddenPostIdsRef.current.delete(feedbackItem.id);
+                }
+            }
+            setItems((currentItems) => {
+                const restoredItems = [...currentItems];
+                removedItems.forEach(({ item: removedItem, index }) => {
+                    if (!restoredItems.some((candidate) => candidate.id === removedItem.id)) {
+                        restoredItems.splice(Math.min(index, restoredItems.length), 0, removedItem);
+                    }
+                });
+                return restoredItems;
+            });
+            setFeedbackNotice({
+                tone: 'error',
+                message: 'We couldn’t save that preference, so the post was restored. Please try again.',
+            });
         }
     };
 
@@ -772,15 +1061,19 @@ export default function ShowcaseClient({
                     </div>
                 ) : (
                     <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
-                            {items.map((item) => {
+                            {items.map((item, itemIndex) => {
                                 const resourceKinds = getItemResourceKinds(item);
                                 const isSaved = savedItemIds.has(item.id);
                                 const mediaItems = getItemMediaItems(item);
                                 const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
 
                                 return (
-                                    <div
+                                    <QualifiedImpressionBoundary
                                         key={item.id}
+                                        item={item}
+                                        position={itemIndex}
+                                        feedSessionId={feedSessionId}
+                                        accessToken={session?.access_token ?? null}
                                         className="break-inside-avoid mb-6 flex flex-col"
                                     >
                                         {/* Pinterest Style Card Frame */}
@@ -796,10 +1089,7 @@ export default function ShowcaseClient({
                                                         title={item.title}
                                                         summary={getItemSummary(item)}
                                                         sourceLabel={item.sourceTool || item.model}
-                                                        dateLabel={new Date(item.createdAt).toLocaleDateString('en-US', {
-                                                            month: 'short',
-                                                            day: 'numeric',
-                                                        })}
+                                                        dateLabel={formatShowcaseDate(item.createdAt)}
                                                         saveCount={item.saveCount}
                                                         remixCount={item.remixCount}
                                                         unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
@@ -828,6 +1118,15 @@ export default function ShowcaseClient({
                                                             <span>{isMixedMedia ? 'Mixed' : item.category}</span>
                                                         </div>
                                                     ) : <div />}
+                                                    <ShowcaseFeedbackMenu
+                                                        itemTitle={item.title}
+                                                        creatorName={item.creator.name}
+                                                        canHideCreator={Boolean(
+                                                            item.creator.id && item.creator.id !== user?.id
+                                                        )}
+                                                        sessionOnly={!user}
+                                                        onSelect={(action) => handleFeedFeedback(item, action, 'showcase')}
+                                                    />
                                                 </div>
 
                                                 <div className="flex items-center justify-end gap-2 pointer-events-auto">
@@ -837,6 +1136,16 @@ export default function ShowcaseClient({
                                                         description={item.body || item.prompt}
                                                         sourceSurface="showcase"
                                                         accessToken={session?.access_token ?? null}
+                                                        onShared={() => {
+                                                            void sendShowcaseFeedEvent({
+                                                                item,
+                                                                eventType: 'share',
+                                                                sourceSurface: 'showcase',
+                                                                accessToken: session?.access_token ?? null,
+                                                                feedSessionId,
+                                                                fallbackPosition: itemIndex,
+                                                            }).catch(() => undefined);
+                                                        }}
                                                         iconOnly
                                                         className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] shadow-md transition hover:bg-white"
                                                     />
@@ -883,10 +1192,7 @@ export default function ShowcaseClient({
                                                     {item.title}
                                                 </h3>
                                                 <span className="text-[10px] text-zinc-500 font-semibold whitespace-nowrap mt-0.5">
-                                                    {new Date(item.createdAt).toLocaleDateString('en-US', {
-                                                        month: 'short',
-                                                        day: 'numeric',
-                                                    })}
+                                                    {formatShowcaseDate(item.createdAt)}
                                                 </span>
                                             </div>
 
@@ -919,7 +1225,7 @@ export default function ShowcaseClient({
                                                 </div>
                                             )}
                                         </div>
-                                    </div>
+                                    </QualifiedImpressionBoundary>
                                 );
                             })}
                     </div>
@@ -964,6 +1270,28 @@ export default function ShowcaseClient({
                 )}
             </div>
 
+            {feedbackNotice ? (
+                <div
+                    role={feedbackNotice.tone === 'error' ? 'alert' : 'status'}
+                    aria-live={feedbackNotice.tone === 'error' ? 'assertive' : 'polite'}
+                    className={`fixed bottom-5 left-1/2 z-[110] flex w-[min(calc(100%-2rem),32rem)] -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm shadow-[0_18px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl ${
+                        feedbackNotice.tone === 'error'
+                            ? 'border-rose-300/25 bg-[rgba(70,20,28,0.96)] text-rose-50'
+                            : 'border-emerald-300/20 bg-[rgba(18,51,42,0.96)] text-emerald-50'
+                    }`}
+                >
+                    <span className="leading-6">{feedbackNotice.message}</span>
+                    <button
+                        type="button"
+                        onClick={() => setFeedbackNotice(null)}
+                        className="ui-focus-ring inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-current transition hover:bg-white/10"
+                        aria-label="Dismiss feedback message"
+                    >
+                        <X className="h-4 w-4" aria-hidden />
+                    </button>
+                </div>
+            ) : null}
+
             <ShowcaseReelViewer
                 isOpen={Boolean(selectedItemId)}
                 items={items}
@@ -983,8 +1311,14 @@ export default function ShowcaseClient({
                         updateReelUrl(selectedItemId, 'replace', mediaIndex);
                     }
                 }}
-                onToggleSave={toggleSave}
-                onRemix={handleRemix}
+                onToggleSave={(id) => toggleSave(id, 'showcase-reel')}
+                onRemix={(id) => handleRemix(id, 'showcase-reel')}
+                feedSessionId={feedSessionId}
+                onFeedback={(feedbackItem, action) => handleFeedFeedback(
+                    feedbackItem,
+                    action,
+                    'showcase-reel'
+                )}
                 buildDetailPath={buildCommunityDetailPath}
             />
         </div>

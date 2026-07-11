@@ -25,6 +25,18 @@ vi.mock('@/lib/showcase-feed', () => ({
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
+  createServiceClient: () => ({
+    rpc: async () => ({
+      data: {
+        allowed: true,
+        limit: 60,
+        remaining: 59,
+        retryAfterSeconds: 0,
+        resetAt: new Date().toISOString(),
+      },
+      error: null,
+    }),
+  }),
   createUserClient: () => ({
     auth: {
       getUser: () => getUserMock(),
@@ -59,7 +71,7 @@ describe('/api/showcase/feed route', () => {
 
   it('returns a public cache header for anonymous feed requests', async () => {
     const { GET } = await import('@/app/api/showcase/feed/route');
-    const response = await GET(new NextRequest('http://localhost/api/showcase/feed', {
+    const response = await GET(new NextRequest('http://localhost/api/showcase/feed?sort=recent', {
       headers: { 'x-request-id': 'feed-anon-1' },
     }));
 
@@ -73,6 +85,9 @@ describe('/api/showcase/feed route', () => {
       offset: 0,
       limit: 12,
       viewerUserId: null,
+      anonymousKeyHash: null,
+      cursor: null,
+      requestId: 'feed-anon-1',
       tool: null,
       unlock: 'all',
       resource: 'all',
@@ -83,7 +98,7 @@ describe('/api/showcase/feed route', () => {
 
   it('treats the all tool filter as the unfiltered community feed', async () => {
     const { GET } = await import('@/app/api/showcase/feed/route');
-    const response = await GET(new NextRequest('http://localhost/api/showcase/feed?tool=all&offset=12'));
+    const response = await GET(new NextRequest('http://localhost/api/showcase/feed?tool=all&offset=12&sort=recent'));
 
     expect(response.status).toBe(200);
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
@@ -92,6 +107,9 @@ describe('/api/showcase/feed route', () => {
       offset: 12,
       limit: 12,
       viewerUserId: null,
+      anonymousKeyHash: null,
+      cursor: null,
+      requestId: expect.any(String),
       tool: null,
       unlock: 'all',
       resource: 'all',
@@ -119,10 +137,13 @@ describe('/api/showcase/feed route', () => {
     expect(getUserMock).toHaveBeenCalledTimes(1);
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
       category: 'all',
-      sort: 'recent',
+      sort: 'for-you',
       offset: 0,
       limit: 12,
       viewerUserId: 'user-1',
+      anonymousKeyHash: null,
+      cursor: null,
+      requestId: 'feed-auth-1',
       tool: null,
       unlock: 'all',
       resource: 'all',
