@@ -1,4 +1,5 @@
 const USERNAME_PATTERN = /^[a-z0-9-]{3,24}$/;
+const GENERATED_USERNAME_PATTERN = /^creator-[a-f0-9]{8}$/;
 const MAX_DISPLAY_NAME_LENGTH = 60;
 const MAX_BIO_LENGTH = 280;
 
@@ -77,6 +78,28 @@ export interface ValidatedProfileUpdate {
   fieldErrors: ProfileFieldErrors;
 }
 
+export interface CreatorProfileReadinessInput {
+  username?: string | null;
+  displayName?: string | null;
+  bio?: string | null;
+  avatarUrl?: string | null;
+  coverUrl?: string | null;
+}
+
+export interface CreatorProfileReadiness {
+  hasClaimedHandle: boolean;
+  hasDisplayName: boolean;
+  hasBio: boolean;
+  hasAvatar: boolean;
+  hasCover: boolean;
+  publicPublishReady: boolean;
+  sellerReady: boolean;
+  profileComplete: boolean;
+  missingForPublicPublish: Array<'handle' | 'displayName'>;
+  missingForSeller: Array<'handle' | 'displayName' | 'avatar'>;
+  missingForCompleteProfile: Array<'handle' | 'displayName' | 'avatar' | 'bio'>;
+}
+
 export function buildFallbackUsername(userId: string): string {
   return `creator-${userId.replace(/-/g, '').slice(0, 8).toLowerCase()}`;
 }
@@ -88,6 +111,100 @@ export function normalizeUsername(value: string | null | undefined): string | nu
 
   const normalized = value.trim().replace(/^@+/, '').toLowerCase();
   return normalized.length > 0 ? normalized : null;
+}
+
+export function isGeneratedProfileUsername(value: string | null | undefined): boolean {
+  const normalized = normalizeUsername(value);
+  return Boolean(normalized && GENERATED_USERNAME_PATTERN.test(normalized));
+}
+
+export function isClaimedProfileUsername(value: string | null | undefined): boolean {
+  const normalized = normalizeUsername(value);
+  return Boolean(
+    normalized
+      && USERNAME_PATTERN.test(normalized)
+      && !GENERATED_USERNAME_PATTERN.test(normalized)
+  );
+}
+
+export function getCreatorProfileReadiness(
+  profile: CreatorProfileReadinessInput | null | undefined
+): CreatorProfileReadiness {
+  const hasClaimedHandle = isClaimedProfileUsername(profile?.username);
+  const hasDisplayName = Boolean(profile?.displayName?.trim());
+  const hasBio = Boolean(profile?.bio?.trim());
+  const hasAvatar = Boolean(profile?.avatarUrl?.trim());
+  const hasCover = Boolean(profile?.coverUrl?.trim());
+  const publicPublishReady = hasClaimedHandle && hasDisplayName;
+  const sellerReady = publicPublishReady && hasAvatar;
+  const profileComplete = sellerReady && hasBio;
+
+  return {
+    hasClaimedHandle,
+    hasDisplayName,
+    hasBio,
+    hasAvatar,
+    hasCover,
+    publicPublishReady,
+    sellerReady,
+    profileComplete,
+    missingForPublicPublish: [
+      ...(!hasClaimedHandle ? ['handle' as const] : []),
+      ...(!hasDisplayName ? ['displayName' as const] : []),
+    ],
+    missingForSeller: [
+      ...(!hasClaimedHandle ? ['handle' as const] : []),
+      ...(!hasDisplayName ? ['displayName' as const] : []),
+      ...(!hasAvatar ? ['avatar' as const] : []),
+    ],
+    missingForCompleteProfile: [
+      ...(!hasClaimedHandle ? ['handle' as const] : []),
+      ...(!hasDisplayName ? ['displayName' as const] : []),
+      ...(!hasAvatar ? ['avatar' as const] : []),
+      ...(!hasBio ? ['bio' as const] : []),
+    ],
+  };
+}
+
+export function getSafeProfileNextPath(
+  value: string | null | undefined,
+  fallback = '/creations'
+): string {
+  const rawCandidate = value?.trim();
+  if (!rawCandidate) {
+    return fallback;
+  }
+
+  let candidate = rawCandidate;
+  if (!candidate.startsWith('/')) {
+    try {
+      candidate = decodeURIComponent(rawCandidate);
+    } catch {
+      return fallback;
+    }
+  }
+
+  let safetyCandidate = candidate;
+  try {
+    safetyCandidate = decodeURIComponent(candidate);
+  } catch {
+    // Preserve valid internal URLs that contain a literal percent sign while
+    // still applying the non-decoded safety checks below.
+  }
+
+  if (
+    !candidate.startsWith('/')
+    || candidate.startsWith('//')
+    || candidate.includes('\\')
+    || /[\u0000-\u001F\u007F]/.test(candidate)
+    || safetyCandidate.startsWith('//')
+    || safetyCandidate.includes('\\')
+    || /[\u0000-\u001F\u007F]/.test(safetyCandidate)
+  ) {
+    return fallback;
+  }
+
+  return candidate;
 }
 
 export function buildCreatorProfilePath(username: string): string {
@@ -234,6 +351,8 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
     fieldErrors.username = 'Choose a username to publish your creator profile.';
   } else if (!USERNAME_PATTERN.test(username)) {
     fieldErrors.username = 'Use 3-24 lowercase letters, numbers, or hyphens.';
+  } else if (GENERATED_USERNAME_PATTERN.test(username)) {
+    fieldErrors.username = 'Choose a custom handle instead of the reserved creator-xxxxxxxx format.';
   }
 
   if (displayName && displayName.length > MAX_DISPLAY_NAME_LENGTH) {

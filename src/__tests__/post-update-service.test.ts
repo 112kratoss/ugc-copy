@@ -199,4 +199,37 @@ describe('updateOwnerPostForRoute', () => {
     expect(dependencies.getMarketplaceQualityErrorForPostBundle).not.toHaveBeenCalled();
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
+
+  it('maps unavailable profile verification to a server failure', async () => {
+    const { client } = createSupabaseMock({ bundle: null });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+        'Could not verify your creator profile right now. Try again.'
+      )),
+      updatePostWithResourceBundleAtomically: vi.fn(),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        title: 'Helpful launch proof',
+        body: 'A public proof post with enough detail for visitors.',
+        visibility: 'public',
+      },
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Could not verify your creator profile right now. Try again.' },
+    });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
 });

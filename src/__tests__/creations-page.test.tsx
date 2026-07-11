@@ -114,7 +114,11 @@ describe('CreationsPage', () => {
       }
 
       if (url === '/api/profile') {
-        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+        return Promise.resolve(jsonResponse({
+          username: 'creator-user1',
+          displayName: 'Creator User',
+          avatarUrl: 'https://cdn.example.com/avatar.jpg',
+        }));
       }
 
       return Promise.reject(new Error(`Unexpected request: ${url}`));
@@ -491,7 +495,11 @@ describe('CreationsPage', () => {
       }
 
       if (url === '/api/profile') {
-        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+        return Promise.resolve(jsonResponse({
+          username: 'creator-user1',
+          displayName: 'Creator User',
+          avatarUrl: 'https://cdn.example.com/avatar.jpg',
+        }));
       }
 
       if (url === '/api/showcase/publish') {

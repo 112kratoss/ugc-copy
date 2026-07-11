@@ -391,4 +391,97 @@ describe('post resource bundle server access', () => {
       remixUse: 'reference_only',
     });
   });
+
+  it('requires a deliberately claimed profile before any public post publish', async () => {
+    const { getMarketplaceQualityErrorForPostBundle } = await import('@/lib/post-resource-bundles-server');
+    const profileClient = {
+      from() {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async maybeSingle() {
+            return {
+              data: {
+                username: 'creator-a1b2c3d4',
+                display_name: 'New Creator',
+                avatar_url: null,
+              },
+              error: null,
+            };
+          },
+        };
+        return query;
+      },
+    };
+
+    await expect(getMarketplaceQualityErrorForPostBundle({
+      supabase: profileClient as never,
+      ownerUserId: 'owner-1',
+      post: { visibility: 'public', body: 'A useful public post.' },
+      bundle: null,
+    })).resolves.toMatch(/custom handle/i);
+  });
+
+  it('allows a claimed public profile without an avatar until an unlock is attached', async () => {
+    const { getMarketplaceQualityErrorForPostBundle } = await import('@/lib/post-resource-bundles-server');
+    const profileClient = {
+      from() {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async maybeSingle() {
+            return {
+              data: {
+                username: 'launch-maker',
+                display_name: 'Launch Maker',
+                avatar_url: null,
+              },
+              error: null,
+            };
+          },
+        };
+        return query;
+      },
+    };
+
+    await expect(getMarketplaceQualityErrorForPostBundle({
+      supabase: profileClient as never,
+      ownerUserId: 'owner-1',
+      post: { visibility: 'public', body: 'A useful public post.' },
+      bundle: null,
+    })).resolves.toBeNull();
+
+    await expect(getMarketplaceQualityErrorForPostBundle({
+      supabase: profileClient as never,
+      ownerUserId: 'owner-1',
+      post: { visibility: 'public', body: 'A useful public post.' },
+      bundle: { accessMode: 'free' },
+    })).resolves.toMatch(/profile photo/i);
+  });
+
+  it('distinguishes profile lookup failures from incomplete profiles', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getMarketplaceQualityErrorForPostBundle } = await import('@/lib/post-resource-bundles-server');
+    const profileClient = {
+      from() {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async maybeSingle() {
+            return { data: null, error: new Error('database unavailable') };
+          },
+        };
+        return query;
+      },
+    };
+
+    await expect(getMarketplaceQualityErrorForPostBundle({
+      supabase: profileClient as never,
+      ownerUserId: 'owner-1',
+      post: { visibility: 'public', body: 'A useful public post.' },
+      bundle: null,
+    })).resolves.toBe('Could not verify your creator profile right now. Try again.');
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
 });

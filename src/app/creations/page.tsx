@@ -20,7 +20,7 @@ import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
-import type { ProfileApiResponse } from '@/lib/profile';
+import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
@@ -1270,9 +1270,15 @@ export default function CreationsPage() {
             })),
         [filteredSuccessful, posts]
     );
-    const publicProfileUsername = profile?.username?.trim() || null;
-    const activePortfolioPostCount = posts.filter((post) => !post.archivedAt).length;
-    const isProfileIncomplete = !profile?.displayName?.trim() || !profile?.bio?.trim() || !profile?.avatarUrl || !profile?.coverUrl;
+    const profileReadiness = getCreatorProfileReadiness(profile);
+    const publicProfileUsername = profileReadiness.hasClaimedHandle
+        ? profile?.username?.trim() || null
+        : null;
+    const activePortfolioPostCount = posts.filter(
+        (post) => !post.archivedAt && post.visibility === 'public'
+    ).length;
+    const isProfileIncomplete = !profileReadiness.profileComplete;
+    const hasPortfolioProof = successfulGenerations.length > 0 && activePortfolioPostCount > 0;
     const shouldShowPortfolioStarter = activeView === 'creations' && !isLoading && (
         successfulGenerations.length === 0 ||
         activePortfolioPostCount === 0 ||
@@ -1403,19 +1409,23 @@ export default function CreationsPage() {
                                     Portfolio setup
                                 </div>
                                 <h2 className="mt-4 max-w-2xl text-2xl font-semibold tracking-tight text-white">
-                                    Turn the first output into a profile-ready portfolio piece.
+                                    {hasPortfolioProof
+                                        ? 'Finish the profile behind your published work.'
+                                        : 'Turn the first output into a profile-ready portfolio piece.'}
                                 </h2>
                                 <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">
-                                    New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional unlock.
+                                    {hasPortfolioProof
+                                        ? 'Your creation and public proof are in place. Add the remaining identity details so visitors and buyers know who is behind the work.'
+                                        : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional unlock.'}
                                 </p>
                             </div>
                             <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
                                 <Link
-                                    href="/profile"
+                                    href="/profile?next=%2Fcreations"
                                     className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
                                 >
                                     <UserRound className="h-4 w-4" />
-                                    Set up profile
+                                    {profileReadiness.publicPublishReady ? 'Complete profile' : 'Set up profile'}
                                 </Link>
                                 <Link
                                     href={publicProfileUsername ? `/creators/${publicProfileUsername}` : '/profile'}
@@ -1429,9 +1439,19 @@ export default function CreationsPage() {
                         <div className="mt-5 grid gap-3 md:grid-cols-3">
                             {[
                                 {
-                                    title: isProfileIncomplete ? 'Finish creator identity' : 'Creator identity ready',
-                                    body: 'Add a name, bio, avatar, and cover so published work feels intentional.',
-                                    ready: !isProfileIncomplete,
+                                    title: profileReadiness.profileComplete
+                                        ? 'Creator profile ready'
+                                        : profileReadiness.publicPublishReady
+                                            ? 'Strengthen creator profile'
+                                            : 'Finish creator identity',
+                                    body: profileReadiness.profileComplete
+                                        ? 'Your handle, name, avatar, and bio are ready for visitors and buyers.'
+                                        : profileReadiness.sellerReady
+                                            ? 'Your selling identity is ready. Add a short bio so visitors understand your work.'
+                                            : profileReadiness.publicPublishReady
+                                                ? 'Your public identity is ready. Add an avatar before selling unlocks.'
+                                                : 'Choose a custom handle and display name before publishing publicly.',
+                                    ready: profileReadiness.profileComplete,
                                 },
                                 {
                                     title: successfulGenerations.length > 0 ? 'Creation ready' : 'Create one proof piece',
@@ -1532,7 +1552,7 @@ export default function CreationsPage() {
                         </div>
                         <div className="grid w-full max-w-3xl gap-3 sm:grid-cols-3">
                             {[
-                                { icon: UserRound, title: 'Profile', body: 'Name, bio, avatar, cover.' },
+                                { icon: UserRound, title: 'Profile', body: 'Custom handle, name, and avatar.' },
                                 { icon: Wand2, title: 'Create', body: 'Generate image, video, or motion.' },
                                 { icon: Globe, title: 'Publish', body: 'Add to portfolio or attach an unlock.' },
                             ].map((item) => {
@@ -1551,7 +1571,7 @@ export default function CreationsPage() {
                                 <Wand2 className="h-4 w-4" />
                                 Choose a creator tool
                             </Link>
-                            <Link href="/profile" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
+                            <Link href="/profile?next=%2Fcreations" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
                                 <UserRound className="h-4 w-4" />
                                 Set up profile
                             </Link>

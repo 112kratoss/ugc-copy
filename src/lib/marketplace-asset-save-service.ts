@@ -11,6 +11,7 @@ import {
   isMarketplaceAssetStatus,
   isMarketplaceAssetType,
 } from '@/lib/marketplace';
+import { getCreatorPublishReadinessError } from '@/lib/marketplace-trust';
 import {
   normalizeWorkflowGraph,
   serializeWorkflowGraph,
@@ -158,6 +159,38 @@ export async function saveMarketplaceAssetForRoute({
 
   if (priceUsdCents === null || priceUsdCents < 0 || (priceUsdCents > 0 && priceUsdCents < 100)) {
     return { ok: false, status: 400, body: { error: 'Price must be free or at least $1.00.' } };
+  }
+
+  if (status === 'active' || status === 'unlisted') {
+    const { data: sellerProfile, error: sellerProfileError } = await userSupabase
+      .from('profiles')
+      .select('username, display_name, avatar_url')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (sellerProfileError) {
+      console.error('Failed to verify marketplace seller profile:', sellerProfileError);
+      return { ok: false, status: 500, body: { error: 'Could not verify your creator profile right now. Try again.' } };
+    }
+
+    const profileError = getCreatorPublishReadinessError({
+      username: typeof sellerProfile?.username === 'string' ? sellerProfile.username : null,
+      displayName: typeof sellerProfile?.display_name === 'string' ? sellerProfile.display_name : null,
+      avatarUrl: typeof sellerProfile?.avatar_url === 'string' ? sellerProfile.avatar_url : null,
+    }, { requiresAvatar: true });
+
+    if (profileError) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: profileError,
+          field: 'profile',
+          actionHref: '/profile',
+          actionLabel: 'Complete profile and return',
+        },
+      };
+    }
   }
 
   if (postId) {

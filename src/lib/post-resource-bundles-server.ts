@@ -36,6 +36,8 @@ import {
 } from '@/lib/post-resource-bundles';
 import {
   assessMarketplaceListingQuality,
+  CREATOR_PROFILE_CHECK_ERROR,
+  getCreatorPublishReadinessError,
   getMarketplaceQualityError,
   type MarketplaceQualityAssessment,
 } from '@/lib/marketplace-trust';
@@ -1405,18 +1407,32 @@ export async function getMarketplaceQualityErrorForPostBundle(params: {
   bundle: PostResourceBundleInput | null | undefined;
 }): Promise<string | null> {
   const accessMode = params.bundle?.accessMode ?? 'none';
-  if (accessMode === 'none') {
-    return null;
-  }
 
   const { data: profile, error } = await params.supabase
     .from('profiles')
-    .select('username, display_name')
+    .select('username, display_name, avatar_url')
     .eq('id', params.ownerUserId)
     .maybeSingle();
 
   if (error) {
     console.error('Failed to load creator profile for marketplace quality gate:', error);
+    return CREATOR_PROFILE_CHECK_ERROR;
+  }
+
+  const seller = {
+    username: typeof profile?.username === 'string' ? profile.username : null,
+    displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
+    avatarUrl: typeof profile?.avatar_url === 'string' ? profile.avatar_url : null,
+  };
+  const profileReadinessError = getCreatorPublishReadinessError(seller, {
+    requiresAvatar: accessMode !== 'none',
+  });
+  if (profileReadinessError) {
+    return profileReadinessError;
+  }
+
+  if (accessMode === 'none') {
+    return null;
   }
 
   const postHasMedia = Boolean(
@@ -1441,10 +1457,7 @@ export async function getMarketplaceQualityErrorForPostBundle(params: {
       reviewStatus: params.post.reviewStatus ?? 'visible',
       hasMedia: postHasMedia,
     },
-    seller: {
-      username: typeof profile?.username === 'string' ? profile.username : null,
-      displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
-    },
+    seller,
   });
 }
 

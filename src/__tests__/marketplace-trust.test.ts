@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assessMarketplaceListingQuality,
   formatBundleAccessLabel,
+  getCreatorPublishReadinessError,
 } from '@/lib/marketplace-trust';
 
 const basePost = {
@@ -17,6 +18,7 @@ const basePost = {
 const baseSeller = {
   username: 'launchmaker',
   name: 'Launch Maker',
+  avatarUrl: 'https://cdn.example.com/avatar.jpg',
 };
 
 describe('marketplace trust helpers', () => {
@@ -98,6 +100,26 @@ describe('marketplace trust helpers', () => {
 
     expect(assessment.eligible).toBe(false);
     expect(assessment.issues.some((issue) => issue.code === 'missing_creator_identity')).toBe(true);
+  });
+
+  it('uses one readiness rule for public posts and a stronger seller rule for unlocks', () => {
+    expect(getCreatorPublishReadinessError({
+      username: 'creator-a1b2c3d4',
+      displayName: 'Launch Maker',
+      avatarUrl: 'https://cdn.example.com/avatar.jpg',
+    }, { requiresAvatar: false })).toMatch(/custom handle/i);
+
+    expect(getCreatorPublishReadinessError({
+      username: 'launchmaker',
+      displayName: 'Launch Maker',
+      avatarUrl: null,
+    }, { requiresAvatar: false })).toBeNull();
+
+    expect(getCreatorPublishReadinessError({
+      username: 'launchmaker',
+      displayName: 'Launch Maker',
+      avatarUrl: null,
+    }, { requiresAvatar: true })).toMatch(/profile photo/i);
   });
 
   it('accepts useful prompt, workflow, file, notes, and remix listings', () => {

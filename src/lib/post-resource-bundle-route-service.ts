@@ -9,6 +9,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import type { PostResourceBundleInput } from '@/lib/post-resource-bundles';
 import { validatePostResourceBundleInput } from '@/lib/post-resource-bundles';
+import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import {
   getMarketplaceQualityErrorForPostBundle,
   getPostResourceBundleDetailByPostId,
@@ -167,7 +168,11 @@ export async function putPostResourceBundleForRoute({
     : null;
 
   if (marketplaceQualityError) {
-    return { ok: false, status: 400, body: { error: marketplaceQualityError } };
+    return {
+      ok: false,
+      status: isCreatorProfileCheckError(marketplaceQualityError) ? 500 : 400,
+      body: { error: marketplaceQualityError },
+    };
   }
 
   const savedBundle = await persistPostResourceBundle({

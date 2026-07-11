@@ -76,6 +76,26 @@ describe('/api/marketplace/assets route', () => {
         })),
       },
       from(table: string) {
+        if (table === 'profiles') {
+          return {
+            select() {
+              return {
+                eq() { return this; },
+                async maybeSingle() {
+                  return {
+                    data: {
+                      username: 'ready-creator',
+                      display_name: 'Ready Creator',
+                      avatar_url: 'https://cdn.example.com/avatar.jpg',
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        }
+
         if (table === 'posts') {
           return {
             select() {

@@ -70,13 +70,17 @@ describe('LoginPage onboarding redirects', () => {
     }
   });
 
-  function fillAuthForm() {
-    fireEvent.change(screen.getByPlaceholderText('name@example.com'), {
+  function fillAuthForm(password = 'Strong-password1!') {
+    fireEvent.change(screen.getByLabelText(/email address/i), {
       target: { value: 'creator@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-      target: { value: 'strong-password' },
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: password },
     });
+    const confirmation = screen.queryByLabelText(/confirm password/i);
+    if (confirmation) {
+      fireEvent.change(confirmation, { target: { value: password } });
+    }
   }
 
   it('keeps normal login pointed at the requested return URL', async () => {
@@ -84,17 +88,17 @@ describe('LoginPage onboarding redirects', () => {
     render(<LoginPage />);
 
     fillAuthForm();
-    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^sign in$/i }).at(-1)!);
 
     await waitFor(() => expect(mocks.signInWithPassword).toHaveBeenCalled());
-    expect(mocks.replace).toHaveBeenCalledWith('/create');
+    expect(mocks.replace).toHaveBeenCalledWith('/auth/continue?next=%2Fcreate');
     expect(mocks.refresh).toHaveBeenCalled();
   });
 
   it('sends password recovery back through the authenticated reset page', async () => {
     render(<LoginPage />);
 
-    fireEvent.change(screen.getByLabelText('Email Address'), {
+    fireEvent.change(screen.getByLabelText(/email address/i), {
       target: { value: 'creator@example.com' },
     });
     fireEvent.click(screen.getByRole('button', { name: /forgot password/i }));
@@ -104,7 +108,7 @@ describe('LoginPage onboarding redirects', () => {
     const redirectTo = new URL(options.redirectTo);
 
     expect(redirectTo.pathname).toBe('/auth/callback');
-    expect(redirectTo.searchParams.get('next')).toBe('/auth/reset-password');
+    expect(redirectTo.searchParams.get('next')).toBe('/auth/reset-password?next=%2Fcreate');
     expect(await screen.findByText(/password reset link sent/i)).toBeInTheDocument();
   });
 
@@ -126,12 +130,13 @@ describe('LoginPage onboarding redirects', () => {
 
     expect(emailRedirectTo.pathname).toBe('/auth/callback');
     expect(emailRedirectTo.origin).toBe('https://magicbooklet.com');
-    expect(emailRedirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
-    expect(mocks.replace).toHaveBeenCalledWith('/profile?welcome=1');
+    expect(emailRedirectTo.searchParams.get('next')).toBe('/create');
+    expect(mocks.replace).toHaveBeenCalledWith('/profile?welcome=1&next=%2Fcreate');
     expect(mocks.replace).not.toHaveBeenCalledWith('/create');
   });
 
-  it('configures confirmation-email signups to return to profile setup', async () => {
+  it('preserves the requested route through confirmation-email signup', async () => {
+    mocks.searchParams = new URLSearchParams('returnUrl=/create/video?model=kling');
     render(<LoginPage />);
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
@@ -143,18 +148,18 @@ describe('LoginPage onboarding redirects', () => {
     const emailRedirectTo = new URL(signUpPayload.options.emailRedirectTo);
 
     expect(emailRedirectTo.origin).toBe('https://magicbooklet.com');
-    expect(emailRedirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
+    expect(emailRedirectTo.searchParams.get('next')).toBe('/create/video?model=kling');
     expect(
-      await screen.findByText(/it will open your creator profile setup automatically/i)
+      await screen.findByText(/continue where you left off/i)
     ).toBeInTheDocument();
   });
 
-  it('uses profile setup as the Google target when the user is in signup mode', async () => {
+  it('preserves intent for Google while server-side onboarding decides the destination', async () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create');
     render(<LoginPage />);
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^google$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
     const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
@@ -163,47 +168,54 @@ describe('LoginPage onboarding redirects', () => {
     expect(oauthPayload.provider).toBe('google');
     expect(redirectTo.origin).toBe('https://magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
-    expect(redirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
-  });
-
-  it('keeps Apple login pointed at the requested return URL', async () => {
-    mocks.searchParams = new URLSearchParams('returnUrl=/create');
-    render(<LoginPage />);
-
-    fireEvent.click(screen.getByRole('button', { name: /^apple$/i }));
-
-    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
-    const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
-    const redirectTo = new URL(oauthPayload.options.redirectTo);
-
-    expect(oauthPayload.provider).toBe('apple');
-    expect(redirectTo.origin).toBe('https://magicbooklet.com');
-    expect(redirectTo.pathname).toBe('/auth/callback');
     expect(redirectTo.searchParams.get('next')).toBe('/create');
   });
 
-  it('uses profile setup as the Apple target when the user is in signup mode', async () => {
-    mocks.searchParams = new URLSearchParams('returnUrl=/create');
+  it('does not advertise Apple while the provider is unavailable', () => {
+    render(<LoginPage />);
+
+    expect(screen.queryByRole('button', { name: /apple/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
+  });
+
+  it('shows and enforces the configured password requirements before signup', async () => {
     render(<LoginPage />);
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^apple$/i }));
+    expect(screen.getByText('8 or more characters')).toBeInTheDocument();
+    expect(screen.getByText('One lowercase letter')).toBeInTheDocument();
+    expect(screen.getByText('One uppercase letter')).toBeInTheDocument();
+    expect(screen.getByText('One number')).toBeInTheDocument();
+    expect(screen.getByText('One symbol')).toBeInTheDocument();
 
-    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
-    const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];
-    const redirectTo = new URL(oauthPayload.options.redirectTo);
+    fillAuthForm('alllowercase');
+    fireEvent.click(screen.getByRole('button', { name: /^create account$/i }));
 
-    expect(oauthPayload.provider).toBe('apple');
-    expect(redirectTo.origin).toBe('https://magicbooklet.com');
-    expect(redirectTo.pathname).toBe('/auth/callback');
-    expect(redirectTo.searchParams.get('next')).toBe('/profile?welcome=1');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/uppercase letter.*number.*symbol/i);
+    expect(mocks.signUp).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/^password$/i)).toHaveFocus();
+  });
+
+  it('requires password confirmation before creating an account', async () => {
+    render(<LoginPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fillAuthForm();
+    fireEvent.change(screen.getByLabelText(/confirm password/i), {
+      target: { value: 'Different-password1!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^create account$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/passwords do not match/i);
+    expect(mocks.signUp).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/confirm password/i)).toHaveFocus();
   });
 
   it('allows an explicit auth redirect origin to override the public site URL', async () => {
     process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN = 'https://www.magicbooklet.com';
     render(<LoginPage />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^google$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
     const oauthPayload = mocks.signInWithOAuth.mock.calls[0][0];

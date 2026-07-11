@@ -11,6 +11,8 @@ interface DeferredCreatorProfileCardProps {
   isLoading: boolean;
   loadError: string | null;
   onboardingMode?: boolean;
+  nextPath?: string;
+  returnAfterSave?: boolean;
 }
 
 type IdleWindow = Window & {
@@ -48,7 +50,8 @@ function useDeferredUntilIdle() {
 }
 
 export default function DeferredCreatorProfileCard(props: DeferredCreatorProfileCardProps) {
-  const isReady = useDeferredUntilIdle();
+  const isDeferredReady = useDeferredUntilIdle();
+  const isReady = props.onboardingMode || isDeferredReady;
 
   if (!isReady) {
     return <CreatorProfileCardFallback {...props} />;

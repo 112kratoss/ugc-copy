@@ -139,6 +139,35 @@ describe('NewPostClient', () => {
     expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'post');
   });
 
+  it('offers profile repair without losing the current composer after a readiness error', async () => {
+    enqueueResponse({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+        field: 'profile',
+        actionHref: '/profile',
+        actionLabel: 'Complete profile and return',
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/custom handle/i);
+    expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'publish');
+    const repairLink = screen.getByRole('link', { name: /complete profile in a new tab/i });
+    expect(repairLink).toHaveAttribute('href', '/profile?source=post-composer');
+    expect(repairLink).toHaveAttribute('target', '_blank');
+  });
+
   it('renders searchable Made With comboboxes fetched from the API', async () => {
     render(<NewPostClient />);
 

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import CreateImagePage from '@/app/create-image/page';
 import CreateMotionPage from '@/app/create-motion/page';
 import CreateVideoPage from '@/app/create-video/page';
+import NewPostPage from '@/app/post/new/page';
 
 vi.mock('@/app/components/RouteAuthBoundary', () => ({
   RequireAuth: ({ children, returnTo }: { children: React.ReactNode; returnTo: string }) => (
@@ -21,6 +22,10 @@ vi.mock('@/app/create-video/CreateVideoClient', () => ({
 
 vi.mock('@/app/create-motion/CreateMotionClient', () => ({
   default: () => <div>Motion creator</div>,
+}));
+
+vi.mock('@/app/post/new/NewPostClient', () => ({
+  default: () => <div>Post composer</div>,
 }));
 
 describe('creator auth return paths', () => {
@@ -61,6 +66,24 @@ describe('creator auth return paths', () => {
     expect(screen.getByTestId('auth-boundary')).toHaveAttribute(
       'data-return-to',
       '/create-motion?remix=generation-1&model=kling-3.0'
+    );
+  });
+
+  it('preserves allowlisted composer context through sign-in', async () => {
+    render(await NewPostPage({
+      searchParams: Promise.resolve({
+        generationId: 'generation-1',
+        publishIntent: 'paid-generation',
+        resourceMode: 'paid',
+        focus: 'price',
+        from: 'creations',
+        unsafe: 'ignored',
+      }),
+    }));
+
+    expect(screen.getByTestId('auth-boundary')).toHaveAttribute(
+      'data-return-to',
+      '/post/new?generationId=generation-1&publishIntent=paid-generation&resourceMode=paid&focus=price&from=creations'
     );
   });
 });

@@ -27,6 +27,7 @@ import {
   type PostMediaPersistInput,
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
   normalizeSourceToolInputWithCatalog,
@@ -725,7 +726,11 @@ export async function updateOwnerPostForRoute({
       : null;
 
     if (marketplaceQualityError) {
-      return { ok: false, status: 400, body: { error: marketplaceQualityError } };
+      return {
+        ok: false,
+        status: isCreatorProfileCheckError(marketplaceQualityError) ? 500 : 400,
+        body: { error: marketplaceQualityError },
+      };
     }
 
     const updatedPost = await resolvedDependencies.updatePostWithResourceBundleAtomically({

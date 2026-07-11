@@ -1,29 +1,19 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { Apple, ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2, WandSparkles } from 'lucide-react';
-
-function getSafeRedirectPath(value: string | null, fallback = '/profile') {
-    if (!value) {
-        return fallback;
-    }
-
-    try {
-        const decoded = decodeURIComponent(value);
-        if (decoded.startsWith('/') && !decoded.startsWith('//') && !decoded.includes('\\')) {
-            return decoded;
-        }
-    } catch {
-        if (value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')) {
-            return value;
-        }
-    }
-
-    return fallback;
-}
+import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2, WandSparkles } from 'lucide-react';
+import {
+    buildAuthContinuePath,
+    buildProfileSetupPath,
+    getSafeAuthNextPath,
+} from '@/lib/auth-onboarding';
+import {
+    getPasswordRequirements,
+    getPasswordValidationMessage,
+} from '@/lib/password-policy';
 
 function getConfiguredAuthOrigin() {
     const configuredOrigin =
@@ -53,8 +43,7 @@ function getAuthCallbackUrl(nextPath: string) {
     return `${getConfiguredAuthOrigin()}/auth/callback?next=${encodeURIComponent(nextPath)}`;
 }
 
-const PROFILE_SETUP_REDIRECT = '/profile?welcome=1';
-type SocialProvider = 'apple' | 'google';
+type AuthErrorField = 'email' | 'password' | 'confirmPassword' | null;
 
 export default function LoginPage() {
     return (
@@ -71,16 +60,26 @@ export default function LoginPage() {
 function LoginContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const explicitRedirect = searchParams.get('redirect') || searchParams.get('returnUrl');
-    const redirectTo = getSafeRedirectPath(explicitRedirect, PROFILE_SETUP_REDIRECT);
-    const signupRedirectTo = PROFILE_SETUP_REDIRECT;
-    const [isLogin, setIsLogin] = useState(true);
+    const explicitRedirect = searchParams.get('next') || searchParams.get('redirect') || searchParams.get('returnUrl');
+    const redirectTo = getSafeAuthNextPath(explicitRedirect);
+    const signupRedirectTo = buildProfileSetupPath(redirectTo);
+    const [isLogin, setIsLogin] = useState(searchParams.get('mode') !== 'signup');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [errorField, setErrorField] = useState<AuthErrorField>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(
+        searchParams.get('recovery') === '1'
+            ? 'Enter your email, then choose Forgot password to request a fresh recovery link.'
+            : null
+    );
+    const emailRef = useRef<HTMLInputElement>(null);
+    const passwordRef = useRef<HTMLInputElement>(null);
+    const confirmPasswordRef = useRef<HTMLInputElement>(null);
+    const passwordRequirements = getPasswordRequirements(password);
 
     useEffect(() => {
         let isActive = true;
@@ -90,7 +89,7 @@ function LoginContent() {
                 return;
             }
 
-            router.replace(redirectTo);
+            router.replace(buildAuthContinuePath(redirectTo));
             router.refresh();
         });
 
@@ -101,9 +100,28 @@ function LoginContent() {
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
-        setLoading(true);
         setError(null);
+        setErrorField(null);
         setSuccessMessage(null);
+
+        if (!isLogin) {
+            const passwordError = getPasswordValidationMessage(password);
+            if (passwordError) {
+                setError(passwordError);
+                setErrorField('password');
+                passwordRef.current?.focus();
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                setError('The passwords do not match. Re-enter the same password.');
+                setErrorField('confirmPassword');
+                confirmPasswordRef.current?.focus();
+                return;
+            }
+        }
+
+        setLoading(true);
 
         try {
             if (isLogin) {
@@ -112,14 +130,14 @@ function LoginContent() {
                     password,
                 });
                 if (error) throw error;
-                router.replace(redirectTo);
+                router.replace(buildAuthContinuePath(redirectTo));
                 router.refresh();
             } else {
                 const { data, error } = await supabase.auth.signUp({
                     email,
                     password,
                     options: {
-                        emailRedirectTo: getAuthCallbackUrl(signupRedirectTo),
+                        emailRedirectTo: getAuthCallbackUrl(redirectTo),
                     },
                 });
                 if (error) throw error;
@@ -128,30 +146,31 @@ function LoginContent() {
                     router.refresh();
                     return;
                 }
-                // Check if email confirmation is required based on project settings
-                setSuccessMessage('Check your email for the confirmation link. It will open your creator profile setup automatically.');
-                setIsLogin(true); // Switch to login mode
-                setLoading(false); // Stop loading since we're just showing a message
+                setSuccessMessage('Check your email for the confirmation link. We’ll help you finish your profile, then continue where you left off.');
+                setIsLogin(true);
+                setPassword('');
+                setConfirmPassword('');
+                setLoading(false);
                 return;
             }
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'An error occurred';
             setError(message);
         } finally {
-            if (isLogin) setLoading(false);
+            setLoading(false);
         }
     };
 
-    const handleSocialLogin = async (provider: SocialProvider) => {
+    const handleSocialLogin = async () => {
         setLoading(true);
         setError(null);
+        setErrorField(null);
         setSuccessMessage(null);
         try {
-            const nextPath = isLogin ? redirectTo : signupRedirectTo;
             const { error } = await supabase.auth.signInWithOAuth({
-                provider,
+                provider: 'google',
                 options: {
-                    redirectTo: getAuthCallbackUrl(nextPath),
+                    redirectTo: getAuthCallbackUrl(redirectTo),
                 },
             });
             if (error) throw error;
@@ -165,16 +184,20 @@ function LoginContent() {
     const handlePasswordReset = async () => {
         if (!email.trim()) {
             setError('Enter your email address first, then choose Forgot password.');
+            setErrorField('email');
+            emailRef.current?.focus();
             return;
         }
 
         setLoading(true);
         setError(null);
+        setErrorField(null);
         setSuccessMessage(null);
 
         try {
+            const resetPage = `/auth/reset-password?next=${encodeURIComponent(redirectTo)}`;
             const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-                redirectTo: getAuthCallbackUrl('/auth/reset-password'),
+                redirectTo: getAuthCallbackUrl(resetPage),
             });
             if (resetError) throw resetError;
             setSuccessMessage('Password reset link sent. Check your email to continue.');
@@ -207,31 +230,78 @@ function LoginContent() {
                 <div className="w-full max-w-md">
                     <div className="mb-7 text-center">
                         <h1 className="mb-2 text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
-                            {isLogin ? 'Welcome Back' : 'Create Account'}
+                            {isLogin ? 'Welcome back' : 'Create your account'}
                         </h1>
                         <p className="text-sm leading-6 text-[var(--ui-text-muted)]">
                             {isLogin
-                                ? 'Enter your details to access your account'
-                                : 'Set up your creator identity and start making'}
+                                ? 'Sign in to continue to your creator workspace.'
+                                : 'Create an account now. Your creator profile comes next.'}
                         </p>
                     </div>
 
                     <div className="rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
+                        <div className="mb-6 grid grid-cols-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-1" role="group" aria-label="Choose authentication mode">
+                            <button
+                                type="button"
+                                aria-pressed={isLogin}
+                                onClick={() => {
+                                    setIsLogin(true);
+                                    setError(null);
+                                    setErrorField(null);
+                                    setSuccessMessage(null);
+                                    setConfirmPassword('');
+                                }}
+                                className={`ui-focus-ring min-h-11 rounded-xl px-3 text-sm font-extrabold transition ${
+                                    isLogin
+                                        ? 'bg-[var(--ui-surface-3)] text-[var(--ui-text-primary)] shadow-sm'
+                                        : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
+                                }`}
+                            >
+                                Sign in
+                            </button>
+                            <button
+                                type="button"
+                                aria-pressed={!isLogin}
+                                onClick={() => {
+                                    setIsLogin(false);
+                                    setError(null);
+                                    setErrorField(null);
+                                    setSuccessMessage(null);
+                                }}
+                                className={`ui-focus-ring min-h-11 rounded-xl px-3 text-sm font-extrabold transition ${
+                                    !isLogin
+                                        ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-sm'
+                                        : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
+                                }`}
+                            >
+                                Sign up
+                            </button>
+                        </div>
+
                         <form onSubmit={handleAuth} className="space-y-4">
                             <div>
                                 <label htmlFor="login-email" className="mb-1.5 block text-sm font-bold text-[var(--ui-text-secondary)]">
-                                    Email Address
+                                    Email address
                                 </label>
                                 <div className="relative">
                                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
                                     <input
                                         id="login-email"
+                                        ref={emailRef}
                                         name="email"
                                         type="email"
                                         value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
+                                        onChange={(e) => {
+                                            setEmail(e.target.value);
+                                            if (errorField === 'email') {
+                                                setError(null);
+                                                setErrorField(null);
+                                            }
+                                        }}
                                         required
                                         autoComplete="email"
+                                        aria-invalid={errorField === 'email'}
+                                        aria-describedby={errorField === 'email' ? 'auth-error' : undefined}
                                         className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-10 pr-4 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
                                         placeholder="name@example.com"
                                     />
@@ -258,13 +328,25 @@ function LoginContent() {
                                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
                                     <input
                                         id="login-password"
+                                        ref={passwordRef}
                                         name="password"
                                         type={showPassword ? 'text' : 'password'}
                                         value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
+                                        onChange={(e) => {
+                                            setPassword(e.target.value);
+                                            if (errorField === 'password') {
+                                                setError(null);
+                                                setErrorField(null);
+                                            }
+                                        }}
                                         required
-                                        minLength={6}
+                                        minLength={isLogin ? undefined : 8}
                                         autoComplete={isLogin ? 'current-password' : 'new-password'}
+                                        aria-invalid={errorField === 'password'}
+                                        aria-describedby={[
+                                            !isLogin ? 'signup-password-requirements' : null,
+                                            errorField === 'password' ? 'auth-error' : null,
+                                        ].filter(Boolean).join(' ') || undefined}
                                         className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-10 pr-12 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
                                         placeholder="••••••••"
                                     />
@@ -281,10 +363,61 @@ function LoginContent() {
                                         )}
                                     </button>
                                 </div>
+
+                                {!isLogin ? (
+                                    <div id="signup-password-requirements" className="mt-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
+                                        <p className="text-xs font-bold text-[var(--ui-text-secondary)]">Your password needs:</p>
+                                        <ul className="mt-2 grid gap-1.5 text-xs sm:grid-cols-2">
+                                            {passwordRequirements.map((requirement) => (
+                                                <li
+                                                    key={requirement.id}
+                                                    className={`flex items-center gap-2 ${
+                                                        requirement.isMet ? 'text-emerald-300' : 'text-[var(--ui-text-faint)]'
+                                                    }`}
+                                                >
+                                                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                                                    {requirement.label}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ) : null}
                             </div>
 
+                            {!isLogin ? (
+                                <div>
+                                    <label htmlFor="confirm-password" className="mb-1.5 block text-sm font-bold text-[var(--ui-text-secondary)]">
+                                        Confirm password
+                                    </label>
+                                    <div className="relative">
+                                        <Lock className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-500" aria-hidden />
+                                        <input
+                                            id="confirm-password"
+                                            ref={confirmPasswordRef}
+                                            name="confirmPassword"
+                                            type={showPassword ? 'text' : 'password'}
+                                            value={confirmPassword}
+                                            onChange={(event) => {
+                                                setConfirmPassword(event.target.value);
+                                                if (errorField === 'confirmPassword') {
+                                                    setError(null);
+                                                    setErrorField(null);
+                                                }
+                                            }}
+                                            required
+                                            minLength={8}
+                                            autoComplete="new-password"
+                                            aria-invalid={errorField === 'confirmPassword'}
+                                            aria-describedby={errorField === 'confirmPassword' ? 'auth-error' : undefined}
+                                            className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-10 pr-4 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
+                                            placeholder="Re-enter your password"
+                                        />
+                                    </div>
+                                </div>
+                            ) : null}
+
                             {error && (
-                                <div role="alert" aria-live="assertive" className="flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                                <div id="auth-error" role="alert" aria-live="assertive" className="flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
                                     <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                                     <p>{error}</p>
                                 </div>
@@ -308,7 +441,7 @@ function LoginContent() {
                                         Processing...
                                     </>
                                 ) : (
-                                    isLogin ? 'Sign In' : 'Create Account'
+                                    isLogin ? 'Sign in' : 'Create account'
                                 )}
                             </button>
                         </form>
@@ -322,9 +455,10 @@ function LoginContent() {
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
                             <button
-                                onClick={() => handleSocialLogin('google')}
+                                type="button"
+                                onClick={() => void handleSocialLogin()}
                                 disabled={loading}
                                 className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
                             >
@@ -346,31 +480,9 @@ function LoginContent() {
                                         fill="#EA4335"
                                     />
                                 </svg>
-                                Google
-                            </button>
-                            <button
-                                onClick={() => handleSocialLogin('apple')}
-                                disabled={loading}
-                                className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
-                            >
-                                <Apple className="w-5 h-5" fill="currentColor" strokeWidth={1.6} aria-hidden="true" />
-                                Apple
+                                Continue with Google
                             </button>
                         </div>
-
-                        <p className="mt-8 text-center text-sm text-zinc-400">
-                            {isLogin ? "Don't have an account? " : "Already have an account? "}
-                            <button
-                                onClick={() => {
-                                    setIsLogin(!isLogin);
-                                    setError(null);
-                                    setSuccessMessage(null);
-                                }}
-                                className="ui-focus-ring rounded-full px-1 font-bold text-[var(--ui-primary)] hover:underline"
-                            >
-                                {isLogin ? 'Sign up' : 'Log in'}
-                            </button>
-                        </p>
                     </div>
                 </div>
             </div>

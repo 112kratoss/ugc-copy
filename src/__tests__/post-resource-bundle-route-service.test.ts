@@ -203,4 +203,29 @@ describe('putPostResourceBundleForRoute', () => {
     });
     expect(savePostResourceBundle).not.toHaveBeenCalled();
   });
+
+  it('maps unavailable profile verification to a server failure', async () => {
+    const userSupabase = createUserSupabaseMock(privatePost({ visibility: 'public' }));
+    const adminSupabase = createAdminSupabaseMock(true);
+
+    const result = await putPostResourceBundleForRoute({
+      postId: 'post-1',
+      ownerUserId: 'user-1',
+      userSupabase: userSupabase.client,
+      adminSupabase: adminSupabase.client,
+      readBody: vi.fn(async () => validBundleBody),
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+          'Could not verify your creator profile right now. Try again.'
+        )),
+        savePostResourceBundle: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Could not verify your creator profile right now. Try again.' },
+    });
+  });
 });

@@ -89,4 +89,83 @@ describe('publishPreparedPost', () => {
       },
     });
   });
+
+  it('returns a profile repair action before creating an incomplete public post', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'A useful public creator story with enough context.');
+    formData.set('visibility', 'public');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const createPostWithResourceBundleAtomically = vi.fn();
+    const result = await publishPreparedPost({
+      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+          'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
+        )),
+        createPostWithResourceBundleAtomically,
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: {
+        error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+        field: 'profile',
+        actionHref: '/profile',
+        actionLabel: 'Complete profile and return',
+      },
+    });
+    expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('treats a failed profile check as a retryable server failure', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'A useful public creator story with enough context.');
+    formData.set('visibility', 'public');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const result = await publishPreparedPost({
+      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+          'Could not verify your creator profile right now. Try again.'
+        )),
+        createPostWithResourceBundleAtomically: vi.fn(),
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Could not verify your creator profile right now. Try again.' },
+    });
+  });
 });

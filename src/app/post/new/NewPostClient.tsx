@@ -21,7 +21,11 @@ import {
 
 import { useAuth } from '@/app/components/AuthProvider';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { assessMarketplaceListingQuality } from '@/lib/marketplace-trust';
+import {
+  assessMarketplaceListingQuality,
+  isCreatorProfileReadinessError,
+} from '@/lib/marketplace-trust';
+import { getCurrentInternalPath } from '@/lib/share';
 import {
   getPostResourceKindLabel,
   normalizePostResourceBundleAccessMode,
@@ -70,6 +74,8 @@ interface CreatedPostState {
 interface ComposerError {
   section: 'post' | 'story' | 'resources' | 'publish';
   message: string;
+  actionHref?: string;
+  actionLabel?: string;
 }
 
 interface ComposerMediaItem {
@@ -84,18 +90,41 @@ interface ComposerMediaItem {
 
 class ComposerSubmissionError extends Error {
   readonly section: ComposerError['section'];
+  readonly actionHref?: string;
+  readonly actionLabel?: string;
 
-  constructor(message: string, section: ComposerError['section']) {
+  constructor(
+    message: string,
+    section: ComposerError['section'],
+    action?: { href: string; label: string }
+  ) {
     super(message);
     this.name = 'ComposerSubmissionError';
     this.section = section;
+    this.actionHref = action?.href;
+    this.actionLabel = action?.label;
   }
 }
 
-function getSubmissionError(data: { error?: string; field?: string }, fallback: string) {
+function buildProfileRepairHref(): string {
+  return '/profile?source=post-composer';
+}
+
+function getSubmissionError(
+  data: { error?: string; field?: string; actionHref?: string; actionLabel?: string },
+  fallback: string
+) {
+  const message = data.error || fallback;
+  const needsProfileRepair = data.field === 'profile' || isCreatorProfileReadinessError(message);
   return new ComposerSubmissionError(
-    data.error || fallback,
-    data.field === 'sourceTools' ? 'post' : 'publish'
+    message,
+    data.field === 'sourceTools' ? 'post' : 'publish',
+    needsProfileRepair
+      ? {
+          href: buildProfileRepairHref(),
+          label: 'Complete profile in a new tab',
+        }
+      : undefined
   );
 }
 
@@ -1427,8 +1456,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     });
   };
 
-  const stopWithError = (message: string, section: 'post' | 'story' | 'resources' | 'publish') => {
-    setError({ section, message });
+  const stopWithError = (
+    message: string,
+    section: 'post' | 'story' | 'resources' | 'publish',
+    action?: { href: string; label: string }
+  ) => {
+    setError({ section, message, actionHref: action?.href, actionLabel: action?.label });
     focusComposerSection(section);
   };
 
@@ -1439,7 +1472,17 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
     return (
       <div role="alert" className="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-        {error.message}
+        <p>{error.message}</p>
+        {error.actionHref ? (
+          <Link
+            href={error.actionHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ui-focus-ring mt-2 inline-flex min-h-12 items-center font-bold text-white underline decoration-white/40 underline-offset-4"
+          >
+            {error.actionLabel ?? 'Complete profile in a new tab'}
+          </Link>
+        ) : null}
       </div>
     );
   };
@@ -1712,7 +1755,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     const effectiveVisibility = submitVisibilityRef.current;
 
     if (!session?.access_token) {
-      router.push('/login?returnUrl=/post/new');
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/post/new'))}`);
       return;
     }
 
@@ -1774,9 +1817,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               archivedAt: initialPost?.archivedAt ?? null,
               reviewStatus: 'visible',
               hasMedia: hasMediaProof,
-            },
-            seller: {
-              name: 'Profile ready',
             },
           })
         : { eligible: true, issues: [] };
@@ -1944,6 +1984,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       setError({
         section: submitError instanceof ComposerSubmissionError ? submitError.section : 'publish',
         message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
+        actionHref: submitError instanceof ComposerSubmissionError ? submitError.actionHref : undefined,
+        actionLabel: submitError instanceof ComposerSubmissionError ? submitError.actionLabel : undefined,
       });
     } finally {
       setIsSubmitting(false);

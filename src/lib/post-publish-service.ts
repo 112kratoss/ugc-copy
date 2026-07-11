@@ -24,6 +24,10 @@ import {
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import {
+  isCreatorProfileCheckError,
+  isCreatorProfileReadinessError,
+} from '@/lib/marketplace-trust';
+import {
   getSubmittedMediaKind,
   inferExtension,
   sanitizeFileStem,
@@ -71,6 +75,8 @@ export type PostPublishResult =
       body: {
         error: string;
         field?: string;
+        actionHref?: string;
+        actionLabel?: string;
       };
     };
 
@@ -129,7 +135,22 @@ export async function publishPreparedPost({
     : null;
 
   if (marketplaceQualityError) {
-    return { ok: false, status: 400, body: { error: marketplaceQualityError } };
+    const needsProfileRepair = isCreatorProfileReadinessError(marketplaceQualityError);
+    const profileCheckFailed = isCreatorProfileCheckError(marketplaceQualityError);
+    return {
+      ok: false,
+      status: profileCheckFailed ? 500 : 400,
+      body: {
+        error: marketplaceQualityError,
+        ...(needsProfileRepair
+          ? {
+              field: 'profile',
+              actionHref: '/profile',
+              actionLabel: 'Complete profile and return',
+            }
+          : {}),
+      },
+    };
   }
 
   const persistedMediaItems: PostMediaPersistInput[] = [];

@@ -32,6 +32,10 @@ import {
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
+import {
+  isCreatorProfileCheckError,
+  isCreatorProfileReadinessError,
+} from '@/lib/marketplace-trust';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
@@ -107,6 +111,9 @@ export type ShowcasePublishServiceResult =
       status: 400 | 403 | 404 | 500;
       body: {
         error: string;
+        field?: string;
+        actionHref?: string;
+        actionLabel?: string;
       };
     };
 
@@ -387,7 +394,22 @@ export async function publishGenerationToShowcaseForRoute({
     : null;
 
   if (marketplaceQualityError) {
-    return { ok: false, status: 400, body: { error: marketplaceQualityError } };
+    const needsProfileRepair = isCreatorProfileReadinessError(marketplaceQualityError);
+    const profileCheckFailed = isCreatorProfileCheckError(marketplaceQualityError);
+    return {
+      ok: false,
+      status: profileCheckFailed ? 500 : 400,
+      body: {
+        error: marketplaceQualityError,
+        ...(needsProfileRepair
+          ? {
+              field: 'profile',
+              actionHref: '/profile',
+              actionLabel: 'Complete profile and return',
+            }
+          : {}),
+      },
+    };
   }
 
   const updatePayload: { is_public: boolean; [key: string]: unknown } = {

@@ -135,4 +135,87 @@ describe('publishGenerationToShowcaseForRoute', () => {
     }));
     expect(adminClient.removeMock).toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
   });
+
+  it('returns an actionable profile repair response for public publishing', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Original title',
+      description: 'Original description',
+      prompt: 'Original prompt',
+    };
+    const userClient = createUserClientMock(generation);
+    const adminClient = createAdminClientMock();
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: {
+        generationId: 'gen-1',
+        visibility: 'public',
+      },
+      supabase: userClient.client,
+      userId: 'user-1',
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+          'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
+        )),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: {
+        error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+        field: 'profile',
+        actionHref: '/profile',
+        actionLabel: 'Complete profile and return',
+      },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('returns a retryable server failure when profile verification is unavailable', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Original title',
+      description: 'Original description',
+      prompt: 'Original prompt',
+    };
+    const userClient = createUserClientMock(generation);
+    const adminClient = createAdminClientMock();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'public' },
+      supabase: userClient.client,
+      userId: 'user-1',
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+          'Could not verify your creator profile right now. Try again.'
+        )),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Could not verify your creator profile right now. Try again.' },
+    });
+  });
 });

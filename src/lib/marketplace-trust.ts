@@ -8,6 +8,10 @@ import {
   type PostResourceBundleResources,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { getCreatorProfileReadiness } from '@/lib/profile';
+
+const CREATOR_PROFILE_READINESS_ERROR_PREFIX = 'Complete your profile before publishing';
+export const CREATOR_PROFILE_CHECK_ERROR = 'Could not verify your creator profile right now. Try again.';
 
 interface MarketplaceQualityIssue {
   code: string;
@@ -43,7 +47,38 @@ export interface MarketplaceQualityInput {
     username?: string | null;
     name?: string | null;
     displayName?: string | null;
+    avatarUrl?: string | null;
+    avatar?: string | null;
   } | null;
+}
+
+export function getCreatorPublishReadinessError(
+  seller: MarketplaceQualityInput['seller'],
+  options: { requiresAvatar: boolean }
+): string | null {
+  const readiness = getCreatorProfileReadiness({
+    username: seller?.username,
+    displayName: seller?.displayName ?? seller?.name,
+    avatarUrl: seller?.avatarUrl ?? seller?.avatar,
+  });
+
+  if (!readiness.publicPublishReady) {
+    return `${CREATOR_PROFILE_READINESS_ERROR_PREFIX} publicly: choose a custom handle and add your display name.`;
+  }
+
+  if (options.requiresAvatar && !readiness.sellerReady) {
+    return `${CREATOR_PROFILE_READINESS_ERROR_PREFIX} an unlock: upload a profile photo so customers know who they are buying from.`;
+  }
+
+  return null;
+}
+
+export function isCreatorProfileReadinessError(value: string | null | undefined): boolean {
+  return Boolean(value?.startsWith(CREATOR_PROFILE_READINESS_ERROR_PREFIX));
+}
+
+export function isCreatorProfileCheckError(value: string | null | undefined): boolean {
+  return value === CREATOR_PROFILE_CHECK_ERROR;
 }
 
 export function formatBundleAccessLabel({
@@ -118,11 +153,11 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     });
   }
 
-  if (!hasCreatorIdentity(input.seller)) {
+  if (input.seller && !hasCreatorIdentity(input.seller)) {
     issues.push({
       code: 'missing_creator_identity',
       field: 'creator',
-      message: 'Complete your creator profile name or username before publishing a marketplace unlock.',
+      message: 'Choose a custom handle, add your display name, and upload a profile photo before publishing an unlock.',
     });
   }
 
@@ -209,14 +244,11 @@ function isPlaceholderText(value: string): boolean {
 }
 
 function hasCreatorIdentity(seller: MarketplaceQualityInput['seller']): boolean {
-  const username = normalizeComparableText(normalizeText(seller?.username));
-  const displayName = normalizeComparableText(normalizeText(seller?.displayName ?? seller?.name));
-  const genericNames = new Set(['anonymous', 'creator', 'magicbooklet', 'unknown', 'user']);
-
-  return Boolean(
-    (username.length >= 3 && !genericNames.has(username) && !isPlaceholderText(username)) ||
-    (displayName.length >= 3 && !genericNames.has(displayName) && !isPlaceholderText(displayName))
-  );
+  return getCreatorProfileReadiness({
+    username: seller?.username,
+    displayName: seller?.displayName ?? seller?.name,
+    avatarUrl: seller?.avatarUrl ?? seller?.avatar,
+  }).sellerReady;
 }
 
 function hasUsefulPublicProof(post: NonNullable<MarketplaceQualityInput['post']>): boolean {

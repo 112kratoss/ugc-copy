@@ -47,7 +47,7 @@ function createAdminSupabaseMock(options?: {
   };
 }
 
-function createUserSupabaseMock() {
+function createUserSupabaseMock(options?: { sellerReady?: boolean }) {
   const posts: PostRow[] = [
     {
       id: 'post-public',
@@ -73,9 +73,25 @@ function createUserSupabaseMock() {
   ];
   const assetUpserts: Array<Record<string, unknown>> = [];
   const contentUpserts: Array<Record<string, unknown>> = [];
+  const sellerProfile = options?.sellerReady === false
+    ? { username: 'creator-a1b2c3d4', display_name: 'New Creator', avatar_url: null }
+    : { username: 'ready-creator', display_name: 'Ready Creator', avatar_url: 'https://cdn.example.com/avatar.jpg' };
 
   const client = {
     from(table: string) {
+      if (table === 'profiles') {
+        return {
+          select() {
+            return {
+              eq() { return this; },
+              async maybeSingle() {
+                return { data: sellerProfile, error: null };
+              },
+            };
+          },
+        };
+      }
+
       if (table === 'posts') {
         return {
           select() {
@@ -264,5 +280,59 @@ describe('saveMarketplaceAssetForRoute', () => {
         guide_markdown: '# Guide',
       },
     ]);
+  });
+
+  it('keeps active marketplace listings behind seller profile readiness', async () => {
+    const admin = createAdminSupabaseMock();
+    const userSupabase = createUserSupabaseMock({ sellerReady: false });
+
+    const result = await saveMarketplaceAssetForRoute({
+      adminSupabase: admin.client,
+      readBody: async () => ({
+        postId: 'post-public',
+        type: 'guide',
+        status: 'active',
+        title: 'Public proof guide',
+        priceUsdCents: 1900,
+        guideMarkdown: '# Guide',
+      }),
+      userId: 'user-1',
+      userSupabase: userSupabase.client,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      body: {
+        field: 'profile',
+        actionHref: '/profile',
+      },
+    });
+    expect(userSupabase.assetUpserts).toHaveLength(0);
+  });
+
+  it('keeps directly accessible unlisted listings behind seller readiness too', async () => {
+    const admin = createAdminSupabaseMock();
+    const userSupabase = createUserSupabaseMock({ sellerReady: false });
+
+    const result = await saveMarketplaceAssetForRoute({
+      adminSupabase: admin.client,
+      readBody: async () => ({
+        type: 'prompt_pack',
+        status: 'unlisted',
+        title: 'Private launch hooks',
+        priceUsdCents: 900,
+        promptPack: 'Hook one\nHook two',
+      }),
+      userId: 'user-1',
+      userSupabase: userSupabase.client,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { field: 'profile' },
+    });
+    expect(userSupabase.assetUpserts).toHaveLength(0);
   });
 });

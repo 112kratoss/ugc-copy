@@ -32,6 +32,7 @@ function createServiceClientTestDouble() {
         const profile = {
           username: 'creator-one',
           display_name: 'Creator One',
+          avatar_url: 'https://cdn.example.com/avatar.jpg',
         };
         const query = {
           select() {

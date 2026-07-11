@@ -6,6 +6,7 @@ import type { EditableCreatorProfile } from '@/lib/profile';
 
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
+  updateUser: vi.fn(),
   from: vi.fn(),
   upload: vi.fn(),
   uploadToSignedUrl: vi.fn(),
@@ -13,10 +14,20 @@ const supabaseMocks = vi.hoisted(() => ({
   getPublicUrl: vi.fn(),
 }));
 
+const routerMocks = vi.hoisted(() => ({
+  replace: vi.fn(),
+  refresh: vi.fn(),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => routerMocks,
+}));
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
       getSession: supabaseMocks.getSession,
+      updateUser: supabaseMocks.updateUser,
     },
     storage: {
       from: supabaseMocks.from,
@@ -41,6 +52,8 @@ const profile: EditableCreatorProfile = {
 
 describe('CreatorProfileCard', () => {
   beforeEach(() => {
+    routerMocks.replace.mockReset();
+    routerMocks.refresh.mockReset();
     supabaseMocks.getSession.mockResolvedValue({
       data: {
         session: {
@@ -49,6 +62,7 @@ describe('CreatorProfileCard', () => {
         },
       },
     });
+    supabaseMocks.updateUser.mockResolvedValue({ error: null });
     supabaseMocks.upload.mockResolvedValue({ error: null });
     supabaseMocks.uploadToSignedUrl.mockResolvedValue({ error: null });
     supabaseMocks.remove.mockResolvedValue({ error: null });
@@ -165,9 +179,11 @@ describe('CreatorProfileCard', () => {
       />
     );
 
-    expect(screen.getByText(/setup progress/i)).toBeInTheDocument();
+    expect(screen.getByText(/profile essentials/i)).toBeInTheDocument();
     expect(screen.getByText(/public preview/i)).toBeInTheDocument();
-    expect(screen.getByText(/save the handle first/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 essentials complete/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save and continue/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /skip for now/i })).toBeInTheDocument();
   });
 
   it('lets creators preserve their public website, location, and social handles', () => {
@@ -176,14 +192,148 @@ describe('CreatorProfileCard', () => {
         initialProfile={profile}
         isLoading={false}
         loadError={null}
-        onboardingMode
       />
     );
 
     expect(screen.getByText(/^Location$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Website$/i)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Social Links' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'More about you' })).toBeInTheDocument();
     expect(screen.getByText(/^X \(Twitter\) Handle$/i)).toBeInTheDocument();
+  });
+
+  it('keeps optional details collapsed during first-run setup', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={{
+          ...profile,
+          username: 'creator-a1b2c3d4',
+          displayName: '',
+          avatarUrl: '',
+        }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+      />
+    );
+
+    expect(screen.getByText(/add optional details/i).closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByLabelText(/username required/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/display name required/i)).toBeInTheDocument();
+  });
+
+  it('focuses the generated handle and explains how to finish essentials', async () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={{
+          ...profile,
+          username: 'creator-a1b2c3d4',
+          displayName: '',
+          avatarUrl: '',
+        }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save and continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/username required/i)).toHaveFocus();
+    });
+    expect(screen.getByText(/replace the generated handle/i)).toBeInTheDocument();
+    expect(screen.getByText(/complete the highlighted essentials/i)).toBeInTheDocument();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('returns to the preserved creation after onboarding save', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/profile/validate')) {
+        return { ok: true, json: async () => ({ ok: true }) } as Response;
+      }
+      if (url.endsWith('/api/profile')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ...profile,
+            username: 'my-studio',
+            displayName: 'My Studio',
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch to ${url}`);
+    });
+
+    render(
+      <CreatorProfileCard
+        initialProfile={{ ...profile, username: 'my-studio', displayName: 'My Studio' }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+        nextPath="/create-video?model=kling"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save and continue/i }));
+
+    await waitFor(() => {
+      expect(routerMocks.replace).toHaveBeenCalledWith('/create-video?model=kling');
+    });
+    expect(routerMocks.refresh).toHaveBeenCalled();
+  });
+
+  it('returns a ready creator to the interrupted task after a repair save', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/profile/validate')) {
+        return { ok: true, json: async () => ({ ok: true }) } as Response;
+      }
+      if (url.endsWith('/api/profile')) {
+        return { ok: true, json: async () => profile } as Response;
+      }
+      throw new Error(`Unexpected fetch to ${url}`);
+    });
+
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+        nextPath="/post/new?generationId=gen-1"
+        returnAfterSave
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save and return/i }));
+
+    await waitFor(() => {
+      expect(routerMocks.replace).toHaveBeenCalledWith('/post/new?generationId=gen-1');
+    });
+    expect(routerMocks.refresh).toHaveBeenCalled();
+  });
+
+  it('allows onboarding to be skipped without losing the intended destination', async () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={{ ...profile, username: 'creator-a1b2c3d4', displayName: '' }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+        nextPath="/create-image?model=gpt-image-2"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /skip for now/i }));
+
+    await waitFor(() => {
+      expect(routerMocks.replace).toHaveBeenCalledWith('/create-image?model=gpt-image-2');
+    });
+    expect(supabaseMocks.updateUser).toHaveBeenCalledWith({
+      data: { creator_profile_onboarding_skipped_version: 1 },
+    });
+    expect(routerMocks.refresh).toHaveBeenCalled();
   });
 
   it('uses the avatar image itself for drag and scroll cropping', () => {
