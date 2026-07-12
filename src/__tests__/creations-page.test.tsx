@@ -86,6 +86,11 @@ const makeGeneration = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const makeSignedStorageUrl = (expiresAtSeconds: number, tokenId: string) => {
+  const payload = Buffer.from(JSON.stringify({ exp: expiresAtSeconds, tokenId })).toString('base64url');
+  return `https://project.supabase.co/storage/v1/object/sign/generated_images/user/output.jpg?token=header.${payload}.signature`;
+};
+
 const flushPromises = async () => {
   for (let index = 0; index < 12; index += 1) {
     await Promise.resolve();
@@ -923,8 +928,9 @@ describe('CreationsPage', () => {
   });
 
   it('preserves unchanged storage-backed media URLs across processing polls', async () => {
-    const firstUrl = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user/output.jpg?token=first';
-    const rotatedUrl = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user/output.jpg?token=rotated';
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const firstUrl = makeSignedStorageUrl(nowSeconds + 3600, 'first');
+    const rotatedUrl = makeSignedStorageUrl(nowSeconds + 3660, 'rotated');
     let generationRequestCount = 0;
     let pollCallback: (() => void) | null = null;
     vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
@@ -979,6 +985,45 @@ describe('CreationsPage', () => {
 
     expect(generationRequestCount).toBe(2);
     expect(screen.getByAltText('Generated image')).toHaveAttribute('src', firstUrl);
+  });
+
+  it('replaces an expired cached signed URL with the freshly signed URL', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const expiredUrl = makeSignedStorageUrl(nowSeconds - 60, 'expired');
+    const freshUrl = makeSignedStorageUrl(nowSeconds + 3600, 'fresh');
+
+    window.sessionStorage.setItem('magicbooklet:creations-cache:v1:user-1', JSON.stringify({
+      fetchedAt: Date.now(),
+      generations: [makeGeneration({ output_url: expiredUrl })],
+      posts: [],
+      profile: null,
+    }));
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ output_url: freshUrl })],
+        }));
+      }
+
+      if (url.startsWith('/api/posts')) {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Generated image')).toHaveAttribute('src', freshUrl);
+    });
   });
 
   it('restores an unavailable image preview through an owner-scoped temporary upload', async () => {

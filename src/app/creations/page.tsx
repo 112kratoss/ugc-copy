@@ -111,6 +111,7 @@ interface GenerationsApiResponse {
 
 const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
+const SIGNED_MEDIA_URL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const STUDIO_GRID_CLASS = 'grid items-stretch gap-4 xl:gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,16rem),1fr))]';
 
 function getCreationsWorkspaceCacheKey(userId: string) {
@@ -200,6 +201,30 @@ function getUniqueMediaUrls(urls: Array<string | null | undefined>): string[] {
     });
 }
 
+function getSignedMediaUrlExpirationMs(url: string): number | null {
+    try {
+        const parsedUrl = new URL(url);
+        if (!parsedUrl.pathname.includes('/storage/v1/object/sign/')) {
+            return null;
+        }
+
+        const tokenPayload = parsedUrl.searchParams.get('token')?.split('.')[1];
+        if (!tokenPayload) {
+            return null;
+        }
+
+        const normalizedPayload = tokenPayload.replace(/-/g, '+').replace(/_/g, '/');
+        const paddedPayload = normalizedPayload.padEnd(
+            Math.ceil(normalizedPayload.length / 4) * 4,
+            '='
+        );
+        const payload = JSON.parse(globalThis.atob(paddedPayload)) as { exp?: unknown };
+        return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+    } catch {
+        return null;
+    }
+}
+
 function preserveStableMediaUrl(
     previousUrl: string | null | undefined,
     incomingUrl: string | null | undefined
@@ -208,7 +233,19 @@ function preserveStableMediaUrl(
         return incomingUrl ?? null;
     }
 
-    if (previousUrl && getMediaIdentity(previousUrl) === getMediaIdentity(incomingUrl)) {
+    if (!previousUrl || getMediaIdentity(previousUrl) !== getMediaIdentity(incomingUrl)) {
+        return incomingUrl;
+    }
+
+    if (previousUrl === incomingUrl) {
+        return previousUrl;
+    }
+
+    const previousExpirationMs = getSignedMediaUrlExpirationMs(previousUrl);
+    if (
+        previousExpirationMs !== null
+        && previousExpirationMs > Date.now() + SIGNED_MEDIA_URL_REFRESH_BUFFER_MS
+    ) {
         return previousUrl;
     }
 
