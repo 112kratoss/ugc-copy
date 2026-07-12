@@ -17,6 +17,9 @@ type GenerationRow = {
   created_at?: string;
   completed_at?: string | null;
   refunded?: boolean;
+  error_message?: string | null;
+  template_run_id?: string | null;
+  template_run_step_id?: string | null;
 };
 
 type SupabaseMockOptions = {
@@ -37,7 +40,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
       rpcCalls.push({ fn, args });
 
-      if (fn === 'start_generation') {
+      if (fn === 'start_generation' || fn === 'start_template_generation') {
         const insertError = generationInsertErrors.shift();
         if (insertError) {
           return { data: null, error: insertError };
@@ -51,7 +54,9 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
           output_url: null,
           model: String(args.p_model),
           category: args.p_category ? String(args.p_category) : null,
-          workflow_settings: (args.p_workflow_settings as Record<string, unknown>) ?? null,
+          workflow_settings: fn === 'start_template_generation'
+            ? {}
+            : (args.p_workflow_settings as Record<string, unknown>) ?? null,
           prompt: typeof args.p_prompt === 'string' ? args.p_prompt : undefined,
           cost: typeof args.p_cost === 'number' ? args.p_cost : undefined,
           duration: typeof args.p_duration === 'number' ? args.p_duration : undefined,
@@ -60,6 +65,8 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
             : null,
           created_at: new Date().toISOString(),
           completed_at: null,
+          template_run_id: typeof args.p_template_run_id === 'string' ? args.p_template_run_id : null,
+          template_run_step_id: typeof args.p_template_run_step_id === 'string' ? args.p_template_run_step_id : null,
         };
         generations.push(row);
 
@@ -128,6 +135,26 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
             generation_id: row.id,
             output_url: row.output_url,
             refunded: false,
+          },
+          error: null,
+        };
+      }
+
+      if (fn === 'settle_template_generation_start_failed') {
+        const row = generations.find((generation) => generation.id === args.p_generation_id);
+        if (!row) return { data: { status: 'missing' }, error: null };
+        const alreadyRefunded = Boolean(row.refunded);
+        row.status = 'failed';
+        row.completed_at = row.completed_at ?? new Date().toISOString();
+        row.refunded = true;
+        row.error_message = typeof args.p_error_message === 'string' ? args.p_error_message : null;
+        row.client_request_key_hash = null;
+        return {
+          data: {
+            status: alreadyRefunded ? 'already_failed' : 'failed',
+            generation_id: row.id,
+            refunded: true,
+            remaining_credits: 100,
           },
           error: null,
         };
@@ -329,6 +356,54 @@ describe('generation services', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('rejects missing callback authentication before a template credit reservation or provider request', async () => {
+    const previousWebhookSecret = process.env.WEBHOOK_SECRET;
+    const previousHmacKey = process.env.KIE_WEBHOOK_HMAC_KEY;
+    delete process.env.WEBHOOK_SECRET;
+    delete process.env.KIE_WEBHOOK_HMAC_KEY;
+    vi.resetModules();
+
+    try {
+      const { GenerationServiceError, startImageGeneration } = await import('@/lib/generation-services');
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      const request = startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        clientRequestKeyHash: 'c'.repeat(64),
+        prompt: 'Keep this private template prompt out of diagnostics.',
+        model: 'nano-banana-2',
+        imageUrls: ['https://signed.example.com/reference.png?private=1'],
+        privateRecipe: true,
+        persistInputMedia: false,
+        templateContext: { runId: 'run-1', stepId: 'step-image-1' },
+      });
+
+      await expect(request).rejects.toMatchObject({
+        name: GenerationServiceError.name,
+        status: 503,
+        failureCode: 'service_misconfigured',
+        message: expect.stringContaining('No credits were charged'),
+      });
+      expect(generations).toHaveLength(0);
+      expect(rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+
+      const logs = logError.mock.calls.flat().map(String).join('\n');
+      expect(logs).toContain('generation_start_configuration_preflight_failed');
+      expect(logs).toContain('callback_auth');
+      expect(logs).not.toContain('reference.png');
+      expect(logs).not.toContain('private template prompt');
+    } finally {
+      if (previousWebhookSecret === undefined) delete process.env.WEBHOOK_SECRET;
+      else process.env.WEBHOOK_SECRET = previousWebhookSecret;
+      if (previousHmacKey === undefined) delete process.env.KIE_WEBHOOK_HMAC_KEY;
+      else process.env.KIE_WEBHOOK_HMAC_KEY = previousHmacKey;
+    }
   });
 
   it('stores voiceover generations as audio records', async () => {
@@ -621,6 +696,55 @@ describe('generation services', () => {
     expect(generations[0].duration).toBe(7);
   });
 
+  it('keeps a template video recipe out of the generation row while sending it to the provider', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-template-video-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, inputMediaRows, rpcCalls, uploads } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'v'.repeat(64),
+      prompt: 'Turn the rider into a spectral flaming hero.',
+      model: 'kling-3.0-video',
+      duration: 5,
+      mode: 'std',
+      aspectRatio: '9:16',
+      privateRecipe: true,
+      persistInputMedia: false,
+      templateContext: { runId: 'run-1', stepId: 'step-video-1' },
+    });
+
+    expect(providerBody).toMatchObject({
+      input: { prompt: 'Turn the rider into a spectral flaming hero.' },
+    });
+    expect(rpcCalls[0]).toEqual({
+      fn: 'start_template_generation',
+      args: expect.objectContaining({
+        p_template_run_id: 'run-1',
+        p_template_run_step_id: 'step-video-1',
+      }),
+    });
+    expect(rpcCalls[0].args).not.toHaveProperty('p_prompt');
+    expect(rpcCalls[0].args).not.toHaveProperty('p_workflow_settings');
+    expect(generations[0]).toMatchObject({
+      prompt: undefined,
+      workflow_settings: {},
+      template_run_id: 'run-1',
+      template_run_step_id: 'step-video-1',
+    });
+    expect(uploads).toEqual([]);
+    expect(inputMediaRows).toEqual([]);
+  });
+
   it('sends image generations with named elements first and stores compiled prompt metadata', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -716,6 +840,123 @@ describe('generation services', () => {
         handle: '@hero',
       }),
     });
+  });
+
+  it('skips durable input snapshots when a trusted template run marks inputs ephemeral', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-image-ephemeral-input-1' } }),
+    } as Response);
+
+    const { supabase, uploads, inputMediaRows } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Create a private template frame.',
+      model: 'nano-banana-2',
+      imageUrls: ['https://signed.example.com/private-person.png'],
+      persistInputMedia: false,
+    });
+
+    expect(uploads).toEqual([]);
+    expect(inputMediaRows).toEqual([]);
+  });
+
+  it('keeps a template image recipe out of the generation row while sending it to the provider', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-template-image-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'i'.repeat(64),
+      prompt: 'Preserve the face and add a burning supernatural helmet.',
+      model: 'nano-banana-2',
+      privateRecipe: true,
+      persistInputMedia: false,
+      templateContext: { runId: 'run-1', stepId: 'step-image-1' },
+    });
+
+    expect(providerBody).toMatchObject({
+      input: { prompt: 'Preserve the face and add a burning supernatural helmet.' },
+    });
+    expect(rpcCalls[0]).toEqual({
+      fn: 'start_template_generation',
+      args: expect.objectContaining({
+        p_template_run_id: 'run-1',
+        p_template_run_step_id: 'step-image-1',
+      }),
+    });
+    expect(rpcCalls[0].args).not.toHaveProperty('p_prompt');
+    expect(rpcCalls[0].args).not.toHaveProperty('p_workflow_settings');
+    expect(generations[0]).toMatchObject({
+      prompt: undefined,
+      workflow_settings: {},
+      template_run_id: 'run-1',
+      template_run_step_id: 'step-image-1',
+    });
+  });
+
+  it('atomically refunds template starts and persists safe diagnostics when the provider rejects an upload', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        code: 422,
+        msg: 'invalid image_input at https://private.example/image.png?token=private-value',
+      }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'f'.repeat(64),
+      prompt: 'A private creator prompt that must not reach logs.',
+      model: 'nano-banana-2',
+      imageUrls: ['https://signed.example.com/tiny.jpeg'],
+      privateRecipe: true,
+      persistInputMedia: false,
+      templateContext: { runId: 'run-1', stepId: 'step-image-1' },
+    })).rejects.toThrow('invalid image_input');
+
+    const settlement = rpcCalls.find((call) => call.fn === 'settle_template_generation_start_failed');
+    expect(settlement).toEqual({
+      fn: 'settle_template_generation_start_failed',
+      args: {
+        p_generation_id: 'gen-1',
+        p_error_message: 'The generation model could not read one of the uploads. Start a new run with a clear JPEG, PNG, or WebP image at least 256×256 px.',
+      },
+    });
+    expect(generations[0]).toMatchObject({
+      status: 'failed',
+      prediction_id: null,
+      refunded: true,
+      client_request_key_hash: null,
+      error_message: expect.stringContaining('256×256'),
+    });
+
+    const logs = logError.mock.calls.flat().map(String).join('\n');
+    expect(logs).toContain('template_generation_start_failed_after_reservation');
+    expect(logs).toContain('invalid_input_media');
+    expect(logs).not.toContain('private.example');
+    expect(logs).not.toContain('private-value');
+    expect(logs).not.toContain('private creator prompt');
   });
 
   it('uses GPT Image 2 text-to-image provider payload when no references are attached', async () => {
@@ -1696,7 +1937,11 @@ describe('generation services', () => {
       duration: 6,
       characterOrientation: 'image',
       mode: '1080p',
-    })).rejects.toThrow('Server configuration error: webhook secret missing');
+    })).rejects.toMatchObject({
+      status: 503,
+      failureCode: 'service_misconfigured',
+      message: expect.stringContaining('No credits were charged'),
+    });
 
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();

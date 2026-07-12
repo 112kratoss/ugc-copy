@@ -90,6 +90,26 @@ export async function resolveStoredMediaUrl(
     outputUrl: string
 ): Promise<string> {
     const location = getStoredMediaLocation(outputUrl);
+    const privateTemplateLocation = outputUrl.startsWith('template_inputs/')
+        ? { bucket: 'template_inputs', filePath: outputUrl.slice('template_inputs/'.length) }
+        : outputUrl.startsWith('template_assets/')
+            ? { bucket: 'template_assets', filePath: outputUrl.slice('template_assets/'.length) }
+            : null;
+
+    // Template inputs and fixed assets intentionally are not accepted by the
+    // generic /api/media proxy. Server-only template execution and catalog
+    // routes may still resolve them with the service client.
+    if (!location && privateTemplateLocation?.filePath) {
+        try {
+            const { data, error } = await adminSupabase.storage
+                .from(privateTemplateLocation.bucket)
+                .createSignedUrl(privateTemplateLocation.filePath, 3600);
+            if (!error && data?.signedUrl) return data.signedUrl;
+        } catch (error) {
+            console.error('resolveStoredMediaUrl: private template signing failed:', error);
+        }
+        return outputUrl;
+    }
 
     if (!location) {
         return outputUrl;

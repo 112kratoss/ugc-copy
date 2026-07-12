@@ -80,6 +80,9 @@ function createSupabaseClientMock() {
                 filters[column] = value;
                 return query;
               },
+              or() {
+                return query;
+              },
               range(start: number, end: number) {
                 rangeStart = start;
                 rangeEnd = end;
@@ -185,60 +188,48 @@ vi.mock('@/lib/generation-services', () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
-  createServiceClient: () => ({
-    from(table: string) {
-      serviceTableCalls.push(table);
-      if (table === 'generation_input_media') {
-        return {
-          select() {
-            return {
-              in(_column: string, values: string[]) {
-                return {
-                  order() {
-                    return {
-                      data: inputMediaState.filter((item) => values.includes(item.generation_id)),
-                      error: null,
-                    };
-                  },
-                };
-              },
-            };
-          },
-        };
-      }
+  createServiceClient: () => {
+    const baseClient = createSupabaseClientMock();
+    return {
+      ...baseClient,
+      from(table: string) {
+        serviceTableCalls.push(table);
+        if (table === 'generation_input_media') {
+          return {
+            select() {
+              return {
+                in(_column: string, values: string[]) {
+                  return {
+                    order() {
+                      return {
+                        data: inputMediaState.filter((item) => values.includes(item.generation_id)),
+                        error: null,
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        }
 
-      if (table === 'generations') {
-        return {
-          select() {
-            return {
-              eq() {
-                return {
-                  async maybeSingle() {
-                    return { data: null, error: null };
-                  },
-                };
-              },
-            };
-          },
-        };
-      }
-
-      throw new Error(`Unexpected service table: ${table}`);
-    },
-    storage: {
-      from(bucket: string) {
-        return {
-          createSignedUrl: async (filePath: string) => ({
-            data: { signedUrl: `https://signed.example.com/${bucket}/${filePath}` },
-            error: null,
-          }),
-          getPublicUrl: (filePath: string) => ({
-            data: { publicUrl: `https://public.example.com/${bucket}/${filePath}` },
-          }),
-        };
+        return baseClient.from(table);
       },
-    },
-  }),
+      storage: {
+        from(bucket: string) {
+          return {
+            createSignedUrl: async (filePath: string) => ({
+              data: { signedUrl: `https://signed.example.com/${bucket}/${filePath}` },
+              error: null,
+            }),
+            getPublicUrl: (filePath: string) => ({
+              data: { publicUrl: `https://public.example.com/${bucket}/${filePath}` },
+            }),
+          };
+        },
+      },
+    };
+  },
   buildMediaProxyUrl: (bucket: string, filePath: string) => `https://proxy.example.com/${bucket}/${filePath}`,
   getStoredMediaLocation: (outputUrl: string) => {
     if (outputUrl.startsWith('http')) {
@@ -463,7 +454,7 @@ describe('/api/generations route', () => {
     expect(serviceTableCalls).not.toContain('generation_input_media');
   });
 
-  it('returns status-only pages without media signing or service-role expansion', async () => {
+  it('returns status-only Studio projections without media signing', async () => {
     generationsState = [
       {
         ...generationsState[0],
@@ -506,6 +497,8 @@ describe('/api/generations route', () => {
         completed_at: '2026-03-24T11:01:00.000Z',
         category: 'image',
         model: 'nano-banana-2',
+        origin: 'creation',
+        template: null,
       },
     ]);
     expect(data.pagination).toEqual({
@@ -513,7 +506,7 @@ describe('/api/generations route', () => {
       hasMore: false,
       nextCursor: null,
     });
-    expect(serviceTableCalls).toEqual([]);
+    expect(serviceTableCalls).toEqual(['generations']);
   });
 
   it('supports owner-scoped exact generation lookup without loading the whole history', async () => {

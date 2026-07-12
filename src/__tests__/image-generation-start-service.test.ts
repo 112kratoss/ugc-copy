@@ -177,4 +177,34 @@ describe('startImageGenerationForRoute', () => {
       cost: 8,
     });
   });
+
+  it('forwards the server-only input-retention override without reading it from the body', async () => {
+    startImageGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-image-private-template',
+      generationId: 'gen-image-private-template',
+      remainingCredits: 90,
+      cost: 5,
+    });
+    const userClient = createClientMock();
+    const adminClient = createClientMock();
+
+    await startImageGenerationForRoute({
+      request: new Request('http://localhost/api/template-runs/run-1/frames'),
+      body: {
+        prompt: 'A private template frame',
+        model: 'nano-banana-2',
+        imageUrls: ['https://example.com/private-input.png'],
+        // A public caller cannot override this through the request body.
+        persistInputMedia: true,
+      },
+      userId: 'user-1',
+      supabase: userClient.client,
+      adminSupabase: adminClient.client,
+      persistInputMedia: false,
+    });
+
+    expect(startImageGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      persistInputMedia: false,
+    }));
+  });
 });

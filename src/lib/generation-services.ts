@@ -58,6 +58,13 @@ import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildKieWebhookCallbackUrl, extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
+  getPublicGenerationStartFailure,
+  type GenerationStartFailureCode,
+  type PublicGenerationStartFailure,
+} from '@/lib/generation-public-failure';
+export { getPublicGenerationStartFailure };
+export type { GenerationStartFailureCode, PublicGenerationStartFailure };
+import {
   fetchWithProviderTimeout,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
@@ -95,14 +102,36 @@ export interface KlingVideoElementInput {
   sourceGenerationId?: string | null;
 }
 
+export type TemplateGenerationContext = Readonly<{
+  runId: string;
+  stepId: string;
+}>;
+
 export class GenerationServiceError extends Error {
   status: number;
+  failureCode: GenerationStartFailureCode | null;
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, failureCode: GenerationStartFailureCode | null = null) {
     super(message);
     this.name = 'GenerationServiceError';
     this.status = status;
+    this.failureCode = failureCode;
   }
+}
+
+function generationStartDiagnostic(error: unknown) {
+  const status = error && typeof error === 'object' && 'status' in error
+    && typeof (error as { status?: unknown }).status === 'number'
+    ? (error as { status: number }).status
+    : null;
+  return {
+    errorType: error instanceof GenerationServiceError
+      ? 'generation_service_error'
+      : error instanceof Error
+        ? 'provider_error'
+        : 'unknown_error',
+    ...(status === null ? {} : { status }),
+  };
 }
 
 export interface SyncableGenerationRecord {
@@ -156,6 +185,37 @@ function requireApiKey(): string {
   return KIE_API_KEY;
 }
 
+function failKieGenerationConfiguration(component: 'provider_api_key' | 'callback_base_url' | 'callback_auth'): never {
+  console.error(JSON.stringify({
+    level: 'error',
+    msg: 'generation_start_configuration_preflight_failed',
+    component,
+  }));
+  throw new GenerationServiceError(
+    'Generation setup is incomplete. No credits were charged for this attempt. Ask an administrator to finish the service setup before retrying.',
+    503,
+    'service_misconfigured',
+  );
+}
+
+/** Validate every server-side dependency required to submit a durable KIE
+ * task. Start services call this before storage resolution, credit RPCs, or
+ * provider requests so an operator configuration error cannot reserve funds. */
+function requireKieGenerationConfiguration(): void {
+  if (!KIE_API_KEY) {
+    failKieGenerationConfiguration('provider_api_key');
+  }
+
+  try {
+    buildKieWebhookCallbackUrl();
+  } catch (error) {
+    const component = error instanceof Error && error.message.includes('NEXT_PUBLIC_SITE_URL')
+      ? 'callback_base_url'
+      : 'callback_auth';
+    failKieGenerationConfiguration(component);
+  }
+}
+
 async function deductCreditsOrThrow(creditSupabase: SupabaseClient, userId: string, cost: number): Promise<number> {
   const { data: remainingCredits, error } = await creditSupabase.rpc('deduct_credits', {
     p_user_id: userId,
@@ -185,11 +245,17 @@ function resolveQuotedGenerationCost(computedCost: number, quotedCostCredits?: n
   return quotedCostCredits;
 }
 
-async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: string, amount: number) {
+async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: string, amount: number): Promise<boolean> {
   try {
-    await creditSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
+    const { error } = await creditSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
+    if (error) {
+      console.error('Failed to refund credits:', error);
+      return false;
+    }
+    return true;
   } catch (error) {
     console.error('Failed to refund credits:', error);
+    return false;
   }
 }
 
@@ -324,7 +390,7 @@ async function createKieTask(
   endpoint = 'https://api.kie.ai/api/v1/jobs/createTask',
   options: { generationId?: string | null } = {},
 ) {
-  requireApiKey();
+  requireKieGenerationConfiguration();
   const callbackUrl = typeof body.callBackUrl === 'string' && body.callBackUrl.trim()
     ? body.callBackUrl
     : buildKieWebhookCallbackUrl({ generationId: options.generationId });
@@ -378,6 +444,7 @@ async function reserveGenerationRecord(
 async function startGenerationRecord(
   supabase: SupabaseClient,
   record: Record<string, unknown>,
+  templateContext?: TemplateGenerationContext,
 ): Promise<{
   generationId: string;
   remainingCredits: number;
@@ -385,18 +452,33 @@ async function startGenerationRecord(
   predictionId?: string;
   idempotentReplay?: boolean;
 }> {
-  const { data, error } = await supabase.rpc('start_generation', {
-    p_user_id: record.user_id,
-    p_cost: record.cost,
-    p_model: record.model,
-    p_prompt: record.prompt ?? null,
-    p_category: record.category ?? null,
-    p_duration: record.duration ?? null,
-    p_creation_mode: record.creation_mode ?? null,
-    p_source_generation_id: record.source_generation_id ?? null,
-    p_workflow_settings: record.workflow_settings ?? null,
-    p_client_request_key_hash: record.client_request_key_hash ?? null,
-  });
+  const rpcName = templateContext ? 'start_template_generation' : 'start_generation';
+  const rpcArgs = templateContext
+    ? {
+        p_user_id: record.user_id,
+        p_template_run_id: templateContext.runId,
+        p_template_run_step_id: templateContext.stepId,
+        p_cost: record.cost,
+        p_model: record.model,
+        p_category: record.category ?? null,
+        p_duration: record.duration ?? null,
+        p_creation_mode: record.creation_mode ?? null,
+        p_source_generation_id: record.source_generation_id ?? null,
+        p_client_request_key_hash: record.client_request_key_hash ?? null,
+      }
+    : {
+        p_user_id: record.user_id,
+        p_cost: record.cost,
+        p_model: record.model,
+        p_prompt: record.prompt ?? null,
+        p_category: record.category ?? null,
+        p_duration: record.duration ?? null,
+        p_creation_mode: record.creation_mode ?? null,
+        p_source_generation_id: record.source_generation_id ?? null,
+        p_workflow_settings: record.workflow_settings ?? null,
+        p_client_request_key_hash: record.client_request_key_hash ?? null,
+      };
+  const { data, error } = await supabase.rpc(rpcName, rpcArgs);
 
   if (error || !isRecord(data)) {
     throw new GenerationServiceError(
@@ -425,6 +507,18 @@ async function startGenerationRecord(
 
   if (status === 'invalid_idempotency_key') {
     throw new GenerationServiceError('Generation idempotency key is invalid.', 400);
+  }
+
+  if (status === 'template_context_not_found') {
+    throw new GenerationServiceError('Template generation context was not found.', 404);
+  }
+
+  if (status === 'invalid_template_context') {
+    throw new GenerationServiceError('Template generation context is invalid.', 409);
+  }
+
+  if (status === 'template_step_already_started') {
+    throw new GenerationServiceError('This template step has already started.', 409);
   }
 
   if (status === 'in_progress') {
@@ -503,6 +597,7 @@ async function markGenerationProviderStarted(
 async function markGenerationStartFailedQuietly(
   supabase: SupabaseClient,
   generationId: string | null,
+  options: { errorMessage?: string; refunded?: boolean } = {},
 ) {
   if (!generationId) return;
 
@@ -511,6 +606,8 @@ async function markGenerationStartFailedQuietly(
       .from('generations')
       .update({
         status: 'failed',
+        ...(options.errorMessage ? { error_message: options.errorMessage } : {}),
+        ...(options.refunded !== undefined ? { refunded: options.refunded } : {}),
         completed_at: new Date().toISOString(),
         client_request_key_hash: null,
       })
@@ -521,6 +618,72 @@ async function markGenerationStartFailedQuietly(
     }
   } catch (error) {
     console.error('Failed to mark generation start failed:', error);
+  }
+}
+
+async function settleTemplateGenerationStartFailureQuietly(params: {
+  creditSupabase: SupabaseClient;
+  error: unknown;
+  generationId: string;
+  model: string;
+  templateContext: TemplateGenerationContext;
+  userId: string;
+  cost: number;
+}) {
+  const failure = getPublicGenerationStartFailure(params.error);
+  const logEntry = {
+    level: 'error',
+    msg: 'template_generation_start_failed_after_reservation',
+    generationId: params.generationId,
+    templateRunId: params.templateContext.runId,
+    templateRunStepId: params.templateContext.stepId,
+    model: params.model,
+    failureCode: failure.code,
+    ...generationStartDiagnostic(params.error),
+  };
+
+  try {
+    const { data, error } = await params.creditSupabase.rpc('settle_template_generation_start_failed', {
+      p_generation_id: params.generationId,
+      p_error_message: failure.message,
+    });
+    const status = data && typeof data === 'object' && 'status' in data
+      ? (data as { status?: unknown }).status
+      : null;
+
+    if (!error && (status === 'failed' || status === 'already_failed')) {
+      console.error(JSON.stringify({ ...logEntry, settlement: status }));
+      return;
+    }
+
+    const errorCode = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+    const missingRpc = errorCode === 'PGRST202' || errorCode === '42883';
+    if (!missingRpc) {
+      console.error(JSON.stringify({
+        ...logEntry,
+        settlement: 'failed',
+        settlementError: supabaseErrorMessage(error, `Unexpected settlement status: ${String(status)}`),
+      }));
+      return;
+    }
+
+    // Rolling-deploy compatibility only: older databases do not have the
+    // atomic settlement RPC yet. Mark the row as refunded when this fallback
+    // succeeds so later reconciliation cannot refund it twice.
+    const refunded = await refundCreditsQuietly(params.creditSupabase, params.userId, params.cost);
+    await markGenerationStartFailedQuietly(params.creditSupabase, params.generationId, {
+      errorMessage: failure.message,
+      refunded,
+    });
+    console.error(JSON.stringify({ ...logEntry, settlement: refunded ? 'legacy_fallback' : 'legacy_fallback_failed' }));
+  } catch (settlementError) {
+    console.error(JSON.stringify({
+      ...logEntry,
+      settlement: 'failed',
+      ...generationStartDiagnostic(settlementError),
+    }));
   }
 }
 
@@ -1348,10 +1511,13 @@ export async function startImageGeneration(params: {
   qualityMode?: ImageQualityMode;
   outputFormat?: ImageOutputFormat;
   googleSearch?: boolean;
+  persistInputMedia?: boolean;
+  privateRecipe?: boolean;
+  templateContext?: TemplateGenerationContext;
   quotedCostCredits?: number;
   sourceGenerationId?: string | null;
 }): Promise<GenerationStartResult> {
-  requireApiKey();
+  requireKieGenerationConfiguration();
   const {
     supabase,
     creditSupabase,
@@ -1367,9 +1533,16 @@ export async function startImageGeneration(params: {
     qualityMode = 'standard',
     outputFormat = 'jpg',
     googleSearch = false,
+    persistInputMedia = true,
+    privateRecipe = false,
+    templateContext,
     quotedCostCredits,
     sourceGenerationId = null,
   } = params;
+
+  if (templateContext && !privateRecipe) {
+    throw new GenerationServiceError('Template generations must keep their recipe private.', 500);
+  }
 
   const trimmedPrompt = trimPrompt(prompt, 'A prompt is required to generate an image.');
   const modelConfig = IMAGE_MODELS[model];
@@ -1502,10 +1675,10 @@ export async function startImageGeneration(params: {
       model,
       cost,
       client_request_key_hash: clientRequestKeyHash,
-      prompt: trimmedPrompt,
+      prompt: privateRecipe ? null : trimmedPrompt,
       category: 'image',
       source_generation_id: sourceGenerationId,
-      workflow_settings: {
+      workflow_settings: privateRecipe ? {} : {
         model,
         providerModel,
         aspectRatio,
@@ -1521,7 +1694,7 @@ export async function startImageGeneration(params: {
             }
           : {}),
       },
-    });
+    }, templateContext);
     generationId = reservation.generationId;
     if (reservation.predictionId) {
       return {
@@ -1536,15 +1709,17 @@ export async function startImageGeneration(params: {
     predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
-    await persistGenerationInputMedia({
-      supabase,
-      generationId,
-      userId,
-      candidates: collectImageInputCandidates({
-        resolvedImageUrls,
-        elements: normalizedElements,
-      }),
-    });
+    if (persistInputMedia) {
+      await persistGenerationInputMedia({
+        supabase,
+        generationId,
+        userId,
+        candidates: collectImageInputCandidates({
+          resolvedImageUrls,
+          elements: normalizedElements,
+        }),
+      });
+    }
 
     return {
       predictionId,
@@ -1553,9 +1728,21 @@ export async function startImageGeneration(params: {
       generationId,
     };
   } catch (error) {
-    if (!predictionId) {
-      await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    if (!predictionId && generationId) {
+      if (templateContext) {
+        await settleTemplateGenerationStartFailureQuietly({
+          creditSupabase,
+          error,
+          generationId,
+          model,
+          templateContext,
+          userId,
+          cost,
+        });
+      } else {
+        const refunded = await refundCreditsQuietly(creditSupabase, userId, cost);
+        await markGenerationStartFailedQuietly(creditSupabase, generationId, { refunded });
+      }
     }
     throw error;
   }
@@ -1591,8 +1778,11 @@ export async function startVideoGeneration(params: {
   seedanceAssets?: SeedanceAssetCollections | null;
   quotedCostCredits?: number;
   sourceGenerationId?: string | null;
+  persistInputMedia?: boolean;
+  privateRecipe?: boolean;
+  templateContext?: TemplateGenerationContext;
 }): Promise<GenerationStartResult> {
-  requireApiKey();
+  requireKieGenerationConfiguration();
   const {
     supabase,
     creditSupabase,
@@ -1623,7 +1813,14 @@ export async function startVideoGeneration(params: {
     seedanceAssets = null,
     quotedCostCredits,
     sourceGenerationId = null,
+    persistInputMedia = true,
+    privateRecipe = false,
+    templateContext,
   } = params;
+
+  if (templateContext && !privateRecipe) {
+    throw new GenerationServiceError('Template generations must keep their recipe private.', 500);
+  }
 
   const selectedModel = VIDEO_MODELS[model];
   if (!selectedModel) {
@@ -2009,10 +2206,10 @@ export async function startVideoGeneration(params: {
       cost,
       duration: totalDuration,
       client_request_key_hash: clientRequestKeyHash,
-      prompt: isMultiShot ? normalizedMultiPrompts[0]?.prompt || '' : trimmedPrompt,
+      prompt: privateRecipe ? null : (isMultiShot ? normalizedMultiPrompts[0]?.prompt || '' : trimmedPrompt),
       category: 'video',
       source_generation_id: sourceGenerationId,
-      workflow_settings: {
+      workflow_settings: privateRecipe ? {} : {
         model,
         mode,
         ...(model === 'grok-imagine-video'
@@ -2073,7 +2270,7 @@ export async function startVideoGeneration(params: {
           ? { endFrame: normalizedEndFrame }
           : {}),
       },
-    });
+    }, templateContext);
     generationId = reservation.generationId;
     if (reservation.predictionId) {
       return {
@@ -2159,12 +2356,14 @@ export async function startVideoGeneration(params: {
       })
     );
 
-    await persistGenerationInputMedia({
-      supabase,
-      generationId,
-      userId,
-      candidates: videoInputCandidates,
-    });
+    if (persistInputMedia) {
+      await persistGenerationInputMedia({
+        supabase,
+        generationId,
+        userId,
+        candidates: videoInputCandidates,
+      });
+    }
 
     return {
       predictionId,
@@ -2173,9 +2372,21 @@ export async function startVideoGeneration(params: {
       generationId,
     };
   } catch (error) {
-    if (!predictionId) {
-      await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    if (!predictionId && generationId) {
+      if (templateContext) {
+        await settleTemplateGenerationStartFailureQuietly({
+          creditSupabase,
+          error,
+          generationId,
+          model,
+          templateContext,
+          userId,
+          cost,
+        });
+      } else {
+        const refunded = await refundCreditsQuietly(creditSupabase, userId, cost);
+        await markGenerationStartFailedQuietly(creditSupabase, generationId, { refunded });
+      }
     }
     throw error;
   }
@@ -2198,7 +2409,7 @@ export async function startMotionGeneration(params: {
   referenceVideo?: RemixMediaAssetDescriptor | null;
   quotedCostCredits?: number;
 }): Promise<GenerationStartResult> {
-  requireApiKey();
+  requireKieGenerationConfiguration();
   const {
     supabase,
     creditSupabase,
@@ -2228,13 +2439,6 @@ export async function startMotionGeneration(params: {
 
   const computedCost = getMotionCost(model, mode, duration);
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
-  try {
-    buildKieWebhookCallbackUrl();
-  } catch (error) {
-    console.error('Kie webhook callback is not configured:', error);
-    throw new GenerationServiceError('Server configuration error: webhook secret missing', 500);
-  }
-
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
@@ -2337,7 +2541,7 @@ export async function startVoiceoverGeneration(params: {
   timestamps?: boolean;
   dialogueTurns?: DialogueTurnInput[];
 }): Promise<GenerationStartResult> {
-  requireApiKey();
+  requireKieGenerationConfiguration();
   const {
     creditSupabase,
     userId,
@@ -2454,7 +2658,7 @@ export async function startSoundEffectGeneration(params: {
   promptInfluence?: number;
   outputFormat?: 'mp3' | 'wav';
 }): Promise<GenerationStartResult> {
-  requireApiKey();
+  requireKieGenerationConfiguration();
   const {
     creditSupabase,
     userId,

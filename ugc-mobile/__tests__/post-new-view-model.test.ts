@@ -10,12 +10,14 @@ import {
   getPostComposerPublishActions,
   applyCreationPromptResource,
   getDefaultPostComposerDraft,
+  getExplicitPublishGeneration,
   getPostComposerPackageStatus,
   getPostComposerPreviewStatusLabel,
   getPostComposerReadiness,
   getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishableGenerations,
+  isTemplateGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
   validatePostComposerDraft,
@@ -49,6 +51,62 @@ describe('post new view model', () => {
     ];
 
     expect(getPublishableGenerations(items).map((item) => item.id)).toEqual(['ready']);
+  });
+
+  it('allows only an explicit canonical template result before its grid preview is ready', () => {
+    const templateResult = generation({
+      id: 'template-result',
+      preview_url: null,
+      previewUrl: null,
+      media: { gridReady: false } as GenerationListItem['media'],
+      origin: 'template',
+      template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+    });
+    const ordinaryPending = generation({
+      id: 'ordinary-pending',
+      preview_url: null,
+      previewUrl: null,
+      media: { gridReady: false } as GenerationListItem['media'],
+    });
+
+    expect(getPublishableGenerations([templateResult, ordinaryPending])).toEqual([]);
+    expect(getExplicitPublishGeneration([templateResult], templateResult.id)).toBe(templateResult);
+    expect(getExplicitPublishGeneration([ordinaryPending], ordinaryPending.id)).toBeNull();
+    expect(getExplicitPublishGeneration([{ ...templateResult, linked_post_id: 'post-1' }], templateResult.id)).toBeNull();
+    expect(isTemplateGeneration(templateResult)).toBe(true);
+  });
+
+  it('forces template-origin publishing to final media only', () => {
+    const item = generation({
+      id: 'template-result',
+      origin: 'template',
+      template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Private recipe' },
+      input_media: [{ url: 'https://private.example.com/input.jpg', kind: 'image' }],
+    });
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation' as const,
+      selectedGenerationId: item.id,
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'paid' as const,
+        previewText: 'Private recipe',
+        priceUsd: '9',
+        selectedKinds: {
+          ...getDefaultPostComposerDraft().resource.selectedKinds,
+          prompt: true,
+        },
+        promptText: 'Do not publish this prompt',
+      },
+      creationPackage: {
+        attachGenerationReferences: true,
+        attachPromptResource: true,
+      },
+    };
+
+    const payload = buildPublishGenerationPostPayload(item, draft);
+    expect(payload.resourceBundle).toEqual({ accessMode: 'none' });
+    expect(payload).not.toHaveProperty('includeGenerationReferences');
   });
 
   it('builds a publish payload from generation metadata', () => {

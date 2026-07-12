@@ -28,6 +28,7 @@ import {
   Music,
   Play,
   Plus,
+  ShieldCheck,
   Trash2,
   Video,
   Volume2,
@@ -38,6 +39,7 @@ import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant-client';
 import type {
+  ApprovalGateNodeData,
   AudioInputNodeData,
   ImageGenerateNodeData,
   ImageInputNodeData,
@@ -73,6 +75,7 @@ export const WORKFLOW_NODE_LIBRARY: WorkflowNodeLibraryItem[] = [
   { type: 'audio-input', label: 'Audio input', icon: <Volume2 className="h-4 w-4" /> },
   { type: 'image-generate', label: 'Image gen', icon: <ImageIcon className="h-4 w-4" /> },
   { type: 'video-generate', label: 'Video gen', icon: <Clapperboard className="h-4 w-4" /> },
+  { type: 'approval-gate', label: 'Approval', icon: <ShieldCheck className="h-4 w-4" /> },
   { type: 'motion-generate', label: 'Motion', icon: <Wand2 className="h-4 w-4" /> },
   { type: 'voiceover-generate', label: 'Voiceover', icon: <Mic className="h-4 w-4" /> },
   { type: 'sound-effects-generate', label: 'Sound FX', icon: <Volume2 className="h-4 w-4" /> },
@@ -117,6 +120,7 @@ export interface WorkflowNodeRuntimeData {
   isRunControlDisabled?: boolean;
   isRunMenuOpen?: boolean;
   onCloseRunMenu?: () => void;
+  onApprove?: () => void;
   onDeleteNode?: () => void;
   onOpenRunMenu?: () => void;
   onRunBranch?: () => void;
@@ -125,6 +129,8 @@ export interface WorkflowNodeRuntimeData {
   runMessage?: string | null;
   runNodeDisabled?: boolean;
   showPlayControl?: boolean;
+  isApproving?: boolean;
+  templatePathState?: 'active' | 'dimmed' | 'output' | 'issue';
 }
 
 interface WorkflowEdgeRuntimeData {
@@ -310,7 +316,7 @@ function NodeShell({
       : assistantPreviewState === 'removed'
         ? 'border border-rose-500/35 bg-rose-500/10 text-rose-200'
         : 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
-  const shellToneClassName = assistantPreviewState === 'added'
+  const baseShellToneClassName = assistantPreviewState === 'added'
     ? 'border-emerald-400/45 bg-emerald-500/[0.05] ring-emerald-400/10'
     : assistantPreviewState === 'changed'
       ? 'border-sky-400/45 bg-sky-500/[0.05] ring-sky-400/10'
@@ -319,10 +325,20 @@ function NodeShell({
         : assistantManaged
           ? 'border-white/15 ring-white/[0.04]'
           : 'border-white/10 ring-white/[0.03]';
+  const shellToneClassName = runtime?.templatePathState === 'issue'
+    ? 'border-rose-400/65 bg-rose-500/[0.06] ring-rose-400/20 shadow-[0_0_0_1px_rgba(251,113,133,0.12),0_18px_48px_rgba(0,0,0,0.42)]'
+    : runtime?.templatePathState === 'output'
+      ? 'border-emerald-300/70 bg-emerald-500/[0.08] ring-emerald-300/20 shadow-[0_0_36px_rgba(16,185,129,0.12),0_18px_48px_rgba(0,0,0,0.42)]'
+      : runtime?.templatePathState === 'active'
+        ? 'border-emerald-500/35 bg-emerald-500/[0.035] ring-emerald-400/10'
+        : baseShellToneClassName;
+  const pathVisibilityClassName = runtime?.templatePathState === 'dimmed'
+    ? 'opacity-30 saturate-50'
+    : '';
 
   return (
     <div
-      className={`workflow-canvas-node-shell group relative min-w-[230px] max-w-[260px] overflow-visible rounded-2xl border bg-[#090909] p-3 ring-1 ${shellToneClassName} ${dragging ? 'shadow-[0_10px_30px_rgba(0,0,0,0.32)]' : 'shadow-[0_18px_48px_rgba(0,0,0,0.42)]'}`}
+      className={`workflow-canvas-node-shell group relative min-w-[230px] max-w-[260px] overflow-visible rounded-2xl border bg-[#090909] p-3 ring-1 transition-[opacity,border-color,background-color] duration-200 ${shellToneClassName} ${pathVisibilityClassName} ${dragging ? 'shadow-[0_10px_30px_rgba(0,0,0,0.32)]' : 'shadow-[0_18px_48px_rgba(0,0,0,0.42)]'}`}
       style={{
         minHeight,
         backfaceVisibility: 'hidden',
@@ -461,13 +477,15 @@ function NodeShell({
               ? 'bg-emerald-500/10 text-emerald-300'
               : status === 'queued'
                 ? 'bg-sky-500/10 text-sky-300'
-                : status === 'processing'
+              : status === 'processing'
                   ? 'bg-amber-500/10 text-amber-300'
+                  : status === 'awaiting_approval'
+                    ? 'bg-violet-500/10 text-violet-200'
                   : status === 'failed' || status === 'blocked'
                     ? 'bg-rose-500/10 text-rose-300'
                     : 'bg-white/5 text-zinc-400'
           }`}>
-            {status}
+            {status === 'awaiting_approval' ? 'review' : status}
           </span>
         </div>
       </div>
@@ -721,6 +739,13 @@ const ImageInputNode = memo(function ImageInputNode({ data, dragging }: NodeProp
       ) : undefined}
     >
       <SourceHandle id="image" top={92} />
+      <div className={`mt-3 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+        typed.templateInput.mode === 'consumer'
+          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+          : 'border-white/10 bg-white/[0.04] text-zinc-400'
+      }`}>
+        {typed.templateInput.mode === 'consumer' ? 'Consumer upload' : 'Fixed asset'}
+      </div>
       {!typed.imageUrl && (
         <div className="mt-3 rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-center text-xs text-zinc-500">
           Upload an image or connect one here.
@@ -755,6 +780,13 @@ const VideoInputNode = memo(function VideoInputNode({ data, dragging }: NodeProp
       ) : undefined}
     >
       <SourceHandle id="video" top={92} />
+      <div className={`mt-3 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+        typed.templateInput.mode === 'consumer'
+          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+          : 'border-white/10 bg-white/[0.04] text-zinc-400'
+      }`}>
+        {typed.templateInput.mode === 'consumer' ? 'Consumer upload' : 'Fixed asset'}
+      </div>
       {!typed.videoUrl && (
         <div className="mt-3 rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-center text-xs text-zinc-500">
           Upload a reference video or connect one here.
@@ -987,6 +1019,63 @@ const SoundEffectsGenerateNode = memo(function SoundEffectsGenerateNode({ data, 
   );
 });
 
+const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: NodeProps) {
+  const typed = data as unknown as RuntimeWorkflowNodeData<ApprovalGateNodeData>;
+  const runtime = getWorkflowNodeRuntimeData(typed);
+  const isImage = typed.mediaKind === 'image';
+  const previewUrl = typed.runState.outputUrl ? getDisplayMediaUrl(typed.runState.outputUrl) : null;
+
+  return (
+    <NodeShell
+      dragging={dragging}
+      icon={<ShieldCheck className="h-4 w-4" />}
+      title={typed.title}
+      subtitle={isImage ? 'Image review checkpoint' : 'Video review checkpoint'}
+      status={typed.runState.status}
+      runtime={runtime}
+      minHeight={132}
+      preview={previewUrl ? (
+        <PreviewMediaLink
+          href={previewUrl}
+          label={`Review ${typed.mediaKind} approval output`}
+          kind={typed.mediaKind}
+          disabled={dragging}
+        >
+          {isImage ? (
+            <img src={previewUrl} alt="" className="h-28 w-full rounded-xl border border-violet-400/15 object-cover" />
+          ) : (
+            <video src={previewUrl} className="h-28 w-full rounded-xl border border-violet-400/15 object-cover" muted playsInline />
+          )}
+        </PreviewMediaLink>
+      ) : undefined}
+    >
+      <InputHandleLabel label={isImage ? 'IMAGE' : 'VIDEO'} top={72} width={18} offset={84} />
+      <TargetHandle id={typed.mediaKind} top={72} />
+      <SourceHandle id={typed.mediaKind} top={72} />
+      <div className="mt-3 rounded-xl border border-violet-400/15 bg-violet-500/[0.06] px-3 py-2.5 text-xs leading-relaxed text-zinc-200">
+        {typed.label || `Review generated ${typed.mediaKind}`}
+      </div>
+      <div className="mt-2 text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+        {typed.allowRetry ? 'Retry available' : 'Approve only'}
+      </div>
+      {typed.runState.status === 'awaiting_approval' && runtime?.onApprove ? (
+        <button
+          type="button"
+          disabled={runtime.isApproving}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            runtime.onApprove?.();
+          }}
+          className="nodrag nopan mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {runtime.isApproving ? 'Continuing…' : 'Approve & continue'}
+        </button>
+      ) : null}
+    </NodeShell>
+  );
+});
+
 const GroupNode = memo(function GroupNode({ data }: NodeProps) {
   const typed = data as RuntimeWorkflowNodeData<WorkflowNodeData>;
   const runtime = getWorkflowNodeRuntimeData(typed);
@@ -1123,6 +1212,7 @@ export const workflowCanvasNodeTypes = {
   'voiceover-generate': VoiceoverGenerateNode,
   'music-generate': MusicGenerateNode,
   'sound-effects-generate': SoundEffectsGenerateNode,
+  'approval-gate': ApprovalGateNode,
   note: NoteNode,
   group: GroupNode,
 };

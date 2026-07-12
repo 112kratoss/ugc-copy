@@ -182,4 +182,33 @@ describe('startVideoGenerationForRoute', () => {
       cost: 100,
     });
   });
+
+  it('forwards the server-only input-retention override without reading it from the body', async () => {
+    startVideoGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-video-private-template',
+      generationId: 'gen-video-private-template',
+      remainingCredits: 80,
+      cost: 20,
+    });
+    const userClient = createClientMock();
+    const adminClient = createClientMock();
+
+    await startVideoGenerationForRoute({
+      request: new Request('http://localhost/api/template-runs/run-1/start'),
+      body: {
+        prompt: 'A private template video',
+        model: 'kling-3.0-video',
+        // A public caller cannot override this through the request body.
+        persistInputMedia: true,
+      },
+      userId: 'user-1',
+      supabase: userClient.client,
+      adminSupabase: adminClient.client,
+      persistInputMedia: false,
+    });
+
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      persistInputMedia: false,
+    }));
+  });
 });

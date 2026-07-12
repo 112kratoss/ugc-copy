@@ -120,6 +120,7 @@ interface PublishToShowcaseModalProps {
   defaultTitle?: string;
   defaultDescription?: string;
   showPaidShortcut?: boolean;
+  mediaOnly?: boolean;
   initialSellAutoUnlock?: boolean;
   paywallPrefill?: GenerationPaywallPrefill | null;
   shareAfterPublish?: {
@@ -133,6 +134,9 @@ interface PublishToShowcaseModalProps {
     visibility?: PostVisibility;
     resourceBundleStatus?: 'draft' | 'published' | null;
     resourceBundlePath?: string | null;
+    postId?: string | null;
+    showcasePath?: string | null;
+    ownerPath?: string | null;
   }) => void;
 }
 
@@ -144,6 +148,7 @@ export default function PublishToShowcaseModal({
   defaultTitle = '',
   defaultDescription = '',
   showPaidShortcut = true,
+  mediaOnly = false,
   initialSellAutoUnlock = false,
   paywallPrefill = null,
   shareAfterPublish,
@@ -336,7 +341,7 @@ export default function PublishToShowcaseModal({
       return;
     }
 
-    let resourceBundle: PostResourceBundleInput = { accessMode: 'none' };
+    let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
     if (sellAutoUnlock) {
       if (!paywallPrefill || autoUnlockKinds.length === 0) {
         setFormError('This creation does not have enough saved setup data to package automatically yet.');
@@ -402,6 +407,9 @@ export default function PublishToShowcaseModal({
         visibility?: PostVisibility;
         resourceBundleStatus?: 'draft' | 'published' | null;
         resourceBundlePath?: string | null;
+        postId?: string | null;
+        showcasePath?: string | null;
+        ownerPath?: string | null;
       };
       if (!response.ok || !data.success) {
         if (data.field === 'profile') {
@@ -419,6 +427,9 @@ export default function PublishToShowcaseModal({
         visibility: data.visibility,
         resourceBundleStatus: data.resourceBundleStatus ?? null,
         resourceBundlePath: data.resourceBundlePath ?? null,
+        postId: data.postId ?? null,
+        showcasePath: data.showcasePath ?? null,
+        ownerPath: data.ownerPath ?? null,
       });
 
       if (shareAfterPublish && nextVisibility === 'public') {
@@ -465,7 +476,9 @@ export default function PublishToShowcaseModal({
               Publish this creation
             </h3>
             <p id="publish-to-showcase-description" className="mt-2 text-sm leading-6 text-zinc-400">
-              Title, notes, and optional price.
+              {mediaOnly
+                ? 'Add a title and caption, then share it to the Feed or keep it private.'
+                : 'Title, notes, and optional price.'}
             </p>
           </div>
           <button
@@ -546,7 +559,7 @@ export default function PublishToShowcaseModal({
             />
           </div>
 
-          <div className={`rounded-[24px] border p-4 transition ${
+          {!mediaOnly ? <div className={`rounded-[24px] border p-4 transition ${
             sellAutoUnlock
               ? 'border-emerald-300/30 bg-emerald-500/10'
               : 'border-white/10 bg-black/35'
@@ -647,7 +660,7 @@ export default function PublishToShowcaseModal({
                 ) : null}
               </div>
             </div>
-          </div>
+          </div> : null}
 
           {formError ? (
             <div role="alert" aria-live="assertive" className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">

@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   createNodeRunState,
   createStarterGraph,
+  createTemplateReadyStarterGraph,
+  createTemplateVersionSnapshotGraph,
   createWorkflowGraphHash,
   createWorkflowNode,
   duplicateWorkflowSelection,
   getExecutionOrder,
+  getWorkflowAncestorPath,
   getResolvedWorkflowImageReferences,
   getWorkflowPromptMentionCandidates,
   getPromptEnhancementTargets,
@@ -18,6 +21,7 @@ import {
   serializeWorkflowGraph,
   validateWorkflowConnectionForGraph,
   validateWorkflowConnection,
+  validateWorkflowTemplateAuthoringGraph,
   type ImageInputNodeData,
 } from '@/lib/workflow-canvas';
 
@@ -1530,5 +1534,119 @@ describe('workflow canvas helpers', () => {
       outputUrl: 'https://example.com/existing.jpg',
     });
     expect(insertedNode?.data.runState).toEqual(createNodeRunState());
+  });
+});
+
+describe('workflow template graph helpers', () => {
+  it('creates a publish-ready transformation graph with consumer inputs and approval checkpoints', () => {
+    const graph = createTemplateReadyStarterGraph();
+    const output = graph.nodes.find((node) => node.type === 'video-generate');
+    const validation = validateWorkflowTemplateAuthoringGraph({
+      graph,
+      outputNodeId: output?.id,
+    });
+
+    expect(graph.version).toBe(2);
+    expect(graph.nodes.filter((node) => node.type === 'approval-gate')).toHaveLength(2);
+    expect(validation.valid).toBe(true);
+    expect(validation.outputKind).toBe('video');
+    expect(validation.inputSlots.map((slot) => slot.key)).toEqual(['person', 'vehicle']);
+  });
+
+  it('keeps only the selected output ancestry and excludes disconnected canvas notes', () => {
+    const graph = createTemplateReadyStarterGraph();
+    const output = graph.nodes.find((node) => node.type === 'video-generate');
+    const disconnected = createWorkflowNode('note', { x: 1800, y: 800 });
+    const graphWithNote = normalizeWorkflowGraph({
+      ...graph,
+      nodes: [...graph.nodes, disconnected],
+    });
+
+    const path = getWorkflowAncestorPath(graphWithNote, output?.id);
+    const snapshot = createTemplateVersionSnapshotGraph(graphWithNote, output?.id);
+
+    expect(path.nodeIds).toContain(output?.id);
+    expect(path.nodeIds).not.toContain(disconnected.id);
+    expect(snapshot.nodes.some((node) => node.id === disconnected.id)).toBe(false);
+  });
+
+  it('strips consumer media while retaining only durable fixed-asset paths for the server compiler', () => {
+    const consumer = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const fixed = createWorkflowNode('video-input', { x: 0, y: 180 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...consumer,
+          data: normalizeNodeData('image-input', {
+            ...consumer.data,
+            imageUrl: 'https://example.com/consumer.jpg',
+            storagePath: 'generated_images/user/consumer.jpg',
+            templateInput: {
+              mode: 'consumer',
+              key: 'person',
+              label: 'Your photo',
+              guidance: 'Use a clear photo.',
+              required: true,
+            },
+          }),
+        },
+        {
+          ...fixed,
+          data: normalizeNodeData('video-input', {
+            ...fixed.data,
+            videoUrl: 'https://example.com/fixed.mp4',
+            storagePath: 'generated_videos/user/fixed.mp4',
+            templateInput: {
+              mode: 'fixed',
+              key: '',
+              label: 'Fixed video',
+              guidance: '',
+              required: true,
+            },
+          }),
+        },
+      ],
+      edges: [],
+    });
+
+    const snapshot = createTemplateVersionSnapshotGraph(graph);
+    const consumerData = snapshot.nodes.find((node) => node.id === consumer.id)?.data;
+    const fixedData = snapshot.nodes.find((node) => node.id === fixed.id)?.data;
+
+    expect(consumerData).toMatchObject({ imageUrl: null, storagePath: null });
+    expect(fixedData).toMatchObject({ videoUrl: null, storagePath: 'generated_videos/user/fixed.mp4' });
+    expect(consumerData).not.toHaveProperty('runState');
+    expect(fixedData).not.toHaveProperty('runState');
+  });
+
+  it('enforces typed approval inputs and rejects connections that introduce cycles', () => {
+    const image = createWorkflowNode('image-generate', { x: 0, y: 0 });
+    const approval = createWorkflowNode('approval-gate', { x: 260, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [image, approval],
+      edges: [{
+        id: 'image-approval',
+        source: image.id,
+        target: approval.id,
+        sourceHandle: 'image',
+        targetHandle: 'image',
+      }],
+    });
+
+    expect(validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: image.id,
+      sourceHandle: 'image',
+      targetNodeId: approval.id,
+      targetHandle: 'video',
+    })).toMatchObject({ valid: false });
+
+    expect(validateWorkflowConnectionForGraph({
+      graph,
+      sourceNodeId: approval.id,
+      sourceHandle: 'image',
+      targetNodeId: image.id,
+      targetHandle: 'image-reference',
+    })).toMatchObject({ valid: false, message: expect.stringMatching(/cycle/i) });
   });
 });

@@ -5,6 +5,7 @@ const afterMock = vi.fn((callback: () => Promise<void> | void) => callback());
 const executeWorkflowRunMock = vi.fn();
 const monitorWorkflowRunMock = vi.fn();
 const getWorkflowRunDetailsMock = vi.fn();
+const approveWorkflowRunStepMock = vi.fn();
 let runRateLimitAllowed = true;
 let runAdminRpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
 
@@ -18,9 +19,15 @@ vi.mock('next/server', async () => {
 });
 
 vi.mock('@/lib/workflow-runner', () => ({
+  approveWorkflowRunStep: (...args: unknown[]) => approveWorkflowRunStepMock(...args),
   executeWorkflowRun: (...args: unknown[]) => executeWorkflowRunMock(...args),
   monitorWorkflowRun: (...args: unknown[]) => monitorWorkflowRunMock(...args),
   getWorkflowRunDetails: (...args: unknown[]) => getWorkflowRunDetailsMock(...args),
+  WorkflowRunApprovalError: class WorkflowRunApprovalError extends Error {
+    constructor(message: string, public readonly status: number) {
+      super(message);
+    }
+  },
 }));
 
 function createSupabaseMock() {
@@ -97,6 +104,7 @@ describe('workflow run routes', () => {
     executeWorkflowRunMock.mockReset();
     monitorWorkflowRunMock.mockReset();
     getWorkflowRunDetailsMock.mockReset();
+    approveWorkflowRunStepMock.mockReset();
   });
 
   afterEach(() => {
@@ -199,5 +207,37 @@ describe('workflow run routes', () => {
     expect(response.status).toBe(200);
     expect(afterMock).not.toHaveBeenCalled();
     expect(monitorWorkflowRunMock).not.toHaveBeenCalled();
+  });
+
+  it('POST approval-steps/[stepId]/approve resumes a paused workflow run', async () => {
+    approveWorkflowRunStepMock.mockResolvedValue({
+      id: 'run-1',
+      canvas_id: 'canvas-1',
+      status: 'processing',
+      steps: [],
+    });
+
+    const { POST } = await import('@/app/api/workflow-canvases/[id]/runs/[runId]/approval-steps/[stepId]/approve/route');
+    const response = await POST(
+      new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1/approval-steps/step-1/approve', {
+        method: 'POST',
+        headers: { 'x-request-id': 'workflow-run-approval-route-1' },
+      }) as never,
+      {
+        params: Promise.resolve({
+          id: 'canvas-1',
+          runId: 'run-1',
+          stepId: 'step-1',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'workflow-run-approval-route-1');
+    expect(approveWorkflowRunStepMock).toHaveBeenCalledWith(expect.objectContaining({
+      canvasId: 'canvas-1',
+      runId: 'run-1',
+      stepId: 'step-1',
+    }));
   });
 });

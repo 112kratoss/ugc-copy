@@ -7,6 +7,7 @@ import {
 } from '@/app/create-workflow/useWorkflowCanvasRunState';
 import {
   createStarterGraph,
+  createTemplateReadyStarterGraph,
   type WorkflowCanvasNode,
   type WorkflowCanvasRunRecord,
 } from '@/lib/workflow-canvas';
@@ -111,5 +112,53 @@ describe('useWorkflowCanvasRunState', () => {
     expect(merged[1]).toBe(starter.nodes[1]);
     expect(merged[0].data.runState.status).toBe('succeeded');
     expect(starter.nodes[0].data.runState.status).toBe('idle');
+  });
+
+  it('uses a pending approval output for preview while the checkpoint is paused', async () => {
+    const graph = createTemplateReadyStarterGraph();
+    const approval = graph.nodes.find((node) => node.type === 'approval-gate');
+    expect(approval).toBeTruthy();
+    let latestState: ReturnType<typeof useWorkflowCanvasRunState> | null = null;
+
+    render(
+      <RunStateHarness
+        nodes={graph.nodes}
+        onRender={(state) => {
+          latestState = state;
+        }}
+      />
+    );
+
+    const run: WorkflowCanvasRunRecord = {
+      id: 'run-approval',
+      canvas_id: 'canvas-1',
+      start_node_id: approval!.id,
+      mode: 'branch',
+      status: 'awaiting_approval',
+      created_at: '2026-07-11T12:00:00.000Z',
+      finished_at: null,
+      steps: [{
+        id: 'step-approval',
+        node_id: approval!.id,
+        status: 'awaiting_approval',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: { pendingOutputUrl: 'generated_images/user/review.jpg' },
+        error_message: null,
+        started_at: '2026-07-11T12:00:01.000Z',
+        finished_at: null,
+      }],
+    };
+
+    await act(async () => {
+      latestState!.applyRunUpdate(run);
+      await Promise.resolve();
+    });
+
+    const renderedApproval = latestState!.renderNodes.find((node) => node.id === approval!.id);
+    expect(renderedApproval?.data.runState).toMatchObject({
+      status: 'awaiting_approval',
+      outputUrl: 'generated_images/user/review.jpg',
+    });
   });
 });

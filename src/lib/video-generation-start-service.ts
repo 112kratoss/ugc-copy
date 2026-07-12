@@ -36,6 +36,7 @@ type StartVideoGenerationForRouteInput = {
   userId: string;
   supabase: VideoGenerationStartRouteClient;
   adminSupabase: VideoGenerationStartRouteClient;
+  persistInputMedia?: boolean;
 };
 
 function readString(value: unknown, fallback: string): string {
@@ -79,6 +80,7 @@ export async function startVideoGenerationForRoute({
   userId,
   supabase,
   adminSupabase,
+  persistInputMedia = true,
 }: StartVideoGenerationForRouteInput): Promise<VideoGenerationStartRoutePayload> {
   const selectedModel = readString(body.model, 'kling-3.0-video');
   const elements = readArray<ImageElementDescriptor>(body.elements);
@@ -154,6 +156,7 @@ export async function startVideoGenerationForRoute({
       startFrame: readObject<RemixMediaAssetDescriptor>(body.startFrame),
       endFrame: readObject<RemixMediaAssetDescriptor>(body.endFrame),
       seedanceAssets: readObject<SeedanceAssetCollections>(body.seedanceAssets),
+      persistInputMedia,
       quotedCostCredits: quote.costCredits,
       sourceGenerationId,
     }),

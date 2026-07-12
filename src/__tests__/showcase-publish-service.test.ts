@@ -6,7 +6,7 @@ import {
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
 
-function createUserClientMock(generation: Record<string, unknown>) {
+function createUserClientMock(generation: Record<string, unknown> | null) {
   const selects: string[] = [];
   const eqs: Array<{ column: string; value: unknown }> = [];
 
@@ -26,8 +26,8 @@ function createUserClientMock(generation: Record<string, unknown>) {
                 return {
                   single() {
                     return Promise.resolve({
-                      data: generation.id === value ? generation : null,
-                      error: generation.id === value ? null : { message: 'not found' },
+                      data: generation?.id === value ? generation : null,
+                      error: generation?.id === value ? null : { message: 'not found' },
                     });
                   },
                 };
@@ -40,6 +40,59 @@ function createUserClientMock(generation: Record<string, unknown>) {
     eqs,
     selects,
   };
+}
+
+function createCanonicalTemplateAdminClientMock({
+  generation,
+  canonicalRun = true,
+}: {
+  generation: Record<string, unknown> | null;
+  canonicalRun?: boolean;
+}) {
+  const runFilters: Array<{ column: string; value: unknown }> = [];
+  const removeMock = vi.fn(async () => ({ data: null, error: null }));
+
+  const client = {
+    from(table: string) {
+      if (table === 'generations') {
+        return {
+          select() {
+            return {
+              eq(_column: string, value: unknown) {
+                return {
+                  single: vi.fn(async () => ({
+                    data: generation?.id === value ? generation : null,
+                    error: generation?.id === value ? null : { message: 'not found' },
+                  })),
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'template_runs') {
+        const query = {
+          eq(column: string, value: unknown) {
+            runFilters.push({ column, value });
+            return query;
+          },
+          maybeSingle: vi.fn(async () => ({
+            data: canonicalRun ? { id: 'run-1' } : null,
+            error: null,
+          })),
+        };
+        return { select: vi.fn(() => query) };
+      }
+
+      throw new Error(`Unexpected admin table: ${table}`);
+    },
+    storage: {
+      from: vi.fn(() => ({ remove: removeMock })),
+    },
+  } as unknown as SupabaseClient;
+
+  return { client, removeMock, runFilters };
 }
 
 function createAdminClientMock() {
@@ -58,6 +111,154 @@ function createAdminClientMock() {
 }
 
 describe('publishGenerationToShowcaseForRoute', () => {
+  it('publishes a backend-private generation only when it is the canonical result of the owner\'s successful consumer run', async () => {
+    const generation = {
+      id: 'template-result-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/template-result.jpg',
+      showcase_asset_path: null,
+      title: 'Template result',
+      description: null,
+      prompt: null,
+    };
+    const userClient = createUserClientMock(null);
+    const adminClient = createCanonicalTemplateAdminClientMock({ generation });
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-template-1',
+      visibility: 'private' as const,
+      bundleStatus: null,
+    }));
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: {
+        generationId: 'template-result-1',
+        visibility: 'private',
+        title: 'My final image',
+        prompt: 'This must not be copied to the published generation',
+        workflowSettings: { secret: 'recipe' },
+        resourceBundle: { accessMode: 'none' },
+      },
+      supabase: userClient.client,
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: {
+        postId: 'post-template-1',
+        visibility: 'private',
+      },
+    });
+    expect(adminClient.runFilters).toEqual([
+      { column: 'user_id', value: 'user-1' },
+      { column: 'status', value: 'succeeded' },
+      { column: 'is_test', value: false },
+      { column: 'result_generation_id', value: 'template-result-1' },
+    ]);
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      generationId: 'template-result-1',
+      ownerUserId: 'user-1',
+      generationUpdate: expect.not.objectContaining({
+        prompt: expect.anything(),
+        workflow_settings: expect.anything(),
+      }),
+      bundle: null,
+      hasBundlePayload: false,
+      post: expect.objectContaining({
+        generation_id: 'template-result-1',
+        prompt: null,
+      }),
+    }));
+  });
+
+  it.each([
+    ['an intermediate generation', { user_id: 'user-1', status: 'succeeded' }, false],
+    ['a creator test result', { user_id: 'user-1', status: 'succeeded' }, false],
+    ['another user\'s result', { user_id: 'user-2', status: 'succeeded' }, true],
+    ['a failed result', { user_id: 'user-1', status: 'failed' }, true],
+  ])('rejects %s when the ordinary owner query cannot see it', async (_label, overrides, canonicalRun) => {
+    const generation = {
+      id: 'hidden-generation-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/hidden.jpg',
+      showcase_asset_path: null,
+      title: null,
+      description: null,
+      prompt: null,
+      ...overrides,
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createCanonicalTemplateAdminClientMock({ generation, canonicalRun }).client,
+      body: { generationId: 'hidden-generation-1', visibility: 'public' },
+      supabase: createUserClientMock(null).client,
+      userId: 'user-1',
+      dependencies: { publishGenerationPostWithResourceBundleAtomically },
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Generation not found' } });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('rejects recipe, input, reference, and paid resource sharing for canonical template results', async () => {
+    const generation = {
+      id: 'template-result-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/template-result.jpg',
+      showcase_asset_path: null,
+      title: null,
+      description: null,
+      prompt: null,
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createCanonicalTemplateAdminClientMock({ generation }).client,
+      body: {
+        generationId: 'template-result-1',
+        visibility: 'public',
+        shareInputMediaForRemix: true,
+        includeGenerationReferences: true,
+        exposePromptPublic: true,
+        resourceBundle: { accessMode: 'paid', priceUsdCents: 900 },
+      },
+      supabase: createUserClientMock(null).client,
+      userId: 'user-1',
+      dependencies: { publishGenerationPostWithResourceBundleAtomically },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Template results can publish media and a caption, but cannot share the private recipe or input files.' },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
   it('publishes a generation-backed post as private and removes the old showcase derivative', async () => {
     const generation = {
       id: 'gen-1',

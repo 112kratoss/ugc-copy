@@ -24,7 +24,7 @@ import {
 type VoiceoverModelId = 'text-to-speech-turbo-2-5' | 'text-to-speech-multilingual-v2' | 'text-to-dialogue-v3';
 type SoundEffectModelId = 'sound-effect-v2';
 
-const WORKFLOW_GRAPH_VERSION = 1;
+const WORKFLOW_GRAPH_VERSION = 2;
 
 export type WorkflowNodeKind =
   | 'text-input'
@@ -37,6 +37,7 @@ export type WorkflowNodeKind =
   | 'voiceover-generate'
   | 'music-generate'
   | 'sound-effects-generate'
+  | 'approval-gate'
   | 'note'
   | 'group';
 
@@ -54,7 +55,7 @@ export type WorkflowHandleType =
   | 'reference-video'
   | 'reference-audio';
 
-export type WorkflowRunStatus = 'idle' | 'queued' | 'processing' | 'succeeded' | 'failed' | 'blocked';
+export type WorkflowRunStatus = 'idle' | 'queued' | 'processing' | 'awaiting_approval' | 'succeeded' | 'failed' | 'blocked';
 
 export interface WorkflowNodeRunState {
   status: WorkflowRunStatus;
@@ -115,6 +116,7 @@ export interface ImageInputNodeData extends BaseWorkflowNodeData {
   imageUrl: string | null;
   storagePath: string | null;
   referenceHandle: string | null;
+  templateInput: WorkflowTemplateInputConfig;
   seedanceAsset: SeedanceAssetMetadata;
 }
 
@@ -122,7 +124,26 @@ export interface VideoInputNodeData extends BaseWorkflowNodeData {
   videoUrl: string | null;
   storagePath: string | null;
   durationSeconds: number | null;
+  templateInput: WorkflowTemplateInputConfig;
   seedanceAsset: SeedanceAssetMetadata;
+}
+
+export type WorkflowTemplateInputMode = 'consumer' | 'fixed';
+
+export interface WorkflowTemplateInputConfig {
+  mode: WorkflowTemplateInputMode;
+  key: string;
+  label: string;
+  guidance: string;
+  required: true;
+}
+
+export type WorkflowApprovalMediaKind = 'image' | 'video';
+
+export interface ApprovalGateNodeData extends BaseWorkflowNodeData {
+  mediaKind: WorkflowApprovalMediaKind;
+  label: string;
+  allowRetry: boolean;
 }
 
 export interface AudioInputNodeData extends BaseWorkflowNodeData {
@@ -228,6 +249,7 @@ export type WorkflowNodeData =
   | VoiceoverGenerateNodeData
   | MusicGenerateNodeData
   | SoundEffectsGenerateNodeData
+  | ApprovalGateNodeData
   | GroupNodeData;
 
 export type WorkflowCanvasNode = Node<WorkflowNodeData, WorkflowNodeKind>;
@@ -247,9 +269,32 @@ export interface WorkflowCanvasListItem {
   revision: number;
   status: WorkflowCanvasStatus;
   published_at: string | null;
+  preview: WorkflowCanvasPreview;
+  node_count: number;
+  connection_count: number;
+  output_kinds: WorkflowCanvasOutputKind[];
 }
 
-type WorkflowGraphSerializationMode = 'storage' | 'client-save' | 'share-export';
+export type WorkflowCanvasOutputKind = 'image' | 'video' | 'audio';
+
+export interface WorkflowCanvasPreviewNode {
+  id: string;
+  type: WorkflowNodeKind;
+  position: { x: number; y: number };
+}
+
+export interface WorkflowCanvasPreviewEdge {
+  source: string;
+  target: string;
+}
+
+export interface WorkflowCanvasPreview {
+  nodes: WorkflowCanvasPreviewNode[];
+  edges: WorkflowCanvasPreviewEdge[];
+  truncated: boolean;
+}
+
+export type WorkflowGraphSerializationMode = 'storage' | 'client-save' | 'share-export' | 'template-compile';
 
 interface SerializedWorkflowCanvasNode {
   id: string;
@@ -313,7 +358,7 @@ export interface WorkflowCanvasRunRecord {
   canvas_id: string;
   start_node_id: string;
   mode: 'node' | 'branch';
-  status: 'processing' | 'succeeded' | 'failed';
+  status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed';
   created_at: string;
   finished_at: string | null;
   steps?: WorkflowCanvasRunStepRecord[];
@@ -370,6 +415,10 @@ const WORKFLOW_NODE_HANDLE_SCHEMAS: Record<WorkflowNodeKind, WorkflowNodeHandleS
     inputs: ['prompt'],
     outputs: ['audio'],
   },
+  'approval-gate': {
+    inputs: ['image', 'video'],
+    outputs: ['image', 'video'],
+  },
 };
 
 const EMPTY_RUN_STATE: WorkflowNodeRunState = {
@@ -404,6 +453,13 @@ function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
         imageUrl: null,
         storagePath: null,
         referenceHandle: null,
+        templateInput: {
+          mode: 'fixed',
+          key: '',
+          label: 'Your image',
+          guidance: 'Upload a clear, well-lit image.',
+          required: true,
+        },
         seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Image' }),
         runState: createNodeRunState(),
       };
@@ -414,6 +470,13 @@ function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
         videoUrl: null,
         storagePath: null,
         durationSeconds: null,
+        templateInput: {
+          mode: 'fixed',
+          key: '',
+          label: 'Your video',
+          guidance: 'Upload a clear reference video.',
+          required: true,
+        },
         seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Video' }),
         runState: createNodeRunState(),
       };
@@ -507,6 +570,15 @@ function createNodeData(type: WorkflowNodeKind): WorkflowNodeData {
         outputFormat: 'mp3',
         runState: createNodeRunState(),
       };
+    case 'approval-gate':
+      return {
+        title: 'Approval',
+        subtitle: 'Pause for consumer review',
+        mediaKind: 'image',
+        label: 'Review generated image',
+        allowRetry: true,
+        runState: createNodeRunState(),
+      };
     case 'note':
       return { title: 'Note', subtitle: 'Canvas note', text: 'Use this space for instructions, references, or team context.', runState: createNodeRunState() };
     case 'group':
@@ -553,6 +625,119 @@ export function createStarterGraph(): WorkflowCanvasGraph {
   });
 }
 
+/**
+ * A focused starting point for reusable transformation templates. The creator
+ * can keep, replace, or reconnect every node; consumers only see the two
+ * classified upload slots and approval checkpoints derived from this graph.
+ */
+export function createTemplateReadyStarterGraph(): WorkflowCanvasGraph {
+  const personInput = createWorkflowNode('image-input', { x: 60, y: 120 });
+  const vehicleInput = createWorkflowNode('image-input', { x: 60, y: 420 });
+  const openingPrompt = createWorkflowNode('text-input', { x: 380, y: 40 });
+  const finalPrompt = createWorkflowNode('text-input', { x: 380, y: 500 });
+  const videoPrompt = createWorkflowNode('text-input', { x: 1080, y: 650 });
+  const openingImage = createWorkflowNode('image-generate', { x: 720, y: 80 });
+  const finalImage = createWorkflowNode('image-generate', { x: 720, y: 440 });
+  const openingApproval = createWorkflowNode('approval-gate', { x: 1060, y: 100 });
+  const finalApproval = createWorkflowNode('approval-gate', { x: 1060, y: 460 });
+  const video = createWorkflowNode('video-generate', { x: 1420, y: 280 });
+
+  return normalizeWorkflowGraph({
+    version: WORKFLOW_GRAPH_VERSION,
+    viewport: { x: 28, y: 74, zoom: 0.67 },
+    nodes: [
+      {
+        ...personInput,
+        data: normalizeNodeData('image-input', {
+          ...personInput.data,
+          title: 'Person photo',
+          subtitle: 'Consumer upload · required',
+          referenceHandle: '@person',
+          templateInput: {
+            mode: 'consumer',
+            key: 'person',
+            label: 'Your photo',
+            guidance: 'Use a clear photo with your face and body visible.',
+            required: true,
+          },
+        }),
+      },
+      {
+        ...vehicleInput,
+        data: normalizeNodeData('image-input', {
+          ...vehicleInput.data,
+          title: 'Vehicle photo',
+          subtitle: 'Consumer upload · required',
+          referenceHandle: '@vehicle',
+          templateInput: {
+            mode: 'consumer',
+            key: 'vehicle',
+            label: 'Your vehicle',
+            guidance: 'Use a full side or three-quarter view of the vehicle.',
+            required: true,
+          },
+        }),
+      },
+      {
+        ...openingPrompt,
+        data: normalizeNodeData('text-input', {
+          ...openingPrompt.data,
+          title: 'Opening frame prompt',
+          text: 'Create a cinematic opening frame that preserves @person and @vehicle before the transformation begins.',
+        }),
+      },
+      {
+        ...finalPrompt,
+        data: normalizeNodeData('text-input', {
+          ...finalPrompt.data,
+          title: 'Final frame prompt',
+          text: 'Transform @person and @vehicle into a dramatic supernatural rider and blazing infernal vehicle while preserving identity and composition.',
+        }),
+      },
+      {
+        ...videoPrompt,
+        data: normalizeNodeData('text-input', {
+          ...videoPrompt.data,
+          title: 'Transition prompt',
+          text: 'A fast cinematic transformation builds from the opening frame into the final supernatural rider, with coherent motion and a strong final hold.',
+        }),
+      },
+      { ...openingImage, data: normalizeNodeData('image-generate', { ...openingImage.data, title: 'Opening image' }) },
+      { ...finalImage, data: normalizeNodeData('image-generate', { ...finalImage.data, title: 'Final image' }) },
+      {
+        ...openingApproval,
+        data: normalizeNodeData('approval-gate', {
+          ...openingApproval.data,
+          mediaKind: 'image',
+          label: 'Review opening image',
+        }),
+      },
+      {
+        ...finalApproval,
+        data: normalizeNodeData('approval-gate', {
+          ...finalApproval.data,
+          mediaKind: 'image',
+          label: 'Review final image',
+        }),
+      },
+      { ...video, data: normalizeNodeData('video-generate', { ...video.data, title: 'Final video' }) },
+    ],
+    edges: [
+      createCanvasEdge(openingPrompt.id, 'text', openingImage.id, 'prompt'),
+      createCanvasEdge(personInput.id, 'image', openingImage.id, 'image-reference'),
+      createCanvasEdge(vehicleInput.id, 'image', openingImage.id, 'image-reference'),
+      createCanvasEdge(finalPrompt.id, 'text', finalImage.id, 'prompt'),
+      createCanvasEdge(personInput.id, 'image', finalImage.id, 'image-reference'),
+      createCanvasEdge(vehicleInput.id, 'image', finalImage.id, 'image-reference'),
+      createCanvasEdge(openingImage.id, 'image', openingApproval.id, 'image'),
+      createCanvasEdge(finalImage.id, 'image', finalApproval.id, 'image'),
+      createCanvasEdge(openingApproval.id, 'image', video.id, 'start-frame'),
+      createCanvasEdge(finalApproval.id, 'image', video.id, 'end-frame'),
+      createCanvasEdge(videoPrompt.id, 'text', video.id, 'prompt'),
+    ],
+  });
+}
+
 export function createCanvasEdge(source: string, sourceHandle: WorkflowHandleType, target: string, targetHandle: WorkflowHandleType): WorkflowCanvasEdge {
   return {
     id: `${source}:${sourceHandle}->${target}:${targetHandle}`,
@@ -581,10 +766,57 @@ function serializeWorkflowNodeData(
     return sanitizeWorkflowNodeDataForShare(type, normalizedData);
   }
 
+  if (mode === 'template-compile') {
+    return sanitizeWorkflowNodeDataForTemplateCompile(type, normalizedData);
+  }
+
   return {
     ...normalized,
     runState: createNodeRunState((normalized.runState as Partial<WorkflowNodeRunState> | undefined) ?? undefined),
   };
+}
+
+function sanitizeWorkflowNodeDataForTemplateCompile(
+  type: WorkflowNodeKind,
+  data: WorkflowNodeData
+): Record<string, unknown> {
+  const editableData = {
+    ...(data as Record<string, unknown>),
+  };
+  delete editableData.runState;
+
+  if (type === 'image-input') {
+    const typed = data as ImageInputNodeData;
+    const isConsumerInput = typed.templateInput.mode === 'consumer';
+    return {
+      ...editableData,
+      imageUrl: null,
+      storagePath: isConsumerInput ? null : typed.storagePath,
+      seedanceAsset: isConsumerInput
+        ? createSeedanceAssetMetadata({ assetType: 'Image' })
+        : sanitizeSeedanceAssetMetadataForShare(typed.seedanceAsset),
+    };
+  }
+
+  if (type === 'video-input') {
+    const typed = data as VideoInputNodeData;
+    const isConsumerInput = typed.templateInput.mode === 'consumer';
+    return {
+      ...editableData,
+      videoUrl: null,
+      storagePath: isConsumerInput ? null : typed.storagePath,
+      durationSeconds: isConsumerInput ? null : typed.durationSeconds,
+      seedanceAsset: isConsumerInput
+        ? createSeedanceAssetMetadata({ assetType: 'Video' })
+        : sanitizeSeedanceAssetMetadataForShare(typed.seedanceAsset),
+    };
+  }
+
+  if (type === 'audio-input') {
+    return sanitizeWorkflowNodeDataForShare(type, data);
+  }
+
+  return editableData;
 }
 
 function sanitizeWorkflowReferenceElementsForShare(elements: WorkflowReferenceElement[]) {
@@ -689,6 +921,31 @@ export function createWorkflowShareSnapshotGraph(
   return serializeWorkflowGraph(value, { mode: 'share-export' });
 }
 
+/**
+ * Produces the private, server-compiler snapshot used for an immutable
+ * template version. Consumer uploads and every run result are removed; fixed
+ * inputs retain only their durable storage paths so the server can copy them
+ * into versioned template storage.
+ */
+export function createTemplateVersionSnapshotGraph(
+  value: Partial<WorkflowCanvasGraph> | null | undefined,
+  outputNodeId?: string | null
+): SerializedWorkflowCanvasGraph {
+  const graph = normalizeWorkflowGraph(value);
+  if (!outputNodeId) {
+    return serializeWorkflowGraph(graph, { mode: 'template-compile' });
+  }
+
+  const path = getWorkflowAncestorPath(graph, outputNodeId);
+  const nodeIds = new Set(path.nodeIds);
+  const edgeIds = new Set(path.edgeIds);
+  return serializeWorkflowGraph({
+    ...graph,
+    nodes: graph.nodes.filter((node) => nodeIds.has(node.id)),
+    edges: graph.edges.filter((edge) => edgeIds.has(edge.id)),
+  }, { mode: 'template-compile' });
+}
+
 export function createWorkflowGraphHash(
   graph: Partial<WorkflowCanvasGraph> | null | undefined,
   options?: SerializeWorkflowGraphOptions
@@ -709,7 +966,9 @@ export function normalizeWorkflowGraph(value: Partial<WorkflowCanvasGraph> | nul
 
   const nodes = rawNodes.map((node) => normalizeNode(node)).filter(Boolean) as WorkflowCanvasNode[];
   return syncWorkflowGraphElementBindings({
-    version: typeof value?.version === 'number' ? value.version : WORKFLOW_GRAPH_VERSION,
+    version: typeof value?.version === 'number'
+      ? Math.max(WORKFLOW_GRAPH_VERSION, value.version)
+      : WORKFLOW_GRAPH_VERSION,
     viewport: normalizeViewport(value?.viewport),
     nodes,
     edges: rawEdges.filter((edge): edge is WorkflowCanvasEdge => Boolean(edge?.id && edge.source && edge.target)),
@@ -796,6 +1055,10 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         imageUrl: typeof (data as ImageInputNodeData | undefined)?.imageUrl === 'string' ? (data as ImageInputNodeData).imageUrl : null,
         storagePath: typeof (data as ImageInputNodeData | undefined)?.storagePath === 'string' ? (data as ImageInputNodeData).storagePath : null,
         referenceHandle: normalizeWorkflowReferenceHandle((data as ImageInputNodeData | undefined)?.referenceHandle),
+        templateInput: normalizeWorkflowTemplateInputConfig(
+          (data as ImageInputNodeData | undefined)?.templateInput,
+          (base as ImageInputNodeData).templateInput
+        ),
         seedanceAsset: normalizeSeedanceAssetMetadata(
           (data as ImageInputNodeData | undefined)?.seedanceAsset,
           'Image',
@@ -816,6 +1079,10 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         durationSeconds: typeof (data as VideoInputNodeData | undefined)?.durationSeconds === 'number'
           ? (data as VideoInputNodeData).durationSeconds
           : null,
+        templateInput: normalizeWorkflowTemplateInputConfig(
+          (data as VideoInputNodeData | undefined)?.templateInput,
+          (base as VideoInputNodeData).templateInput
+        ),
         seedanceAsset: normalizeSeedanceAssetMetadata(
           (data as VideoInputNodeData | undefined)?.seedanceAsset,
           'Video',
@@ -914,9 +1181,48 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         outputFormat: (data as SoundEffectsGenerateNodeData | undefined)?.outputFormat === 'wav' ? 'wav' : 'mp3',
         runState,
       };
+    case 'approval-gate':
+      return {
+        ...(base as ApprovalGateNodeData),
+        ...assistantMetadata,
+        title,
+        subtitle,
+        mediaKind: (data as ApprovalGateNodeData | undefined)?.mediaKind === 'video' ? 'video' : 'image',
+        label: typeof (data as ApprovalGateNodeData | undefined)?.label === 'string'
+          ? (data as ApprovalGateNodeData).label
+          : (base as ApprovalGateNodeData).label,
+        allowRetry: (data as ApprovalGateNodeData | undefined)?.allowRetry !== false,
+        runState,
+      };
     case 'group':
       return { ...(base as GroupNodeData), ...assistantMetadata, title, subtitle, color: typeof (data as GroupNodeData | undefined)?.color === 'string' ? (data as GroupNodeData).color : (base as GroupNodeData).color, runState };
   }
+}
+
+function normalizeWorkflowTemplateInputConfig(
+  value: unknown,
+  fallback: WorkflowTemplateInputConfig
+): WorkflowTemplateInputConfig {
+  if (!value || typeof value !== 'object') {
+    return { ...fallback };
+  }
+
+  const typedValue = value as Partial<WorkflowTemplateInputConfig>;
+  const key = typeof typedValue.key === 'string'
+    ? typedValue.key
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+    : fallback.key;
+
+  return {
+    mode: typedValue.mode === 'consumer' ? 'consumer' : 'fixed',
+    key,
+    label: typeof typedValue.label === 'string' ? typedValue.label.slice(0, 80) : fallback.label,
+    guidance: typeof typedValue.guidance === 'string' ? typedValue.guidance.slice(0, 240) : fallback.guidance,
+    required: true,
+  };
 }
 
 function normalizeImageGenerateNodeData(params: {
@@ -1285,11 +1591,15 @@ function getLegacyLanguageCode(data: VoiceoverGenerateNodeData | undefined): str
 }
 
 function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
-  return ['text-input', 'image-input', 'video-input', 'audio-input', 'image-generate', 'video-generate', 'motion-generate', 'voiceover-generate', 'music-generate', 'sound-effects-generate', 'note', 'group'].includes(String(value));
+  return ['text-input', 'image-input', 'video-input', 'audio-input', 'image-generate', 'video-generate', 'motion-generate', 'voiceover-generate', 'music-generate', 'sound-effects-generate', 'approval-gate', 'note', 'group'].includes(String(value));
 }
 
 export function isRunnableNode(node: WorkflowCanvasNode): boolean {
   return node.type === 'image-generate' || node.type === 'video-generate' || node.type === 'motion-generate' || node.type === 'voiceover-generate' || node.type === 'music-generate' || node.type === 'sound-effects-generate';
+}
+
+export function isApprovalGateNode(node: WorkflowCanvasNode): node is WorkflowCanvasNode & { data: ApprovalGateNodeData } {
+  return node.type === 'approval-gate';
 }
 
 export function validateWorkflowConnection(sourceType: WorkflowHandleType | null | undefined, targetType: WorkflowHandleType | null | undefined): boolean {
@@ -1297,7 +1607,31 @@ export function validateWorkflowConnection(sourceType: WorkflowHandleType | null
   if (sourceType === 'text' && targetType === 'prompt') return true;
   if (sourceType === 'image' && (targetType === 'image-reference' || targetType === 'reference-image' || targetType === 'element-image' || targetType === 'start-frame' || targetType === 'end-frame' || targetType === 'image')) return true;
   if (sourceType === 'video' && targetType === 'reference-video') return true;
+  if (sourceType === 'video' && targetType === 'video') return true;
   if (sourceType === 'audio' && targetType === 'reference-audio') return true;
+  return false;
+}
+
+function wouldWorkflowConnectionCreateCycle(
+  graph: WorkflowCanvasGraph,
+  sourceNodeId: string,
+  targetNodeId: string
+): boolean {
+  const queue = [targetNodeId];
+  const visited = new Set<string>();
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const nodeId = queue[index];
+    if (!nodeId || visited.has(nodeId)) {
+      continue;
+    }
+    if (nodeId === sourceNodeId) {
+      return true;
+    }
+    visited.add(nodeId);
+    getOutgoingEdges(graph, nodeId).forEach((edge) => queue.push(edge.target));
+  }
+
   return false;
 }
 
@@ -1319,6 +1653,303 @@ export function getIncomingEdges(graph: WorkflowCanvasGraph, nodeId: string): Wo
 
 function getOutgoingEdges(graph: WorkflowCanvasGraph, nodeId: string): WorkflowCanvasEdge[] {
   return graph.edges.filter((edge) => edge.source === nodeId);
+}
+
+export type WorkflowTemplateOutputKind = 'image' | 'video';
+
+export interface WorkflowTemplatePath {
+  nodeIds: string[];
+  edgeIds: string[];
+}
+
+export interface WorkflowTemplateAuthoringIssue {
+  code:
+    | 'output-required'
+    | 'invalid-output'
+    | 'cycle'
+    | 'unsupported-node'
+    | 'invalid-connection'
+    | 'input-key-required'
+    | 'input-key-duplicate'
+    | 'input-label-required'
+    | 'input-guidance-required'
+    | 'fixed-asset-required'
+    | 'consumer-input-required'
+    | 'prompt-required'
+    | 'approval-input-required';
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+}
+
+export interface WorkflowTemplateAuthoringInputSlot {
+  nodeId: string;
+  key: string;
+  kind: WorkflowTemplateOutputKind;
+  label: string;
+  description: string;
+  required: true;
+}
+
+export interface WorkflowTemplateAuthoringValidation {
+  valid: boolean;
+  issues: WorkflowTemplateAuthoringIssue[];
+  path: WorkflowTemplatePath;
+  outputKind: WorkflowTemplateOutputKind | null;
+  inputSlots: WorkflowTemplateAuthoringInputSlot[];
+}
+
+export function getWorkflowNodeMediaOutputKind(
+  node: WorkflowCanvasNode | null | undefined
+): WorkflowTemplateOutputKind | null {
+  if (!node) {
+    return null;
+  }
+  if (node.type === 'image-input' || node.type === 'image-generate') {
+    return 'image';
+  }
+  if (node.type === 'video-input' || node.type === 'video-generate') {
+    return 'video';
+  }
+  if (node.type === 'approval-gate') {
+    return (normalizeNodeData('approval-gate', node.data) as ApprovalGateNodeData).mediaKind;
+  }
+  return null;
+}
+
+export function getWorkflowAncestorPath(
+  graphValue: Partial<WorkflowCanvasGraph> | null | undefined,
+  outputNodeId: string | null | undefined
+): WorkflowTemplatePath {
+  const graph = normalizeWorkflowGraph(graphValue);
+  if (!outputNodeId || !getNodeById(graph, outputNodeId)) {
+    return { nodeIds: [], edgeIds: [] };
+  }
+
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+  const queue = [outputNodeId];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const nodeId = queue[index];
+    if (!nodeId || nodeIds.has(nodeId)) {
+      continue;
+    }
+    nodeIds.add(nodeId);
+    getIncomingEdges(graph, nodeId).forEach((edge) => {
+      edgeIds.add(edge.id);
+      queue.push(edge.source);
+    });
+  }
+
+  return {
+    nodeIds: graph.nodes.filter((node) => nodeIds.has(node.id)).map((node) => node.id),
+    edgeIds: graph.edges.filter((edge) => edgeIds.has(edge.id)).map((edge) => edge.id),
+  };
+}
+
+function findWorkflowCycleNodeId(graph: WorkflowCanvasGraph, pathNodeIds: Set<string>): string | null {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  const visit = (nodeId: string): string | null => {
+    if (visiting.has(nodeId)) {
+      return nodeId;
+    }
+    if (visited.has(nodeId)) {
+      return null;
+    }
+    visiting.add(nodeId);
+    for (const edge of getOutgoingEdges(graph, nodeId)) {
+      if (!pathNodeIds.has(edge.target)) {
+        continue;
+      }
+      const cycleNodeId = visit(edge.target);
+      if (cycleNodeId) {
+        return cycleNodeId;
+      }
+    }
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    return null;
+  };
+
+  for (const nodeId of pathNodeIds) {
+    const cycleNodeId = visit(nodeId);
+    if (cycleNodeId) {
+      return cycleNodeId;
+    }
+  }
+  return null;
+}
+
+export function validateWorkflowTemplateAuthoringGraph(params: {
+  graph: Partial<WorkflowCanvasGraph> | null | undefined;
+  outputNodeId: string | null | undefined;
+}): WorkflowTemplateAuthoringValidation {
+  const graph = normalizeWorkflowGraph(params.graph);
+  const outputNode = params.outputNodeId ? getNodeById(graph, params.outputNodeId) : undefined;
+  const path = getWorkflowAncestorPath(graph, params.outputNodeId);
+  const pathNodeIds = new Set(path.nodeIds);
+  const pathEdgeIds = new Set(path.edgeIds);
+  const issues: WorkflowTemplateAuthoringIssue[] = [];
+  const outputKind = getWorkflowNodeMediaOutputKind(outputNode);
+
+  if (!params.outputNodeId || !outputNode) {
+    issues.push({ code: 'output-required', message: 'Choose the image or video node consumers should receive.' });
+  } else if (!outputKind || outputNode.type === 'image-input' || outputNode.type === 'video-input') {
+    issues.push({
+      code: 'invalid-output',
+      nodeId: outputNode.id,
+      message: 'The final output must be a generated image, generated video, or matching approval checkpoint.',
+    });
+  }
+
+  const cycleNodeId = findWorkflowCycleNodeId(graph, pathNodeIds);
+  if (cycleNodeId) {
+    issues.push({
+      code: 'cycle',
+      nodeId: cycleNodeId,
+      message: 'The selected template path contains a loop. Remove the cycle before publishing.',
+    });
+  }
+
+  const supportedKinds = new Set<WorkflowNodeKind>([
+    'text-input',
+    'image-input',
+    'video-input',
+    'image-generate',
+    'video-generate',
+    'approval-gate',
+  ]);
+  const inputSlots: WorkflowTemplateAuthoringInputSlot[] = [];
+  const seenInputKeys = new Set<string>();
+
+  for (const node of graph.nodes) {
+    if (!pathNodeIds.has(node.id)) {
+      continue;
+    }
+
+    if (!supportedKinds.has(node.type)) {
+      issues.push({
+        code: 'unsupported-node',
+        nodeId: node.id,
+        message: `${node.data.title || 'This node'} is not supported in published templates yet.`,
+      });
+      continue;
+    }
+
+    if (node.type === 'image-input' || node.type === 'video-input') {
+      const data = node.data as ImageInputNodeData | VideoInputNodeData;
+      const kind = node.type === 'image-input' ? 'image' : 'video';
+      const input = data.templateInput;
+      if (input.mode === 'consumer') {
+        if (!/^[a-z][a-z0-9_]*$/.test(input.key)) {
+          issues.push({
+            code: 'input-key-required',
+            nodeId: node.id,
+            message: `${node.data.title} needs a stable key that starts with a letter and uses letters, numbers, or underscores.`,
+          });
+        } else if (seenInputKeys.has(input.key)) {
+          issues.push({
+            code: 'input-key-duplicate',
+            nodeId: node.id,
+            message: `Consumer input key “${input.key}” is used more than once.`,
+          });
+        } else {
+          seenInputKeys.add(input.key);
+        }
+        if (!input.label.trim()) {
+          issues.push({ code: 'input-label-required', nodeId: node.id, message: `${node.data.title} needs a public upload label.` });
+        }
+        if (!input.guidance.trim()) {
+          issues.push({ code: 'input-guidance-required', nodeId: node.id, message: `${node.data.title} needs upload guidance.` });
+        }
+        inputSlots.push({
+          nodeId: node.id,
+          key: input.key,
+          kind,
+          label: input.label,
+          description: input.guidance,
+          required: true,
+        });
+      } else {
+        const hasAsset = node.type === 'image-input'
+          ? Boolean((data as ImageInputNodeData).storagePath || (data as ImageInputNodeData).imageUrl)
+          : Boolean((data as VideoInputNodeData).storagePath || (data as VideoInputNodeData).videoUrl);
+        if (!hasAsset) {
+          issues.push({
+            code: 'fixed-asset-required',
+            nodeId: node.id,
+            message: `${node.data.title} is a fixed template asset but has no uploaded media.`,
+          });
+        }
+      }
+    }
+
+    if (node.type === 'image-generate' || node.type === 'video-generate') {
+      const videoData = node.type === 'video-generate' ? node.data as VideoGenerateNodeData : null;
+      const hasPrompt = videoData?.isMultiShot
+        ? videoData.multiPrompts.every((prompt) => prompt.prompt.trim())
+        : getIncomingEdges(graph, node.id).some((edge) => {
+            if (edge.sourceHandle !== 'text' || edge.targetHandle !== 'prompt') {
+              return false;
+            }
+            const source = getNodeById(graph, edge.source);
+            return Boolean(source && 'text' in source.data && typeof source.data.text === 'string' && source.data.text.trim());
+          });
+      if (!hasPrompt) {
+        issues.push({ code: 'prompt-required', nodeId: node.id, message: `${node.data.title} needs a connected prompt.` });
+      }
+    }
+
+    if (node.type === 'approval-gate') {
+      const approval = node.data as ApprovalGateNodeData;
+      const incoming = getIncomingEdges(graph, node.id).filter((edge) => pathEdgeIds.has(edge.id));
+      if (
+        incoming.length !== 1
+        || incoming[0]?.sourceHandle !== approval.mediaKind
+        || incoming[0]?.targetHandle !== approval.mediaKind
+      ) {
+        issues.push({
+          code: 'approval-input-required',
+          nodeId: node.id,
+          message: `${node.data.title} needs exactly one ${approval.mediaKind} input.`,
+        });
+      }
+    }
+  }
+
+  for (const edge of graph.edges) {
+    if (!pathEdgeIds.has(edge.id)) {
+      continue;
+    }
+    if (!validateWorkflowConnection(
+      edge.sourceHandle as WorkflowHandleType | null | undefined,
+      edge.targetHandle as WorkflowHandleType | null | undefined
+    )) {
+      issues.push({
+        code: 'invalid-connection',
+        edgeId: edge.id,
+        message: 'The selected template path contains an incompatible connection.',
+      });
+    }
+  }
+
+  if (path.nodeIds.length > 0 && inputSlots.length === 0) {
+    issues.push({
+      code: 'consumer-input-required',
+      message: 'Classify at least one image or video input as a consumer upload.',
+    });
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+    path,
+    outputKind,
+    inputSlots,
+  };
 }
 
 type WorkflowCapabilityIssueCode =
@@ -2228,11 +2859,55 @@ export function validateWorkflowConnectionForGraph(params: {
   }
 
   const targetNode = getNodeById(graph, targetNodeId);
+  const sourceNode = getNodeById(graph, sourceNodeId);
   if (!targetNode) {
     return {
       valid: false,
       message: 'That target node is no longer available.',
     };
+  }
+
+  if (!sourceNode) {
+    return {
+      valid: false,
+      message: 'That source node is no longer available.',
+    };
+  }
+
+  if (wouldWorkflowConnectionCreateCycle(graph, sourceNodeId, targetNodeId)) {
+    return {
+      valid: false,
+      message: 'That connection would create a cycle. Template workflows must move forward without loops.',
+    };
+  }
+
+  if (targetNode.type === 'approval-gate') {
+    const approval = normalizeNodeData('approval-gate', targetNode.data) as ApprovalGateNodeData;
+    if (sourceHandle !== approval.mediaKind || targetHandle !== approval.mediaKind) {
+      return {
+        valid: false,
+        message: `This approval checkpoint reviews ${approval.mediaKind} output. Connect a matching ${approval.mediaKind} handle.`,
+      };
+    }
+
+    const matchingInputs = getIncomingEdges(graph, targetNode.id)
+      .filter((edge) => edge.targetHandle === approval.mediaKind);
+    if (matchingInputs.length >= 1) {
+      return {
+        valid: false,
+        message: 'Approval checkpoints accept exactly one media input.',
+      };
+    }
+  }
+
+  if (sourceNode.type === 'approval-gate') {
+    const approval = normalizeNodeData('approval-gate', sourceNode.data) as ApprovalGateNodeData;
+    if (sourceHandle !== approval.mediaKind) {
+      return {
+        valid: false,
+        message: `This approval checkpoint passes through ${approval.mediaKind} output only.`,
+      };
+    }
   }
 
   const existingExactMatch = graph.edges.some((edge) =>
@@ -2677,6 +3352,9 @@ export function getNodeOutputUrl(node: WorkflowCanvasNode): string | null {
   if (node.type === 'audio-input') {
     return (data as AudioInputNodeData).audioUrl;
   }
+  if (node.type === 'approval-gate') {
+    return (data as ApprovalGateNodeData).runState.outputUrl;
+  }
   return data.runState.outputUrl;
 }
 
@@ -2684,6 +3362,40 @@ export function inspectWorkflowNodeDependencies(
   graph: WorkflowCanvasGraph,
   node: WorkflowCanvasNode
 ): WorkflowNodeDependencyState {
+  if (node.type === 'approval-gate') {
+    const approval = normalizeNodeData('approval-gate', node.data) as ApprovalGateNodeData;
+    const incoming = getIncomingEdges(graph, node.id);
+    const matchingInputs = incoming.filter((edge) => (
+      edge.sourceHandle === approval.mediaKind && edge.targetHandle === approval.mediaKind
+    ));
+
+    if (incoming.length !== 1 || matchingInputs.length !== 1) {
+      return {
+        kind: 'blocked',
+        message: `Approval checkpoints need exactly one ${approval.mediaKind} input.`,
+      };
+    }
+
+    const source = getNodeById(graph, matchingInputs[0]!.source);
+    if (!source) {
+      return { kind: 'blocked', message: 'The approval checkpoint source is missing.' };
+    }
+    if (getNodeOutputUrl(source)) {
+      return { kind: 'ready', message: null };
+    }
+    if (
+      source.data.runState.status === 'processing'
+      || source.data.runState.status === 'queued'
+      || source.data.runState.status === 'awaiting_approval'
+    ) {
+      return { kind: 'queued', message: `${source.data.title || 'Upstream media'} is still generating.` };
+    }
+    return {
+      kind: 'blocked',
+      message: `${source.data.title || 'Upstream media'} has no ${approval.mediaKind} output to review yet.`,
+    };
+  }
+
   const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
   const resolvedInputs = resolveNodeInputs(graph, node.id);
   if (!capabilityValidation.isValid) {
@@ -2734,8 +3446,12 @@ export function inspectWorkflowNodeDependencies(
       continue;
     }
 
-    if (isRunnableNode(source)) {
-      if (source.data.runState.status === 'processing' || source.data.runState.status === 'queued') {
+    if (isRunnableNode(source) || isApprovalGateNode(source)) {
+      if (
+        source.data.runState.status === 'processing'
+        || source.data.runState.status === 'queued'
+        || source.data.runState.status === 'awaiting_approval'
+      ) {
         waitingMessages.push(`${sourceTitle} is still generating.`);
         continue;
       }

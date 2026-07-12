@@ -35,6 +35,7 @@ type StartImageGenerationForRouteInput = {
   userId: string;
   supabase: ImageGenerationStartRouteClient;
   adminSupabase: ImageGenerationStartRouteClient;
+  persistInputMedia?: boolean;
 };
 
 function readString(value: unknown, fallback: string): string {
@@ -55,6 +56,7 @@ export async function startImageGenerationForRoute({
   userId,
   supabase,
   adminSupabase,
+  persistInputMedia = true,
 }: StartImageGenerationForRouteInput): Promise<ImageGenerationStartRoutePayload> {
   const selectedModel = readString(body.model, 'nano-banana-2');
   const imageUrls = readArray<string>(body.imageUrls);
@@ -109,6 +111,7 @@ export async function startImageGenerationForRoute({
       qualityMode: normalizedSettings.qualityMode as ImageQualityMode | undefined,
       outputFormat: normalizedSettings.outputFormat as ImageOutputFormat,
       googleSearch: Boolean(normalizedSettings.googleSearch),
+      persistInputMedia,
       quotedCostCredits: quote.costCredits,
       sourceGenerationId,
     }),

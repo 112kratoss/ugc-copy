@@ -5,6 +5,7 @@ import { ArrowLeft, Save } from 'lucide-react';
 import type { CanvasSaveState } from './useWorkflowCanvasPersistence';
 
 interface WorkflowCanvasChromeProps {
+  backLabel?: string;
   canvasTitle: string;
   children: ReactNode;
   canvasOverlay?: ReactNode;
@@ -29,6 +30,7 @@ function getSaveLabel(saveState: CanvasSaveState) {
 }
 
 export function WorkflowCanvasChrome({
+  backLabel = 'Back to create',
   canvasTitle,
   children,
   canvasOverlay,
@@ -46,20 +48,21 @@ export function WorkflowCanvasChrome({
     <div className="workflow-builder-shell flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         data-testid="workflow-canvas-header"
-        className="shrink-0 border-b border-white/10 bg-black/88 px-5 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.28)] backdrop-blur-xl supports-[backdrop-filter]:bg-black/74"
+        className="shrink-0 border-b border-white/10 bg-black/88 px-3 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.28)] backdrop-blur-xl supports-[backdrop-filter]:bg-black/74 sm:px-5"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3 sm:items-center">
+          <div className="flex min-w-0 basis-full items-center gap-3 sm:flex-1 sm:basis-auto">
             <button
               type="button"
               onClick={onNavigateBack}
-              aria-label="Back to create"
+              aria-label={backLabel}
+              title={backLabel}
               className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-300 transition hover:bg-white/[0.06]"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
 
-            <div className="min-w-[280px] flex-1">
+            <div className="min-w-0 flex-1 sm:min-w-[280px]">
               <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">Workflow title</div>
               <input
                 aria-label="Workflow title"
@@ -70,9 +73,9 @@ export function WorkflowCanvasChrome({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex w-full min-w-0 items-center gap-2 overflow-x-auto pb-1 sm:w-auto sm:gap-3 sm:overflow-visible sm:pb-0">
             {headerActions}
-            <span className={`text-xs uppercase tracking-[0.16em] ${
+            <span className={`shrink-0 text-xs uppercase tracking-[0.16em] ${
               saveState === 'dirty'
                 ? 'text-amber-300'
                 : saveState === 'saving'
@@ -85,7 +88,7 @@ export function WorkflowCanvasChrome({
               type="button"
               onClick={onSave}
               disabled={!canSave || isSaving}
-              className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-sm text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-sm text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
               {isSaving ? 'Saving...' : 'Save'}

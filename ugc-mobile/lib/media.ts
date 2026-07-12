@@ -18,6 +18,7 @@ export interface UploadedMedia {
 }
 
 const CLIENT_UPLOAD_BUCKETS = new Set(['uploads']);
+const TEMPLATE_INPUT_BUCKET = 'template_inputs';
 
 function assertClientUploadBucket(bucket: string) {
   if (!CLIENT_UPLOAD_BUCKETS.has(bucket)) {
@@ -162,6 +163,64 @@ export async function uploadPickedMedia(
     durationSeconds: options.durationSeconds ?? null,
     sizeBytes: uploadBody.sizeBytes,
   };
+}
+
+export async function uploadTemplateRunInput(
+  uri: string,
+  options: {
+    api: Pick<MagicbookletApiClient, 'signTemplateRunInput' | 'finalizeTemplateRunInput'>;
+    runId: string;
+    slotKey: string;
+    kind?: 'image' | 'video';
+    fileName?: string | null;
+    mimeType?: string | null;
+    sizeBytes?: number | null;
+  }
+) {
+  const missingEnvKeys = getMissingMobileEnvKeys();
+  if (missingEnvKeys.length > 0) {
+    throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
+  }
+
+  const uploadBody = await readUriUploadBody(uri, {
+    mimeType: options.mimeType,
+    sizeBytes: options.sizeBytes,
+    defaultMimeType: options.kind === 'video' ? 'video/mp4' : 'image/jpeg',
+  });
+  const expectedKind = options.kind ?? 'image';
+  if (!uploadBody.mimeType.startsWith(`${expectedKind}/`)) {
+    throw new Error(`Choose a ${expectedKind} file.`);
+  }
+
+  const extension = getUploadExtension(uploadBody.mimeType, options.fileName);
+  const fileName = sanitizeUploadFileName(
+    options.fileName,
+    `${options.slotKey}.${extension || (expectedKind === 'video' ? 'mp4' : 'jpg')}`
+  );
+  const uploadIntent = await options.api.signTemplateRunInput(options.runId, {
+    slotKey: options.slotKey,
+    fileName,
+    mimeType: uploadBody.mimeType,
+    sizeBytes: uploadBody.sizeBytes,
+  });
+
+  if (uploadIntent.bucket !== TEMPLATE_INPUT_BUCKET) {
+    throw new Error('Unsupported template input upload bucket.');
+  }
+
+  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(
+    uploadIntent.path,
+    uploadIntent.token,
+    uploadBody.body,
+    { contentType: uploadBody.mimeType }
+  );
+  if (uploadError) {
+    throw new Error(uploadError.message);
+  }
+
+  return options.api.finalizeTemplateRunInput(options.runId, {
+    inputs: [{ slotKey: options.slotKey, storagePath: uploadIntent.storagePath }],
+  });
 }
 
 export async function uploadProfileImage(

@@ -75,6 +75,10 @@ function createAdminSupabaseMock({
                 filters[column] = value;
                 return query;
               },
+              is(column: string, value: unknown) {
+                filters[column] = value;
+                return query;
+              },
               maybeSingle: vi.fn(async () => {
                 if (table === 'generations' && filters.id === generation?.id && filters.user_id === generation.user_id) {
                   return { data: generation, error: null };
@@ -101,6 +105,9 @@ function createAdminSupabaseMock({
             deletes.push(table);
             const query = {
               eq() {
+                return query;
+              },
+              is() {
                 return query;
               },
               then(resolve: (value: { error: null }) => void) {

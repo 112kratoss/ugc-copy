@@ -59,6 +59,12 @@ export interface GenerationListItem {
   preview_url?: string | null;
   previewUrl?: string | null;
   media?: VisualMediaDescriptor | null;
+  origin?: 'creation' | 'template';
+  template?: {
+    runId: string;
+    templateId: string;
+    templateTitle: string | null;
+  } | null;
   creationMode?: 'motion' | null;
   status: string;
   created_at: string;
@@ -114,6 +120,149 @@ export interface MediaReadUrlResponse {
   success: boolean;
   signedUrl: string;
   expiresInSeconds: number;
+}
+
+export interface MediaTemplateCreator {
+  id: string;
+  username: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+export interface MediaTemplateInputSlot {
+  key: string;
+  kind: 'image' | 'video';
+  label: string;
+  description: string | null;
+  required: boolean;
+}
+
+export interface MediaTemplateSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  category: string;
+  videoUrl: string | null;
+  thumbnailUrl: string | null;
+  creatorUserId: string | null;
+  creator: MediaTemplateCreator | null;
+  inputSlots: MediaTemplateInputSlot[];
+  outputKind: 'image' | 'video';
+  status: 'draft' | 'active' | 'disabled';
+  estimatedTotalCredits: number | null;
+  useCount: number;
+}
+
+export interface MediaTemplateDetail extends MediaTemplateSummary {
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface MediaTemplateListResponse {
+  success: boolean;
+  templates: MediaTemplateSummary[];
+}
+
+export interface MediaTemplateDetailResponse {
+  success: boolean;
+  template: MediaTemplateDetail;
+}
+
+export type TemplateRunStatus =
+  | 'collecting_inputs'
+  | 'queued'
+  | 'processing'
+  | 'awaiting_approval'
+  | 'succeeded'
+  | 'needs_attention'
+  | 'failed'
+  | 'cancelled';
+
+export type TemplateRunFailureCode =
+  | 'insufficient_credits'
+  | 'invalid_input_media'
+  | 'service_misconfigured'
+  | 'provider_busy'
+  | 'provider_unavailable'
+  | 'provider_rejected';
+
+export interface TemplateRunInput {
+  slotKey: string;
+  status: 'uploaded' | 'missing' | string;
+  previewUrl: string | null;
+  fileName: string | null;
+}
+
+export interface TemplateRunStep {
+  id: string;
+  kind: 'generation' | 'approval';
+  mediaKind: 'image' | 'video';
+  status: string;
+  label: string;
+  outputUrl: string | null;
+  errorMessage: string | null;
+  failureCode: TemplateRunFailureCode | null;
+  canRetry: boolean;
+  estimatedRetryCredits: number | null;
+}
+
+export interface TemplateRunResult {
+  /** The canonical generation selected by the backend as this run's result.
+   * It is intentionally nullable for legacy runs and must never be inferred
+   * from a workflow step id. */
+  generationId: string | null;
+  kind: 'image' | 'video';
+  url: string;
+}
+
+export interface TemplateRun {
+  id: string;
+  templateId: string;
+  templateSlug: string;
+  templateTitle: string;
+  templateCreator: MediaTemplateCreator | null;
+  status: TemplateRunStatus;
+  inputSlots: MediaTemplateInputSlot[];
+  inputs: TemplateRunInput[];
+  steps: TemplateRunStep[];
+  result: TemplateRunResult | null;
+  estimatedTotalCredits: number | null;
+  estimatedRemainingCredits: number | null;
+  creditsUsed: number;
+  errorMessage: string | null;
+  isTest: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface TemplateRunResponse {
+  success: boolean;
+  run: TemplateRun;
+}
+
+export interface TemplateRunInputSignRequest {
+  slotKey: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+export interface TemplateRunInputSignResponse {
+  success: boolean;
+  bucket: 'template_inputs';
+  path: string;
+  storagePath: string;
+  token: string;
+  signedUploadUrl: string | null;
+  expiresInSeconds: number;
+}
+
+export interface TemplateRunInputFinalizeRequest {
+  inputs: Array<{
+    slotKey: string;
+    storagePath: string;
+  }>;
 }
 
 export type ProfileMediaUploadRole = 'avatar' | 'cover';

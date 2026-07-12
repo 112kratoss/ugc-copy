@@ -7,9 +7,10 @@ import {
   startVideoGeneration,
   startVoiceoverGeneration,
   syncGenerationStatuses,
+  type TemplateGenerationContext,
 } from '@/lib/generation-services';
 import {
-  createWorkflowGraphHash,
+  type ApprovalGateNodeData,
   type AudioInputNodeData,
   type ImageInputNodeData,
   getExecutionOrder,
@@ -19,11 +20,13 @@ import {
   getResolvedWorkflowImageReferences,
   getResolvedWorkflowVideoReferences,
   inspectWorkflowNodeDependencies,
+  isApprovalGateNode,
   isSeedance2VideoModel,
   isRunnableNode,
   normalizeNodeData,
   normalizeWorkflowGraph,
   resolveNodeInputs,
+  serializeWorkflowGraph,
   updateNodeRunState,
   type ImageGenerateNodeData,
   type MotionGenerateNodeData,
@@ -47,11 +50,21 @@ import { quoteGenerationModel } from '@/lib/generation-model-catalog';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
-  status: 'processing' | 'succeeded' | 'failed';
+  status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed';
 }
 
-interface RunnableExecutionResult {
-  status: 'processing' | 'blocked';
+export class WorkflowRunApprovalError extends Error {
+  constructor(
+    message: string,
+    public readonly status: 400 | 404 | 409,
+  ) {
+    super(message);
+    this.name = 'WorkflowRunApprovalError';
+  }
+}
+
+export interface WorkflowRunnableExecutionResult {
+  status: 'processing' | 'awaiting_approval' | 'blocked';
   generation_id: string | null;
   input_snapshot: Record<string, unknown> | null;
   output_snapshot: Record<string, unknown> | null;
@@ -68,10 +81,11 @@ interface WorkflowRunRow {
   user_id: string;
   start_node_id: string;
   mode: 'node' | 'branch';
-  status: 'processing' | 'succeeded' | 'failed';
+  status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed';
   created_at: string;
   finished_at: string | null;
   catalog_revision: string | null;
+  graph_snapshot: WorkflowCanvasGraph | null;
 }
 
 interface GenerationStatusSnapshot {
@@ -265,7 +279,7 @@ function getKlingVideoElementPayload(
     } => Boolean(reference));
 }
 
-function buildBlockedError(message: string): RunnableExecutionResult {
+function buildBlockedError(message: string): WorkflowRunnableExecutionResult {
   return {
     status: 'blocked',
     generation_id: null,
@@ -288,17 +302,6 @@ function buildStaticOutputSnapshot(node: WorkflowCanvasNode) {
               ? node.data.text
               : null,
   };
-}
-
-async function persistWorkflowGraph(
-  supabase: SupabaseClient,
-  canvasId: string,
-  graph: WorkflowCanvasGraph
-) {
-  await supabase
-    .from('workflow_canvases')
-    .update({ graph, viewport: graph.viewport })
-    .eq('id', canvasId);
 }
 
 function applyStepToGraph(graph: WorkflowCanvasGraph, step: HydratedRunStep): WorkflowCanvasGraph {
@@ -349,7 +352,7 @@ function mapGenerationStatus(status: string): WorkflowRunStatus {
 }
 
 function getDerivedStepFinishedAt(step: HydratedRunStep, status: WorkflowRunStatus): string | null {
-  if (status === 'processing' || status === 'queued') {
+  if (status === 'processing' || status === 'queued' || status === 'awaiting_approval') {
     return null;
   }
 
@@ -365,20 +368,26 @@ function hasStepChanged(previous: HydratedRunStep, next: HydratedRunStep) {
   );
 }
 
-function deriveWorkflowRunStatus(steps: HydratedRunStep[]): 'processing' | 'succeeded' | 'failed' {
+function deriveWorkflowRunStatus(steps: HydratedRunStep[]): 'processing' | 'awaiting_approval' | 'succeeded' | 'failed' {
   if (steps.some((step) => step.status === 'failed' || step.status === 'blocked')) {
     return 'failed';
   }
 
-  if (steps.some((step) => step.status === 'processing' || step.status === 'queued')) {
+  if (steps.some((step) => step.status === 'processing')) {
     return 'processing';
   }
+
+  if (steps.some((step) => step.status === 'awaiting_approval')) {
+    return 'awaiting_approval';
+  }
+
+  if (steps.some((step) => step.status === 'queued')) return 'processing';
 
   return 'succeeded';
 }
 
-function getDerivedRunFinishedAt(run: WorkflowRunRow, status: 'processing' | 'succeeded' | 'failed', steps: HydratedRunStep[]) {
-  if (status === 'processing') {
+function getDerivedRunFinishedAt(run: WorkflowRunRow, status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed', steps: HydratedRunStep[]) {
+  if (status === 'processing' || status === 'awaiting_approval') {
     return null;
   }
 
@@ -440,7 +449,7 @@ async function loadWorkflowRunState(params: {
   const { supabase, canvasId, runId } = params;
   const { data: run, error } = await supabase
     .from('workflow_canvas_runs')
-    .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at, catalog_revision')
+    .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at, catalog_revision, graph_snapshot')
     .eq('canvas_id', canvasId)
     .eq('id', runId)
     .single();
@@ -449,11 +458,16 @@ async function loadWorkflowRunState(params: {
     throw new Error('Workflow run not found.');
   }
 
-  const { data: canvas } = await supabase
-    .from('workflow_canvases')
-    .select('graph')
-    .eq('id', canvasId)
-    .single();
+  const typedRun = run as WorkflowRunRow;
+  let runGraph = typedRun.graph_snapshot;
+  if (!runGraph) {
+    const { data: canvas } = await supabase
+      .from('workflow_canvases')
+      .select('graph')
+      .eq('id', canvasId)
+      .single();
+    runGraph = (canvas?.graph as WorkflowCanvasGraph | null | undefined) ?? null;
+  }
 
   const { data: steps } = await supabase
     .from('workflow_canvas_run_steps')
@@ -462,8 +476,8 @@ async function loadWorkflowRunState(params: {
     .order('started_at', { ascending: true });
 
   return {
-    run: run as WorkflowRunRow,
-    graph: normalizeWorkflowGraph(canvas?.graph as WorkflowCanvasGraph | undefined),
+    run: typedRun,
+    graph: normalizeWorkflowGraph(runGraph),
     steps: (steps || []) as HydratedRunStep[],
   };
 }
@@ -555,16 +569,53 @@ async function persistHydratedStepUpdates(
   }
 }
 
-async function executeRunnableNode(params: {
+export async function executeWorkflowRunnableNode(params: {
   supabase: SupabaseClient;
   userId: string;
   node: WorkflowCanvasNode;
   graph: WorkflowCanvasGraph;
   catalogRevision?: string | null;
-}): Promise<RunnableExecutionResult> {
-  const { supabase, userId, node, graph, catalogRevision = null } = params;
+  clientRequestKeyHash?: string | null;
+  persistInputMedia?: boolean;
+  privateRecipe?: boolean;
+  templateContext?: TemplateGenerationContext;
+}): Promise<WorkflowRunnableExecutionResult> {
+  const {
+    supabase,
+    userId,
+    node,
+    graph,
+    catalogRevision = null,
+    clientRequestKeyHash = null,
+    persistInputMedia = true,
+    privateRecipe = false,
+    templateContext,
+  } = params;
   const creditSupabase = createServiceClient();
   const inputs = resolveNodeInputs(graph, node.id);
+
+  if (isApprovalGateNode(node)) {
+    const data = normalizeNodeData('approval-gate', node.data as Partial<ApprovalGateNodeData>) as ApprovalGateNodeData;
+    const sourceEdge = getIncomingEdges(graph, node.id)[0];
+    const sourceNode = sourceEdge ? getNodeById(graph, sourceEdge.source) : null;
+    const pendingOutputUrl = sourceNode ? getNodeOutputUrl(sourceNode) : null;
+    if (!pendingOutputUrl) {
+      return buildBlockedError(`Approval checkpoint is missing its ${data.mediaKind} output.`);
+    }
+
+    return {
+      status: 'awaiting_approval',
+      generation_id: null,
+      input_snapshot: inputs,
+      output_snapshot: {
+        pendingOutputUrl,
+        mediaKind: data.mediaKind,
+        label: data.label,
+        allowRetry: data.allowRetry,
+      },
+      error_message: null,
+    };
+  }
 
   if (node.type === 'image-generate') {
     if (!inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
@@ -595,6 +646,10 @@ async function executeRunnableNode(params: {
       outputFormat: data.outputFormat,
       googleSearch: data.googleSearch,
       quotedCostCredits: quote.costCredits,
+      clientRequestKeyHash,
+      persistInputMedia,
+      privateRecipe,
+      templateContext,
     });
 
     return {
@@ -643,7 +698,9 @@ async function executeRunnableNode(params: {
         isMultiShot: data.isMultiShot,
       },
       inputCounts: {
-        images: elementPayload.references.length + Number(Boolean(inputs.startFrameUrl)) + Number(Boolean(inputs.endFrameUrl)),
+        // Start/end frames are validated by their dedicated capabilities and
+        // are not generic image references for catalog limits or pricing.
+        images: elementPayload.references.length,
         videos: elementPayload.referenceVideoUrls.length + klingVideoElements.length,
         audios: elementPayload.referenceAudioUrls.length,
       },
@@ -672,6 +729,10 @@ async function executeRunnableNode(params: {
       fixedLens: data.fixedLens,
       seedanceAssets: elementPayload.seedanceAssets,
       quotedCostCredits: quote.costCredits,
+      clientRequestKeyHash,
+      persistInputMedia,
+      privateRecipe,
+      templateContext,
     });
 
     return {
@@ -818,7 +879,13 @@ export async function executeWorkflowRun(params: {
   catalogRevision?: string | null;
 }): Promise<WorkflowRunExecutionResult> {
   const { supabase, userId, canvasId, graph, startNodeId, mode, catalogRevision = null } = params;
-  const executionOrder = getExecutionOrder(graph, startNodeId, mode);
+  // A canvas can still have an in-memory overlay from a previous run. Start
+  // every execution from the editable graph only so stale generation outputs
+  // can never satisfy dependencies in a new run.
+  const executionGraph = normalizeWorkflowGraph(
+    serializeWorkflowGraph(graph, { mode: 'client-save' }) as unknown as Partial<WorkflowCanvasGraph>,
+  );
+  const executionOrder = getExecutionOrder(executionGraph, startNodeId, mode);
 
   const runInsert = await supabase
     .from('workflow_canvas_runs')
@@ -829,14 +896,17 @@ export async function executeWorkflowRun(params: {
       mode,
       status: 'processing',
       catalog_revision: catalogRevision,
+      graph_snapshot: serializeWorkflowGraph(executionGraph, { mode: 'client-save' }),
     })
     .select('id')
     .single();
 
   const runId = runInsert.data?.id as string;
-  let workingGraph = normalizeWorkflowGraph(graph);
+  let workingGraph = executionGraph;
   let encounteredFailure = false;
-  let hasPendingWork = false;
+  let hasProcessingWork = false;
+  let hasQueuedWork = false;
+  let hasAwaitingApproval = false;
 
   for (const nodeId of executionOrder) {
     const node = getNodeById(workingGraph, nodeId);
@@ -844,7 +914,7 @@ export async function executeWorkflowRun(params: {
 
     const startedAt = new Date().toISOString();
 
-    if (!isRunnableNode(node)) {
+    if (!isRunnableNode(node) && !isApprovalGateNode(node)) {
       await supabase.from('workflow_canvas_run_steps').insert({
         run_id: runId,
         node_id: node.id,
@@ -859,7 +929,7 @@ export async function executeWorkflowRun(params: {
 
     const dependencyState = inspectWorkflowNodeDependencies(workingGraph, node);
     if (dependencyState.kind === 'queued') {
-      hasPendingWork = true;
+      hasQueuedWork = true;
       workingGraph = updateNodeRunState(workingGraph, node.id, {
         status: 'queued',
         error: dependencyState.message,
@@ -897,13 +967,15 @@ export async function executeWorkflowRun(params: {
     }
 
     try {
-      const result = await executeRunnableNode({ supabase, userId, node, graph: workingGraph, catalogRevision });
+      const result = await executeWorkflowRunnableNode({ supabase, userId, node, graph: workingGraph, catalogRevision });
       const nextRunState: Partial<Record<'status' | 'generationId' | 'error' | 'updatedAt' | 'cost', unknown>> = {
         status: result.status,
         generationId: result.generation_id,
         error: result.error_message,
         cost: (result.output_snapshot as { cost?: number | null } | null)?.cost ?? null,
-        updatedAt: result.status === 'processing' ? startedAt : new Date().toISOString(),
+        updatedAt: result.status === 'processing' || result.status === 'awaiting_approval'
+          ? startedAt
+          : new Date().toISOString(),
       };
       workingGraph = updateNodeRunState(workingGraph, node.id, nextRunState as Record<string, unknown>);
 
@@ -916,7 +988,9 @@ export async function executeWorkflowRun(params: {
         output_snapshot: result.output_snapshot,
         error_message: result.error_message,
         started_at: startedAt,
-        finished_at: result.status === 'processing' ? null : new Date().toISOString(),
+        finished_at: result.status === 'processing' || result.status === 'awaiting_approval'
+          ? null
+          : new Date().toISOString(),
       });
 
       if (result.status === 'blocked') {
@@ -924,7 +998,11 @@ export async function executeWorkflowRun(params: {
       }
 
       if (result.status === 'processing') {
-        hasPendingWork = true;
+        hasProcessingWork = true;
+      }
+
+      if (result.status === 'awaiting_approval') {
+        hasAwaitingApproval = true;
       }
     } catch (error) {
       encounteredFailure = true;
@@ -946,14 +1024,22 @@ export async function executeWorkflowRun(params: {
     }
   }
 
-  await persistWorkflowGraph(supabase, canvasId, workingGraph);
-
-  const nextRunStatus = encounteredFailure ? 'failed' : hasPendingWork ? 'processing' : 'succeeded';
+  const nextRunStatus = encounteredFailure
+    ? 'failed'
+    : hasProcessingWork
+      ? 'processing'
+      : hasAwaitingApproval
+        ? 'awaiting_approval'
+        : hasQueuedWork
+          ? 'processing'
+          : 'succeeded';
   await supabase
     .from('workflow_canvas_runs')
     .update({
       status: nextRunStatus,
-      finished_at: nextRunStatus === 'processing' ? null : new Date().toISOString(),
+      finished_at: nextRunStatus === 'processing' || nextRunStatus === 'awaiting_approval'
+        ? null
+        : new Date().toISOString(),
     })
     .eq('id', runId);
 
@@ -982,7 +1068,6 @@ async function advanceWorkflowRunProgress(params: {
 
   await persistHydratedStepUpdates(supabase, originalSteps, hydratedSteps);
 
-  const originalGraphHash = createWorkflowGraphHash(graph);
   let workingGraph = graph;
   for (const step of hydratedSteps) {
     workingGraph = applyStepToGraph(workingGraph, step);
@@ -998,7 +1083,7 @@ async function advanceWorkflowRunProgress(params: {
 
     const queuedStep = hydratedSteps[stepIndex];
     const node = getNodeById(workingGraph, nodeId);
-    if (!node || !isRunnableNode(node)) {
+    if (!node || (!isRunnableNode(node) && !isApprovalGateNode(node))) {
       continue;
     }
 
@@ -1042,7 +1127,7 @@ async function advanceWorkflowRunProgress(params: {
     }
 
     try {
-      const result = await executeRunnableNode({
+      const result = await executeWorkflowRunnableNode({
         supabase,
         userId: run.user_id,
         node,
@@ -1058,7 +1143,9 @@ async function advanceWorkflowRunProgress(params: {
         output_snapshot: result.output_snapshot,
         error_message: result.error_message,
         started_at: startedAt,
-        finished_at: result.status === 'processing' ? null : new Date().toISOString(),
+        finished_at: result.status === 'processing' || result.status === 'awaiting_approval'
+          ? null
+          : new Date().toISOString(),
       };
 
       hydratedSteps[stepIndex] = resumedStep;
@@ -1093,10 +1180,6 @@ async function advanceWorkflowRunProgress(params: {
     }
   }
 
-  if (createWorkflowGraphHash(workingGraph) !== originalGraphHash) {
-    await persistWorkflowGraph(supabase, canvasId, workingGraph);
-  }
-
   const nextRunStatus = deriveWorkflowRunStatus(hydratedSteps);
   const nextFinishedAt = getDerivedRunFinishedAt(run, nextRunStatus, hydratedSteps);
   if (run.status !== nextRunStatus || run.finished_at !== nextFinishedAt) {
@@ -1114,6 +1197,54 @@ async function advanceWorkflowRunProgress(params: {
     status: nextRunStatus,
     finished_at: nextFinishedAt,
   }, hydratedSteps);
+}
+
+export async function approveWorkflowRunStep(params: {
+  supabase: SupabaseClient;
+  canvasId: string;
+  runId: string;
+  stepId: string;
+}) {
+  const { supabase, canvasId, runId, stepId } = params;
+  const { graph, steps } = await loadWorkflowRunState({ supabase, canvasId, runId });
+  const step = steps.find((candidate) => candidate.id === stepId);
+  if (!step) {
+    throw new WorkflowRunApprovalError('Approval step not found.', 404);
+  }
+  if (step.status !== 'awaiting_approval') {
+    throw new WorkflowRunApprovalError('This approval step is not waiting for review.', 409);
+  }
+
+  const node = getNodeById(graph, step.node_id);
+  if (!node || !isApprovalGateNode(node)) {
+    throw new WorkflowRunApprovalError('The selected step is not an approval checkpoint.', 400);
+  }
+
+  const outputSnapshot = (step.output_snapshot || {}) as Record<string, unknown>;
+  const pendingOutputUrl = typeof outputSnapshot.pendingOutputUrl === 'string'
+    ? outputSnapshot.pendingOutputUrl
+    : null;
+  if (!pendingOutputUrl) {
+    throw new WorkflowRunApprovalError('The approval preview is no longer available.', 409);
+  }
+
+  const approvedAt = new Date().toISOString();
+  await updateRunStep(supabase, step.id, {
+    status: 'succeeded',
+    output_snapshot: {
+      ...outputSnapshot,
+      outputUrl: pendingOutputUrl,
+      approvedAt,
+    },
+    error_message: null,
+    finished_at: approvedAt,
+  });
+  await supabase
+    .from('workflow_canvas_runs')
+    .update({ status: 'processing', finished_at: null })
+    .eq('id', runId);
+
+  return advanceWorkflowRunOnce({ supabase, canvasId, runId });
 }
 
 export async function monitorWorkflowRun(params: {

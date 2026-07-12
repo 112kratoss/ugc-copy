@@ -8,6 +8,8 @@ import type {
   ImageGenerationRequest,
   MediaReadUrlRequest,
   MediaReadUrlResponse,
+  MediaTemplateDetailResponse,
+  MediaTemplateListResponse,
   MediaUploadIntentRequest,
   MediaUploadIntentResponse,
   MarketplaceResourceList,
@@ -32,6 +34,10 @@ import type {
   ShowcaseFeedResponse,
   ShowcasePostResponse,
   SourceToolOption,
+  TemplateRunInputFinalizeRequest,
+  TemplateRunInputSignRequest,
+  TemplateRunInputSignResponse,
+  TemplateRunResponse,
   VideoGenerationRequest,
 } from './types';
 import {
@@ -40,6 +46,11 @@ import {
   type GenerationModelQuote,
   type GenerationModelQuoteRequest,
 } from './generation-model-catalog';
+import {
+  normalizeMediaTemplateDetailResponse,
+  normalizeMediaTemplateListResponse,
+  normalizeTemplateRunResponse,
+} from './media-templates';
 
 export class ApiError extends Error {
   constructor(
@@ -127,9 +138,17 @@ function absolutizeMediaUrl(root: string, url: string | null | undefined) {
 
 function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): GenerationListItem {
   const previewUrl = absolutizeMediaUrl(root, item.previewUrl ?? item.preview_url);
+  const isTemplateResult = item.origin === 'template';
 
   return {
     ...item,
+    // Template consumers receive the result and public attribution, never the
+    // underlying model, prompt, or source references from the private recipe.
+    ...(isTemplateResult ? {
+      model: 'Magicbooklet template',
+      prompt: null,
+      input_media: [],
+    } : {}),
     output_url: absolutizeMediaUrl(root, item.output_url),
     output_urls: item.output_urls?.map((url) => absolutizeMediaUrl(root, url)).filter((url): url is string => Boolean(url)),
     preview_url: previewUrl,
@@ -139,10 +158,52 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
       url: absolutizeMediaUrl(root, item.media.url) ?? item.media.url,
       previewUrl: absolutizeMediaUrl(root, item.media.previewUrl),
     } : item.media,
-    input_media: item.input_media?.map((media) => ({
-      ...media,
-      url: absolutizeMediaUrl(root, media.url),
+    input_media: isTemplateResult
+      ? []
+      : item.input_media?.map((media) => ({
+        ...media,
+        url: absolutizeMediaUrl(root, media.url),
+      })),
+  };
+}
+
+function normalizeTemplateListMediaUrls(root: string, response: MediaTemplateListResponse): MediaTemplateListResponse {
+  return {
+    ...response,
+    templates: response.templates.map((template) => ({
+      ...template,
+      thumbnailUrl: absolutizeMediaUrl(root, template.thumbnailUrl),
+      videoUrl: absolutizeMediaUrl(root, template.videoUrl),
+      creator: template.creator ? {
+        ...template.creator,
+        avatarUrl: absolutizeMediaUrl(root, template.creator.avatarUrl),
+      } : null,
     })),
+  };
+}
+
+function normalizeTemplateRunMediaUrls(root: string, response: TemplateRunResponse): TemplateRunResponse {
+  return {
+    ...response,
+    run: {
+      ...response.run,
+      templateCreator: response.run.templateCreator ? {
+        ...response.run.templateCreator,
+        avatarUrl: absolutizeMediaUrl(root, response.run.templateCreator.avatarUrl),
+      } : null,
+      inputs: response.run.inputs.map((input) => ({
+        ...input,
+        previewUrl: absolutizeMediaUrl(root, input.previewUrl),
+      })),
+      steps: response.run.steps.map((step) => ({
+        ...step,
+        outputUrl: absolutizeMediaUrl(root, step.outputUrl),
+      })),
+      result: response.run.result ? {
+        ...response.run.result,
+        url: absolutizeMediaUrl(root, response.run.result.url) ?? response.run.result.url,
+      } : null,
+    },
   };
 }
 
@@ -441,6 +502,82 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    listMediaTemplates: async (params?: Record<string, QueryValue>) => {
+      const response = await request<unknown>(`/api/templates${buildQuery(params)}`, {}, {
+        auth: false,
+        cacheTtlMs: CONTENT_CACHE_TTL_MS,
+      });
+      return normalizeTemplateListMediaUrls(root, normalizeMediaTemplateListResponse(response));
+    },
+    getMediaTemplate: async (slug: string) => {
+      const response = await request<unknown>(`/api/templates/${encodeURIComponent(slug)}`, {}, {
+        auth: false,
+        cacheTtlMs: CONTENT_CACHE_TTL_MS,
+      });
+      const normalized = normalizeMediaTemplateDetailResponse(response);
+      const listNormalized = normalizeTemplateListMediaUrls(root, {
+        success: normalized.success,
+        templates: [normalized.template],
+      });
+      return {
+        success: normalized.success,
+        template: {
+          ...normalized.template,
+          ...listNormalized.templates[0],
+        },
+      } satisfies MediaTemplateDetailResponse;
+    },
+    createMediaTemplateRun: async (templateId: string, idempotencyKey?: string) => {
+      const response = await request<unknown>(
+        `/api/templates/${encodeURIComponent(templateId)}/runs`,
+        generationStartInit({}, 'template-run', idempotencyKey)
+      );
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
+    getTemplateRun: async (runId: string) => {
+      const response = await request<unknown>(`/api/template-runs/${encodeURIComponent(runId)}`);
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
+    signTemplateRunInput: (runId: string, body: TemplateRunInputSignRequest) =>
+      request<TemplateRunInputSignResponse>(`/api/template-runs/${encodeURIComponent(runId)}/inputs/sign`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    finalizeTemplateRunInput: async (runId: string, body: TemplateRunInputFinalizeRequest) => {
+      const response = await request<unknown>(`/api/template-runs/${encodeURIComponent(runId)}/inputs/finalize`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
+    startTemplateRun: async (runId: string, idempotencyKey?: string) => {
+      const response = await request<unknown>(
+        `/api/template-runs/${encodeURIComponent(runId)}/start`,
+        generationStartInit({}, 'template-run-start', idempotencyKey)
+      );
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
+    retryTemplateRunStep: async (runId: string, stepId: string, idempotencyKey?: string) => {
+      const response = await request<unknown>(
+        `/api/template-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/retry`,
+        generationStartInit({}, 'template-step-retry', idempotencyKey)
+      );
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
+    approveTemplateRunStep: async (runId: string, stepId: string, idempotencyKey?: string) => {
+      const response = await request<unknown>(
+        `/api/template-runs/${encodeURIComponent(runId)}/approval-steps/${encodeURIComponent(stepId)}/approve`,
+        generationStartInit({}, 'template-step-approve', idempotencyKey)
+      );
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
+    cancelTemplateRun: async (runId: string, idempotencyKey?: string) => {
+      const response = await request<unknown>(
+        `/api/template-runs/${encodeURIComponent(runId)}/cancel`,
+        generationStartInit({}, 'template-cancel', idempotencyKey)
+      );
+      return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
+    },
     createProfileMediaUpload: (body: ProfileMediaUploadIntentRequest) =>
       request<ProfileMediaUploadIntentResponse>('/api/profile/media/sign', {
         method: 'POST',

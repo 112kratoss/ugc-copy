@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -830,6 +830,50 @@ describe('CreationsPage', () => {
     expect(screen.getByTestId('creation-card-gen-image')).toBeInTheDocument();
     expect(generationFetch).toHaveBeenCalledTimes(1);
     expect(setIntervalSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows canonical template results without unsafe lifecycle actions', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({
+            id: 'gen-template-result',
+            title: null,
+            prompt: null,
+            origin: 'template',
+            template: {
+              runId: 'run-template-1',
+              templateId: 'template-1',
+              templateTitle: 'Ghost rider transformation',
+            },
+          })],
+        }));
+      }
+
+      if (url.startsWith('/api/posts')) {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    const card = await screen.findByTestId('creation-card-gen-template-result');
+    expect(within(card).getByText('Ghost rider transformation')).toBeInTheDocument();
+    expect(within(card).getByText('From template')).toBeInTheDocument();
+    expect(within(card).getByRole('link', { name: 'Open run' })).toHaveAttribute(
+      'href',
+      '/template-runs/run-template-1',
+    );
+    expect(within(card).queryByRole('button', { name: 'Archive creation' })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Delete creation' })).not.toBeInTheDocument();
   });
 
   it('preserves unchanged storage-backed media URLs across processing polls', async () => {

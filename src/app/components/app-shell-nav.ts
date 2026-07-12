@@ -39,13 +39,15 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     label: 'Create',
     shortLabel: 'Create',
     href: '/create',
-    description: 'Launch image, video, motion, and workflow tools',
+    description: 'Launch image, video, motion, template, and workflow tools',
     icon: Sparkles,
     match: (pathname) =>
       isExactOrChild(pathname, '/create') ||
       pathname.startsWith('/create-image') ||
       pathname.startsWith('/create-video') ||
-      pathname.startsWith('/create-motion'),
+      pathname.startsWith('/create-motion') ||
+      isExactOrChild(pathname, '/templates') ||
+      isExactOrChild(pathname, '/template-runs'),
   },
   {
     id: 'studio',
@@ -122,6 +124,9 @@ export function getAppShellTitle(pathname: string) {
   if (pathname.startsWith('/post/new')) return 'Share Post';
   if (pathname.startsWith('/marketplace/sell')) return 'Seller';
   if (pathname.startsWith('/notifications')) return 'Alerts';
+  if (pathname.startsWith('/templates/new')) return 'Create Template';
+  if (pathname.startsWith('/template-runs')) return 'Create From Template';
+  if (pathname.startsWith('/templates')) return 'Templates';
 
   return getActiveAppNavItem(pathname)?.label ?? 'Workspace';
 }

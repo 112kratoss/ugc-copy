@@ -13,6 +13,15 @@ describe('app shell navigation', () => {
     expect(getActiveAppNavItem('/creators/sassy23bh')?.id).toBe('showcase');
   });
 
+  it('keeps template discovery and runs in the Create section', () => {
+    expect(getActiveAppNavItem('/templates')?.id).toBe('create');
+    expect(getActiveAppNavItem('/templates/ghost-rider')?.id).toBe('create');
+    expect(getActiveAppNavItem('/template-runs/run-1')?.id).toBe('create');
+    expect(getAppShellTitle('/templates')).toBe('Templates');
+    expect(getAppShellTitle('/templates/new')).toBe('Create Template');
+    expect(getAppShellTitle('/template-runs/run-1')).toBe('Create From Template');
+  });
+
   it('uses the composer title for new post routes', () => {
     expect(getAppShellTitle('/post/new')).toBe('Share Post');
   });

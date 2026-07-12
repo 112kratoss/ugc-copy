@@ -11,19 +11,21 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { addEdge, type Connection, type ReactFlowInstance } from '@xyflow/react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import {
   DEFAULT_VIEWPORT,
   createStarterGraph,
+  createTemplateReadyStarterGraph,
   createWorkflowNode,
   duplicateWorkflowSelection,
   inspectWorkflowNodeCapabilities,
   isRunnableNode,
   normalizeNodeData,
   syncWorkflowGraphElementBindings,
+  validateWorkflowTemplateAuthoringGraph,
   validateWorkflowConnectionForGraph,
   type WorkflowCanvasRunRecord,
   type WorkflowCanvasEdge,
@@ -54,6 +56,7 @@ import {
 import { WorkflowAssistantDrawer } from './WorkflowPlannerDrawer';
 import { WorkflowCanvasSurface } from './WorkflowCanvasSurface';
 import { WorkflowCanvasInspector } from './WorkflowNodeEditors';
+import { WorkflowTemplatePublishDrawer } from './WorkflowTemplatePublishDrawer';
 import { useWorkflowCanvasAssistant } from './useWorkflowCanvasAssistant';
 import { useWorkflowCanvasCanvases } from './useWorkflowCanvasCanvases';
 import { useWorkflowCanvasContextMenu } from './useWorkflowCanvasContextMenu';
@@ -152,13 +155,22 @@ function UnsavedChangesDialog({
 }
 
 export default function CreateWorkflowClient({
+  initialCanvasId = null,
   initialImportShareId = null,
+  initialTemplateId = null,
+  initialTestRunId = null,
+  organizedWorkflowNavigation = false,
 }: {
+  initialCanvasId?: string | null;
   initialImportShareId?: string | null;
+  initialTemplateId?: string | null;
+  initialTestRunId?: string | null;
+  organizedWorkflowNavigation?: boolean;
 }) {
   const router = useRouter();
   const { credits, refreshSessionState, session, updateCredits } = useAuth();
   const modelCatalog = useWebGenerationModelCatalog();
+  const modelCatalogRevision = modelCatalog.catalog?.revision ?? null;
   const e2eAuth = useMemo(() => getClientE2EAuthState(), []);
   const effectiveSession = session ?? e2eAuth?.session ?? null;
   const canvasSectionRef = useRef<HTMLElement | null>(null);
@@ -175,6 +187,10 @@ export default function CreateWorkflowClient({
     edges: WorkflowCanvasEdge[];
   } | null>(null);
   const unsavedDecisionResolverRef = useRef<((decision: UnsavedDecision) => void) | null>(null);
+  const templateEntryInitializedRef = useRef(false);
+  const lastActivatedCanvasIdRef = useRef<string | null>(null);
+  const templateContextIdRef = useRef<string | null>(null);
+  const templateModeActiveRef = useRef(false);
   const starter = useMemo(() => createStarterGraph(), []);
 
   const [error, setError] = useState<string | null>(null);
@@ -183,12 +199,18 @@ export default function CreateWorkflowClient({
   const [previewMedia, setPreviewMedia] = useState<PreviewMediaState | null>(null);
   const [activeInspectorPanel, setActiveInspectorPanel] = useState<WorkflowInspectorPanel | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeRun, setActiveRun] = useState<WorkflowCanvasRunRecord | null>(null);
+  const [runPollingRevision, setRunPollingRevision] = useState(0);
+  const [approvingStepId, setApprovingStepId] = useState<string | null>(null);
   const [nodePopupPosition, setNodePopupPosition] = useState<CanvasAnchoredPopupPosition | null>(null);
   const [nodes, setNodes] = useState<WorkflowCanvasNode[]>(starter.nodes);
   const [edges, setEdges] = useState<WorkflowCanvasEdge[]>(starter.edges.map((edge) => decorateWorkflowEdge(edge)));
   const [changeKey, setChangeKey] = useState(0);
   const [openNodeRunMenuId, setOpenNodeRunMenuId] = useState<string | null>(null);
   const [unsavedReason, setUnsavedReason] = useState<string | null>(null);
+  const [isTemplateDrawerOpen, setIsTemplateDrawerOpen] = useState(false);
+  const [templateContextId, setTemplateContextId] = useState<string | null>(null);
+  const [templateOutputNodeId, setTemplateOutputNodeId] = useState<string | null>(null);
 
   const markCanvasChanged = useCallback(() => {
     setChangeKey((current) => current + 1);
@@ -229,9 +251,18 @@ export default function CreateWorkflowClient({
     });
 
     if (migratedCount > 0) {
-      setNodes(nextNodes);
-      markCanvasChanged();
-      setError(`${migratedCount} retired workflow model${migratedCount === 1 ? ' was' : 's were'} replaced with current defaults. Review settings before running.`);
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (cancelled) {
+          return;
+        }
+        setNodes(nextNodes);
+        markCanvasChanged();
+        setError(`${migratedCount} retired workflow model${migratedCount === 1 ? ' was' : 's were'} replaced with current defaults. Review settings before running.`);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
   }, [markCanvasChanged, modelCatalog.catalog, nodes]);
 
@@ -253,6 +284,22 @@ export default function CreateWorkflowClient({
     edges,
     viewport,
   }), [edges, nodes, starter.version, viewport]);
+  const templateAuthoringValidation = useMemo(() => validateWorkflowTemplateAuthoringGraph({
+    graph,
+    outputNodeId: templateOutputNodeId,
+  }), [graph, templateOutputNodeId]);
+  const templatePathNodeIds = useMemo(
+    () => new Set(templateAuthoringValidation.path.nodeIds),
+    [templateAuthoringValidation.path.nodeIds]
+  );
+  const templatePathEdgeIds = useMemo(
+    () => new Set(templateAuthoringValidation.path.edgeIds),
+    [templateAuthoringValidation.path.edgeIds]
+  );
+  const templateIssueNodeIds = useMemo(
+    () => new Set(templateAuthoringValidation.issues.flatMap((issue) => issue.nodeId ? [issue.nodeId] : [])),
+    [templateAuthoringValidation.issues]
+  );
 
   const syncElementBindingNodes = useCallback((
     nextNodes: WorkflowCanvasNode[],
@@ -271,6 +318,18 @@ export default function CreateWorkflowClient({
   } = useWorkflowCanvasRunState(nodes);
 
   const syncCanvasState = useCallback((canvas: WorkflowCanvasRecord) => {
+    const previousCanvasId = lastActivatedCanvasIdRef.current;
+    lastActivatedCanvasIdRef.current = canvas.id;
+    if (previousCanvasId && previousCanvasId !== canvas.id) {
+      const wasAuthoringTemplate = templateModeActiveRef.current || Boolean(templateContextIdRef.current);
+      templateModeActiveRef.current = false;
+      templateContextIdRef.current = null;
+      setIsTemplateDrawerOpen(false);
+      setTemplateContextId(null);
+      if (wasAuthoringTemplate) {
+        router.replace('/create-workflow');
+      }
+    }
     syncPersistedCanvasRef.current(canvas);
     const syncedGraph = syncWorkflowGraphElementBindings(canvas.graph);
     setNodes(syncedGraph.nodes.map((node) => ({ ...node, selected: false })));
@@ -278,12 +337,15 @@ export default function CreateWorkflowClient({
     setViewport(canvas.graph.viewport || DEFAULT_VIEWPORT);
     setActiveInspectorPanel(null);
     setActiveRunId(null);
+    setActiveRun(null);
+    setApprovingStepId(null);
     setOpenNodeRunMenuId(null);
+    setTemplateOutputNodeId(null);
     clearRunStateOverlay();
     resetSelectionRef.current();
     setError(null);
     resetTransientUiRef.current();
-  }, [clearRunStateOverlay]);
+  }, [clearRunStateOverlay, router]);
 
   const {
     activeCanvasId,
@@ -291,6 +353,7 @@ export default function CreateWorkflowClient({
     canvases,
     createCanvas,
     deleteCanvas,
+    fetchCanvasDetails,
     isCanvasTransitionPending,
     isLoading,
     replaceActiveCanvas,
@@ -299,11 +362,13 @@ export default function CreateWorkflowClient({
     setCanvasTitle,
     syncSavedCanvasMetadata,
   } = useWorkflowCanvasCanvases({
+    autoCreateWhenEmpty: !organizedWorkflowNavigation,
     authHeaders,
     beforeCanvasTransitionRef,
     hasUnsavedChangesRef,
     onActivateCanvas: syncCanvasState,
     onError: setError,
+    initialCanvasId,
     sessionUserId: effectiveSession?.user?.id ?? null,
   });
 
@@ -326,6 +391,68 @@ export default function CreateWorkflowClient({
   });
 
   const activeCanvasHasUnsavedChanges = saveState === 'dirty' || hasUnsavedChanges();
+
+  useEffect(() => {
+    if (
+      !initialTemplateId
+      || isLoading
+      || !effectiveSession?.user?.id
+      || templateEntryInitializedRef.current
+    ) {
+      return;
+    }
+
+    templateEntryInitializedRef.current = true;
+    void (async () => {
+      if (initialTemplateId === 'new') {
+        const created = await createCanvas({
+          title: 'Untitled media template',
+          graph: createTemplateReadyStarterGraph(),
+        });
+        if (!created) {
+          templateEntryInitializedRef.current = false;
+          return;
+        }
+        templateModeActiveRef.current = true;
+        setIsTemplateDrawerOpen(true);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/templates/${initialTemplateId}`, {
+          headers: await authHeaders(),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to load template authoring details.');
+        }
+        const authoring = data.template?.authoring as {
+          sourceCanvasId?: string | null;
+          outputNodeId?: string | null;
+        } | null | undefined;
+        if (!authoring?.sourceCanvasId) {
+          throw new Error('This template does not expose an editable source workflow.');
+        }
+        const sourceCanvas = await fetchCanvasDetails(authoring.sourceCanvasId);
+        replaceActiveCanvas(sourceCanvas);
+        templateContextIdRef.current = initialTemplateId;
+        templateModeActiveRef.current = true;
+        setTemplateContextId(initialTemplateId);
+        setTemplateOutputNodeId(authoring.outputNodeId ?? null);
+        setIsTemplateDrawerOpen(true);
+      } catch (templateLoadError) {
+        setError(templateLoadError instanceof Error ? templateLoadError.message : 'Failed to load template workflow.');
+      }
+    })();
+  }, [
+    authHeaders,
+    createCanvas,
+    effectiveSession?.user?.id,
+    fetchCanvasDetails,
+    initialTemplateId,
+    isLoading,
+    replaceActiveCanvas,
+  ]);
 
   const workflowAssistant = useWorkflowCanvasAssistant({
     activeCanvasId,
@@ -538,12 +665,15 @@ export default function CreateWorkflowClient({
   }, [confirmBeforeTransition]);
 
   const handleRunUpdate = useCallback((run: WorkflowCanvasRunRecord) => {
+    setActiveRun(run);
     applyRunUpdate(run);
     setNodes((current) => mergeWorkflowRunIntoNodes(current, run));
   }, [applyRunUpdate]);
 
   const handleRunComplete = useCallback(() => {
     setActiveRunId(null);
+    setActiveRun(null);
+    setApprovingStepId(null);
     clearRunStateOverlay();
     void refreshActiveCanvasRecord();
     void refreshSessionState();
@@ -555,6 +685,8 @@ export default function CreateWorkflowClient({
     authHeaders,
     onRunUpdate: handleRunUpdate,
     onRunComplete: handleRunComplete,
+    onRunAwaitingApproval: setActiveRun,
+    pollingRevision: runPollingRevision,
   });
 
   useEffect(() => {
@@ -871,7 +1003,7 @@ export default function CreateWorkflowClient({
         body: JSON.stringify({
           startNodeId: nodeId,
           mode,
-          catalogRevision: modelCatalog.catalog?.revision ?? null,
+          catalogRevision: modelCatalogRevision,
         }),
       });
       const data = await response.json();
@@ -893,7 +1025,7 @@ export default function CreateWorkflowClient({
     closeContextMenu,
     graph,
     hasUnsavedChanges,
-    modelCatalog.catalog?.revision,
+    modelCatalogRevision,
     persistCanvas,
     saveState,
     setManualSelection,
@@ -906,6 +1038,44 @@ export default function CreateWorkflowClient({
   const handleRunBranchFromNode = useCallback((nodeId: string) => {
     void startWorkflowRun(nodeId, 'branch');
   }, [startWorkflowRun]);
+
+  const approveWorkflowGate = useCallback(async (nodeId: string) => {
+    if (!activeCanvasId || !activeRunId || !activeRun?.steps) {
+      return;
+    }
+    const step = activeRun.steps.find((candidate) => (
+      candidate.node_id === nodeId && candidate.status === 'awaiting_approval'
+    ));
+    if (!step) {
+      setError('This approval checkpoint is no longer waiting for review.');
+      return;
+    }
+
+    setApprovingStepId(step.id);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/workflow-canvases/${activeCanvasId}/runs/${activeRunId}/approval-steps/${step.id}/approve`,
+        {
+          method: 'POST',
+          headers: await authHeaders(),
+          body: JSON.stringify({}),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to approve workflow checkpoint.');
+      }
+      if (data.run) {
+        handleRunUpdate(data.run as WorkflowCanvasRunRecord);
+      }
+      setRunPollingRevision((current) => current + 1);
+    } catch (approvalError) {
+      setError(approvalError instanceof Error ? approvalError.message : 'Failed to approve workflow checkpoint.');
+    } finally {
+      setApprovingStepId(null);
+    }
+  }, [activeCanvasId, activeRun, activeRunId, authHeaders, handleRunUpdate]);
 
   const nodeRunStateById = useMemo(() => {
     return Object.fromEntries(nodes.map((node) => {
@@ -937,6 +1107,11 @@ export default function CreateWorkflowClient({
         node,
       });
       const capabilityValidation = inspectWorkflowNodeCapabilities(graph, node);
+      const approvalStep = node.type === 'approval-gate'
+        ? activeRun?.steps?.find((step) => (
+            step.node_id === node.id && step.status === 'awaiting_approval'
+          ))
+        : null;
 
       return [node.id, {
         assistantManaged: Boolean(node.data.managed),
@@ -949,6 +1124,12 @@ export default function CreateWorkflowClient({
         onDeleteNode: () => {
           handleDeleteNode(node.id);
         },
+        onApprove: approvalStep
+          ? () => {
+              void approveWorkflowGate(node.id);
+            }
+          : undefined,
+        isApproving: Boolean(approvalStep && approvingStepId === approvalStep.id),
         onOpenRunMenu: runState
           ? () => {
               setManualSelection({ nodeIds: [node.id], edgeIds: [] });
@@ -971,11 +1152,23 @@ export default function CreateWorkflowClient({
           ? 'A workflow run is already in progress.'
           : runAffordance?.message ?? null,
         runNodeDisabled: runState?.runNodeDisabled,
-        showPlayControl: node.type !== 'note' && node.type !== 'group',
+        showPlayControl: node.type !== 'note' && node.type !== 'group' && node.type !== 'approval-gate',
+        templatePathState: isTemplateDrawerOpen
+          ? templateIssueNodeIds.has(node.id)
+            ? 'issue'
+            : node.id === templateOutputNodeId
+              ? 'output'
+              : templatePathNodeIds.has(node.id)
+                ? 'active'
+                : 'dimmed'
+          : undefined,
       }];
     }));
   }, [
     activeRunId,
+    activeRun,
+    approvingStepId,
+    approveWorkflowGate,
     credits,
     graph,
     handleDeleteNode,
@@ -985,6 +1178,10 @@ export default function CreateWorkflowClient({
     nodes,
     openNodeRunMenuId,
     setManualSelection,
+    isTemplateDrawerOpen,
+    templateIssueNodeIds,
+    templateOutputNodeId,
+    templatePathNodeIds,
   ]);
 
   const assistantPreviewRuntimeById = useMemo<Record<string, WorkflowNodeRuntimeData | undefined>>(() => {
@@ -1001,6 +1198,27 @@ export default function CreateWorkflowClient({
 
   const visibleNodes = workflowAssistant.previewGraph?.nodes ?? renderNodes;
   const visibleEdges = workflowAssistant.previewGraph?.edges ?? edges;
+  const templateVisibleEdges = useMemo(() => {
+    if (!isTemplateDrawerOpen || !templateOutputNodeId || workflowAssistant.previewGraph) {
+      return visibleEdges;
+    }
+
+    return visibleEdges.map((edge) => ({
+      ...edge,
+      animated: templatePathEdgeIds.has(edge.id),
+      style: {
+        ...(edge.style || {}),
+        opacity: templatePathEdgeIds.has(edge.id) ? 1 : 0.14,
+        strokeWidth: templatePathEdgeIds.has(edge.id) ? 2.6 : 1.25,
+      },
+    }));
+  }, [
+    isTemplateDrawerOpen,
+    templateOutputNodeId,
+    templatePathEdgeIds,
+    visibleEdges,
+    workflowAssistant.previewGraph,
+  ]);
   const visibleNodeActionRuntimeById = workflowAssistant.previewGraph
     ? assistantPreviewRuntimeById
     : nodeActionRuntimeById;
@@ -1242,9 +1460,9 @@ export default function CreateWorkflowClient({
   const handleNavigateBack = useCallback(async () => {
     const canLeave = await confirmBeforeTransition('Save your changes before leaving this workflow?');
     if (canLeave) {
-      router.push('/create');
+      router.push(organizedWorkflowNavigation ? '/create-workflow' : '/create');
     }
-  }, [confirmBeforeTransition, router]);
+  }, [confirmBeforeTransition, organizedWorkflowNavigation, router]);
 
   if (isLoading) {
     return (
@@ -1329,6 +1547,48 @@ export default function CreateWorkflowClient({
                   proposal={workflowAssistant.proposal}
                   setupMessage={workflowAssistant.setupMessage}
                 />
+                <WorkflowTemplatePublishDrawer
+                  key={activeCanvasId ?? 'no-active-canvas'}
+                  activeCanvasId={activeCanvasId}
+                  activeCanvasRevision={activeCanvasRevision}
+                  authHeaders={authHeaders}
+                  canvasTitle={canvasTitle}
+                  catalogRevision={modelCatalogRevision}
+                  graph={graph}
+                  isOpen={isTemplateDrawerOpen}
+                  initialTestRunId={initialTestRunId}
+                  outputNodeId={templateOutputNodeId}
+                  templateId={templateContextId}
+                  onClose={() => {
+                    templateModeActiveRef.current = false;
+                    setIsTemplateDrawerOpen(false);
+                  }}
+                  onEnsureSaved={async () => {
+                    const result = await persistCanvas(canvasTitle, graph);
+                    if (result.status === 'saved' || result.status === 'noop') {
+                      return result.revision;
+                    }
+                    return null;
+                  }}
+                  onFocusNode={(nodeId) => {
+                    setManualSelection({ nodeIds: [nodeId], edgeIds: [] });
+                    setActiveInspectorPanel(null);
+                    setOpenNodeRunMenuId(null);
+                    void reactFlowInstance?.fitView({
+                      nodes: [{ id: nodeId }],
+                      padding: 0.42,
+                      duration: 260,
+                      maxZoom: 1.05,
+                    });
+                  }}
+                  onOutputNodeChange={setTemplateOutputNodeId}
+                  onTemplateCreated={(template) => {
+                    templateContextIdRef.current = template.id;
+                    templateModeActiveRef.current = true;
+                    setTemplateContextId(template.id);
+                    router.replace(`/create-workflow?template=${encodeURIComponent(template.id)}`);
+                  }}
+                />
               </>
             )}
             leftRail={(
@@ -1348,23 +1608,50 @@ export default function CreateWorkflowClient({
                 onSelectCanvas={(canvas) => {
                   void selectCanvas(canvas);
                 }}
+                onOpenWorkflowLibrary={() => {
+                  void handleNavigateBack();
+                }}
                 searchInputRef={nodeLibrarySearchInputRef}
+                showWorkflowSwitcher={!organizedWorkflowNavigation}
               />
             )}
             headerActions={(
-              <WorkflowCanvasShareActions
-                activeCanvasId={activeCanvasId}
-                activeCanvasHasUnsavedChanges={activeCanvasHasUnsavedChanges}
-                authHeaders={authHeaders}
-                canvasTitle={canvasTitle}
-                graph={graph}
-                initialImportShareId={initialImportShareId}
-                onBeforeImport={() => confirmBeforeTransition('Save your changes before importing another workflow?')}
-                onImportComplete={replaceActiveCanvas}
-                onPersistCanvas={persistCanvas}
-              />
+              <div className="flex shrink-0 items-center gap-2">
+                <WorkflowCanvasShareActions
+                  activeCanvasId={activeCanvasId}
+                  activeCanvasHasUnsavedChanges={activeCanvasHasUnsavedChanges}
+                  authHeaders={authHeaders}
+                  canvasTitle={canvasTitle}
+                  graph={graph}
+                  initialImportShareId={initialImportShareId}
+                  importedCanvasPath={organizedWorkflowNavigation
+                    ? (canvas) => `/create-workflow?canvas=${encodeURIComponent(canvas.id)}`
+                    : undefined}
+                  onBeforeImport={() => confirmBeforeTransition('Save your changes before importing another workflow?')}
+                  onImportComplete={replaceActiveCanvas}
+                  onPersistCanvas={persistCanvas}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    workflowAssistant.closeAssistant();
+                    setActiveInspectorPanel(null);
+                    templateModeActiveRef.current = true;
+                    setIsTemplateDrawerOpen(true);
+                  }}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm transition ${
+                    isTemplateDrawerOpen
+                      ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-50'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20'
+                  }`}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Publish as template
+                </button>
+              </div>
             )}
             onCanvasTitleChange={handleCanvasTitleChange}
+            backLabel={organizedWorkflowNavigation ? 'All workflows' : 'Back to create'}
             onNavigateBack={() => {
               void handleNavigateBack();
             }}
@@ -1376,7 +1663,7 @@ export default function CreateWorkflowClient({
             <WorkflowCanvasSurface
               canvasSectionRef={canvasSectionRef}
               contextMenu={workflowAssistant.previewGraph ? null : contextMenu}
-              edges={visibleEdges}
+              edges={templateVisibleEdges}
               error={error}
               isReadOnly={Boolean(workflowAssistant.previewGraph)}
               nodeActionRuntimeById={visibleNodeActionRuntimeById}

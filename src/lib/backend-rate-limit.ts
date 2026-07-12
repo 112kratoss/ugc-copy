@@ -30,6 +30,12 @@ export const MEDIA_GENERATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const MEDIA_TEMPLATE_MUTATION_RATE_LIMIT = {
+  scope: 'media-template:mutate',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const GENERATION_LIFECYCLE_MUTATION_RATE_LIMIT = {
   scope: 'generation-lifecycle:mutate',
   limit: 60,

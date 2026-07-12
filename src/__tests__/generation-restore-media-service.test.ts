@@ -11,6 +11,9 @@ function makeMaybeSingleQuery<T>(value: () => T | null) {
     eq() {
       return query;
     },
+    is() {
+      return query;
+    },
     async maybeSingle() {
       return {
         data: value(),
@@ -24,6 +27,9 @@ function makeMaybeSingleQuery<T>(value: () => T | null) {
 function makeUpdateQuery() {
   const query = {
     eq() {
+      return query;
+    },
+    is() {
       return query;
     },
     then(resolve: (result: { error: null }) => void) {

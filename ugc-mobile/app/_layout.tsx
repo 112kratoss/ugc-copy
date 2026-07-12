@@ -74,6 +74,9 @@ function RootLayoutNav() {
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen name="auth" options={{ title: 'Sign in', presentation: 'modal', animation: reducedMotion ? 'none' : 'fade_from_bottom' }} />
                 <Stack.Screen name="create/[tool]" options={{ title: 'Create', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                <Stack.Screen name="templates/index" options={{ title: 'Templates', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                <Stack.Screen name="templates/[slug]" options={{ title: 'Template', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                <Stack.Screen name="template-runs/[runId]" options={{ title: 'Template creation', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="post/new" options={{ title: 'Post', presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
