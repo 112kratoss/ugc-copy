@@ -55,7 +55,11 @@ export default function NotificationsPage() {
       }
       setIsAuthenticated(true);
 
-      const response = await fetch('/api/mobile/notifications?limit=50');
+      const response = await fetch('/api/mobile/notifications?limit=50', {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
       if (!response.ok) {
         throw new Error(`Alerts request failed with ${response.status}`);
       }
@@ -95,8 +99,14 @@ export default function NotificationsPage() {
   const handleMarkAllRead = async () => {
     if (unreadCount === 0) return;
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
       const response = await fetch('/api/mobile/notifications/read-all', {
         method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
       });
       if (response.ok) {
         setNotifications((current) =>
@@ -112,9 +122,15 @@ export default function NotificationsPage() {
   const handlePressNotification = async (notification: WebNotification) => {
     if (!notification.isRead) {
       try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
         const response = await fetch('/api/mobile/notifications/read', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({ ids: [notification.id] }),
         });
         if (response.ok) {
