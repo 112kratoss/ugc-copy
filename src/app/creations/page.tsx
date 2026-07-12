@@ -309,6 +309,7 @@ export default function CreationsPage() {
     const { session } = useAuth();
     const userId = session?.user?.id ?? null;
     const accessToken = session?.access_token ?? null;
+    const requestedGenerationId = searchParams.get('generation')?.trim() || null;
     const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
     const initialPostVisibility = (() => {
         const value = searchParams.get('visibility');
@@ -331,6 +332,7 @@ export default function CreationsPage() {
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
     const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
+    const requestedGenerationRef = useRef<string | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
     const [initialSellAutoUnlockInPublishModal, setInitialSellAutoUnlockInPublishModal] = useState(false);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
@@ -489,8 +491,11 @@ export default function CreationsPage() {
         });
     }, [posts, profile, userId]);
 
-    const loadGenerationDetail = useCallback(async (generation: Generation): Promise<Generation> => {
-        if (hasFullGenerationDetails(generation)) {
+    const loadGenerationById = useCallback(async (
+        generationId: string,
+        generation?: Generation
+    ): Promise<Generation> => {
+        if (generation && hasFullGenerationDetails(generation)) {
             return generation;
         }
 
@@ -499,11 +504,11 @@ export default function CreationsPage() {
             throw new Error('Authentication required.');
         }
 
-        setGenerationDetailLoadingId(generation.id);
+        setGenerationDetailLoadingId(generationId);
         setGenerationDetailError(null);
 
         try {
-            const response = await fetch(buildGenerationDetailUrl(generation.id), {
+            const response = await fetch(buildGenerationDetailUrl(generationId), {
                 headers: { Authorization: `Bearer ${accessToken}` },
             });
             const data = await response.json() as GenerationsApiResponse;
@@ -517,7 +522,9 @@ export default function CreationsPage() {
                 throw new Error('Creation details were not found.');
             }
 
-            const [mergedGeneration] = mergeGenerationRefresh([generation], [loadedGeneration]);
+            const mergedGeneration = generation
+                ? mergeGenerationRefresh([generation], [loadedGeneration])[0]
+                : loadedGeneration;
             const previousGenerations = generationsRef.current;
             const nextGenerations = previousGenerations.some((item) => item.id === mergedGeneration.id)
                 ? previousGenerations.map((item) => item.id === mergedGeneration.id ? mergedGeneration : item)
@@ -533,6 +540,38 @@ export default function CreationsPage() {
             setGenerationDetailLoadingId(null);
         }
     }, [accessToken, cacheGenerations, router, userId]);
+
+    const loadGenerationDetail = useCallback(
+        (generation: Generation) => loadGenerationById(generation.id, generation),
+        [loadGenerationById]
+    );
+
+    useEffect(() => {
+        if (!requestedGenerationId || !accessToken || !userId) {
+            return;
+        }
+
+        if (requestedGenerationRef.current === requestedGenerationId) {
+            return;
+        }
+
+        requestedGenerationRef.current = requestedGenerationId;
+        const existingGeneration = generationsRef.current.find(
+            (generation) => generation.id === requestedGenerationId
+        );
+
+        void loadGenerationById(requestedGenerationId, existingGeneration)
+            .then((generation) => {
+                if (requestedGenerationRef.current === requestedGenerationId) {
+                    setPreviewGen(generation);
+                }
+            })
+            .catch(() => {
+                if (requestedGenerationRef.current === requestedGenerationId) {
+                    requestedGenerationRef.current = null;
+                }
+            });
+    }, [accessToken, loadGenerationById, requestedGenerationId, userId]);
 
     useEffect(() => {
         void fetchCreations();

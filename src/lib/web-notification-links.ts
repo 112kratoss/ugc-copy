@@ -19,6 +19,10 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
         return `/showcase/${encodeURIComponent(initialId)}`;
       }
 
+      if (initialId) {
+        return `/creations?generation=${encodeURIComponent(initialId)}`;
+      }
+
       return '/creations';
     }
 
