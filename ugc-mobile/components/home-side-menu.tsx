@@ -6,6 +6,7 @@ import {
   ChevronRight,
   CircleHelp,
   Crown,
+  Layers3,
   LayoutDashboard,
   LogIn,
   LogOut,
@@ -320,6 +321,7 @@ export function HomeSideMenu({
             </View>
 
             <View style={{ gap: 8 }}>
+              <MenuRow icon={<Layers3 size={21} color={appTheme.colors.text} />} label="Templates" onPress={() => navigateAndClose('/templates')} />
               <MenuRow icon={<LayoutDashboard size={21} color={appTheme.colors.text} />} label="Seller Dashboard" onPress={() => navigateAndClose('/seller-dashboard')} />
               <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle, marginVertical: 4 }} />
               <MenuRow icon={<Settings size={21} color={appTheme.colors.text} />} label="Settings" onPress={() => navigateAndClose('/settings')} />

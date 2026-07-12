@@ -29,6 +29,21 @@ type GenerationRow = {
   model: string;
   category?: string | null;
   prompt?: string | null;
+  template_run_id?: string | null;
+  template_run_step_id?: string | null;
+  studio_visible?: boolean;
+};
+
+type TemplateRunStudioRow = {
+  id: string;
+  template_id: string;
+  result_generation_id: string;
+};
+
+type TemplateStudioMetadata = {
+  runId: string;
+  templateId: string;
+  templateTitle: string | null;
 };
 
 type LinkedPostRow = {
@@ -55,6 +70,21 @@ function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(valu
   const nextValue = { ...value };
   delete nextValue.workflow_settings;
   return nextValue;
+}
+
+export function projectGenerationForStudio(
+  generation: GenerationRow,
+  isTemplateResult: boolean,
+): Record<string, unknown> {
+  const projected = { ...withoutWorkflowSettings(generation) } as Record<string, unknown>;
+  delete projected.template_run_id;
+  delete projected.template_run_step_id;
+  delete projected.studio_visible;
+  if (isTemplateResult) {
+    delete projected.prompt;
+    projected.model = 'template-workflow';
+  }
+  return projected;
 }
 
 function getWorkflowSettings(value: unknown): Record<string, unknown> | null {
@@ -188,8 +218,9 @@ async function fetchOwnerGenerations({
   cursorOffset: number;
   pageLimit: number;
 }): Promise<{ rows: GenerationRow[]; hasMore: boolean }> {
-  const statusColumns = 'id, status, created_at, completed_at, model, category, archived_at';
-  const baseColumns = 'id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at';
+  const projectionColumns = 'template_run_id, template_run_step_id, studio_visible';
+  const statusColumns = `id, status, created_at, completed_at, model, category, archived_at, ${projectionColumns}`;
+  const baseColumns = `id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const selectCandidates = statusOnly ? [statusColumns] : [
     `${baseColumns}, preview_url, thumbnail_url, preview_thumbhash, preview_status, creation_mode`,
     `${baseColumns}, preview_url, thumbnail_url`,
@@ -204,6 +235,7 @@ async function fetchOwnerGenerations({
       .from('generations')
       .select(columns)
       .eq('user_id', userId)
+      .or('and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true')
       .order('created_at', { ascending: false });
 
     if (!includeArchived) {
@@ -238,6 +270,73 @@ async function fetchOwnerGenerations({
   throw lastPreviewColumnError ?? new Error('Failed to fetch generations');
 }
 
+async function authorizeOwnerStudioProjection({
+  adminSupabase,
+  generations,
+  userId,
+}: {
+  adminSupabase: OwnerGenerationsRouteClient;
+  generations: GenerationRow[];
+  userId: string;
+}): Promise<{
+  generations: GenerationRow[];
+  templateMetadata: Map<string, TemplateStudioMetadata>;
+}> {
+  const candidateRunIds = Array.from(new Set(generations.flatMap((generation) => (
+    generation.template_run_id ? [generation.template_run_id] : []
+  ))));
+  const templateMetadata = new Map<string, TemplateStudioMetadata>();
+
+  if (candidateRunIds.length > 0) {
+    const { data: runData, error: runError } = await adminSupabase
+      .from('template_runs')
+      .select('id, template_id, result_generation_id')
+      .in('id', candidateRunIds)
+      .eq('user_id', userId)
+      .eq('status', 'succeeded')
+      .eq('is_test', false);
+    if (runError) throw runError;
+
+    const runs = (runData ?? []) as unknown as TemplateRunStudioRow[];
+    const templateIds = Array.from(new Set(runs.map((run) => run.template_id)));
+    const templateTitles = new Map<string, string | null>();
+    if (templateIds.length > 0) {
+      const { data: templateData, error: templateError } = await adminSupabase
+        .from('templates')
+        .select('id, name')
+        .in('id', templateIds);
+      if (templateError) throw templateError;
+      for (const template of (templateData ?? []) as Array<{ id: string; name: string | null }>) {
+        templateTitles.set(template.id, template.name);
+      }
+    }
+
+    for (const run of runs) {
+      templateMetadata.set(run.result_generation_id, {
+        runId: run.id,
+        templateId: run.template_id,
+        templateTitle: templateTitles.get(run.template_id) ?? null,
+      });
+    }
+  }
+
+  return {
+    generations: generations.filter((generation) => {
+      const isOrdinary = !generation.template_run_id && !generation.template_run_step_id;
+      if (isOrdinary) return true;
+      const metadata = templateMetadata.get(generation.id);
+      return Boolean(
+        generation.studio_visible === true
+        && generation.status === 'succeeded'
+        && generation.template_run_id
+        && generation.template_run_step_id
+        && metadata?.runId === generation.template_run_id,
+      );
+    }),
+    templateMetadata,
+  };
+}
+
 function buildPagination(pageLimit: number, hasMore: boolean, cursorOffset: number) {
   return {
     limit: pageLimit,
@@ -266,8 +365,9 @@ export async function listOwnerGenerationsForRoute({
   const pageLimit = Math.min(requestedLimit, MAX_GENERATIONS_PAGE_LIMIT);
   const cursorOffset = Math.max(0, parsePositiveInteger(searchParams.get('cursor'), 0));
 
-  const { rows: generations, hasMore } = await fetchOwnerGenerations({
-    supabase,
+  const adminSupabase = getAdminSupabase();
+  const { rows: candidateGenerations, hasMore } = await fetchOwnerGenerations({
+    supabase: adminSupabase,
     userId,
     includeArchived,
     requestedGenerationId,
@@ -275,22 +375,36 @@ export async function listOwnerGenerationsForRoute({
     cursorOffset,
     pageLimit,
   });
+  const {
+    generations,
+    templateMetadata,
+  } = await authorizeOwnerStudioProjection({
+    adminSupabase,
+    generations: candidateGenerations,
+    userId,
+  });
 
   if (statusOnly) {
     return {
-      generations: generations.map((generation) => ({
-        id: generation.id,
-        status: generation.status,
-        created_at: generation.created_at,
-        completed_at: generation.completed_at ?? null,
-        category: generation.category ?? null,
-        model: generation.model,
-      })),
+      generations: generations.map((generation) => {
+        const template = templateMetadata.get(generation.id) ?? null;
+        return {
+          id: generation.id,
+          status: generation.status,
+          created_at: generation.created_at,
+          completed_at: generation.completed_at ?? null,
+          category: generation.category ?? null,
+          model: template ? 'template-workflow' : generation.model,
+          origin: template ? 'template' : 'creation',
+          template,
+        };
+      }),
       pagination: buildPagination(pageLimit, hasMore, cursorOffset),
     };
   }
 
   const generationIds = generations.map((generation) => generation.id).filter(Boolean);
+  const ordinaryGenerationIds = generationIds.filter((generationId) => !templateMetadata.has(generationId));
   const linkedPostMap = new Map<string, LinkedPostRow>();
 
   if (generationIds.length > 0) {
@@ -316,21 +430,21 @@ export async function listOwnerGenerationsForRoute({
     }
   }
 
-  const adminSupabase = getAdminSupabase();
   const inputMediaMap = summaryOnly
     ? new Map()
     : await loadGenerationInputMediaMap({
       supabase: adminSupabase,
-      generationIds,
+      generationIds: ordinaryGenerationIds,
       urlMode: 'signed',
     });
 
   const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
-    const workflowSettings = getWorkflowSettings(generation.workflow_settings);
+    const template = templateMetadata.get(generation.id) ?? null;
+    const workflowSettings = template ? null : getWorkflowSettings(generation.workflow_settings);
     const outputCount = getWorkflowOutputCount(workflowSettings);
     const outputUrls = summaryOnly ? [] : await getPersistedOutputUrls(workflowSettings, adminSupabase);
     const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
-    const inputMedia = summaryOnly
+    const inputMedia = summaryOnly || template
       ? []
       : durableInputMedia.length > 0
         ? durableInputMedia
@@ -341,7 +455,7 @@ export async function listOwnerGenerationsForRoute({
           category: generation.category ?? null,
           workflowSettings: workflowSettings ?? {},
         });
-    const paywallPrefill = summaryOnly
+    const paywallPrefill = summaryOnly || template
       ? null
       : buildGenerationPaywallPrefill({
         category: generation.category,
@@ -381,11 +495,13 @@ export async function listOwnerGenerationsForRoute({
           : null,
       })
       : null;
-    const rest = withoutWorkflowSettings(generation);
+    const rest = projectGenerationForStudio(generation, Boolean(template));
     const linkedPost = linkedPostMap.get(generation.id);
 
     return {
       ...rest,
+      origin: template ? 'template' : 'creation',
+      template,
       category: canonicalCategory,
       creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
       media,

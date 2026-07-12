@@ -51,7 +51,7 @@ describe('mobile backend boundary', () => {
     expect(mediaSource).toContain('createMediaUpload');
     expect(mediaSource).toContain('createMediaReadUrl');
     expect(mediaSource).toContain('createProfileMediaUpload');
-    expect(mediaSource.match(/uploadToSignedUrl/g)).toHaveLength(2);
+    expect(mediaSource.match(/uploadToSignedUrl/g)).toHaveLength(3);
     expect(mediaSource).not.toMatch(/\.upload\s*\(/);
     expect(mediaSource).not.toMatch(/createSignedUrl\s*\(/);
     expect(mediaSource).not.toMatch(/\.download\s*\(/);

@@ -10,12 +10,15 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  ArrowLeft,
   ChevronDown,
   Clock3,
+  PanelsTopLeft,
   MoreHorizontal,
   Plus,
   Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import type { WorkflowCanvasListItem } from '@/lib/workflow-canvas';
 import type { WorkflowNodeLibraryItem } from './WorkflowCanvasNodes';
@@ -35,7 +38,7 @@ function OverlayShell({
   children: ReactNode;
   onClose: () => void;
 }) {
-  return <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" onClick={onClose}>{children}</div>;
+  return <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm" onClick={onClose}>{children}</div>;
 }
 
 function getRememberedWorkflowListCollapsed() {
@@ -102,7 +105,7 @@ function WorkflowDeleteDialog({
 
   return (
     <OverlayShell onClose={isPending ? () => undefined : onCancel}>
-      <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
         <div
           role="dialog"
           aria-modal="true"
@@ -161,8 +164,10 @@ export function WorkflowCanvasLeftRail({
   onAddNode,
   onCreateCanvas,
   onDeleteCanvas,
+  onOpenWorkflowLibrary,
   onSelectCanvas,
   searchInputRef,
+  showWorkflowSwitcher = true,
 }: {
   activeCanvasId: string | null;
   activeCanvasHasUnsavedChanges: boolean;
@@ -172,11 +177,14 @@ export function WorkflowCanvasLeftRail({
   onAddNode: (type: WorkflowNodeLibraryItem['type']) => void;
   onCreateCanvas: () => void;
   onDeleteCanvas: (canvasId: string) => void;
+  onOpenWorkflowLibrary?: () => void;
   onSelectCanvas: (canvas: WorkflowCanvasListItem) => void;
   searchInputRef?: RefObject<HTMLInputElement | null>;
+  showWorkflowSwitcher?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [isWorkflowListCollapsed, setIsWorkflowListCollapsed] = useState(() => getRememberedWorkflowListCollapsed());
+  const [isMobileLibraryOpen, setIsMobileLibraryOpen] = useState(false);
   const [openMenuCanvasId, setOpenMenuCanvasId] = useState<string | null>(null);
   const [pendingDeleteCanvas, setPendingDeleteCanvas] = useState<PendingWorkflowDelete | null>(null);
   const openMenuRef = useRef<HTMLDivElement | null>(null);
@@ -223,16 +231,90 @@ export function WorkflowCanvasLeftRail({
     };
   }, [openMenuCanvasId]);
 
+  useEffect(() => {
+    if (!isMobileLibraryOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMobileLibraryOpen(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileLibraryOpen]);
+
   return (
     <>
+      {!isMobileLibraryOpen ? (
+        <button
+          type="button"
+          aria-label={showWorkflowSwitcher ? 'Open nodes and workflows' : 'Open node library'}
+          aria-controls="workflow-left-rail"
+          aria-expanded="false"
+          onClick={() => setIsMobileLibraryOpen(true)}
+          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-400/35 bg-[#07110d]/95 px-4 py-2.5 text-sm font-medium text-emerald-50 shadow-[0_18px_55px_rgba(0,0,0,0.6)] backdrop-blur-xl transition hover:bg-emerald-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 md:hidden"
+        >
+          <PanelsTopLeft className="h-4 w-4" />
+          {showWorkflowSwitcher ? 'Nodes & workflows' : 'Add nodes'}
+        </button>
+      ) : (
+        <button
+          type="button"
+          aria-label={showWorkflowSwitcher ? 'Dismiss nodes and workflows' : 'Dismiss node library'}
+          onClick={() => setIsMobileLibraryOpen(false)}
+          className="fixed inset-x-0 bottom-0 top-16 z-[60] bg-black/70 backdrop-blur-sm md:hidden"
+        />
+      )}
+
       <aside
+        id="workflow-left-rail"
         data-testid="workflow-left-rail"
-        className="flex h-full w-[320px] shrink-0 flex-col border-r border-white/10 bg-[#050505] shadow-[0_28px_120px_rgba(0,0,0,0.35)]"
+        role={isMobileLibraryOpen ? 'dialog' : undefined}
+        aria-modal={isMobileLibraryOpen ? 'true' : undefined}
+        aria-labelledby={isMobileLibraryOpen ? 'workflow-mobile-library-title' : undefined}
+        className={`${isMobileLibraryOpen
+          ? 'fixed bottom-0 left-0 top-16 z-[70] flex h-auto w-[min(92vw,360px)]'
+          : 'hidden h-full w-[320px]'
+        } shrink-0 flex-col border-r border-white/10 bg-[#050505] shadow-[0_28px_120px_rgba(0,0,0,0.55)] md:static md:z-auto md:flex md:h-full md:w-[320px]`}
       >
         <div className="border-b border-white/10 px-5 py-4">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Node library</div>
-          <div className="mt-2 text-lg font-semibold text-white">Build your graph</div>
-          <div className="mt-1 text-sm text-zinc-400">Switch workflows, add nodes, connect steps, and save when you are ready.</div>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Node library</div>
+              <div id="workflow-mobile-library-title" className="mt-2 text-lg font-semibold text-white">Build your graph</div>
+            </div>
+            <button
+              type="button"
+              aria-label={showWorkflowSwitcher ? 'Close nodes and workflows' : 'Close node library'}
+              onClick={() => setIsMobileLibraryOpen(false)}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-300 transition hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 md:hidden"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="mt-1 text-sm text-zinc-400">
+            {showWorkflowSwitcher
+              ? 'Switch workflows, add nodes, connect steps, and save when you are ready.'
+              : 'Add nodes, connect your steps, and save when the graph is ready.'}
+          </div>
+          {!showWorkflowSwitcher && onOpenWorkflowLibrary ? (
+            <button
+              type="button"
+              onClick={() => {
+                setIsMobileLibraryOpen(false);
+                onOpenWorkflowLibrary();
+              }}
+              className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.035] px-4 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              All workflows
+            </button>
+          ) : null}
           <label className="mt-4 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
             <Search className="h-4 w-4 text-zinc-500" />
             <input
@@ -245,7 +327,7 @@ export function WorkflowCanvasLeftRail({
           </label>
         </div>
 
-        <div className="border-b border-white/10 px-5 py-4">
+        {showWorkflowSwitcher ? <div className="border-b border-white/10 px-5 py-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Workflows</div>
             <div className="flex items-center gap-2">
@@ -264,7 +346,10 @@ export function WorkflowCanvasLeftRail({
               </button>
               <button
                 type="button"
-                onClick={onCreateCanvas}
+                onClick={() => {
+                  setIsMobileLibraryOpen(false);
+                  onCreateCanvas();
+                }}
                 disabled={isCanvasTransitionPending}
                 className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -299,6 +384,7 @@ export function WorkflowCanvasLeftRail({
                             type="button"
                             onClick={() => {
                               setOpenMenuCanvasId(null);
+                              setIsMobileLibraryOpen(false);
                               onSelectCanvas(canvas);
                             }}
                             aria-label={`Open workflow ${canvas.title}`}
@@ -361,7 +447,7 @@ export function WorkflowCanvasLeftRail({
               )}
             </div>
           ) : null}
-        </div>
+        </div> : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
@@ -373,8 +459,11 @@ export function WorkflowCanvasLeftRail({
               <button
                 key={item.type}
                 type="button"
-                onClick={() => onAddNode(item.type)}
-                className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-left text-sm text-zinc-200 transition hover:bg-white/[0.06]"
+                onClick={() => {
+                  setIsMobileLibraryOpen(false);
+                  onAddNode(item.type);
+                }}
+                className="flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-left text-sm text-zinc-200 transition hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
               >
                 {item.icon}
                 <span>{item.label}</span>
@@ -396,6 +485,7 @@ export function WorkflowCanvasLeftRail({
           const canvasId = pendingDeleteCanvas.id;
           setPendingDeleteCanvas(null);
           setOpenMenuCanvasId(null);
+          setIsMobileLibraryOpen(false);
           onDeleteCanvas(canvasId);
         }}
       />

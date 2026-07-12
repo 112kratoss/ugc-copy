@@ -5,8 +5,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import {
   getWorkflowRunDetailsRouteResponse,
+  postWorkflowRunApprovalRouteResponse,
   postWorkflowRunRouteResponse,
 } from '@/lib/workflow-run-route-adapter-service';
+import { WorkflowRunApprovalError } from '@/lib/workflow-runner';
 import type { WorkflowRunRouteResult } from '@/lib/workflow-run-route-service';
 
 describe('workflow run route adapter service', () => {
@@ -230,5 +232,73 @@ describe('workflow run route adapter service', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('workflow-run-detail-miss-1');
     await expect(response.json()).resolves.toEqual({ error: 'Workflow run not found.' });
+  });
+
+  it('approves a workflow checkpoint with rate limiting and private response headers', async () => {
+    const supabase = { kind: 'user-client' } as unknown as SupabaseClient;
+    const adminSupabase = { kind: 'admin-client' };
+    const approveWorkflowRunStep = vi.fn(async () => ({
+      id: 'run-1',
+      canvas_id: 'canvas-1',
+      status: 'processing',
+      steps: [],
+    }));
+    const enforceBackendRateLimit = vi.fn(async () => undefined);
+
+    const response = await postWorkflowRunApprovalRouteResponse({
+      request: new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1/approval-steps/step-1/approve', {
+        method: 'POST',
+        headers: { 'x-request-id': 'workflow-approval-1' },
+      }),
+      context: {
+        params: Promise.resolve({ id: 'canvas-1', runId: 'run-1', stepId: 'step-1' }),
+      },
+      dependencies: {
+        authenticateRequest: vi.fn(async () => ({ userId: 'user-1', supabase })),
+        approveWorkflowRunStep,
+        createServiceClient: vi.fn(() => adminSupabase as never),
+        enforceBackendRateLimit,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('workflow-approval-1');
+    expect(enforceBackendRateLimit).toHaveBeenCalledWith(adminSupabase, expect.objectContaining({
+      key: 'user-1',
+    }));
+    expect(approveWorkflowRunStep).toHaveBeenCalledWith({
+      supabase,
+      canvasId: 'canvas-1',
+      runId: 'run-1',
+      stepId: 'step-1',
+    });
+  });
+
+  it('returns a conflict when a workflow checkpoint is no longer awaiting approval', async () => {
+    const response = await postWorkflowRunApprovalRouteResponse({
+      request: new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1/approval-steps/step-1/approve', {
+        method: 'POST',
+      }),
+      context: {
+        params: Promise.resolve({ id: 'canvas-1', runId: 'run-1', stepId: 'step-1' }),
+      },
+      dependencies: {
+        authenticateRequest: vi.fn(async () => ({
+          userId: 'user-1',
+          supabase: { kind: 'user-client' } as unknown as SupabaseClient,
+        })),
+        approveWorkflowRunStep: vi.fn(async () => {
+          throw new WorkflowRunApprovalError('This approval step is not waiting for review.', 409);
+        }),
+        createServiceClient: vi.fn(() => ({ kind: 'admin-client' }) as never),
+        enforceBackendRateLimit: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'This approval step is not waiting for review.',
+    });
   });
 });

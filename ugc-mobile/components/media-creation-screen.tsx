@@ -830,6 +830,8 @@ export function MediaCreationScreen({
       >
         <CreateHeader meta={meta} activeTool={activeTool} onChange={changeTool} />
 
+        {insideTab ? <TemplateCatalogEntry /> : null}
+
         {catalogNotice ? (
           <SurfaceSection eyebrow="Catalog update" title="Model updated" body={catalogNotice} accent={meta.accent}>
             <SecondaryButton label="Dismiss" onPress={() => setCatalogNotice(null)} />
@@ -899,6 +901,40 @@ export function MediaCreationScreen({
         />
       ) : null}
     </View>
+  );
+}
+
+function TemplateCatalogEntry() {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Browse viral templates"
+      accessibilityHint="Opens ready-made video formats"
+      onPress={() => router.push('/templates' as never)}
+      style={({ pressed }) => ({
+        minHeight: 74,
+        borderRadius: appTheme.radii.xl,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,122,89,0.38)',
+        backgroundColor: appTheme.colors.surfaceInset,
+        paddingHorizontal: 16,
+        paddingVertical: 13,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.pressed }}>
+        <Layers size={21} color={appTheme.colors.primary} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <AppText variant="label">Use a viral template</AppText>
+        <AppText variant="caption" color="muted" numberOfLines={1}>Add your photos, approve the frames, generate.</AppText>
+      </View>
+      <ChevronRight size={20} color={appTheme.colors.primary} />
+    </Pressable>
   );
 }
 

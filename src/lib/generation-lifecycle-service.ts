@@ -75,6 +75,8 @@ export async function archiveOwnerGenerationForRoute({
     })
     .eq('id', generationId)
     .eq('user_id', ownerUserId)
+    .is('template_run_id', null)
+    .is('template_run_step_id', null)
     .is('archived_at', null)
     .select('id')
     .maybeSingle();
@@ -127,6 +129,8 @@ export async function restoreOwnerGenerationForRoute({
     })
     .eq('id', generationId)
     .eq('user_id', ownerUserId)
+    .is('template_run_id', null)
+    .is('template_run_step_id', null)
     .not('archived_at', 'is', null)
     .select('id')
     .maybeSingle();

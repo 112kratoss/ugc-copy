@@ -238,6 +238,64 @@ describe('PublishToShowcaseModal', () => {
     expect(body.visibility).toBe('private');
   });
 
+  it('publishes media-only template results without recipe fields and returns the stable Feed path', async () => {
+    const onPublished = vi.fn();
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
+      JSON.stringify(String(url) === '/api/profile'
+        ? {
+            id: 'user-1',
+            username: 'launchmaker',
+            displayName: 'Launch Maker',
+            avatarUrl: 'https://cdn.example.com/avatar.jpg',
+          }
+        : {
+            success: true,
+            visibility: 'public',
+            postId: 'post-template-1',
+            showcasePath: '/showcase/post-template-1',
+            ownerPath: '/post/post-template-1/edit',
+          }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="template-result-1"
+        defaultTitle="Rider transformation"
+        showPaidShortcut={false}
+        mediaOnly
+        onPublished={onPublished}
+      />
+    );
+
+    expect(screen.getByText(/share it to the Feed or keep it private/i)).toBeInTheDocument();
+    expect(screen.queryByText(/saved system package/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sell the prompt/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalledWith(expect.objectContaining({
+      visibility: 'public',
+      postId: 'post-template-1',
+      showcasePath: '/showcase/post-template-1',
+      ownerPath: '/post/post-template-1/edit',
+    })));
+
+    const request = getPublishRequest();
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({
+      generationId: 'template-result-1',
+      visibility: 'public',
+      shareInputMediaForRemix: false,
+    });
+    expect(body).not.toHaveProperty('resourceBundle');
+    expect(body).not.toHaveProperty('includeGenerationReferences');
+    expect(body).not.toHaveProperty('exposePromptPublic');
+    expect(body).not.toHaveProperty('prompt');
+  });
+
   it('prefills notes from the saved generation setup when no description exists', () => {
     render(
       <PublishToShowcaseModal

@@ -197,6 +197,22 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.mocked(uploadPickedMedia).mockReset();
   });
 
+  it('offers consumer templates from the mobile create workspace without authoring controls', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+    });
+
+    expect(collectText(tree!.root)).toContain('Use a viral template');
+    expect(collectText(tree!.root)).not.toContain('Create template');
+    expect(collectText(tree!.root)).not.toContain('Publish template');
+
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Use a viral template').props.onPress();
+    });
+    expect(routerState.push).toHaveBeenCalledWith('/templates');
+  });
+
   it('renders a schema-v1 model supplied only by the remote catalog', () => {
     catalogState.catalog = createTestGenerationModelCatalog([remoteImageModel]);
     let tree: renderer.ReactTestRenderer | undefined;

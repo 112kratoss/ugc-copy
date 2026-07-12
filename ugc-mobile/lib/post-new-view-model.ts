@@ -354,6 +354,26 @@ export function getPublishableGenerations(items: GenerationListItem[] | null | u
   });
 }
 
+export function isTemplateGeneration(item: GenerationListItem | null | undefined) {
+  return item?.origin === 'template'
+    && Boolean(item.template?.runId && item.template?.templateId);
+}
+
+/** Explicit template handoffs can arrive before their derived grid preview.
+ * The owner API only marks the canonical, successful, non-test result as a
+ * template result, so this narrow bypass does not affect the normal picker. */
+export function getExplicitPublishGeneration(
+  items: GenerationListItem[] | null | undefined,
+  generationId: string | null | undefined,
+) {
+  if (!generationId) return null;
+  const item = (items ?? []).find((candidate) => candidate.id === generationId);
+  if (!item || item.status !== 'succeeded' || item.linked_post_id) return null;
+  if (!item.output_url && !item.output_urls?.length) return null;
+  if (isTemplateGeneration(item)) return item;
+  return getPublishableGenerations([item])[0] ?? null;
+}
+
 export function buildPublishGenerationPayload(item: GenerationListItem) {
   const includeGenerationReferences = hasGenerationReferences(item) || undefined;
 
@@ -369,8 +389,9 @@ export function buildPublishGenerationPayload(item: GenerationListItem) {
 }
 
 export function buildPublishGenerationPostPayload(item: GenerationListItem, draft: PostComposerDraft) {
-  const resourceBundle = buildPostResourceBundleInput(draft.resource);
-  const includeGenerationReferences = shouldIncludeGenerationReferences(item, draft);
+  const templateResult = isTemplateGeneration(item);
+  const resourceBundle = templateResult ? null : buildPostResourceBundleInput(draft.resource);
+  const includeGenerationReferences = templateResult ? false : shouldIncludeGenerationReferences(item, draft);
   const sourceTools = buildSourceToolsPayload(draft, item);
   const primarySourceTool = sourceTools[0];
 
@@ -921,7 +942,7 @@ export function getCreatePostFormat(draft: PostComposerDraft): 'text' | 'media' 
 }
 
 export function getPublishGenerationTitle(item: GenerationListItem) {
-  return item.title || item.prompt || 'Untitled creation';
+  return item.title || item.template?.templateTitle || item.prompt || 'Untitled creation';
 }
 
 export function getPublishGenerationSubtitle(item: GenerationListItem) {

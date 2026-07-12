@@ -471,9 +471,9 @@ describe('/api/generate route', () => {
       }) as never
     );
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({
-      error: 'Server configuration error: webhook secret missing',
+      error: 'Generation setup is incomplete. No credits were charged for this attempt. Ask an administrator to finish the service setup before retrying.',
     });
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('start_generation', expect.anything());
     expect(providerFetch).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateWorkflowPage from '@/app/create-workflow/page';
+import CreateWorkflowEntry from '@/app/create-workflow/CreateWorkflowEntry';
 import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { createStarterGraph, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
 
@@ -720,7 +721,13 @@ describe('CreateWorkflowPage', () => {
   it('renders the simplified left rail and removes lifecycle-heavy controls', async () => {
     await renderLoadedPage();
 
-    expect(screen.getByTestId('workflow-left-rail')).toBeInTheDocument();
+    const leftRail = screen.getByTestId('workflow-left-rail');
+    const mobileLibraryTrigger = screen.getByRole('button', { name: /open nodes and workflows/i });
+
+    expect(leftRail).toBeInTheDocument();
+    expect(leftRail).toHaveClass('hidden', 'md:flex');
+    expect(mobileLibraryTrigger).toHaveClass('md:hidden', 'min-h-11');
+    expect(mobileLibraryTrigger).toHaveAttribute('aria-controls', 'workflow-left-rail');
     expect(screen.getByText(/build your graph/i)).toBeInTheDocument();
     expect(screen.getByText(/^workflows$/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /new workflow/i })).toBeInTheDocument();
@@ -728,12 +735,59 @@ describe('CreateWorkflowPage', () => {
 
     expect(screen.getByRole('button', { name: /ai builder/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /history/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /publish/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /publish as template/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /command/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /create draft/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^share workflow$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^import workflow$/i })).toBeInTheDocument();
+  });
+
+  it('opens a canvas deep link in the organized editor and returns to the library', async () => {
+    render(<CreateWorkflowEntry initialCanvasId="canvas-2" />);
+
+    expect(await screen.findByDisplayValue('Second workflow')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open node library/i })).toBeInTheDocument();
+    expect(screen.queryByText(/^workflows$/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^all workflows$/i })[0]);
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/create-workflow');
+    });
+  });
+
+  it('opens an accessible mobile node and workflow drawer that stays below the publish sheet', async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /open nodes and workflows/i }));
+
+    const mobileDrawer = screen.getByRole('dialog', { name: /build your graph/i });
+    expect(mobileDrawer).toBe(screen.getByTestId('workflow-left-rail'));
+    expect(mobileDrawer).toHaveAttribute('aria-modal', 'true');
+    expect(mobileDrawer).toHaveClass('fixed', 'z-[70]', 'md:static', 'md:z-auto');
+    expect(screen.getByRole('button', { name: /dismiss nodes and workflows/i })).toHaveClass('z-[60]');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /build your graph/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /open nodes and workflows/i })).toBeInTheDocument();
+  });
+
+  it('adds a node from the mobile drawer and returns directly to the canvas', async () => {
+    await renderLoadedPage();
+    const initialNodeCount = screen.getAllByTestId(/node-select-/).length;
+
+    fireEvent.click(screen.getByRole('button', { name: /open nodes and workflows/i }));
+    const mobileDrawer = screen.getByRole('dialog', { name: /build your graph/i });
+    fireEvent.click(within(mobileDrawer).getByRole('button', { name: /^prompt$/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/node-select-/)).toHaveLength(initialNodeCount + 1);
+    });
+    expect(screen.queryByRole('dialog', { name: /build your graph/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open nodes and workflows/i })).toBeInTheDocument();
   });
 
   it('collapses the workflow list while keeping new workflow available', async () => {
@@ -1109,6 +1163,62 @@ describe('CreateWorkflowPage', () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue('Second workflow')).toBeInTheDocument();
     });
+  });
+
+  it('drops the previous template context when switching workflows', async () => {
+    const fetchMock = vi.mocked(fetch);
+    const baseFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/templates' && init?.method === 'POST') {
+        const payload = JSON.parse(String(init.body || '{}')) as { name: string; sourceCanvasId: string };
+        return new Response(JSON.stringify({
+          template: {
+            id: `template-for-${payload.sourceCanvasId}`,
+            name: payload.name,
+          },
+        }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.startsWith('/api/templates/') && init?.method === 'PATCH') {
+        throw new Error(`Stale template context patched: ${url}`);
+      }
+      return baseFetch(input, init);
+    });
+
+    await renderLoadedPage();
+    fireEvent.click(screen.getByRole('button', { name: /publish as template/i }));
+    expect(await screen.findByTestId('workflow-template-publish-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save draft/i }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => (
+        String(url) === '/api/templates'
+        && init?.method === 'POST'
+        && JSON.parse(String(init.body || '{}')).sourceCanvasId === 'canvas-1'
+      ))).toBe(true);
+    });
+
+    fireEvent.click(getWorkflowButton('Second workflow'));
+    await waitFor(() => expect(getWorkflowTitleInput()).toHaveValue('Second workflow'));
+    expect(screen.queryByTestId('workflow-template-publish-drawer')).not.toBeInTheDocument();
+    expect(mockReplace).toHaveBeenCalledWith('/create-workflow');
+
+    fireEvent.click(screen.getByRole('button', { name: /publish as template/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /save draft/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => (
+        String(url) === '/api/templates'
+        && init?.method === 'POST'
+        && JSON.parse(String(init.body || '{}')).sourceCanvasId === 'canvas-2'
+      ))).toBe(true);
+    });
+    expect(fetchMock.mock.calls.some(([url, init]) => (
+      String(url).startsWith('/api/templates/template-for-canvas-1') && init?.method === 'PATCH'
+    ))).toBe(false);
   });
 
   it('can create a new workflow from the left rail', async () => {

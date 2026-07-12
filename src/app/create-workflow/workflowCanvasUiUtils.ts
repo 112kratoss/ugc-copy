@@ -65,7 +65,7 @@ export function getNodeLabel(nodes: WorkflowCanvasGraph['nodes'], nodeId: string
 }
 
 export function getNodePreviewKind(nodeType: WorkflowNodeKind): PreviewMediaKind {
-  if (nodeType === 'image-input' || nodeType === 'image-generate') {
+  if (nodeType === 'image-input' || nodeType === 'image-generate' || nodeType === 'approval-gate') {
     return 'image';
   }
 

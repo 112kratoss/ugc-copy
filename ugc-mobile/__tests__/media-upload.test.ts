@@ -171,6 +171,73 @@ describe('mobile media uploads', () => {
     expect(uploadState.upload).not.toHaveBeenCalled();
   });
 
+  it('uploads video template inputs with the run-scoped signed upload contract', async () => {
+    uploadState.readUriUploadBody.mockResolvedValueOnce({
+      body: new Uint8Array([1, 2, 3]).buffer,
+      mimeType: 'video/mp4',
+      sizeBytes: 3,
+    });
+    const signTemplateRunInput = vi.fn(async () => ({
+      success: true,
+      bucket: 'template_inputs' as const,
+      path: 'user-1/run-1/reference/server-issued.mp4',
+      storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4',
+      token: 'template-upload-token',
+      signedUploadUrl: 'https://storage.example.com/template-upload-token',
+      expiresInSeconds: 900,
+    }));
+    const finalizeTemplateRunInput = vi.fn(async () => ({
+      success: true,
+      run: {
+        id: 'run-1',
+        templateId: 'template-1',
+        templateSlug: 'rider',
+        templateTitle: 'Rider',
+        templateCreator: null,
+        status: 'collecting_inputs' as const,
+        inputSlots: [],
+        inputs: [{ slotKey: 'reference', status: 'uploaded', previewUrl: null, fileName: 'reference.mp4' }],
+        steps: [],
+        result: null,
+        estimatedTotalCredits: null,
+        estimatedRemainingCredits: null,
+        creditsUsed: 0,
+        errorMessage: null,
+        isTest: false,
+        createdAt: null,
+        updatedAt: null,
+      },
+    }));
+    const { uploadTemplateRunInput } = await import('../lib/media');
+
+    await uploadTemplateRunInput('file:///reference.mp4', {
+      api: { signTemplateRunInput, finalizeTemplateRunInput } as never,
+      runId: 'run-1',
+      slotKey: 'reference',
+      kind: 'video',
+      fileName: '../reference clip.mp4',
+      mimeType: 'video/mp4',
+      sizeBytes: 3,
+    });
+
+    expect(signTemplateRunInput).toHaveBeenCalledWith('run-1', {
+      slotKey: 'reference',
+      fileName: 'reference-clip.mp4',
+      mimeType: 'video/mp4',
+      sizeBytes: 3,
+    });
+    expect(uploadState.uploadToSignedUrl).toHaveBeenCalledWith(
+      'template_inputs',
+      'user-1/run-1/reference/server-issued.mp4',
+      'template-upload-token',
+      expect.any(ArrayBuffer),
+      { contentType: 'video/mp4' },
+    );
+    expect(finalizeTemplateRunInput).toHaveBeenCalledWith('run-1', {
+      inputs: [{ slotKey: 'reference', storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4' }],
+    });
+  });
+
   it('sanitizes profile image file names before public profile uploads', async () => {
     const createProfileMediaUpload = vi.fn(async () => ({
       success: true,

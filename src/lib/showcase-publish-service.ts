@@ -280,6 +280,51 @@ async function loadOwnedGeneration({
   };
 }
 
+async function loadCanonicalTemplateResultGeneration({
+  adminSupabase,
+  generationId,
+  userId,
+}: {
+  adminSupabase: SupabaseClient;
+  generationId: string;
+  userId: string;
+}): Promise<{
+  generation: GenerationRow | null;
+  hasShowcaseAssetColumn: boolean;
+}> {
+  const adminGenerationResult = await loadOwnedGeneration({
+    generationId,
+    supabase: adminSupabase,
+  });
+
+  if (
+    adminGenerationResult.error
+    || !adminGenerationResult.generation
+    || adminGenerationResult.generation.user_id !== userId
+    || adminGenerationResult.generation.status !== 'succeeded'
+  ) {
+    return { generation: null, hasShowcaseAssetColumn: adminGenerationResult.hasShowcaseAssetColumn };
+  }
+
+  const { data: canonicalRun, error: canonicalRunError } = await adminSupabase
+    .from('template_runs')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('status', 'succeeded')
+    .eq('is_test', false)
+    .eq('result_generation_id', generationId)
+    .maybeSingle();
+
+  if (canonicalRunError || !canonicalRun) {
+    return { generation: null, hasShowcaseAssetColumn: adminGenerationResult.hasShowcaseAssetColumn };
+  }
+
+  return {
+    generation: adminGenerationResult.generation,
+    hasShowcaseAssetColumn: adminGenerationResult.hasShowcaseAssetColumn,
+  };
+}
+
 export async function publishGenerationToShowcaseForRoute({
   adminSupabase,
   body: requestBody,
@@ -294,14 +339,38 @@ export async function publishGenerationToShowcaseForRoute({
   userId: string;
 }): Promise<ShowcasePublishServiceResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
-  const { generationId, isPublic, title, description, prompt, body, category, workflowSettings } = requestBody;
+  const {
+    generationId,
+    isPublic,
+    title,
+    description,
+    prompt: requestedPrompt,
+    body,
+    category,
+    workflowSettings: requestedWorkflowSettings,
+  } = requestBody;
 
-  const { generation, error: fetchError, hasShowcaseAssetColumn } = await loadOwnedGeneration({
+  const ordinaryGenerationResult = await loadOwnedGeneration({
     generationId,
     supabase,
   });
 
-  if (fetchError || !generation) {
+  let generation = ordinaryGenerationResult.generation;
+  let hasShowcaseAssetColumn = ordinaryGenerationResult.hasShowcaseAssetColumn;
+  let isCanonicalTemplateResult = false;
+
+  if (ordinaryGenerationResult.error || !generation) {
+    const templateResult = await loadCanonicalTemplateResultGeneration({
+      adminSupabase,
+      generationId,
+      userId,
+    });
+    generation = templateResult.generation;
+    hasShowcaseAssetColumn = templateResult.hasShowcaseAssetColumn;
+    isCanonicalTemplateResult = Boolean(generation);
+  }
+
+  if (!generation) {
     return { ok: false, status: 404, body: { error: 'Generation not found' } };
   }
 
@@ -313,13 +382,32 @@ export async function publishGenerationToShowcaseForRoute({
     return { ok: false, status: 400, body: { error: 'Cannot publish a generation that has not succeeded' } };
   }
 
+  if (
+    isCanonicalTemplateResult
+    && (
+      requestBody.exposePromptPublic === true
+      || requestBody.shareInputMediaForRemix === true
+      || requestBody.includeGenerationReferences === true
+      || (requestBody.resourceBundle?.accessMode !== undefined && requestBody.resourceBundle.accessMode !== 'none')
+    )
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'Template results can publish media and a caption, but cannot share the private recipe or input files.' },
+    };
+  }
+
   const requestedVisibility = normalizeRequestedVisibility(requestBody.visibility, isPublic);
+  const prompt = isCanonicalTemplateResult ? undefined : requestedPrompt;
+  const workflowSettings = isCanonicalTemplateResult ? undefined : requestedWorkflowSettings;
   const effectiveVisibility = requestedVisibility;
   const shouldExposePost = effectiveVisibility !== 'private';
   const effectiveIsPublic = effectiveVisibility === 'public';
   const effectiveShareInputMediaForRemix = effectiveIsPublic && requestBody.shareInputMediaForRemix === true;
-  const hasRequestedResourceBundlePayload = Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
-  const requestedResourceBundle = requestBody.resourceBundle ?? null;
+  const hasRequestedResourceBundlePayload = !isCanonicalTemplateResult
+    && Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
+  const requestedResourceBundle = isCanonicalTemplateResult ? null : requestBody.resourceBundle ?? null;
   const requestedAccessMode = requestedResourceBundle?.accessMode ?? 'none';
   const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
   let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;

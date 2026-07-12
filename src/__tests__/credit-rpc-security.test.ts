@@ -122,7 +122,8 @@ describe('credit mutation security boundary', () => {
     expect(videoStartService).toContain('creditSupabase: adminSupabase');
     expect(videoStatusService).toContain('settleGenerationFailed');
     expect(videoStatusService).toContain('settleGenerationSucceeded');
-    expect(generationServices).toContain("supabase.rpc('start_generation'");
+    expect(generationServices).toContain("templateContext ? 'start_template_generation' : 'start_generation'");
+    expect(generationServices).toContain('supabase.rpc(rpcName, rpcArgs)');
     expect(generationServices).toContain("supabase.rpc('attach_generation_provider_task'");
     expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");

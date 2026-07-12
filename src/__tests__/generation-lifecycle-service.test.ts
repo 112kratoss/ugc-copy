@@ -114,6 +114,8 @@ describe('generation lifecycle service', () => {
       filters: [
         ['eq', 'id', 'generation-1'],
         ['eq', 'user_id', 'user-1'],
+        ['is', 'template_run_id', null],
+        ['is', 'template_run_step_id', null],
         ['is', 'archived_at', null],
       ],
       selectColumns: 'id',
@@ -168,6 +170,8 @@ describe('generation lifecycle service', () => {
       filters: [
         ['eq', 'id', 'generation-1'],
         ['eq', 'user_id', 'user-1'],
+        ['is', 'template_run_id', null],
+        ['is', 'template_run_step_id', null],
         ['not', 'archived_at', 'is', null],
       ],
       selectColumns: 'id',

@@ -13,6 +13,7 @@ import {
   serializeWorkflowGraph,
   type WorkflowCanvasGraph,
 } from '@/lib/workflow-canvas';
+import { createWorkflowCanvasLibrarySummary } from '@/lib/workflow-canvas-preview';
 import {
   isMissingWorkflowCanvasHistorySchemaError,
   isMissingWorkflowLifecycleColumnsError,
@@ -26,6 +27,7 @@ import {
 type WorkflowCanvasListRow = {
   id: string;
   title: string;
+  graph: Partial<WorkflowCanvasGraph> | null;
   updated_at: string;
   revision: number;
   status?: string | null;
@@ -33,7 +35,6 @@ type WorkflowCanvasListRow = {
 };
 
 type WorkflowCanvasRouteRow = WorkflowCanvasListRow & {
-  graph: Partial<WorkflowCanvasGraph> | null;
   created_at: string;
 };
 
@@ -105,7 +106,13 @@ export async function listWorkflowCanvasesForRoute({
   return {
     ok: true,
     body: {
-      canvases: (data || []).map((canvas) => withWorkflowCanvasLifecycleDefaults(canvas)),
+      canvases: (data || []).map((canvas) => {
+        const { graph, ...metadata } = canvas;
+        return {
+          ...withWorkflowCanvasLifecycleDefaults(metadata),
+          ...createWorkflowCanvasLibrarySummary(graph),
+        };
+      }),
     },
   };
 }

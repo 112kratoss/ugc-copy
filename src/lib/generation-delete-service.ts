@@ -115,6 +115,8 @@ export async function deleteOwnerGenerationForRoute({
       .select('id, user_id, output_url, showcase_asset_path')
       .eq('id', generationId)
       .eq('user_id', userId)
+      .is('template_run_id', null)
+      .is('template_run_step_id', null)
       .maybeSingle();
     const generation = generationData as GenerationDeleteRow | null;
 
@@ -170,7 +172,9 @@ export async function deleteOwnerGenerationForRoute({
       .from('generations')
       .delete()
       .eq('id', generationId)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .is('template_run_id', null)
+      .is('template_run_step_id', null);
 
     if (deleteError) {
       console.error('Failed to delete generation:', deleteError);

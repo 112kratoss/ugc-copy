@@ -9,6 +9,8 @@ interface UseWorkflowRunPollingOptions {
   authHeaders: () => Promise<Record<string, string>>;
   onRunUpdate: (run: WorkflowCanvasRunRecord) => void;
   onRunComplete: () => void;
+  onRunAwaitingApproval?: (run: WorkflowCanvasRunRecord) => void;
+  pollingRevision?: number;
 }
 
 export function useWorkflowRunPolling({
@@ -17,6 +19,8 @@ export function useWorkflowRunPolling({
   authHeaders,
   onRunUpdate,
   onRunComplete,
+  onRunAwaitingApproval,
+  pollingRevision = 0,
 }: UseWorkflowRunPollingOptions) {
   const requestInFlightRef = useRef(false);
   const intervalRef = useRef<number | null>(null);
@@ -50,7 +54,10 @@ export function useWorkflowRunPolling({
 
       const run = data.run as WorkflowCanvasRunRecord;
       onRunUpdate(run);
-      if (run.status !== 'processing') {
+      if (run.status === 'awaiting_approval') {
+        clearPollingInterval();
+        onRunAwaitingApproval?.(run);
+      } else if (run.status !== 'processing') {
         clearPollingInterval();
         onRunComplete();
       }
@@ -59,7 +66,7 @@ export function useWorkflowRunPolling({
     } finally {
       requestInFlightRef.current = false;
     }
-  }, [activeCanvasId, activeRunId, authHeaders, clearPollingInterval, onRunComplete, onRunUpdate]);
+  }, [activeCanvasId, activeRunId, authHeaders, clearPollingInterval, onRunAwaitingApproval, onRunComplete, onRunUpdate]);
 
   useEffect(() => {
     if (!activeCanvasId || !activeRunId) {
@@ -100,5 +107,5 @@ export function useWorkflowRunPolling({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       requestInFlightRef.current = false;
     };
-  }, [activeCanvasId, activeRunId, clearPollingInterval, refreshRun]);
+  }, [activeCanvasId, activeRunId, clearPollingInterval, pollingRevision, refreshRun]);
 }

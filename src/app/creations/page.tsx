@@ -48,6 +48,12 @@ interface Generation {
     linked_post_visibility?: 'public' | 'unlisted' | 'private' | null;
     linked_post_archived_at?: string | null;
     paywallPrefill?: GenerationPaywallPrefill | null;
+    origin?: 'creation' | 'template';
+    template?: {
+        runId: string;
+        templateId: string;
+        templateTitle: string | null;
+    } | null;
 }
 
 type FilterType = 'all' | 'images' | 'videos' | 'audio';
@@ -573,7 +579,11 @@ export default function CreationsPage() {
             setPublishTarget(detailedGeneration);
             setInitialSellAutoUnlockInPublishModal(Boolean(options?.initialSellAutoUnlock));
             setShareAfterPublish(Boolean(options?.shareAfterPublish));
-            setShowPaidShortcutInPublishModal(options?.showPaidShortcut ?? true);
+            setShowPaidShortcutInPublishModal(
+                detailedGeneration.origin === 'template'
+                    ? false
+                    : options?.showPaidShortcut ?? true
+            );
         } catch {
             // Error state is stored in generationDetailError for the page-level notice.
         }
@@ -1048,6 +1058,10 @@ export default function CreationsPage() {
             return generation.title.trim();
         }
 
+        if (generation.origin === 'template' && generation.template?.templateTitle?.trim()) {
+            return generation.template.templateTitle.trim();
+        }
+
         const mediaKind = getMediaKind(generation);
         const mediaLabel = mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video';
         const shortDate = new Date(generation.created_at).toLocaleDateString('en-US', {
@@ -1062,6 +1076,9 @@ export default function CreationsPage() {
         const source = generation.description?.trim() || generation.prompt?.trim();
         if (!source) {
             const mediaKind = getMediaKind(generation);
+            if (generation.origin === 'template') {
+                return `Final ${mediaKind} created from a reusable template. Open the run to review its progress or publish the result.`;
+            }
             return `${mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video'} is ready to publish, share, or turn into an unlock.`;
         }
 
@@ -1129,6 +1146,7 @@ export default function CreationsPage() {
 
         return [
             { label: 'Type', value: mediaLabel },
+            generation.origin === 'template' ? { label: 'Origin', value: 'Template' } : null,
             { label: 'Model', value: generation.model },
             { label: 'Created', value: createdLabel },
             generation.cost !== null ? { label: 'Credits', value: `${generation.cost} credits` } : null,
@@ -1139,12 +1157,13 @@ export default function CreationsPage() {
     const renderPreviewActions = (generation: Generation) => {
         const workspaceState = resolveCreationWorkspaceCardState(generation, posts);
         const mediaKind = getMediaKind(generation);
+        const isTemplateResult = generation.origin === 'template';
         const canManageFromCreation = mediaKind !== 'audio' && isShareSupported(generation);
         const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
         const primaryIsUnlock =
             workspaceState.primaryAction.type === 'add-paywall' ||
             workspaceState.primaryAction.type === 'manage-paywall';
-        const customizeHref = canManageFromCreation
+        const customizeHref = canManageFromCreation && !isTemplateResult
             ? buildCreationCustomizePath(generation, workspaceState)
             : null;
         const downloadHref = generation.output_url;
@@ -1197,6 +1216,13 @@ export default function CreationsPage() {
                     </Link>
                 ) : null}
 
+                {isTemplateResult && generation.template?.runId ? (
+                    <Link href={`/template-runs/${generation.template.runId}`} className={secondaryClass}>
+                        <ExternalLink className="h-4 w-4" />
+                        Open template run
+                    </Link>
+                ) : null}
+
                 {downloadHref ? (
                     <a
                         href={downloadHref}
@@ -1211,24 +1237,28 @@ export default function CreationsPage() {
                     </a>
                 ) : null}
 
-                <button
-                    type="button"
-                    onClick={() => void handleGenerationArchive(generation.id)}
-                    className={quietIconClass}
-                    title="Archive creation"
-                    aria-label="Archive creation"
-                >
-                    <Archive className="h-4 w-4" />
-                </button>
-                <button
-                    type="button"
-                    onClick={() => void handleGenerationDelete(generation.id)}
-                    className={dangerIconClass}
-                    title="Delete creation"
-                    aria-label="Delete creation"
-                >
-                    <Trash2 className="h-4 w-4" />
-                </button>
+                {!isTemplateResult ? (
+                    <>
+                        <button
+                            type="button"
+                            onClick={() => void handleGenerationArchive(generation.id)}
+                            className={quietIconClass}
+                            title="Archive creation"
+                            aria-label="Archive creation"
+                        >
+                            <Archive className="h-4 w-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleGenerationDelete(generation.id)}
+                            className={dangerIconClass}
+                            title="Delete creation"
+                            aria-label="Delete creation"
+                        >
+                            <Trash2 className="h-4 w-4" />
+                        </button>
+                    </>
+                ) : null}
             </>
         );
     };
@@ -1653,6 +1683,7 @@ export default function CreationsPage() {
                         <div data-testid="creation-grid" className={STUDIO_GRID_CLASS}>
                             {successfulCreationCards.map(({ generation: gen, workspaceState }) => {
                                 const mediaKind = getMediaKind(gen);
+                                const isTemplateResult = gen.origin === 'template';
                                 const isImage = mediaKind === 'image';
                                 const isAudio = mediaKind === 'audio';
                                 const MediaIcon = isImage ? ImageIcon : isAudio ? Volume2 : Film;
@@ -1705,8 +1736,10 @@ export default function CreationsPage() {
                                     Boolean(workspaceState.primaryAction.label);
                                 const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
                                 const primaryIsUnlock =
-                                    workspaceState.primaryAction.type === 'add-paywall' ||
-                                    workspaceState.primaryAction.type === 'manage-paywall';
+                                    !isTemplateResult && (
+                                        workspaceState.primaryAction.type === 'add-paywall' ||
+                                        workspaceState.primaryAction.type === 'manage-paywall'
+                                    );
                                 const createdShort = new Date(gen.created_at).toLocaleDateString('en-US', {
                                     month: 'short',
                                     day: 'numeric',
@@ -1733,7 +1766,7 @@ export default function CreationsPage() {
                                                     alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
                                                     outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
                                                     onOpen={() => void openPreviewModal(gen)}
-                                                    onRestore={!isAudio ? () => requestPreviewRestore(gen) : undefined}
+                                                    onRestore={!isAudio && !isTemplateResult ? () => requestPreviewRestore(gen) : undefined}
                                                     isRestoring={restoringGenerationId === gen.id}
                                                 />
                                             ) : null}
@@ -1782,6 +1815,11 @@ export default function CreationsPage() {
                                             </div>
 
                                             <div className="flex flex-wrap gap-2">
+                                                {isTemplateResult ? (
+                                                    <div className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-100">
+                                                        From template
+                                                    </div>
+                                                ) : null}
                                                 <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getPublishBadgeClass(publishBadgeLabel)}`}>
                                                     {publishBadgeLabel}
                                                 </div>
@@ -1897,27 +1935,38 @@ export default function CreationsPage() {
                                                             Link
                                                         </button>
                                                     ) : null}
+                                                    {isTemplateResult && gen.template?.runId ? (
+                                                        <Link
+                                                            href={`/template-runs/${gen.template.runId}`}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                        >
+                                                            <ExternalLink className="h-3.5 w-3.5" />
+                                                            Open run
+                                                        </Link>
+                                                    ) : null}
                                                 </div>
-                                                <div className="flex shrink-0 gap-1.5">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleGenerationArchive(gen.id)}
-                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/20 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
-                                                        title="Archive creation"
-                                                        aria-label="Archive creation"
-                                                    >
-                                                        <Archive className="h-3.5 w-3.5" />
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleGenerationDelete(gen.id)}
-                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
-                                                        title="Delete creation"
-                                                        aria-label="Delete creation"
-                                                    >
-                                                        <Trash2 className="h-3.5 w-3.5" />
-                                                    </button>
-                                                </div>
+                                                {!isTemplateResult ? (
+                                                    <div className="flex shrink-0 gap-1.5">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleGenerationArchive(gen.id)}
+                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/20 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                            title="Archive creation"
+                                                            aria-label="Archive creation"
+                                                        >
+                                                            <Archive className="h-3.5 w-3.5" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleGenerationDelete(gen.id)}
+                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                                            title="Delete creation"
+                                                            aria-label="Delete creation"
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                        </button>
+                                                    </div>
+                                                ) : null}
                                             </div>
                                         </div>
                                     </div>
@@ -2296,9 +2345,10 @@ export default function CreationsPage() {
                 onClose={closePublishModal}
                 generationId={publishTarget?.id ?? null}
                 accessToken={session?.access_token ?? null}
-                defaultTitle={publishTarget?.title ?? ''}
+                defaultTitle={publishTarget?.title ?? publishTarget?.template?.templateTitle ?? ''}
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}
+                mediaOnly={publishTarget?.origin === 'template'}
                 initialSellAutoUnlock={initialSellAutoUnlockInPublishModal}
                 paywallPrefill={publishTarget?.paywallPrefill ?? null}
                 shareAfterPublish={shareAfterPublish ? {

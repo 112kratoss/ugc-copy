@@ -11,6 +11,7 @@ import { createStarterGraph } from '@/lib/workflow-canvas';
 type WorkflowCanvasListRow = {
   id: string;
   title: string;
+  graph: ReturnType<typeof createStarterGraph>;
   updated_at: string;
   revision: number;
   status?: string | null;
@@ -38,6 +39,7 @@ function createWorkflowSupabaseMock(options?: {
   const listRows: WorkflowCanvasListRow[] = [{
     id: 'canvas-1',
     title: 'Workflow canvas',
+    graph: createStarterGraph(),
     updated_at: '2026-03-24T11:00:00.000Z',
     revision: 2,
     status: 'published',
@@ -70,6 +72,7 @@ function createWorkflowSupabaseMock(options?: {
                   data: listRows.map((row) => ({
                     id: row.id,
                     title: row.title,
+                    graph: row.graph,
                     updated_at: row.updated_at,
                     revision: row.revision,
                   })),
@@ -151,7 +154,7 @@ function createRateLimitClient({ allowed = true } = {}) {
 }
 
 describe('workflow canvas collection service', () => {
-  it('lists sidebar canvas metadata with lifecycle fallback defaults', async () => {
+  it('lists data-free canvas previews with lifecycle fallback defaults', async () => {
     const supabase = createWorkflowSupabaseMock({ fallbackList: true });
 
     const result = await listWorkflowCanvasesForRoute({
@@ -169,12 +172,27 @@ describe('workflow canvas collection service', () => {
           revision: 2,
           status: 'draft',
           published_at: null,
+          node_count: 6,
+          connection_count: 5,
+          output_kinds: ['video', 'image'],
+          preview: {
+            nodes: expect.arrayContaining([
+              expect.objectContaining({ id: 'n0', type: 'text-input' }),
+              expect.objectContaining({ id: 'n1', type: 'image-input' }),
+            ]),
+            edges: expect.arrayContaining([
+              expect.objectContaining({ source: 'n0' }),
+            ]),
+            truncated: false,
+          },
         }],
       },
     });
+    expect(JSON.stringify(result)).not.toContain('UGC creator in a warmly lit room');
+    expect(JSON.stringify(result)).not.toContain('imageUrl');
     expect(supabase.listSelects).toEqual([
-      'id,title,updated_at,revision,status,published_at',
-      'id,title,updated_at,revision',
+      'id,title,graph,updated_at,revision,status,published_at',
+      'id,title,graph,updated_at,revision',
     ]);
   });
 

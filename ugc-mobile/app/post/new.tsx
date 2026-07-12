@@ -22,10 +22,12 @@ import {
   getPostComposerPublishActions,
   getPostComposerPackageStatus,
   getPostComposerSubmitLabel,
+  getExplicitPublishGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
   getPublishGenerationTitle,
   getPublishableGenerations,
+  isTemplateGeneration,
   POST_COMPOSER_CATEGORY_OPTIONS,
   POST_COMPOSER_RESOURCE_KIND_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
@@ -132,7 +134,12 @@ export default function NewPostScreen() {
     [generationsQuery.data?.generations]
   );
   const allGenerations = generationsQuery.data?.generations ?? [];
+  const explicitGeneration = useMemo(
+    () => getExplicitPublishGeneration(allGenerations, generationId),
+    [allGenerations, generationId]
+  );
   const selectedGeneration = allGenerations.find((item) => item.id === draft.selectedGenerationId) ?? null;
+  const isTemplateBacked = isTemplateGeneration(selectedGeneration);
   const isGenerationBacked = Boolean(postQuery.data?.post?.generationId) || draft.mode === 'creation';
   const isEditMode = Boolean(postId);
   const isFieldsLocked = isEditMode && isGenerationBacked;
@@ -145,11 +152,12 @@ export default function NewPostScreen() {
     [draft, selectedGeneration]
   );
 
-  // Prefill when generationId is provided and the creations list resolves
+  // Prefill when generationId is provided and the creations list resolves.
+  // A canonical template result may be selected before its grid derivative
+  // is ready, while ordinary creations retain the normal publishable filter.
   useEffect(() => {
-    if (generationId && publishableGenerations.length > 0) {
-      const found = publishableGenerations.find((g) => g.id === generationId);
-      if (found) {
+    if (generationId && explicitGeneration) {
+      const found = explicitGeneration;
         setDraft((current) => {
           if (current.selectedGenerationId === generationId) return current;
           const category = found.category === 'video' || found.category === 'motion' || found.category === 'ugc-ad' ? 'video' : 'image';
@@ -158,7 +166,7 @@ export default function NewPostScreen() {
             mode: 'creation',
             proofMode: 'media',
             selectedGenerationId: found.id,
-            title: current.title || found.title || found.prompt || 'Untitled creation',
+            title: current.title || getPublishGenerationTitle(found),
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
@@ -172,9 +180,15 @@ export default function NewPostScreen() {
             category,
           };
         });
-      }
     }
-  }, [generationId, publishableGenerations]);
+  }, [explicitGeneration, generationId]);
+
+  useEffect(() => {
+    if (!generationId || !generationsQuery.isSuccess) return;
+    const requested = allGenerations.find((item) => item.id === generationId);
+    if (!requested?.linked_post_id) return;
+    router.replace(`/showcase/${encodeURIComponent(requested.linked_post_id)}` as never);
+  }, [allGenerations, generationId, generationsQuery.isSuccess]);
 
   // Prefill when postId is provided and post detail resolves
   useEffect(() => {
@@ -671,7 +685,13 @@ export default function NewPostScreen() {
     pendingVisibility: pendingPublishVisibility,
   });
   const showMadeWith = draft.proofMode === 'media';
-  const unlockSection = (
+  const unlockSection = isTemplateBacked ? (
+    <StatusBlock
+      title="Final media only"
+      body="The creator's template recipe stays private, so prompts, references, and resource packages cannot be attached to this post."
+      tone="neutral"
+    />
+  ) : (
     <UnlockSection
       draft={draft}
       selectedGeneration={selectedGeneration}

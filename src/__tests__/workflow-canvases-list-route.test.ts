@@ -155,13 +155,19 @@ describe('/api/workflow-canvases routes', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns sidebar metadata without full graph payloads', async () => {
+  it('returns sanitized library previews without full graph payloads', async () => {
     const { GET } = await import('@/app/api/workflow-canvases/route');
     const response = await GET(new Request('http://localhost/api/workflow-canvases') as never);
 
     const data = await response.json();
     expect(response.status).toBe(200);
-    expect(data.canvases).toEqual(rows);
+    expect(data.canvases).toEqual([{
+      ...rows[0],
+      preview: { nodes: [], edges: [], truncated: false },
+      node_count: 0,
+      connection_count: 0,
+      output_kinds: [],
+    }]);
     expect(data.canvases[0]).not.toHaveProperty('graph');
   });
 
@@ -180,6 +186,10 @@ describe('/api/workflow-canvases routes', () => {
       revision: 2,
       status: 'draft',
       published_at: null,
+      preview: { nodes: [], edges: [], truncated: false },
+      node_count: 0,
+      connection_count: 0,
+      output_kinds: [],
     }]);
   });
 

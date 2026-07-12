@@ -18,6 +18,7 @@ import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/client-generation-models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type {
+  ApprovalGateNodeData,
   AudioInputNodeData,
   DialogueTurn,
   ImageGenerateNodeData,
@@ -41,6 +42,7 @@ import type {
   WorkflowPromptEnhancementTarget,
   WorkflowReferenceElement,
   WorkflowResolvedImageReference,
+  WorkflowTemplateInputConfig,
   SeedanceAssetMetadata,
   SeedanceAssetStatus,
 } from '@/lib/workflow-canvas';
@@ -708,6 +710,76 @@ function SourceReferenceHandleField({
             Copy handle
           </button>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TemplateInputSettings({
+  kind,
+  value,
+  onChange,
+}: {
+  kind: 'image' | 'video';
+  value: WorkflowTemplateInputConfig;
+  onChange: (value: WorkflowTemplateInputConfig) => void;
+}) {
+  return (
+    <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/[0.045] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-emerald-300">Template input</div>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+            Choose whether consumers replace this {kind} or every run reuses your uploaded asset.
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-300">
+          Required
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <SelectField
+          label="Used by"
+          value={value.mode}
+          options={[
+            { value: 'consumer', label: 'Consumer upload' },
+            { value: 'fixed', label: 'Fixed template asset' },
+          ]}
+          onChange={(mode) => onChange({
+            ...value,
+            mode: mode === 'consumer' ? 'consumer' : 'fixed',
+            required: true,
+          })}
+        />
+
+        {value.mode === 'consumer' ? (
+          <>
+            <TextField
+              label="Stable input key"
+              value={value.key}
+              placeholder={kind === 'image' ? 'person_photo' : 'reference_video'}
+              onChange={(key) => onChange({ ...value, key, required: true })}
+            />
+            <TextField
+              label="Public label"
+              value={value.label}
+              placeholder={kind === 'image' ? 'Your photo' : 'Your video'}
+              onChange={(label) => onChange({ ...value, label, required: true })}
+            />
+            <TextAreaField
+              label="Upload guidance"
+              value={value.guidance}
+              placeholder="Explain which angle, framing, and quality will work best."
+              rows={3}
+              onChange={(guidance) => onChange({ ...value, guidance, required: true })}
+            />
+          </>
+        ) : (
+          <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-3 text-sm leading-relaxed text-zinc-400">
+            Upload the durable asset below. It stays private and is copied into each published template version.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1395,6 +1467,10 @@ function getInspectorNodeTypeLabel(nodeType: WorkflowNodeKind): string {
     return 'Canvas note';
   }
 
+  if (nodeType === 'approval-gate') {
+    return 'Approval checkpoint';
+  }
+
   return nodeType.replace(/-/g, ' ');
 }
 
@@ -1814,12 +1890,61 @@ function NodeEditorContent({
         </div>
       )}
 
+      {selectedKind === 'approval-gate' && (() => {
+        const approval = node.data as ApprovalGateNodeData;
+        return (
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-violet-500/20 bg-violet-500/[0.05] p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-violet-200">Consumer checkpoint</div>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                Execution pauses here and shows the generated media to the consumer. Approval passes the same media to downstream nodes.
+              </p>
+            </div>
+            <SelectField
+              label="Media type"
+              value={approval.mediaKind}
+              options={[
+                { value: 'image', label: 'Image' },
+                { value: 'video', label: 'Video' },
+              ]}
+              onChange={(mediaKind) => onUpdateNode(node.id, {
+                ...node.data,
+                mediaKind: mediaKind === 'video' ? 'video' : 'image',
+              } as Partial<WorkflowNodeData>)}
+            />
+            <TextField
+              label="Consumer review label"
+              value={approval.label}
+              placeholder={`Review generated ${approval.mediaKind}`}
+              onChange={(label) => onUpdateNode(node.id, { ...node.data, label } as Partial<WorkflowNodeData>)}
+            />
+            <CheckboxField
+              label="Allow retry from this review"
+              checked={approval.allowRetry}
+              onChange={(allowRetry) => onUpdateNode(node.id, { ...node.data, allowRetry } as Partial<WorkflowNodeData>)}
+            />
+            <div className="rounded-2xl border border-amber-500/15 bg-amber-500/[0.05] px-3 py-3 text-xs leading-relaxed text-amber-100/80">
+              Disconnect the current media edge before switching this checkpoint between image and video.
+            </div>
+          </div>
+        );
+      })()}
+
       {selectedKind === 'image-input' && (
         <div className="space-y-3">
           {(() => {
             const imageInput = node.data as ImageInputNodeData;
             return (
               <>
+                <TemplateInputSettings
+                  kind="image"
+                  value={imageInput.templateInput}
+                  onChange={(templateInput) => onUpdateNode(node.id, {
+                    ...node.data,
+                    subtitle: templateInput.mode === 'consumer' ? 'Consumer upload · required' : 'Fixed template asset',
+                    templateInput,
+                  } as Partial<WorkflowNodeData>)}
+                />
                 <SourceReferenceHandleField
                   value={imageInput.referenceHandle}
                   helperText="Optional global @handle for this image source. Any downstream generator connected through Image reference can mention it in the prompt."
@@ -1889,6 +2014,15 @@ function NodeEditorContent({
             const videoInput = node.data as VideoInputNodeData;
             return (
               <>
+                <TemplateInputSettings
+                  kind="video"
+                  value={videoInput.templateInput}
+                  onChange={(templateInput) => onUpdateNode(node.id, {
+                    ...node.data,
+                    subtitle: templateInput.mode === 'consumer' ? 'Consumer upload · required' : 'Fixed template asset',
+                    templateInput,
+                  } as Partial<WorkflowNodeData>)}
+                />
                 <UploadTile
                   inputId={`workflow-video-input-${node.id}`}
                   inputLabel="Upload video"
@@ -2733,6 +2867,14 @@ function NodeRunsPanel({
 }
 
 function getNodeGuidance(nodeType: WorkflowNodeKind): string[] {
+  if (nodeType === 'approval-gate') {
+    return [
+      'Approval checkpoints pause template execution and show one generated image or video to the consumer.',
+      'The incoming and outgoing media types must match so the approved media passes through unchanged.',
+      'Enable retry when consumers should be able to regenerate the upstream branch before continuing.',
+    ];
+  }
+
   if (nodeType === 'motion-generate') {
     return [
       'Motion control works best with either a reference image or a reference video before you run it.',

@@ -423,6 +423,35 @@ describe('mobile api client caching', () => {
     ]);
   });
 
+  it('preserves template attribution while masking private recipe metadata', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      generations: [{
+        id: 'gen-template',
+        status: 'succeeded',
+        output_url: 'https://cdn.example.com/result.png',
+        model: 'private-provider-model',
+        prompt: 'private workflow prompt',
+        input_media: [{ url: 'https://cdn.example.com/private-input.png', kind: 'image' }],
+        origin: 'template',
+        template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+      }],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const item = (await api.listGenerations(true)).generations[0];
+    expect(item).toMatchObject({
+      origin: 'template',
+      model: 'Magicbooklet template',
+      prompt: null,
+      input_media: [],
+      template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+    });
+  });
+
   it('posts FormData without forcing a JSON content type', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,

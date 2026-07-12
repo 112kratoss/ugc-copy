@@ -9,12 +9,14 @@ function RunPollingHarness({
   activeRunId,
   authHeaders,
   onRunComplete,
+  onRunAwaitingApproval,
   onRunUpdate,
 }: {
   activeCanvasId: string | null;
   activeRunId: string | null;
   authHeaders: () => Promise<Record<string, string>>;
   onRunComplete: () => void;
+  onRunAwaitingApproval?: (run: WorkflowCanvasRunRecord) => void;
   onRunUpdate: (run: WorkflowCanvasRunRecord) => void;
 }) {
   useWorkflowRunPolling({
@@ -22,6 +24,7 @@ function RunPollingHarness({
     activeRunId,
     authHeaders,
     onRunComplete,
+    onRunAwaitingApproval,
     onRunUpdate,
   });
 
@@ -153,6 +156,47 @@ describe('useWorkflowRunPolling', () => {
       await vi.advanceTimersByTimeAsync(8000);
     });
 
+    expect(runPollCount).toBe(1);
+  });
+
+  it('pauses polling without completing when a run awaits approval', async () => {
+    let runPollCount = 0;
+    const onRunUpdate = vi.fn();
+    const onRunComplete = vi.fn();
+    const onRunAwaitingApproval = vi.fn();
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      runPollCount += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          run: {
+            id: 'run-approval',
+            status: 'awaiting_approval',
+            steps: [],
+          },
+        }),
+      } as Response;
+    }));
+
+    render(
+      <RunPollingHarness
+        activeCanvasId="canvas-1"
+        activeRunId="run-approval"
+        authHeaders={async () => ({ Authorization: 'Bearer test-token' })}
+        onRunComplete={onRunComplete}
+        onRunAwaitingApproval={onRunAwaitingApproval}
+        onRunUpdate={onRunUpdate}
+      />
+    );
+
+    await flushAsyncWork();
+    expect(onRunAwaitingApproval).toHaveBeenCalledTimes(1);
+    expect(onRunComplete).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000);
+    });
     expect(runPollCount).toBe(1);
   });
 });

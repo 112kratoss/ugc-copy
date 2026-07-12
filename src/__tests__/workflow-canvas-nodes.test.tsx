@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { workflowCanvasEdgeTypes, workflowCanvasNodeTypes } from '@/app/create-workflow/WorkflowCanvasNodes';
-import { createStarterGraph } from '@/lib/workflow-canvas';
+import { createStarterGraph, createTemplateReadyStarterGraph } from '@/lib/workflow-canvas';
 
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
@@ -271,5 +271,35 @@ describe('WorkflowCanvasNodes edge controls', () => {
     expect(screen.getByText('VIDEO')).toBeInTheDocument();
     expect(screen.getByText('PROMPT')).toBeInTheDocument();
     expect(screen.queryByText('START')).not.toBeInTheDocument();
+  });
+
+  it('renders a typed approval checkpoint and resumes an awaiting run from the node', () => {
+    const graph = createTemplateReadyStarterGraph();
+    const node = graph.nodes.find((candidate) => candidate.type === 'approval-gate');
+    expect(node).toBeTruthy();
+    const onApprove = vi.fn();
+    const ApprovalNode = workflowCanvasNodeTypes['approval-gate'] as unknown as ComponentType<Record<string, unknown>>;
+
+    render(
+      <ApprovalNode
+        id={node?.id}
+        data={{
+          ...node?.data,
+          runState: {
+            ...node?.data.runState,
+            status: 'awaiting_approval',
+            outputUrl: 'https://example.com/pending.jpg',
+          },
+          __runtime: { onApprove },
+        }}
+        dragging={false}
+      />
+    );
+
+    expect(screen.getByTestId('workflow-handle-target-image')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-handle-source-image')).toBeInTheDocument();
+    expect(screen.getByText('review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /approve & continue/i }));
+    expect(onApprove).toHaveBeenCalledTimes(1);
   });
 });

@@ -132,6 +132,8 @@ export async function restoreGenerationMediaForRoute({
       .select('id, user_id, status, model, category, output_url, showcase_asset_path, is_public')
       .eq('id', generationId)
       .eq('user_id', userId)
+      .is('template_run_id', null)
+      .is('template_run_step_id', null)
       .maybeSingle();
     const ownedGeneration = generation as GenerationRestoreRow | null;
 
@@ -229,7 +231,9 @@ export async function restoreGenerationMediaForRoute({
         is_public: false,
       })
       .eq('id', ownedGeneration.id)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .is('template_run_id', null)
+      .is('template_run_step_id', null);
 
     if (generationUpdateError) {
       console.error('Failed to update restored generation preview:', generationUpdateError);
@@ -260,7 +264,9 @@ export async function restoreGenerationMediaForRoute({
             is_public: ownedGeneration.is_public,
           })
           .eq('id', ownedGeneration.id)
-          .eq('user_id', userId);
+          .eq('user_id', userId)
+          .is('template_run_id', null)
+          .is('template_run_step_id', null);
         if (rollbackError) {
           console.error('Failed to roll back generation preview after linked post update failure:', rollbackError);
         } else {

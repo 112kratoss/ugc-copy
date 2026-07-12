@@ -44,6 +44,7 @@ interface WorkflowCanvasShareActionsProps {
   canvasTitle: string;
   graph: WorkflowCanvasGraph;
   initialImportShareId?: string | null;
+  importedCanvasPath?: (canvas: WorkflowCanvasRecord) => string;
   onBeforeImport: () => Promise<boolean>;
   onImportComplete: (canvas: WorkflowCanvasRecord) => void;
   onPersistCanvas: (
@@ -80,6 +81,7 @@ export function WorkflowCanvasShareActions({
   canvasTitle,
   graph,
   initialImportShareId = null,
+  importedCanvasPath,
   onBeforeImport,
   onImportComplete,
   onPersistCanvas,
@@ -271,7 +273,7 @@ export function WorkflowCanvasShareActions({
       setIsImportDialogOpen(false);
       resetImportState();
       if (initialImportValue) {
-        router.replace('/create-workflow');
+        router.replace(importedCanvasPath?.(payload.canvas) ?? '/create-workflow');
       }
     } catch (error) {
       setImportRequestError(error instanceof Error ? error.message : 'Failed to import workflow share.');
@@ -281,6 +283,7 @@ export function WorkflowCanvasShareActions({
   }, [
     authHeaders,
     importPreview,
+    importedCanvasPath,
     initialImportValue,
     onBeforeImport,
     onImportComplete,

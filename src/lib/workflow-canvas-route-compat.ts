@@ -1,7 +1,7 @@
 import type { WorkflowCanvasStatus } from '@/lib/workflow-canvas';
 
-export const WORKFLOW_CANVAS_LIST_SELECT = 'id,title,updated_at,revision,status,published_at';
-export const WORKFLOW_CANVAS_LIST_SELECT_LEGACY = 'id,title,updated_at,revision';
+export const WORKFLOW_CANVAS_LIST_SELECT = 'id,title,graph,updated_at,revision,status,published_at';
+export const WORKFLOW_CANVAS_LIST_SELECT_LEGACY = 'id,title,graph,updated_at,revision';
 export const WORKFLOW_CANVAS_SELECT = 'id,title,graph,created_at,updated_at,revision,status,published_at';
 export const WORKFLOW_CANVAS_SELECT_LEGACY = 'id,title,graph,created_at,updated_at,revision';
 

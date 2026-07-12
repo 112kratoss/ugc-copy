@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  type ApprovalGateNodeData,
   createCanvasEdge,
   createWorkflowNode,
+  type ImageInputNodeData,
   normalizeWorkflowGraph,
   type TextInputNodeData,
   type VideoGenerateNodeData,
@@ -69,10 +71,11 @@ type RunnerTestState = {
     user_id: string;
     start_node_id: string;
     mode: 'node' | 'branch';
-    status: 'processing' | 'succeeded' | 'failed';
+    status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed';
     created_at: string;
     finished_at: string | null;
     catalog_revision: string | null;
+    graph_snapshot: WorkflowCanvasGraph | null;
   };
   graph: WorkflowCanvasGraph;
   steps: WorkflowCanvasRunStepRecord[];
@@ -122,6 +125,7 @@ function createQueuedWorkflowState(): RunnerTestState & {
       created_at: '2026-04-01T10:00:00.000Z',
       finished_at: null,
       catalog_revision: 'catalog-rev-1',
+      graph_snapshot: normalizeWorkflowGraph(graph),
     },
     graph,
     steps: [
@@ -161,6 +165,104 @@ function createQueuedWorkflowState(): RunnerTestState & {
         output_url: 'generated_images/user-1/hero-frame.png',
       },
     ],
+  };
+}
+
+function createAwaitingApprovalState(): RunnerTestState & {
+  approvalNodeId: string;
+  videoNodeId: string;
+} {
+  const promptNode = createWorkflowNode('text-input', { x: 40, y: 40 });
+  const imageNode = createWorkflowNode('image-input', { x: 40, y: 240 });
+  const approvalNode = createWorkflowNode('approval-gate', { x: 300, y: 240 });
+  const videoNode = createWorkflowNode('video-generate', { x: 560, y: 120 });
+  const graph = normalizeWorkflowGraph({
+    nodes: [
+      {
+        ...promptNode,
+        data: { ...(promptNode.data as TextInputNodeData), text: 'Approved frame video' },
+      },
+      {
+        ...imageNode,
+        data: {
+          ...(imageNode.data as ImageInputNodeData),
+          imageUrl: 'uploads/user-1/review-frame.png',
+          storagePath: 'uploads/user-1/review-frame.png',
+        },
+      },
+      {
+        ...approvalNode,
+        data: {
+          ...(approvalNode.data as ApprovalGateNodeData),
+          mediaKind: 'image',
+          label: 'Review opening frame',
+        },
+      },
+      videoNode,
+    ],
+    edges: [
+      createCanvasEdge(promptNode.id, 'text', videoNode.id, 'prompt'),
+      createCanvasEdge(imageNode.id, 'image', approvalNode.id, 'image'),
+      createCanvasEdge(approvalNode.id, 'image', videoNode.id, 'start-frame'),
+    ],
+  });
+
+  return {
+    approvalNodeId: approvalNode.id,
+    videoNodeId: videoNode.id,
+    run: {
+      id: 'run-approval',
+      canvas_id: 'canvas-approval',
+      user_id: 'user-1',
+      start_node_id: imageNode.id,
+      mode: 'branch',
+      status: 'awaiting_approval',
+      created_at: '2026-04-01T10:00:00.000Z',
+      finished_at: null,
+      catalog_revision: 'catalog-rev-1',
+      graph_snapshot: normalizeWorkflowGraph(graph),
+    },
+    graph,
+    steps: [
+      {
+        id: 'step-input',
+        node_id: imageNode.id,
+        status: 'succeeded',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: { outputUrl: 'uploads/user-1/review-frame.png' },
+        error_message: null,
+        started_at: '2026-04-01T10:00:00.000Z',
+        finished_at: '2026-04-01T10:00:00.000Z',
+      },
+      {
+        id: 'step-approval',
+        node_id: approvalNode.id,
+        status: 'awaiting_approval',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: {
+          pendingOutputUrl: 'uploads/user-1/review-frame.png',
+          mediaKind: 'image',
+          label: 'Review opening frame',
+        },
+        error_message: null,
+        started_at: '2026-04-01T10:00:01.000Z',
+        finished_at: null,
+      },
+      {
+        id: 'step-video',
+        node_id: videoNode.id,
+        status: 'queued',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: null,
+        error_message: 'Waiting for approval.',
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    generations: [],
   };
 }
 
@@ -313,6 +415,68 @@ describe('workflow-runner recovery', () => {
     vi.restoreAllMocks();
   });
 
+  it('starts private template video steps without counting start/end frames as generic references', async () => {
+    const prompt = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const start = createWorkflowNode('image-input', { x: 0, y: 160 });
+    const end = createWorkflowNode('image-input', { x: 0, y: 320 });
+    const video = createWorkflowNode('video-generate', { x: 320, y: 120 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...prompt,
+          data: { ...(prompt.data as TextInputNodeData), text: 'Transform smoothly.' },
+        },
+        {
+          ...start,
+          data: {
+            ...(start.data as ImageInputNodeData),
+            imageUrl: 'https://signed.example/start.png',
+            storagePath: 'template_inputs/user/run/final/start.png',
+          },
+        },
+        {
+          ...end,
+          data: {
+            ...(end.data as ImageInputNodeData),
+            imageUrl: 'https://signed.example/end.png',
+            storagePath: 'template_inputs/user/run/final/end.png',
+          },
+        },
+        video,
+      ],
+      edges: [
+        createCanvasEdge(prompt.id, 'text', video.id, 'prompt'),
+        createCanvasEdge(start.id, 'image', video.id, 'start-frame'),
+        createCanvasEdge(end.id, 'image', video.id, 'end-frame'),
+      ],
+    });
+
+    const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+    await executeWorkflowRunnableNode({
+      supabase: {} as never,
+      userId: 'user-1',
+      graph,
+      node: graph.nodes.find((node) => node.id === video.id)!,
+      catalogRevision: 'catalog-rev-1',
+      clientRequestKeyHash: 'a'.repeat(64),
+      persistInputMedia: false,
+      privateRecipe: true,
+      templateContext: { runId: 'run-1', stepId: 'step-1' },
+    });
+
+    expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+      inputCounts: expect.objectContaining({ images: 0 }),
+    }));
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      startImageUrl: 'https://signed.example/start.png',
+      endImageUrl: 'https://signed.example/end.png',
+      persistInputMedia: false,
+      privateRecipe: true,
+      templateContext: { runId: 'run-1', stepId: 'step-1' },
+      clientRequestKeyHash: 'a'.repeat(64),
+    }));
+  });
+
   it('advances a processing run so queued downstream nodes resume on poll', async () => {
     const state = createQueuedWorkflowState();
     const supabase = createSupabaseMock(state);
@@ -347,6 +511,35 @@ describe('workflow-runner recovery', () => {
       status: 'processing',
       generation_id: 'gen-video',
     });
+    expect(state.graph.nodes.find((node) => node.id === state.videoNodeId)?.data.runState.status).toBe('idle');
+  });
+
+  it('continues from the immutable run snapshot when the source canvas changes', async () => {
+    const state = createQueuedWorkflowState();
+    state.graph = normalizeWorkflowGraph({
+      ...state.graph,
+      nodes: state.graph.nodes.map((node) => node.type === 'text-input'
+        ? {
+            ...node,
+            data: {
+              ...(node.data as TextInputNodeData),
+              text: 'Edited canvas prompt that must not affect the active run',
+            },
+          }
+        : node),
+    });
+    const supabase = createSupabaseMock(state);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    await getWorkflowRunDetails({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'Launch video prompt',
+    }));
   });
 
   it('passes connected Kling video references as named video elements when a queued video node resumes', async () => {
@@ -381,6 +574,7 @@ describe('workflow-runner recovery', () => {
         createCanvasEdge(referenceVideo.id, 'video', state.videoNodeId, 'reference-video'),
       ],
     });
+    state.run.graph_snapshot = normalizeWorkflowGraph(state.graph);
     const supabase = createSupabaseMock(state);
 
     const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
@@ -424,6 +618,34 @@ describe('workflow-runner recovery', () => {
     expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
       quotedCostCredits: 77,
     }));
+  });
+
+  it('approves a checkpoint and resumes its queued downstream branch', async () => {
+    const state = createAwaitingApprovalState();
+    const supabase = createSupabaseMock(state);
+
+    const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
+    const run = await approveWorkflowRunStep({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+      stepId: 'step-approval',
+    });
+
+    expect(state.steps.find((step) => step.id === 'step-approval')).toMatchObject({
+      status: 'succeeded',
+      output_snapshot: expect.objectContaining({
+        outputUrl: 'uploads/user-1/review-frame.png',
+      }),
+    });
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'Approved frame video',
+      startImageUrl: 'uploads/user-1/review-frame.png',
+    }));
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-video',
+    });
   });
 
   it('dedupes concurrent recovery polls for the same run', async () => {

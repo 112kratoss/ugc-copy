@@ -15,9 +15,10 @@ import {
   type WorkflowCanvasListItem,
   type WorkflowCanvasRecord,
 } from '@/lib/workflow-canvas';
+import { createWorkflowCanvasLibrarySummary } from '@/lib/workflow-canvas-preview';
 
 function toCanvasListItem(
-  canvas: Pick<WorkflowCanvasRecord, 'id' | 'title' | 'updated_at' | 'revision' | 'status' | 'published_at'>
+  canvas: Pick<WorkflowCanvasRecord, 'id' | 'title' | 'graph' | 'updated_at' | 'revision' | 'status' | 'published_at'>
 ): WorkflowCanvasListItem {
   return {
     id: canvas.id,
@@ -26,6 +27,7 @@ function toCanvasListItem(
     revision: canvas.revision,
     status: canvas.status,
     published_at: canvas.published_at,
+    ...createWorkflowCanvasLibrarySummary(canvas.graph),
   };
 }
 
@@ -34,20 +36,24 @@ function sortCanvasList(canvases: WorkflowCanvasListItem[]) {
 }
 
 interface UseWorkflowCanvasCanvasesOptions {
+  autoCreateWhenEmpty?: boolean;
   authHeaders: () => Promise<Record<string, string>>;
   beforeCanvasTransitionRef: MutableRefObject<() => Promise<boolean>>;
   hasUnsavedChangesRef: MutableRefObject<boolean>;
   onActivateCanvas: (canvas: WorkflowCanvasRecord) => void;
   onError: (message: string | null) => void;
+  initialCanvasId?: string | null;
   sessionUserId: string | null | undefined;
 }
 
 export function useWorkflowCanvasCanvases({
+  autoCreateWhenEmpty = true,
   authHeaders,
   beforeCanvasTransitionRef,
   hasUnsavedChangesRef,
   onActivateCanvas,
   onError,
+  initialCanvasId = null,
   sessionUserId,
 }: UseWorkflowCanvasCanvasesOptions) {
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
@@ -62,6 +68,8 @@ export function useWorkflowCanvasCanvases({
   const sessionUserIdRef = useRef(sessionUserId);
   const canvasesRef = useRef<WorkflowCanvasListItem[]>([]);
   const canvasesCountRef = useRef(0);
+  const initialCanvasIdRef = useRef(initialCanvasId);
+  const autoCreateWhenEmptyRef = useRef(autoCreateWhenEmpty);
 
   useEffect(() => {
     activeCanvasIdRef.current = activeCanvasId;
@@ -259,14 +267,21 @@ export function useWorkflowCanvasCanvases({
 
   useEffect(() => {
     if (!sessionUserId) {
-      setIsLoading(false);
-      return;
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
     }
 
     let cancelled = false;
-    setIsLoading(true);
 
     async function loadCanvases() {
+      setIsLoading(true);
       try {
         const response = await fetch('/api/workflow-canvases', {
           headers: await authHeadersRef.current(),
@@ -285,7 +300,7 @@ export function useWorkflowCanvasCanvases({
           setCanvases(nextCanvases);
         });
 
-        if (nextCanvases.length === 0) {
+        if (nextCanvases.length === 0 && autoCreateWhenEmptyRef.current) {
           const createResponse = await fetch('/api/workflow-canvases', {
             method: 'POST',
             headers: await authHeadersRef.current(),
@@ -306,10 +321,16 @@ export function useWorkflowCanvasCanvases({
               activateCanvas(createdCanvas);
             });
           }
-        } else {
-          const nextCanvasId = activeCanvasIdRef.current && nextCanvases.some((canvas) => canvas.id === activeCanvasIdRef.current)
-            ? activeCanvasIdRef.current
-            : nextCanvases[0].id;
+        } else if (nextCanvases.length > 0) {
+          const requestedCanvasId = initialCanvasIdRef.current;
+          if (requestedCanvasId && !nextCanvases.some((canvas) => canvas.id === requestedCanvasId)) {
+            onError('That workflow could not be found. Return to all workflows and choose another canvas.');
+            return;
+          }
+          const nextCanvasId = requestedCanvasId
+            ?? (activeCanvasIdRef.current && nextCanvases.some((canvas) => canvas.id === activeCanvasIdRef.current)
+              ? activeCanvasIdRef.current
+              : nextCanvases[0].id);
           const firstCanvas = await fetchCanvasDetails(nextCanvasId);
           if (!cancelled) {
             startTransition(() => {
@@ -328,10 +349,13 @@ export function useWorkflowCanvasCanvases({
       }
     }
 
-    void loadCanvases();
+    const frameId = window.requestAnimationFrame(() => {
+      void loadCanvases();
+    });
 
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(frameId);
     };
   }, [activateCanvas, fetchCanvasDetails, onError, sessionUserId]);
 

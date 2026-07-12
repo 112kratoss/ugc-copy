@@ -28,13 +28,19 @@ function createRunStateFromStep(
   node: WorkflowCanvasNode,
   step: NonNullable<WorkflowCanvasRunRecord['steps']>[number]
 ): WorkflowNodeRunState {
-  const outputSnapshot = (step.output_snapshot as { outputUrl?: string | null; cost?: number | null } | null) ?? null;
+  const outputSnapshot = (step.output_snapshot as {
+    outputUrl?: string | null;
+    pendingOutputUrl?: string | null;
+    cost?: number | null;
+  } | null) ?? null;
 
   return createNodeRunState({
     ...node.data.runState,
     status: step.status as WorkflowNodeRunState['status'],
     generationId: step.generation_id,
-    outputUrl: outputSnapshot?.outputUrl || node.data.runState.outputUrl,
+    outputUrl: outputSnapshot?.outputUrl
+      || (step.status === 'awaiting_approval' ? outputSnapshot?.pendingOutputUrl : null)
+      || node.data.runState.outputUrl,
     cost: outputSnapshot?.cost ?? node.data.runState.cost,
     error: step.error_message,
     updatedAt: step.finished_at || step.started_at,
