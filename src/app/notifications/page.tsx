@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { resolveWebNotificationPath } from '@/lib/web-notification-links';
 
 interface WebNotification {
   id: string;
@@ -22,7 +23,7 @@ interface WebNotification {
   category: 'generation' | 'commerce' | 'social' | 'system';
   title: string;
   body: string;
-  deepLink: string;
+  deepLink: string | null;
   isRead: boolean;
   createdAt: string;
   updatedAt: string;
@@ -144,10 +145,10 @@ export default function NotificationsPage() {
       }
     }
 
-    // Convert deepLink from mobile format (e.g. /viewer?...) or handle accordingly
-    if (notification.deepLink) {
+    const webPath = resolveWebNotificationPath(notification.deepLink);
+    if (webPath) {
       startTransition(() => {
-        router.push(notification.deepLink);
+        router.push(webPath);
       });
     }
   };
