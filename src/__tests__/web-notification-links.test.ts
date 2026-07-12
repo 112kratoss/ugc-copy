@@ -5,7 +5,7 @@ import { resolveWebNotificationPath } from '@/lib/web-notification-links';
 describe('resolveWebNotificationPath', () => {
   it('maps generation viewer links to the web studio', () => {
     expect(resolveWebNotificationPath('/viewer?source=studio-creations&initialId=gen-1'))
-      .toBe('/creations');
+      .toBe('/creations?generation=gen-1');
   });
 
   it('maps showcase viewer links to the post detail route', () => {

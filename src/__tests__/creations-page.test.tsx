@@ -69,6 +69,8 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
 
 const GENERATIONS_PAGE_URL = '/api/generations?includeArchived=true&detail=summary&limit=36';
 const NEXT_GENERATIONS_PAGE_URL = `${GENERATIONS_PAGE_URL}&cursor=36`;
+const generationDetailUrl = (generationId: string) =>
+  `/api/generations?includeArchived=true&id=${generationId}&limit=1`;
 
 const makeGeneration = (overrides: Record<string, unknown> = {}) => ({
   id: 'gen-image',
@@ -168,6 +170,50 @@ describe('CreationsPage', () => {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
     expect(getSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('opens the exact generation preview from a notification deep link', async () => {
+    navigationState.searchParams = new URLSearchParams('generation=gen-notification');
+    const notificationGeneration = makeGeneration({
+      id: 'gen-notification',
+      title: 'Notification image',
+      prompt: 'A product image opened from an alert.',
+      input_media: [],
+      paywallPrefill: null,
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+
+      if (url === generationDetailUrl('gen-notification')) {
+        return Promise.resolve(jsonResponse({ generations: [notificationGeneration] }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true') {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByRole('dialog', { name: 'Notification image' })).toBeInTheDocument();
+    expect(screen.getByAltText('Notification image')).toHaveAttribute(
+      'src',
+      'https://example.com/output.jpg'
+    );
+    expect(fetch).toHaveBeenCalledWith(generationDetailUrl('gen-notification'), {
+      headers: { Authorization: 'Bearer layout-session-token' },
+    });
   });
 
   it('shows cached workspace content immediately while refreshing in the background', async () => {
