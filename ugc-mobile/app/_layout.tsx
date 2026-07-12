@@ -85,6 +85,8 @@ function RootLayoutNav() {
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Seller Dashboard' }} />
+                <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
+                <Stack.Screen name="r/[code]" options={{ title: 'Magicbooklet invite' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
               </Stack>

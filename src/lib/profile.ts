@@ -30,6 +30,8 @@ export interface ProfileApiResponse {
   tiktokHandle: string | null;
   location: string | null;
   credits: number | null;
+  promotionalCredits?: number | null;
+  marketplaceSpendableCredits?: number | null;
 }
 
 export interface EditableCreatorProfile {
@@ -45,6 +47,8 @@ export interface EditableCreatorProfile {
   tiktokHandle: string;
   location: string;
   credits: number | null;
+  promotionalCredits?: number | null;
+  marketplaceSpendableCredits?: number | null;
 }
 
 export interface ProfileUpdatePayload {
@@ -239,6 +243,8 @@ export function toEditableCreatorProfile(profile: ProfileApiResponse): EditableC
     tiktokHandle: profile.tiktokHandle ?? '',
     location: profile.location ?? '',
     credits: profile.credits,
+    promotionalCredits: profile.promotionalCredits ?? 0,
+    marketplaceSpendableCredits: profile.marketplaceSpendableCredits ?? profile.credits,
   };
 }
 
@@ -255,7 +261,11 @@ export function sanitizeProfileRecord(record: {
   tiktok_handle: string | null;
   location: string | null;
   credits: number | null;
+  promotional_credits?: number | null;
 }): ProfileApiResponse {
+  const totalCredits = typeof record.credits === 'number' ? record.credits : null;
+  const promotionalCredits = Math.max(0, record.promotional_credits ?? 0);
+
   return {
     id: record.id,
     username: record.username,
@@ -269,7 +279,11 @@ export function sanitizeProfileRecord(record: {
     instagramHandle: record.instagram_handle,
     tiktokHandle: record.tiktok_handle,
     location: record.location,
-    credits: record.credits,
+    credits: totalCredits,
+    promotionalCredits,
+    marketplaceSpendableCredits: totalCredits === null
+      ? null
+      : Math.max(0, totalCredits - promotionalCredits),
   };
 }
 

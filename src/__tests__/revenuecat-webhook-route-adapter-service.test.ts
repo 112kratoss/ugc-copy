@@ -82,7 +82,10 @@ describe('RevenueCat webhook route adapter service', () => {
   });
 
   it('reconciles valid credit refund events through the Supabase RPC', async () => {
-    const rpc = vi.fn(async () => ({ data: 'refunded', error: null }));
+    const rpc = vi.fn(async () => ({
+      data: { status: 'refunded', rewards: [] },
+      error: null,
+    }));
     const createServiceClient = vi.fn(() => ({ rpc }));
 
     const response = await postRevenueCatWebhookRouteResponse({
@@ -100,7 +103,7 @@ describe('RevenueCat webhook route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('revenuecat-webhook-success-1');
     await expect(response.json()).resolves.toEqual({ received: true, result: 'refunded' });
     expect(createServiceClient).toHaveBeenCalledTimes(1);
-    expect(rpc).toHaveBeenCalledWith('reconcile_mobile_credit_refund', {
+    expect(rpc).toHaveBeenCalledWith('reconcile_mobile_credit_purchase_adjustment', {
       p_action: 'refund',
       p_event_id: 'event-refund-1',
       p_event_timestamp_ms: 1_766_000_000_000,

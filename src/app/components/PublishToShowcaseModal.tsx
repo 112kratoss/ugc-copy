@@ -433,13 +433,19 @@ export default function PublishToShowcaseModal({
       });
 
       if (shareAfterPublish && nextVisibility === 'public') {
-        await sharePublicGeneration({
-          generationId,
-          title: normalizedTitle || shareAfterPublish.title,
-          description: normalizedDescription || shareAfterPublish.description || null,
-          sourceSurface: shareAfterPublish.sourceSurface,
-          accessToken,
-        });
+        try {
+          await sharePublicGeneration({
+            generationId,
+            title: normalizedTitle || shareAfterPublish.title,
+            description: normalizedDescription || shareAfterPublish.description || null,
+            sourceSurface: shareAfterPublish.sourceSurface,
+            accessToken,
+          });
+        } catch (shareError) {
+          // Publishing is already complete. A canceled or unavailable share
+          // action must never be reported as a failed publish.
+          console.error('Published generation, but sharing was unavailable:', shareError);
+        }
       }
 
       onClose();

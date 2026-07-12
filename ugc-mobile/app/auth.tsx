@@ -22,9 +22,15 @@ const workspace = {
 };
 
 export default function AuthScreen() {
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
+  const { returnTo, mode: requestedMode } = useLocalSearchParams<{
+    returnTo?: string | string[];
+    mode?: string | string[];
+  }>();
   const { signInWithPassword, signUpWithPassword, signInWithApple, isAuthConfigured, missingEnvKeys } = useAuth();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const initialMode = (Array.isArray(requestedMode) ? requestedMode[0] : requestedMode) === 'signup'
+    ? 'signup'
+    : 'login';
+  const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);

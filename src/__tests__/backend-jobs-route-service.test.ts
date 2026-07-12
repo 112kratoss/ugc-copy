@@ -37,6 +37,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
   const runGenerationCompletionsBackendJob = vi.fn();
   const runMediaPreviewRepairBackendJob = vi.fn();
   const runMobilePushReceiptsBackendJob = vi.fn();
+  const runReferralRewardReconciliationBackendJob = vi.fn();
 
   beforeEach(() => {
     createServiceClient.mockReset();
@@ -51,6 +52,10 @@ describe('runBackendJobsSchedulerForRoute', () => {
     runMediaPreviewRepairBackendJob.mockResolvedValue(succeededResult('media-preview-repair'));
     runMobilePushReceiptsBackendJob.mockReset();
     runMobilePushReceiptsBackendJob.mockResolvedValue(succeededResult('mobile-push-receipts'));
+    runReferralRewardReconciliationBackendJob.mockReset();
+    runReferralRewardReconciliationBackendJob.mockResolvedValue(
+      succeededResult('referral-reward-reconciliation'),
+    );
   });
 
   it('runs due backend jobs with one shared Supabase service client and route request ids', async () => {
@@ -69,12 +74,14 @@ describe('runBackendJobsSchedulerForRoute', () => {
           backendJob('generation-completions'),
           backendJob('media-preview-repair'),
           backendJob('mobile-push-receipts'),
+          backendJob('referral-reward-reconciliation'),
         ],
         runBackendAlertDeliveryJob,
         runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
+        runReferralRewardReconciliationBackendJob,
       },
     });
 
@@ -83,13 +90,14 @@ describe('runBackendJobsSchedulerForRoute', () => {
       body: {
         success: true,
         scheduler: '/api/cron/backend-jobs',
-        dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
+        dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts', 'referral-reward-reconciliation'],
         results: [
           expect.objectContaining({ job: 'backend-alert-delivery', status: 'succeeded' }),
           expect.objectContaining({ job: 'feed-maintenance', status: 'succeeded' }),
           expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
           expect.objectContaining({ job: 'media-preview-repair', status: 'succeeded' }),
           expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
+          expect.objectContaining({ job: 'referral-reward-reconciliation', status: 'succeeded' }),
         ],
       },
     });
@@ -124,6 +132,12 @@ describe('runBackendJobsSchedulerForRoute', () => {
       serviceClient,
       triggerRoute: '/api/cron/backend-jobs',
     });
+    expect(runReferralRewardReconciliationBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-42:referral-reward-reconciliation',
+      startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
   });
 
   it('skips without creating a Supabase client when no logical job is due', async () => {
@@ -138,6 +152,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
+        runReferralRewardReconciliationBackendJob,
       },
     });
 
@@ -156,6 +171,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
     expect(runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
+    expect(runReferralRewardReconciliationBackendJob).not.toHaveBeenCalled();
   });
 
   it('returns a failed scheduler result when any due job fails', async () => {
@@ -184,6 +200,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
         runGenerationCompletionsBackendJob,
         runMediaPreviewRepairBackendJob,
         runMobilePushReceiptsBackendJob,
+        runReferralRewardReconciliationBackendJob,
       },
     });
 

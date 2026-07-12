@@ -5,6 +5,7 @@ import { useState } from 'react';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 
 const getSessionMock = vi.hoisted(() => vi.fn());
+const sharePublicGenerationMock = vi.hoisted(() => vi.fn());
 
 function getPublishRequest(): RequestInit {
   const call = vi.mocked(fetch).mock.calls.find(([url]) => url === '/api/showcase/publish');
@@ -22,10 +23,16 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
+vi.mock('@/lib/share-client', () => ({
+  sharePublicGeneration: sharePublicGenerationMock,
+}));
+
 describe('PublishToShowcaseModal', () => {
   beforeEach(() => {
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
+    sharePublicGenerationMock.mockReset();
+    sharePublicGenerationMock.mockResolvedValue('copy-link');
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => new Response(
       JSON.stringify(String(url) === '/api/profile'
         ? {
@@ -143,6 +150,37 @@ describe('PublishToShowcaseModal', () => {
       headers: { 'Content-Type': 'application/json' },
     }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps a successful publish successful when the optional share action fails', async () => {
+    sharePublicGenerationMock.mockRejectedValueOnce(new Error('Share sheet unavailable'));
+    const onPublished = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={onClose}
+        onPublished={onPublished}
+        generationId="gen-1"
+        defaultTitle="Broadcast"
+        shareAfterPublish={{
+          title: 'Broadcast',
+          description: 'Finished creation',
+          sourceSurface: 'my-creations',
+        }}
+      />
+    );
+
+    await screen.findByText(/ready for public publishing/i);
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => {
+      expect(onPublished).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+    expect(sharePublicGenerationMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/share sheet unavailable/i)).not.toBeInTheDocument();
   });
 
   it('blocks public publishing with an actionable profile repair link but keeps private save available', async () => {

@@ -82,6 +82,8 @@ function createAdminSupabaseMock({
   rateLimitAllowed = true,
   addCreditsResult = true,
   addCreditsError = null as { message: string } | null,
+  referralError = null as { message: string } | null,
+  onAddCredits = undefined as (() => void) | undefined,
 } = {}) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
@@ -104,9 +106,17 @@ function createAdminSupabaseMock({
       }
 
       if (name === 'add_credits') {
+        onAddCredits?.();
         return Promise.resolve({
           data: addCreditsResult,
           error: addCreditsError,
+        });
+      }
+
+      if (name === 'settle_referral_purchase_rewards') {
+        return Promise.resolve({
+          data: referralError ? null : { status: 'not_referred', rewards: [] },
+          error: referralError,
         });
       }
 
@@ -260,7 +270,10 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       ok: true,
       body: { success: true, alreadyProcessed: true },
     });
-    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual([
+      'check_backend_rate_limit',
+      'settle_referral_purchase_rewards',
+    ]);
   });
 
   it('returns not found when the credit transaction is missing', async () => {
@@ -313,5 +326,54 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
         p_payment_id: 'pay_123',
       },
     });
+  });
+
+  it('keeps a verified top-up successful when referral settlement is temporarily unavailable', async () => {
+    const user = createUserSupabaseMock();
+    const admin = createAdminSupabaseMock({
+      referralError: { message: 'referral database unavailable' },
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await verifyCreditRazorpayPaymentForRoute({
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      createUserSupabase: vi.fn(() => user.client),
+      createAdminSupabase: vi.fn(() => admin.client),
+    });
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+    expect(admin.calls.rpc.map((call) => call.name)).toContain('settle_referral_purchase_rewards');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('credit_purchase_referral_settlement_deferred'));
+    errorSpy.mockRestore();
+  });
+
+  it('treats a concurrent webhook credit assignment as an idempotent success', async () => {
+    const transaction: TransactionRow = { id: 'txn_123', credits: 500, status: 'created' };
+    const user = createUserSupabaseMock({ transaction });
+    const admin = createAdminSupabaseMock({
+      addCreditsResult: false,
+      onAddCredits: () => {
+        transaction.status = 'success';
+      },
+    });
+
+    const result = await verifyCreditRazorpayPaymentForRoute({
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      createUserSupabase: vi.fn(() => user.client),
+      createAdminSupabase: vi.fn(() => admin.client),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: { success: true, alreadyProcessed: true },
+    });
+    expect(user.calls.tables).toEqual(['transactions', 'transactions']);
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual([
+      'check_backend_rate_limit',
+      'add_credits',
+      'settle_referral_purchase_rewards',
+    ]);
   });
 });

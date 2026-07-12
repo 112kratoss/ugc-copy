@@ -1,6 +1,6 @@
 # Production Deployment And Operations Runbook
 
-Last updated: 2026-06-27
+Last updated: 2026-07-12
 
 ## Production Topology
 
@@ -27,6 +27,11 @@ The protected backend health endpoint reports only missing capability names, nev
 - Generation webhook authentication: `KIE_WEBHOOK_HMAC_KEY` or legacy `WEBHOOK_SECRET`.
 - Razorpay: `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`.
 - RevenueCat: `REVENUECAT_SECRET_API_KEY` or `REVENUECAT_REST_API_KEY`, plus `REVENUECAT_WEBHOOK_AUTH_TOKEN`.
+- Invite attribution hashing: `REFERRAL_ATTRIBUTION_HASH_SECRET` set to a dedicated long random secret.
+- Verified iOS links: `APPLE_TEAM_ID` and `IOS_BUNDLE_ID`.
+- Verified Android links: `ANDROID_APP_SHA256_FINGERPRINTS` and `ANDROID_PACKAGE_NAME`.
+
+`NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL` are optional until their store listings are live. When present, they are the install fallbacks on public invite links.
 
 Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus optional `BACKEND_ALERT_DELIVERY_AUTH_HEADER`. The protected backend dashboard is the no-extra-vendor monitoring baseline, so the external alert hook is not a required production capability.
 
@@ -156,7 +161,7 @@ Expect a configured environment, a current build id, no stale scheduler, no sett
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `media-preview-repair`, and `mobile-push-receipts`.
+Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `media-preview-repair`, `mobile-push-receipts`, and `referral-reward-reconciliation`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 
@@ -174,8 +179,24 @@ Until one of those thresholds is met, prefer optimizing the current path first: 
 
 - Send provider dashboard test webhooks for KIE, Razorpay, and RevenueCat.
 - Confirm invalid signatures receive `401` and valid test events are accepted idempotently.
+- In Razorpay, subscribe the production endpoint to `payment.captured`, `refund.processed`, and the `payment.dispute.*` lifecycle events. Referral and base-credit reversals use provider cumulative amounts, so do not substitute a custom one-off refund callback.
+- In RevenueCat, keep `CANCELLATION` and `REFUND_REVERSED` enabled for credit products; verified purchases are also settled through the signed mobile purchase-sync path.
 - Confirm RevenueCat no longer returns `Webhook is not configured.`
 - Verify payment and refund reconciliation in Supabase without relying only on the provider dashboard.
+- Confirm the referral reward reconciliation job has no unsettled verified credit purchases before release promotion.
+
+### Invite And Earn
+
+```bash
+curl -fsS https://magicbooklet.com/.well-known/apple-app-site-association
+curl -fsS https://magicbooklet.com/.well-known/assetlinks.json
+```
+
+- Confirm both association documents return `200` directly over HTTPS without a redirect and contain the production app identifiers/signing fingerprints.
+- Open a real `/r/<code>` link on desktop, iOS, and Android. Confirm the web fallback records the invite before enabling sign-up, and installed apps open the native referral route.
+- Complete a new-account referral in the release environment, then make one verified test credit-pack purchase. Confirm the invitee receives the one-time 5% promotional bonus and the inviter receives 5% promotional credits.
+- Refund that test purchase through the provider, then restore/reverse the refund when the provider supports it. Confirm base and referral balances change atomically and notification entries use one idempotent provider event key.
+- Confirm promotional credits can fund creation but do not increase paid-credit marketplace spending power.
 
 ### Mobile Compatibility
 

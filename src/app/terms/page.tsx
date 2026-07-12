@@ -15,7 +15,7 @@ export default function TermsOfService() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Terms of Service</h1>
-                <p className="text-zinc-400 mb-12">Last updated: February 9, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: July 12, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -55,12 +55,31 @@ export default function TermsOfService() {
                             <li>All purchases are final and non-refundable unless required by law</li>
                             <li>Credits have no cash value and cannot be transferred</li>
                             <li>Unused credits do not expire as long as your account remains active</li>
+                            <li>Promotional credits may be restricted to first-party creation tools and cannot be used for creator marketplace purchases</li>
+                            <li>Credits linked to a refunded, reversed, or disputed payment may be removed from your balance</li>
                             <li>Pricing may change with reasonable advance notice</li>
                         </ul>
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">5. Acceptable Use</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">5. Invite &amp; Earn Program</h2>
+                        <p className="mb-4">
+                            Eligible users may receive a personal referral link to invite new users to the Service. Unless a different offer is shown before sharing:
+                        </p>
+                        <ul className="list-disc list-inside space-y-2 ml-4">
+                            <li>The invited friend receives promotional credits equal to 5% of the credits in their first verified credit-pack purchase</li>
+                            <li>The inviter receives promotional credits equal to 5% of the credits in each verified credit-pack purchase made by that friend</li>
+                            <li>Rewards are rounded down to a whole credit and are granted only after payment verification</li>
+                            <li>Only new accounts attributed through a valid link or code within the displayed attribution window qualify</li>
+                            <li>Referral credits have no cash value, are non-transferable, do not expire while the account remains active, and are limited to first-party creation tools</li>
+                        </ul>
+                        <p className="mt-4">
+                            Refunds, payment reversals, and chargebacks reverse the related rewards. If those rewards were already spent, your balance may become negative and paid actions may remain unavailable until the balance is restored. Self-referrals, duplicate or misleading accounts, automated sharing, collusion, and attempts to route promotional credits through marketplace sellers are prohibited. We may pause new referrals, withhold suspicious rewards for review, or remove rewards obtained through abuse. Referral messages must clearly state that the sender may earn bonus credits.
+                        </p>
+                    </section>
+
+                    <section>
+                        <h2 className="text-2xl font-semibold text-white mb-4">6. Acceptable Use</h2>
                         <p className="mb-4">You agree NOT to use the Service to:</p>
                         <ul className="list-disc list-inside space-y-2 ml-4">
                             <li>Create content that is illegal, harmful, or infringes on others&apos; rights</li>
@@ -73,7 +92,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">6. Intellectual Property</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">7. Intellectual Property</h2>
                         <p className="mb-4">
                             <strong>Your Content:</strong> You retain ownership of images and videos you upload.
                             By uploading content, you grant us a limited license to process it for providing the Service.
@@ -86,7 +105,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">7. Disclaimer of Warranties</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">8. Disclaimer of Warranties</h2>
                         <p>
                             The Service is provided &ldquo;as is&rdquo; without warranties of any kind. We do not guarantee that
                             the Service will be uninterrupted, error-free, or meet your specific requirements.
@@ -95,7 +114,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">8. Limitation of Liability</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">9. Limitation of Liability</h2>
                         <p>
                             To the maximum extent permitted by law, we shall not be liable for any indirect,
                             incidental, special, or consequential damages arising from your use of the Service.
@@ -103,7 +122,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">9. Termination</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">10. Termination</h2>
                         <p>
                             We reserve the right to suspend or terminate your access to the Service at any time
                             for violations of these Terms or for any other reason at our discretion. Upon termination,
@@ -112,7 +131,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">10. Changes to Terms</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">11. Changes to Terms</h2>
                         <p>
                             We may update these Terms from time to time. We will notify you of material changes
                             by posting the updated Terms on our website. Continued use of the Service after changes
@@ -121,7 +140,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">11. Contact Us</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">12. Contact Us</h2>
                         <p>
                             If you have any questions about these Terms, please contact us at{" "}
                             <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">

@@ -24,7 +24,7 @@ import DeferredAppShellAccount from './DeferredAppShellAccount';
 const NAV_GROUPS = [
   { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
   { label: 'Explore', ids: ['marketplace', 'workflow'] },
-  { label: 'Account', ids: ['alerts', 'profile'] },
+  { label: 'Account', ids: ['invite', 'alerts', 'profile'] },
 ] as const;
 
 function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean }) {

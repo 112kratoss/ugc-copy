@@ -22,6 +22,9 @@ const COMPLETE_ENVIRONMENT = {
   RAZORPAY_WEBHOOK_SECRET: 'rzp-webhook-secret',
   REVENUECAT_SECRET_API_KEY: 'revenuecat-key',
   REVENUECAT_WEBHOOK_AUTH_TOKEN: 'Bearer revenuecat-webhook-secret',
+  REFERRAL_ATTRIBUTION_HASH_SECRET: 'referral-hash-secret',
+  APPLE_TEAM_ID: 'TEAM123456',
+  ANDROID_APP_SHA256_FINGERPRINTS: 'AA:BB',
 } satisfies NodeJS.ProcessEnv;
 
 describe('backend environment contract', () => {
@@ -77,6 +80,9 @@ describe('backend environment contract', () => {
     expect(template).toContain('OPS_READ_SECRET=');
     expect(template).toContain('KIE_WEBHOOK_HMAC_KEY=');
     expect(template).toContain('REVENUECAT_WEBHOOK_AUTH_TOKEN=');
+    expect(template).toContain('REFERRAL_ATTRIBUTION_HASH_SECRET=');
+    expect(template).toContain('APPLE_TEAM_ID=');
+    expect(template).toContain('ANDROID_APP_SHA256_FINGERPRINTS=');
     expect(template).toContain('BACKEND_ALERT_DELIVERY_URL=');
     expect(template).toContain('BACKEND_ALERT_DELIVERY_AUTH_HEADER=');
     expect(gitignore).toContain('!.env.example');

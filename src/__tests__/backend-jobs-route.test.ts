@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   runGenerationCompletionsBackendJob: vi.fn(),
   runMediaPreviewRepairBackendJob: vi.fn(),
   runMobilePushReceiptsBackendJob: vi.fn(),
+  runReferralRewardReconciliationBackendJob: vi.fn(),
 }));
 
 function deferredResult<T>() {
@@ -43,6 +44,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
     ),
     runMobilePushReceiptsBackendJob: (...args: unknown[]) => (
       mocks.runMobilePushReceiptsBackendJob(...args)
+    ),
+    runReferralRewardReconciliationBackendJob: (...args: unknown[]) => (
+      mocks.runReferralRewardReconciliationBackendJob(...args)
     ),
   };
 });
@@ -101,6 +105,14 @@ describe('/api/cron/backend-jobs route', () => {
       status: 'succeeded',
       summary: { updatedCount: 1 },
     });
+    mocks.runReferralRewardReconciliationBackendJob.mockReset();
+    mocks.runReferralRewardReconciliationBackendJob.mockResolvedValue({
+      success: true,
+      job: 'referral-reward-reconciliation',
+      route: '/api/cron/referral-rewards',
+      status: 'succeeded',
+      summary: { processed: 1, settled: 1, failed: 0, failures: [] },
+    });
   });
 
   afterEach(() => {
@@ -123,6 +135,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
+    expect(mocks.runReferralRewardReconciliationBackendJob).not.toHaveBeenCalled();
   });
 
   it('runs every due logical backend job on the top-of-hour scheduler tick', async () => {
@@ -280,6 +293,36 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts'],
+    });
+  });
+
+  it('runs referral reconciliation on its staggered hourly scheduler tick', async () => {
+    vi.setSystemTime(new Date('2026-06-22T10:40:00.000Z'));
+
+    const { GET } = await import('@/app/api/cron/backend-jobs/route');
+    const response = await GET(new Request('http://localhost/api/cron/backend-jobs', {
+      headers: {
+        authorization: 'Bearer secret-123',
+        'x-request-id': 'scheduler-referral-40',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runReferralRewardReconciliationBackendJob).toHaveBeenCalledWith({
+      requestId: 'scheduler-referral-40:referral-reward-reconciliation',
+      startedAtMs: Date.parse('2026-06-22T10:40:00.000Z'),
+      serviceClient: { service: 'supabase' },
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+    expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
+    expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      dueJobs: [
+        'backend-alert-delivery',
+        'generation-completions',
+        'mobile-push-receipts',
+        'referral-reward-reconciliation',
+      ],
     });
   });
 

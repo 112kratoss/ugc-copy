@@ -48,6 +48,7 @@ describe('credit mutation security boundary', () => {
       'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
       'attach_generation_provider_task(uuid, text)',
       'settle_generation_failed(text, timestamp with time zone)',
+      'settle_generation_start_failed(uuid, text)',
       'settle_generation_succeeded(text, text, timestamp with time zone, text, text, text, integer, text, timestamp with time zone, jsonb)',
     ];
 
@@ -125,8 +126,8 @@ describe('credit mutation security boundary', () => {
     expect(generationServices).toContain("templateContext ? 'start_template_generation' : 'start_generation'");
     expect(generationServices).toContain('supabase.rpc(rpcName, rpcArgs)');
     expect(generationServices).toContain("supabase.rpc('attach_generation_provider_task'");
-    expect(generationServices).toContain("creditSupabase.rpc('deduct_credits'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
+    expect(generationServices).toContain("params.creditSupabase.rpc('settle_generation_start_failed'");
     expect(generationServices).toContain("creditSupabase.rpc('settle_generation_failed'");
     expect(generationServices).toContain("settlementSupabase.rpc('settle_generation_succeeded'");
   });

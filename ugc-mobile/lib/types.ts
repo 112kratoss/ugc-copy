@@ -52,6 +52,75 @@ export interface ProfileResponse {
   credits: number | null;
 }
 
+export interface ReferralProgramSummary {
+  inviterPercent: number;
+  inviteeFirstPurchasePercent: number;
+  attributionWindowDays: number;
+}
+
+export interface ReferralStats {
+  visits: number;
+  signups: number;
+  purchasers: number;
+  creditsEarned: number;
+  creditsReversed: number;
+}
+
+export type ReferralRewardStatus = 'granted' | 'reversed' | 'restored';
+export type ReferralRewardKind = 'inviter_purchase' | 'invitee_first_purchase';
+
+export interface ReferralReward {
+  id: string;
+  credits: number;
+  status: ReferralRewardStatus;
+  kind: ReferralRewardKind;
+  createdAt: string;
+}
+
+export interface ReferralOverviewResponse {
+  success: true;
+  program: ReferralProgramSummary;
+  code: string | null;
+  shareUrl: string | null;
+  stats: ReferralStats;
+  recentRewards: ReferralReward[];
+}
+
+export interface ReferralLinkRequest {
+  next?: string;
+}
+
+export interface ReferralLinkResponse {
+  success: true;
+  code: string;
+  shareUrl: string;
+}
+
+export interface ReferralVisitRequest {
+  code: string;
+  source: 'mobile';
+  next?: string;
+  installationId?: string;
+}
+
+export interface ReferralVisitResponse {
+  success: true;
+  visitToken: string;
+  code: string;
+  expiresAt: string;
+}
+
+export interface ReferralClaimRequest {
+  visitToken?: string;
+  code?: string;
+}
+
+export interface ReferralClaimResponse {
+  success: true;
+  claimed: boolean;
+  reason?: string;
+}
+
 export interface GenerationListItem {
   id: string;
   output_url: string | null;
@@ -859,6 +928,7 @@ export interface MobileCommerceSyncResponse {
   success: boolean;
   entitlement: 'credits' | 'marketplace_unlock' | 'post_resource_unlock';
   credits?: number | null;
+  referralBonusCredits?: number;
   alreadyProcessed?: boolean;
   assetId?: string;
   postId?: string;
@@ -873,6 +943,8 @@ export type MobileNotificationType =
   | 'generation_succeeded'
   | 'generation_failed'
   | 'credits_purchased'
+  | 'referral_reward_earned'
+  | 'referral_reward_reversed'
   | 'purchases_restored'
   | 'marketplace_unlocked'
   | 'post_resource_unlocked'

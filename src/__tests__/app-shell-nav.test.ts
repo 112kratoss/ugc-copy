@@ -26,9 +26,10 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/post/new')).toBe('Share Post');
   });
 
-  it('keeps authentication routes focused outside the workspace shell', () => {
+  it('keeps authentication and referral landing routes focused outside the workspace shell', () => {
     expect(isMinimalAppChromePath('/login')).toBe(true);
     expect(isMinimalAppChromePath('/auth/reset-password')).toBe(true);
+    expect(isMinimalAppChromePath('/r/friend123')).toBe(true);
     expect(isMinimalAppChromePath('/showcase')).toBe(false);
   });
 });

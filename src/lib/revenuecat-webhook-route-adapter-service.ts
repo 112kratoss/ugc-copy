@@ -3,6 +3,8 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import { notifyReferralRewardSettlement } from '@/lib/credit-referral-integration';
+import { reconcileMobileCreditPurchaseAdjustment } from '@/lib/referral-reward-service';
 import {
   parseRevenueCatRefundEvent,
   webhookAuthorizationMatches,
@@ -10,12 +12,7 @@ import {
 import { createServiceClient } from '@/lib/server-helpers';
 import { isWebhookPayloadTooLarge } from '@/lib/webhook-request';
 
-type RevenueCatRefundRpcClient = {
-  rpc: (
-    functionName: 'reconcile_mobile_credit_refund',
-    args: Record<string, unknown>,
-  ) => PromiseLike<{ data: unknown; error: unknown }>;
-};
+type RevenueCatRefundRpcClient = Parameters<typeof reconcileMobileCreditPurchaseAdjustment>[0];
 
 type RevenueCatWebhookRouteDependencies = {
   createServiceClient?: () => RevenueCatRefundRpcClient;
@@ -79,21 +76,24 @@ async function handleRevenueCatWebhookPOST(
   }
 
   const { event } = parsed;
-  const { data, error } = await dependencies.createServiceClient().rpc('reconcile_mobile_credit_refund', {
-    p_action: event.action,
-    p_event_id: event.eventId,
-    p_event_timestamp_ms: event.eventTimestampMs,
-    p_external_order_id: event.externalOrderId,
-    p_product_id: event.productId,
-    p_user_id: event.userId,
-  });
-
-  if (error || typeof data !== 'string') {
+  const adminSupabase = dependencies.createServiceClient();
+  let settlement;
+  try {
+    settlement = await reconcileMobileCreditPurchaseAdjustment(adminSupabase, {
+      action: event.action,
+      externalOrderId: event.externalOrderId,
+      productId: event.productId,
+      providerEventId: event.eventId,
+      providerEventTimestampMs: event.eventTimestampMs,
+      userId: event.userId,
+    });
+    await notifyReferralRewardSettlement(adminSupabase as never, settlement);
+  } catch (error) {
     dependencies.logError('RevenueCat credit refund reconciliation failed:', error);
     return NextResponse.json({ error: 'Refund reconciliation failed.' }, { status: 503 });
   }
 
-  return NextResponse.json({ received: true, result: data });
+  return NextResponse.json({ received: true, result: settlement.status });
 }
 
 export async function postRevenueCatWebhookRouteResponse({

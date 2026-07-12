@@ -9,6 +9,7 @@ import {
   runGenerationCompletionsBackendJob,
   runMediaPreviewRepairBackendJob,
   runMobilePushReceiptsBackendJob,
+  runReferralRewardReconciliationBackendJob,
   type BackendJobExecutionResult,
 } from '@/lib/backend-job-executions';
 import {
@@ -28,6 +29,7 @@ type BackendJobsRouteDependencies = {
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
   runMediaPreviewRepairBackendJob?: typeof runMediaPreviewRepairBackendJob;
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
+  runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
 };
 
 export type BackendJobsSchedulerRouteResult =
@@ -66,6 +68,9 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
       ?? runMediaPreviewRepairBackendJob,
     runMobilePushReceiptsBackendJob: dependencies?.runMobilePushReceiptsBackendJob
       ?? runMobilePushReceiptsBackendJob,
+    runReferralRewardReconciliationBackendJob:
+      dependencies?.runReferralRewardReconciliationBackendJob
+      ?? runReferralRewardReconciliationBackendJob,
   };
 }
 
@@ -96,6 +101,8 @@ async function runDueBackendJob(
       return options.dependencies.runMediaPreviewRepairBackendJob(runOptions);
     case 'mobile-push-receipts':
       return options.dependencies.runMobilePushReceiptsBackendJob(runOptions);
+    case 'referral-reward-reconciliation':
+      return options.dependencies.runReferralRewardReconciliationBackendJob(runOptions);
     default: {
       const exhaustiveJobName: never = job.name;
       throw new Error(`Unsupported backend job: ${exhaustiveJobName}`);

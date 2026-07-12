@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { collectBackendHealth } from '@/lib/backend-health';
+import { BACKEND_ENVIRONMENT_REQUIREMENTS } from '@/lib/backend-environment';
 
 type QueryResult = {
   data: unknown[] | null;
@@ -28,6 +29,30 @@ class FakeQueryBuilder {
 }
 
 function createClient(results: Record<string, QueryResult | QueryResult[]>) {
+  const withHealthyReferralRun = (result: QueryResult): QueryResult => {
+    if (result.error || !Array.isArray(result.data)) return result;
+    if (result.data.some((row) => (
+      row && typeof row === 'object'
+      && (row as { job_name?: unknown }).job_name === 'referral-reward-reconciliation'
+    ))) return result;
+
+    return {
+      ...result,
+      data: [
+        ...result.data,
+        {
+          job_name: 'referral-reward-reconciliation',
+          status: 'skipped',
+          started_at: '2026-06-21T09:40:00.000Z',
+          finished_at: '2026-06-21T09:40:01.000Z',
+          duration_ms: 1000,
+          skip_reason: 'no_unsettled_referral_rewards',
+          error_message: null,
+        },
+      ],
+    };
+  };
+  const backendJobRuns = results.backend_job_runs;
   const tableResultsByName: Record<string, QueryResult | QueryResult[]> = {
     ai_usage_events: [
       { error: null, data: [] },
@@ -36,6 +61,13 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
     generation_completion_jobs: { error: null, data: [] },
     provider_dependency_events: { error: null, data: [] },
     ...results,
+    ...(backendJobRuns
+      ? {
+          backend_job_runs: Array.isArray(backendJobRuns)
+            ? backendJobRuns.map(withHealthyReferralRun)
+            : withHealthyReferralRun(backendJobRuns),
+        }
+      : {}),
   };
   const builders: Record<string, FakeQueryBuilder[]> = {};
   const from = vi.fn((table: string) => {
@@ -71,6 +103,9 @@ const COMPLETE_BACKEND_ENVIRONMENT = {
   RAZORPAY_WEBHOOK_SECRET: 'rzp-webhook-secret',
   REVENUECAT_SECRET_API_KEY: 'revenuecat-key',
   REVENUECAT_WEBHOOK_AUTH_TOKEN: 'Bearer revenuecat-webhook-secret',
+  REFERRAL_ATTRIBUTION_HASH_SECRET: 'referral-hash-secret',
+  APPLE_TEAM_ID: 'TEAM123456',
+  ANDROID_APP_SHA256_FINGERPRINTS: 'AA:BB',
 } satisfies NodeJS.ProcessEnv;
 
 describe('collectBackendHealth', () => {
@@ -146,8 +181,8 @@ describe('collectBackendHealth', () => {
     expect(health.status).toBe('ok');
     expect(health.environment).toEqual({
       status: 'ok',
-      configuredRequirementCount: 13,
-      totalRequirementCount: 13,
+      configuredRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
+      totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       missing: [],
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
@@ -158,8 +193,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 480,
-      coveredJobCount: 5,
+      logicalDailyInvocations: 504,
+      coveredJobCount: 6,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'backend-alert-delivery',
@@ -186,9 +221,14 @@ describe('collectBackendHealth', () => {
           cadenceMinutes: 10,
           dailyInvocations: 144,
         }),
+        expect.objectContaining({
+          name: 'referral-reward-reconciliation',
+          cadenceMinutes: 60,
+          dailyInvocations: 24,
+        }),
       ]),
     });
-    expect(health.jobs).toHaveLength(5);
+    expect(health.jobs).toHaveLength(6);
     expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,
@@ -205,6 +245,11 @@ describe('collectBackendHealth', () => {
       expectedMaxAgeMinutes: 120,
     });
     expect(health.jobs.find((job) => job.name === 'media-preview-repair')).toMatchObject({
+      status: 'ok',
+      dailyInvocations: 24,
+      expectedMaxAgeMinutes: 120,
+    });
+    expect(health.jobs.find((job) => job.name === 'referral-reward-reconciliation')).toMatchObject({
       status: 'ok',
       dailyInvocations: 24,
       expectedMaxAgeMinutes: 120,

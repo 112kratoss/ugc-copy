@@ -140,7 +140,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
         };
       }
 
-      if (fn === 'settle_template_generation_start_failed') {
+      if (fn === 'settle_template_generation_start_failed' || fn === 'settle_generation_start_failed') {
         const row = generations.find((generation) => generation.id === args.p_generation_id);
         if (!row) return { data: { status: 'missing' }, error: null };
         const alreadyRefunded = Boolean(row.refunded);
@@ -523,8 +523,8 @@ describe('generation services', () => {
     })).rejects.toThrow('Voice provider unavailable');
 
     expect(rpcCalls).toEqual(expect.arrayContaining([
-      expect.objectContaining({ fn: 'deduct_credits' }),
-      expect.objectContaining({ fn: 'refund_credits' }),
+      expect.objectContaining({ fn: 'start_generation' }),
+      expect.objectContaining({ fn: 'settle_generation_start_failed' }),
     ]));
     expect(generations[0]).toMatchObject({
       status: 'failed',
@@ -646,8 +646,8 @@ describe('generation services', () => {
     })).rejects.toThrow('Sound provider unavailable');
 
     expect(rpcCalls).toEqual(expect.arrayContaining([
-      expect.objectContaining({ fn: 'deduct_credits' }),
-      expect.objectContaining({ fn: 'refund_credits' }),
+      expect.objectContaining({ fn: 'start_generation' }),
+      expect.objectContaining({ fn: 'settle_generation_start_failed' }),
     ]));
     expect(generations[0]).toMatchObject({
       status: 'failed',
@@ -1219,7 +1219,7 @@ describe('generation services', () => {
 
     expect(rpcCalls).toEqual(expect.arrayContaining([
       expect.objectContaining({ fn: 'start_generation' }),
-      expect.objectContaining({ fn: 'refund_credits' }),
+      expect.objectContaining({ fn: 'settle_generation_start_failed' }),
     ]));
     expect(generations).toHaveLength(1);
     expect(generations[0]).toMatchObject({
@@ -1256,7 +1256,7 @@ describe('generation services', () => {
 
     expect(backendClient.rpcCalls).toEqual(expect.arrayContaining([
       expect.objectContaining({ fn: 'start_generation' }),
-      expect.objectContaining({ fn: 'refund_credits' }),
+      expect.objectContaining({ fn: 'settle_generation_start_failed' }),
     ]));
     expect(sharedGenerations[0]).toMatchObject({
       status: 'failed',

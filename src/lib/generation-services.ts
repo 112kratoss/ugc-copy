@@ -216,23 +216,6 @@ function requireKieGenerationConfiguration(): void {
   }
 }
 
-async function deductCreditsOrThrow(creditSupabase: SupabaseClient, userId: string, cost: number): Promise<number> {
-  const { data: remainingCredits, error } = await creditSupabase.rpc('deduct_credits', {
-    p_user_id: userId,
-    p_cost: cost,
-  });
-
-  if (error) {
-    throw new GenerationServiceError(error.message || 'Failed to verify credits', 500);
-  }
-
-  if (remainingCredits === -1) {
-    throw new GenerationServiceError(`Insufficient credits. This action costs ${cost} credits.`, 402);
-  }
-
-  return remainingCredits;
-}
-
 function resolveQuotedGenerationCost(computedCost: number, quotedCostCredits?: number): number {
   if (quotedCostCredits === undefined) {
     return computedCost;
@@ -410,35 +393,6 @@ async function createKieTask(
   }
 
   return data.data.taskId as string;
-}
-
-async function reserveGenerationRecord(
-  supabase: SupabaseClient,
-  record: Record<string, unknown>,
-): Promise<string> {
-  const { data, error } = await supabase
-    .from('generations')
-    .insert({
-      ...record,
-      prediction_id: null,
-      status: 'pending',
-    })
-    .select('id')
-    .single();
-
-  if (error) {
-    throw new GenerationServiceError(
-      supabaseErrorMessage(error, 'Failed to create generation record.'),
-      500,
-    );
-  }
-
-  const generationId = data?.id;
-  if (typeof generationId !== 'string' || !generationId) {
-    throw new GenerationServiceError('Failed to create generation record.', 500);
-  }
-
-  return generationId;
 }
 
 async function startGenerationRecord(
@@ -683,6 +637,58 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       ...logEntry,
       settlement: 'failed',
       ...generationStartDiagnostic(settlementError),
+    }));
+  }
+}
+
+async function settleGenerationStartFailureQuietly(params: {
+  creditSupabase: SupabaseClient;
+  error: unknown;
+  generationId: string;
+  userId: string;
+  cost: number;
+}) {
+  const failure = getPublicGenerationStartFailure(params.error);
+  try {
+    const { data, error } = await params.creditSupabase.rpc('settle_generation_start_failed', {
+      p_generation_id: params.generationId,
+      p_error_message: failure.message,
+    });
+    const status = data && typeof data === 'object' && 'status' in data
+      ? (data as { status?: unknown }).status
+      : null;
+
+    if (!error && (status === 'failed' || status === 'already_failed')) return;
+
+    const errorCode = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+    const missingRpc = errorCode === 'PGRST202' || errorCode === '42883';
+    if (!missingRpc) {
+      console.error(JSON.stringify({
+        level: 'error',
+        msg: 'generation_start_failure_settlement_failed',
+        generationId: params.generationId,
+        settlementStatus: status,
+        error: supabaseErrorMessage(error, 'Unexpected generation start settlement status.'),
+      }));
+      return;
+    }
+
+    // Rolling-deploy compatibility for an app release briefly ahead of the
+    // migration. Mark refunded only when the legacy refund succeeds so the
+    // promotional-credit trigger restores the recorded source amount.
+    const refunded = await refundCreditsQuietly(params.creditSupabase, params.userId, params.cost);
+    await markGenerationStartFailedQuietly(params.creditSupabase, params.generationId, {
+      errorMessage: failure.message,
+      refunded,
+    });
+  } catch (settlementError) {
+    console.error(JSON.stringify({
+      level: 'error',
+      msg: 'generation_start_failure_settlement_failed',
+      generationId: params.generationId,
+      error: supabaseErrorMessage(settlementError, 'Failed to settle generation start failure.'),
     }));
   }
 }
@@ -1740,8 +1746,13 @@ export async function startImageGeneration(params: {
           cost,
         });
       } else {
-        const refunded = await refundCreditsQuietly(creditSupabase, userId, cost);
-        await markGenerationStartFailedQuietly(creditSupabase, generationId, { refunded });
+        await settleGenerationStartFailureQuietly({
+          creditSupabase,
+          error,
+          generationId,
+          userId,
+          cost,
+        });
       }
     }
     throw error;
@@ -2384,8 +2395,13 @@ export async function startVideoGeneration(params: {
           cost,
         });
       } else {
-        const refunded = await refundCreditsQuietly(creditSupabase, userId, cost);
-        await markGenerationStartFailedQuietly(creditSupabase, generationId, { refunded });
+        await settleGenerationStartFailureQuietly({
+          creditSupabase,
+          error,
+          generationId,
+          userId,
+          cost,
+        });
       }
     }
     throw error;
@@ -2518,9 +2534,14 @@ export async function startMotionGeneration(params: {
       generationId,
     };
   } catch (error) {
-    if (!predictionId) {
-      await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    if (!predictionId && generationId) {
+      await settleGenerationStartFailureQuietly({
+        creditSupabase,
+        error,
+        generationId,
+        userId,
+        cost,
+      });
     }
     throw error;
   }
@@ -2576,7 +2597,6 @@ export async function startVoiceoverGeneration(params: {
     text: trimmedText,
     dialogueTurns: normalizedDialogueTurns,
   });
-  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   let generationId: string | null = null;
   let predictionId: string | null = null;
 
@@ -2607,7 +2627,7 @@ export async function startVoiceoverGeneration(params: {
       }
     }
 
-    generationId = await reserveGenerationRecord(creditSupabase, {
+    const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model: selectedModel.apiModelId,
       cost,
@@ -2625,6 +2645,16 @@ export async function startVoiceoverGeneration(params: {
         dialogueTurns: normalizedDialogueTurns,
       },
     });
+    generationId = reservation.generationId;
+    if (reservation.predictionId) {
+      return {
+        predictionId: reservation.predictionId,
+        remainingCredits: reservation.remainingCredits,
+        cost: reservation.cost,
+        generationId,
+        idempotentReplay: reservation.idempotentReplay,
+      };
+    }
 
     predictionId = await createKieTask({
       model: selectedModel.apiModelId,
@@ -2634,14 +2664,19 @@ export async function startVoiceoverGeneration(params: {
 
     return {
       predictionId,
-      remainingCredits,
+      remainingCredits: reservation.remainingCredits,
       cost,
       generationId,
     };
   } catch (error) {
-    if (!predictionId) {
-      await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    if (!predictionId && generationId) {
+      await settleGenerationStartFailureQuietly({
+        creditSupabase,
+        error,
+        generationId,
+        userId,
+        cost,
+      });
     }
     throw error;
   }
@@ -2677,12 +2712,11 @@ export async function startSoundEffectGeneration(params: {
   }
 
   const cost = getSoundEffectCost(model, duration);
-  const remainingCredits = await deductCreditsOrThrow(creditSupabase, userId, cost);
   let generationId: string | null = null;
   let predictionId: string | null = null;
 
   try {
-    generationId = await reserveGenerationRecord(creditSupabase, {
+    const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model: selectedModel.apiModelId,
       cost,
@@ -2697,6 +2731,16 @@ export async function startSoundEffectGeneration(params: {
         outputFormat,
       },
     });
+    generationId = reservation.generationId;
+    if (reservation.predictionId) {
+      return {
+        predictionId: reservation.predictionId,
+        remainingCredits: reservation.remainingCredits,
+        cost: reservation.cost,
+        generationId,
+        idempotentReplay: reservation.idempotentReplay,
+      };
+    }
 
     predictionId = await createKieTask({
       model: selectedModel.apiModelId,
@@ -2712,14 +2756,19 @@ export async function startSoundEffectGeneration(params: {
 
     return {
       predictionId,
-      remainingCredits,
+      remainingCredits: reservation.remainingCredits,
       cost,
       generationId,
     };
   } catch (error) {
-    if (!predictionId) {
-      await refundCreditsQuietly(creditSupabase, userId, cost);
-      await markGenerationStartFailedQuietly(creditSupabase, generationId);
+    if (!predictionId && generationId) {
+      await settleGenerationStartFailureQuietly({
+        creditSupabase,
+        error,
+        generationId,
+        userId,
+        cost,
+      });
     }
     throw error;
   }

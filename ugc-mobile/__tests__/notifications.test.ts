@@ -168,6 +168,26 @@ describe('mobile notifications helper', () => {
     expect(notificationsMocks.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
   });
 
+  it('routes referral reward notifications to Invite & Earn', async () => {
+    notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue({
+      notification: {
+        request: {
+          identifier: 'referral-reward-1',
+          content: {
+            data: {
+              deepLink: '/invite',
+            },
+          },
+        },
+      },
+    });
+
+    const { syncLastNotificationResponse } = await import('../lib/notifications');
+
+    await expect(syncLastNotificationResponse()).resolves.toBe(true);
+    expect(routerMocks.push).toHaveBeenCalledWith('/invite');
+  });
+
   it('lets the app layer mark notification taps read before navigation', async () => {
     notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue({
       notification: {

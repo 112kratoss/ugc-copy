@@ -1,5 +1,6 @@
 import {
   Bell,
+  Gift,
   Home,
   Layers3,
   Sparkles,
@@ -11,7 +12,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 export interface AppNavItem {
-  id: 'home' | 'create' | 'studio' | 'showcase' | 'marketplace' | 'workflow' | 'profile' | 'alerts';
+  id: 'home' | 'create' | 'studio' | 'showcase' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
   label: string;
   shortLabel: string;
   href: string;
@@ -101,6 +102,15 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     match: (pathname) => isExactOrChild(pathname, '/notifications'),
   },
   {
+    id: 'invite',
+    label: 'Invite & Earn',
+    shortLabel: 'Invite',
+    href: '/invite',
+    description: 'Share your referral link and track bonus credits',
+    icon: Gift,
+    match: (pathname) => isExactOrChild(pathname, '/invite'),
+  },
+  {
     id: 'profile',
     label: 'Profile',
     shortLabel: 'You',
@@ -136,6 +146,7 @@ export function isMinimalAppChromePath(pathname: string) {
     pathname === '/auth' ||
     pathname.startsWith('/auth/') ||
     pathname === '/login' ||
-    pathname.startsWith('/login?')
+    pathname.startsWith('/login?') ||
+    pathname.startsWith('/r/')
   );
 }

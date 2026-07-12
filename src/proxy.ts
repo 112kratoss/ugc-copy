@@ -20,6 +20,7 @@ const mobileCorsPathPrefixes = [
   '/api/mobile/notifications',
   '/api/posts',
   '/api/profile',
+  '/api/referrals',
   '/api/showcase/feed',
   '/api/showcase/posts',
   '/api/showcase/publish',

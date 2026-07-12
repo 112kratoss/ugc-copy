@@ -15,7 +15,7 @@ export default function PrivacyPolicy() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Privacy Policy</h1>
-                <p className="text-zinc-400 mb-12">Last updated: February 9, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: July 12, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -53,6 +53,14 @@ export default function PrivacyPolicy() {
                             <li>Pages visited and features used</li>
                             <li>Time and date of visits</li>
                         </ul>
+
+                        <h3 className="text-xl font-medium text-white mb-3 mt-6">Referral Information</h3>
+                        <ul className="list-disc list-inside space-y-2 ml-4">
+                            <li>Referral codes, link visits, attribution dates, and the destination opened</li>
+                            <li>Whether an attributed account completed a qualifying purchase</li>
+                            <li>Promotional credits granted, reversed, or restored</li>
+                            <li>Privacy-protective hashes derived from network, browser, or app-installation signals for fraud prevention</li>
+                        </ul>
                     </section>
 
                     <section>
@@ -65,6 +73,7 @@ export default function PrivacyPolicy() {
                             <li>Send you important service updates</li>
                             <li>Improve our AI models and Service quality</li>
                             <li>Detect and prevent fraud or abuse</li>
+                            <li>Attribute referrals, issue promotional credits, and measure referral-program performance</li>
                             <li>Comply with legal obligations</li>
                         </ul>
                     </section>
@@ -90,7 +99,7 @@ export default function PrivacyPolicy() {
                         <h2 className="text-2xl font-semibold text-white mb-4">5. Third-Party Services</h2>
                         <p className="mb-4">We use trusted third-party services for:</p>
                         <ul className="list-disc list-inside space-y-2 ml-4">
-                            <li><strong>Payment Processing:</strong> Stripe and Razorpay - for secure payment handling</li>
+                            <li><strong>Payment Processing:</strong> Razorpay, Apple, Google, and RevenueCat - for secure payment and purchase verification</li>
                             <li><strong>Cloud Storage:</strong> Supabase - for file storage</li>
                             <li><strong>AI Processing:</strong> Kie.ai - for video generation</li>
                             <li><strong>Service Improvement:</strong> To understand how our Service is used and improve performance</li>
@@ -120,10 +129,11 @@ export default function PrivacyPolicy() {
 
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">7. Cookies</h2>
+                        <p className="mb-4">
+                            We use essential cookies to maintain your session and preferences. When you open a referral link, we also use an opaque first-party referral cookie for up to 30 days so a new-account signup can be attributed to the correct inviter.
+                        </p>
                         <p>
-                            We use essential cookies to maintain your session and preferences.
-                            We may use essential cookies required for the Service to function properly.
-                            You can control cookies through your browser settings.
+                            Referral visit and fraud-prevention signals are retained in identifiable or pseudonymous form only as long as needed to operate and protect the program. Short-lived visit signals are normally removed or aggregated after 90 days, while purchase and reward records may be retained for account, financial, dispute, and legal obligations. You can control cookies through your browser settings, although blocking the referral cookie prevents automatic attribution.
                         </p>
                     </section>
 

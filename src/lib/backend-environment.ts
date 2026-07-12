@@ -21,6 +21,9 @@ export const BACKEND_ENVIRONMENT_REQUIREMENTS = [
   { id: 'razorpay-webhook-auth', keys: ['RAZORPAY_WEBHOOK_SECRET'] },
   { id: 'revenuecat-api', keys: ['REVENUECAT_SECRET_API_KEY', 'REVENUECAT_REST_API_KEY'] },
   { id: 'revenuecat-webhook-auth', keys: ['REVENUECAT_WEBHOOK_AUTH_TOKEN'] },
+  { id: 'referral-attribution-hash', keys: ['REFERRAL_ATTRIBUTION_HASH_SECRET'] },
+  { id: 'apple-app-links', keys: ['APPLE_TEAM_ID'] },
+  { id: 'android-app-links', keys: ['ANDROID_APP_SHA256_FINGERPRINTS'] },
 ] as const;
 
 function isConfigured(environment: NodeJS.ProcessEnv, keys: readonly string[]): boolean {

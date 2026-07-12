@@ -24,6 +24,18 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('expo-apple-authentication');
   });
 
+  it('registers verified referral links on iOS and Android', () => {
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+
+    expect(appJson.expo.ios.associatedDomains).toContain('applinks:magicbooklet.com');
+    expect(appJson.expo.android.intentFilters).toContainEqual({
+      action: 'VIEW',
+      autoVerify: true,
+      data: [{ scheme: 'https', host: 'magicbooklet.com', pathPrefix: '/r/' }],
+      category: ['BROWSABLE', 'DEFAULT'],
+    });
+  });
+
   it('sets a manifest placeholder and debug-only Gradle values for local HTTP', () => {
     const manifest: {
       manifest: {

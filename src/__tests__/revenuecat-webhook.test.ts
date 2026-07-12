@@ -44,7 +44,7 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
   beforeEach(() => {
     vi.resetModules();
     rpcMock.mockReset();
-    rpcMock.mockResolvedValue({ data: 'refunded', error: null });
+    rpcMock.mockResolvedValue({ data: { status: 'refunded', rewards: [] }, error: null });
     process.env.REVENUECAT_WEBHOOK_AUTH_TOKEN = 'Bearer revenuecat-webhook-secret';
   });
 
@@ -115,7 +115,7 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
     expect(response.status).toBe(200);
     expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-success-1');
     expect(await response.json()).toEqual({ received: true, result: 'refunded' });
-    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_refund', {
+    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_purchase_adjustment', {
       p_action: 'refund',
       p_event_id: 'event-refund-1',
       p_event_timestamp_ms: 1_766_000_000_000,
@@ -126,7 +126,7 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
   });
 
   it('restores credits when RevenueCat reverses a refund', async () => {
-    rpcMock.mockResolvedValue({ data: 'restored', error: null });
+    rpcMock.mockResolvedValue({ data: { status: 'restored', rewards: [] }, error: null });
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
     const response = await POST(webhookRequest({
       ...refundEvent,
@@ -140,18 +140,18 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_refund', expect.objectContaining({
+    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_purchase_adjustment', expect.objectContaining({
       p_action: 'restore',
       p_external_order_id: 'mobile_app_store_2000000123456789',
     }));
   });
 
   it('treats duplicate and stale deliveries as successful', async () => {
-    rpcMock.mockResolvedValue({ data: 'already_refunded', error: null });
+    rpcMock.mockResolvedValue({ data: { status: 'already_refunded', rewards: [] }, error: null });
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
     const duplicateResponse = await POST(webhookRequest(refundEvent));
 
-    rpcMock.mockResolvedValue({ data: 'stale_event', error: null });
+    rpcMock.mockResolvedValue({ data: { status: 'stale_event', rewards: [] }, error: null });
     const staleResponse = await POST(webhookRequest({ ...refundEvent, id: 'older-event' }));
 
     expect(duplicateResponse.status).toBe(200);

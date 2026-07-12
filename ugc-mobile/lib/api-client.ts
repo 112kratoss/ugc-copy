@@ -26,6 +26,13 @@ import type {
   ProfileMediaUploadIntentResponse,
   PromptEnhancementRequest,
   PromptEnhancementResponse,
+  ReferralClaimRequest,
+  ReferralClaimResponse,
+  ReferralLinkRequest,
+  ReferralLinkResponse,
+  ReferralOverviewResponse,
+  ReferralVisitRequest,
+  ReferralVisitResponse,
   PostResourceAttachment,
   PostResourceBundleInput,
   RemixSourceBundle,
@@ -379,6 +386,28 @@ export function createApiClient({
     getProfile: () => request<ProfileResponse>('/api/profile'),
     updateProfile: (body: Partial<ProfileResponse>) =>
       request<ProfileResponse>('/api/profile', { method: 'PATCH', body: JSON.stringify(body) }),
+    getReferralOverview: () =>
+      request<ReferralOverviewResponse>('/api/referrals/me'),
+    createReferralLink: (body: ReferralLinkRequest = {}) =>
+      request<ReferralLinkResponse>('/api/referrals/link', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    recordReferralVisit: async (body: Omit<ReferralVisitRequest, 'installationId'>) => {
+      const installationId = await getInstallationId?.().catch(() => null);
+      return request<ReferralVisitResponse>('/api/referrals/visit', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...body,
+          ...(installationId ? { installationId } : {}),
+        }),
+      }, { auth: false });
+    },
+    claimReferral: (body: ReferralClaimRequest) =>
+      request<ReferralClaimResponse>('/api/referrals/claim', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     listGenerations: async (includeArchived = true) => {
       const response = await request<{ generations: GenerationListItem[] }>(`/api/generations${buildQuery({ includeArchived })}`);
       return {

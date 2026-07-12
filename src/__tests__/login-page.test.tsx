@@ -112,7 +112,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(await screen.findByText(/password reset link sent/i)).toBeInTheDocument();
   });
 
-  it('sends immediate email signups to creator profile setup instead of the requested app route', async () => {
+  it('sends immediate email signups through server auth finalization before profile setup', async () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create');
     mocks.signUp.mockResolvedValue({
       data: { session: { access_token: 'token' } },
@@ -131,7 +131,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(emailRedirectTo.pathname).toBe('/auth/callback');
     expect(emailRedirectTo.origin).toBe('https://magicbooklet.com');
     expect(emailRedirectTo.searchParams.get('next')).toBe('/create');
-    expect(mocks.replace).toHaveBeenCalledWith('/profile?welcome=1&next=%2Fcreate');
+    expect(mocks.replace).toHaveBeenCalledWith('/auth/continue?next=%2Fcreate');
     expect(mocks.replace).not.toHaveBeenCalledWith('/create');
   });
 

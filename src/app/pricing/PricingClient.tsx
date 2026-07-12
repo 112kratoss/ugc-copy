@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
-import { ArrowLeft, Check, Crown, Loader2, Sparkles, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Crown, Gift, Loader2, Sparkles, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { JsonLd } from "@/app/components/JsonLd";
@@ -398,6 +398,32 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                         </div>
                     </div>
                 </div>
+
+                <section
+                    aria-label="Invite and earn bonus credits"
+                    className="mb-10 overflow-hidden rounded-[28px] border border-amber-300/20 bg-[linear-gradient(110deg,rgba(242,185,94,0.12),rgba(255,122,89,0.06),rgba(25,25,28,0.96))] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6"
+                >
+                    <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 gap-4">
+                            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-amber-300/20 bg-amber-400/10 text-amber-200">
+                                <Gift className="h-5 w-5" aria-hidden />
+                            </span>
+                            <div>
+                                <p className="text-sm font-extrabold text-amber-100">Invite friends. Earn creation credits.</p>
+                                <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-300">
+                                    Your friend gets 5% bonus credits on their first verified top-up. You earn 5% bonus credits every time they top up.
+                                </p>
+                            </div>
+                        </div>
+                        <Link
+                            href="/invite"
+                            className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-full border border-amber-300/25 bg-amber-300 px-5 text-sm font-extrabold text-[#1a0d08] transition hover:bg-amber-200 active:scale-[0.985]"
+                        >
+                            Invite &amp; Earn
+                            <ArrowRight className="h-4 w-4" aria-hidden />
+                        </Link>
+                    </div>
+                </section>
 
                 <div className="ui-stagger mb-16 grid gap-5 md:grid-cols-3">
                     {plans.map((plan) => (

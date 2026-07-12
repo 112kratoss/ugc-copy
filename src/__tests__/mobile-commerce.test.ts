@@ -141,6 +141,18 @@ function createCreditSupabase(options: {
       },
       async rpc(name: string, args: Record<string, unknown>) {
         rpcCalls.push({ name, args });
+        if (name === 'settle_referral_purchase_rewards') {
+          return { data: { status: 'not_referred', rewards: [] }, error: null };
+        }
+        if (name === 'reconcile_mobile_credit_purchase_adjustment') {
+          const restored = transactions.find((item) => item.razorpay_order_id === args.p_external_order_id);
+          if (restored?.status === 'refunded' && args.p_action === 'restore') {
+            restored.status = 'success';
+            credits += restored.credits;
+            return { data: { status: 'restored', rewards: [] }, error: null };
+          }
+          return { data: { status: 'already_active', rewards: [] }, error: null };
+        }
         const transaction = transactions.find((item) => item.id === args.p_transaction_id);
         if (name === 'add_credits' && transaction?.status === 'created') {
           transaction.status = 'success';
@@ -378,7 +390,10 @@ describe('mobile commerce helpers', () => {
       credits: 600,
       alreadyProcessed: false,
     });
-    expect(fakeSupabase.rpcCalls).toHaveLength(1);
+    expect(fakeSupabase.rpcCalls.map((call) => call.name)).toEqual([
+      'add_credits',
+      'settle_referral_purchase_rewards',
+    ]);
     expect(fakeSupabase.transactions[0]?.razorpay_order_id).toBe(buildMobileExternalOrderId('app_store', '1000000123456789'));
   });
 
@@ -405,7 +420,44 @@ describe('mobile commerce helpers', () => {
       credits: 600,
       alreadyProcessed: true,
     });
-    expect(fakeSupabase.rpcCalls).toHaveLength(0);
+    expect(fakeSupabase.rpcCalls.map((call) => call.name)).toEqual([
+      'settle_referral_purchase_rewards',
+    ]);
+  });
+
+  it('restores a provider-verified purchase that was locally marked refunded', async () => {
+    const externalOrderId = buildMobileExternalOrderId('app_store', '1000000123456789');
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      transactions: [{
+        id: 'txn-refunded',
+        user_id: userId,
+        razorpay_order_id: externalOrderId,
+        credits: 500,
+        status: 'refunded',
+      }],
+    });
+
+    await expect(completeMobileCreditPurchase({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      productId: 'magicbooklet.credits.starter',
+      provider: 'app_store',
+      transactionId: '1000000123456789',
+    })).resolves.toMatchObject({
+      credits: 600,
+      alreadyProcessed: false,
+      message: 'Purchase restored.',
+    });
+    expect(fakeSupabase.rpcCalls[0]).toMatchObject({
+      name: 'reconcile_mobile_credit_purchase_adjustment',
+      args: {
+        p_action: 'restore',
+        p_external_order_id: externalOrderId,
+        p_product_id: 'magicbooklet.credits.starter',
+        p_user_id: userId,
+      },
+    });
   });
 
   it('recovers when a duplicate mobile transaction insert already created the order', async () => {
@@ -428,7 +480,10 @@ describe('mobile commerce helpers', () => {
       alreadyProcessed: false,
     });
     expect(fakeSupabase.transactions).toHaveLength(1);
-    expect(fakeSupabase.rpcCalls).toHaveLength(1);
+    expect(fakeSupabase.rpcCalls.map((call) => call.name)).toEqual([
+      'add_credits',
+      'settle_referral_purchase_rewards',
+    ]);
   });
 
   it('uses one atomic database call for mobile marketplace cash unlocks', async () => {

@@ -11,6 +11,8 @@ export type MobileNotificationType =
   | 'generation_succeeded'
   | 'generation_failed'
   | 'credits_purchased'
+  | 'referral_reward_earned'
+  | 'referral_reward_reversed'
   | 'purchases_restored'
   | 'marketplace_unlocked'
   | 'post_resource_unlocked'
@@ -136,6 +138,8 @@ function asNotificationType(value: unknown): MobileNotificationType {
     type === 'generation_succeeded' ||
     type === 'generation_failed' ||
     type === 'credits_purchased' ||
+    type === 'referral_reward_earned' ||
+    type === 'referral_reward_reversed' ||
     type === 'purchases_restored' ||
     type === 'marketplace_unlocked' ||
     type === 'post_resource_unlocked' ||
@@ -1299,6 +1303,36 @@ export async function notifyMobileCreditPurchase(
     objectType: 'credits',
     objectId: params.transactionId ?? null,
     dedupeKey: params.transactionId ? `credits:${params.transactionId}` : null,
+  });
+}
+
+export async function notifyReferralReward(
+  adminSupabase: SupabaseClient,
+  params: {
+    userId: string;
+    credits: number;
+    rewardId: string;
+    reversed?: boolean;
+    eventKey?: string;
+  }
+) {
+  const credits = Math.max(0, Math.trunc(params.credits));
+  const reversed = Boolean(params.reversed);
+  const eventKey = params.eventKey?.trim() || (reversed ? 'reversed' : 'granted');
+
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: reversed ? 'referral_reward_reversed' : 'referral_reward_earned',
+    category: 'commerce',
+    title: reversed ? 'Referral reward reversed' : 'Referral credits earned',
+    body: reversed
+      ? `${credits} referral ${credits === 1 ? 'credit was' : 'credits were'} removed after a payment reversal.`
+      : `You earned ${credits} bonus ${credits === 1 ? 'credit' : 'credits'} from Invite & Earn.`,
+    deepLink: '/invite',
+    objectType: 'referral_reward',
+    objectId: params.rewardId,
+    dedupeKey: `referral-reward:${params.rewardId}:${eventKey}`,
   });
 }
 

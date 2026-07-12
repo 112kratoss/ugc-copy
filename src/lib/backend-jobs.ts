@@ -3,7 +3,8 @@ export type BackendJobName =
   | 'feed-maintenance'
   | 'generation-completions'
   | 'media-preview-repair'
-  | 'mobile-push-receipts';
+  | 'mobile-push-receipts'
+  | 'referral-reward-reconciliation';
 
 export type BackendJobSchedulerDefinition = {
   route: '/api/cron/backend-jobs';
@@ -205,6 +206,15 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_pending_receipts',
     maxMissedRunsBeforeDegraded: 4,
+  }),
+  defineBackendJob({
+    name: 'referral-reward-reconciliation',
+    route: '/api/cron/referral-rewards',
+    schedule: '40 * * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_unsettled_referral_rewards',
+    maxMissedRunsBeforeDegraded: 2,
   }),
 ] as const satisfies readonly BackendJobDefinition[];
 

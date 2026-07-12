@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  notifyReferralRewardSettlement,
+  settleCreditPurchaseReferralRewards,
+} from '@/lib/credit-referral-integration';
+import {
   notifyMarketplaceUnlockCompleted,
   notifyMobileCreditPurchase,
   notifyMobilePurchasesRestored,
@@ -12,6 +16,7 @@ import {
   isExternalServiceTimeoutError,
 } from '@/lib/provider-fetch';
 import { PRICING_PLAN_MAP, type PricingPlan } from '@/lib/pricing';
+import { reconcileMobileCreditPurchaseAdjustment } from '@/lib/referral-reward-service';
 
 export type MobilePurchaseProvider = 'app_store' | 'play_store' | 'revenuecat' | 'sandbox';
 
@@ -36,6 +41,7 @@ export interface MobileCommerceSyncResult {
   assetId?: string;
   postId?: string;
   message?: string;
+  referralBonusCredits?: number;
 }
 
 export class MobileCommerceError extends Error {
@@ -372,7 +378,7 @@ async function getProfileCredits(adminSupabase: SupabaseClient, userId: string) 
 async function getMobileCreditTransaction(adminSupabase: SupabaseClient, userId: string, externalOrderId: string) {
   const { data, error } = await adminSupabase
     .from('transactions')
-    .select('id, credits, status')
+    .select('id, credits, status, razorpay_order_id')
     .eq('razorpay_order_id', externalOrderId)
     .eq('user_id', userId)
     .maybeSingle();
@@ -409,12 +415,41 @@ export async function completeMobileCreditPurchase({
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
   const existing = await getMobileCreditTransaction(adminSupabase, userId, externalOrderId);
 
+  if (existing?.status === 'refunded') {
+    const restoreTimestampMs = Date.now();
+    const settlement = await reconcileMobileCreditPurchaseAdjustment(adminSupabase, {
+      action: 'restore',
+      externalOrderId,
+      productId,
+      providerEventId: `restore-sync:${transactionId}:${restoreTimestampMs}`,
+      providerEventTimestampMs: restoreTimestampMs,
+      userId,
+    });
+    await notifyReferralRewardSettlement(adminSupabase, settlement);
+    return {
+      success: true,
+      entitlement: 'credits',
+      credits: await getProfileCredits(adminSupabase, userId),
+      alreadyProcessed: false,
+      message: 'Purchase restored.',
+    };
+  }
+
   if (existing?.status === 'success') {
+    const referral = await settleCreditPurchaseReferralRewards({
+      adminSupabase,
+      purchaserUserId: userId,
+      transactionId: existing.id,
+      source: 'mobile_purchase',
+    });
     return {
       success: true,
       entitlement: 'credits',
       credits: await getProfileCredits(adminSupabase, userId),
       alreadyProcessed: true,
+      ...(referral?.purchaserBonusCredits
+        ? { referralBonusCredits: referral.purchaserBonusCredits }
+        : {}),
     };
   }
 
@@ -431,7 +466,7 @@ export async function completeMobileCreditPurchase({
         status: 'created',
         mobile_product_id: productId,
       })
-      .select('id, credits, status')
+      .select('id, credits, status, razorpay_order_id')
       .single();
 
     if (insertError) {
@@ -462,6 +497,19 @@ export async function completeMobileCreditPurchase({
     throw new MobileCommerceError('Failed to assign mobile credits.', 500);
   }
 
+  if (!rpcSuccess) {
+    const refreshed = await getMobileCreditTransaction(adminSupabase, userId, externalOrderId);
+    if (refreshed?.status !== 'success') {
+      throw new MobileCommerceError('Failed to assign mobile credits.', 500);
+    }
+  }
+
+  const referral = await settleCreditPurchaseReferralRewards({
+    adminSupabase,
+    purchaserUserId: userId,
+    transactionId: transaction.id,
+    source: 'mobile_purchase',
+  });
   const credits = await getProfileCredits(adminSupabase, userId);
   const alreadyProcessed = !rpcSuccess;
   if (!alreadyProcessed) {
@@ -477,6 +525,9 @@ export async function completeMobileCreditPurchase({
     entitlement: 'credits',
     credits,
     alreadyProcessed,
+    ...(referral?.purchaserBonusCredits
+      ? { referralBonusCredits: referral.purchaserBonusCredits }
+      : {}),
   };
 }
 

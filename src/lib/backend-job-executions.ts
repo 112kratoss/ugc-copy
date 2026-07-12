@@ -24,6 +24,11 @@ import {
 } from '@/lib/generation-completion-jobs';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import { hasMobilePushMaintenanceWork, processMobilePushMaintenance } from '@/lib/mobile-notifications';
+import {
+  hasUnsettledReferralPurchaseTransactions,
+  reconcileReferralPurchaseRewards,
+  REFERRAL_REWARD_RECONCILIATION_BATCH_LIMIT,
+} from '@/lib/referral-reward-reconciliation';
 import { withRequestTrace } from '@/lib/request-trace';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -401,5 +406,30 @@ export function runMobilePushReceiptsBackendJob(options: {
     },
     hasWork: (client, context) => hasMobilePushMaintenanceWork(client, { now: new Date(context.startedAtMs) }),
     run: (client, context) => processMobilePushMaintenance(client, { now: new Date(context.startedAtMs) }),
+  });
+}
+
+export function runReferralRewardReconciliationBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['referral-reward-reconciliation'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'referral_reward_reconciliation_started',
+      skippedNoWork: 'referral_reward_reconciliation_skipped_no_work',
+      skippedLocked: 'referral_reward_reconciliation_skipped',
+      completed: 'referral_reward_reconciliation_completed',
+      failed: 'referral_reward_reconciliation_failed',
+    },
+    hasWork: (client) => hasUnsettledReferralPurchaseTransactions(client),
+    onNoWork: async () => ({ processed: 0, settled: 0, failed: 0, failures: [] }),
+    run: (client) => reconcileReferralPurchaseRewards(client, {
+      limit: REFERRAL_REWARD_RECONCILIATION_BATCH_LIMIT,
+    }),
   });
 }

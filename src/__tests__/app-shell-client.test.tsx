@@ -56,6 +56,23 @@ describe('AppShellClient', () => {
     expect(screen.getAllByRole('link', { name: 'Marketplace' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
   });
 
+  it('exposes Invite & Earn under Account without adding a mobile bottom tab', () => {
+    mockedPathname = '/invite';
+
+    render(
+      <AppShellClient>
+        <div>Invite content</div>
+      </AppShellClient>
+    );
+
+    expect(within(screen.getByRole('banner')).getByText('Invite & Earn')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Invite & Earn' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
+    expect(
+      within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
+        .queryByRole('link', { name: /invite/i })
+    ).not.toBeInTheDocument();
+  });
+
   it('opens an accessible mobile drawer and closes it with Escape', () => {
     render(
       <AppShellClient>
@@ -85,6 +102,19 @@ describe('AppShellClient', () => {
     );
 
     expect(screen.getByRole('main')).toHaveTextContent('Sign-in content');
+    expect(screen.queryByRole('navigation', { name: 'Primary mobile navigation' })).not.toBeInTheDocument();
+  });
+
+  it('keeps public referral landings focused by omitting workspace navigation', () => {
+    mockedPathname = '/r/friend123';
+
+    render(
+      <AppShellClient>
+        <div>Referral content</div>
+      </AppShellClient>
+    );
+
+    expect(screen.getByRole('main')).toHaveTextContent('Referral content');
     expect(screen.queryByRole('navigation', { name: 'Primary mobile navigation' })).not.toBeInTheDocument();
   });
 });

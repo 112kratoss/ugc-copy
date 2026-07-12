@@ -95,6 +95,7 @@ vi.mock('react-native-safe-area-context', () => ({
 vi.mock('lucide-react-native', () => ({
   ChevronRight: (props: Record<string, unknown>) => React.createElement('chevron-right-icon', props),
   Crown: (props: Record<string, unknown>) => React.createElement('crown-icon', props),
+  Gift: (props: Record<string, unknown>) => React.createElement('gift-icon', props),
   Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
   ImageIcon: (props: Record<string, unknown>) => React.createElement('image-icon', props),
   Pencil: (props: Record<string, unknown>) => React.createElement('pencil-icon', props),

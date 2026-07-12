@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { Bell, ChevronRight, CreditCard, UserRound } from 'lucide-react-native';
+import { Bell, ChevronRight, CreditCard, Gift, UserRound } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
@@ -29,6 +29,13 @@ export default function SettingsScreen() {
         title="Credits"
         body={`${credits ?? 0} credits available on this account.`}
         onPress={() => router.push('/pricing' as never)}
+      />
+
+      <SettingsCard
+        icon={<Gift size={22} color={appTheme.colors.commerce} />}
+        title="Invite & Earn"
+        body={user ? 'Share your referral link and track bonus credits.' : 'Apply an invite code or sign in to share your link.'}
+        onPress={() => router.push('/invite' as never)}
       />
 
       <SettingsCard

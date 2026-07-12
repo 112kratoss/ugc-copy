@@ -10,6 +10,7 @@ import { createApiClient, type MagicbookletApiClient } from './api-client';
 import { getFeedInstallationId } from './feed-installation-id';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { getProfileCreditsOrNull } from './auth-profile';
+import { claimPendingReferral } from './referral-attribution';
 import {
   registerForMobilePushNotifications,
   subscribeToMobilePushTokenChanges,
@@ -190,6 +191,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubscribePushTokenChanges();
       appStateSubscription.remove();
     };
+  }, [api, session?.user?.id]);
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+
+    void claimPendingReferral(api).catch((error) => {
+      console.warn('Failed to claim pending referral after authentication', error);
+    });
   }, [api, session?.user?.id]);
 
   const signInWithPassword = async (email: string, password: string) => {

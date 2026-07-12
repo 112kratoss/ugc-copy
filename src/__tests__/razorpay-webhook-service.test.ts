@@ -6,6 +6,9 @@ type CreditTransactionRow = {
   id: string;
   user_id: string;
   credits: number;
+  amount?: number;
+  credit_reversed_amount_subunits?: number;
+  razorpay_payment_id?: string;
   status: 'pending' | 'success';
 } | null;
 
@@ -63,6 +66,14 @@ function createAdminSupabaseMock(state: {
         return { data: true, error: null };
       }
 
+      if (name === 'settle_referral_purchase_rewards') {
+        return { data: { status: 'not_referred', rewards: [] }, error: null };
+      }
+
+      if (name === 'reconcile_razorpay_credit_purchase_adjustment') {
+        return { data: { status: 'partially_reversed', rewards: [] }, error: null };
+      }
+
       if (name === 'complete_marketplace_purchase' && state.marketplaceOrder) {
         state.marketplaceOrder.status = 'paid';
         return { data: true, error: null };
@@ -109,6 +120,26 @@ function paymentCapturedBody(orderId = 'order_123') {
   });
 }
 
+function refundProcessedBody() {
+  return JSON.stringify({
+    event: 'refund.processed',
+    payload: {
+      payment: { entity: { id: 'pay_123', order_id: 'order_123', amount: 10_000, amount_refunded: 5_000 } },
+      refund: { entity: { id: 'rfnd_123', payment_id: 'pay_123', amount: 5_000, status: 'processed' } },
+    },
+  });
+}
+
+function disputeBody(eventName: string, status: string) {
+  return JSON.stringify({
+    event: eventName,
+    payload: {
+      payment: { entity: { id: 'pay_123', order_id: 'order_123', amount: 10_000, amount_refunded: 0 } },
+      dispute: { entity: { id: 'disp_123', payment_id: 'pay_123', amount: 3_000, status } },
+    },
+  });
+}
+
 describe('processRazorpayWebhookForRoute', () => {
   it('settles credit purchases first and stops before marketplace lookups', async () => {
     const admin = createAdminSupabaseMock({
@@ -146,6 +177,12 @@ describe('processRazorpayWebhookForRoute', () => {
           p_credits: 100,
           p_transaction_id: 'txn-1',
           p_payment_id: 'pay_123',
+        },
+      },
+      {
+        name: 'settle_referral_purchase_rewards',
+        payload: {
+          p_transaction_id: 'txn-1',
         },
       },
     ]);
@@ -186,5 +223,79 @@ describe('processRazorpayWebhookForRoute', () => {
       'post_resource_bundle_orders',
       'post_resource_bundle_orders',
     ]);
+  });
+
+  it('reconciles a processed partial refund from the provider cumulative amount', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        amount: 10_000,
+        credit_reversed_amount_subunits: 0,
+        razorpay_payment_id: 'pay_123',
+        status: 'success',
+      },
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: refundProcessedBody(),
+    });
+
+    expect(result).toEqual({ status: 200, body: 'OK' });
+    expect(admin.rpcCalls).toContainEqual({
+      name: 'reconcile_razorpay_credit_purchase_adjustment',
+      payload: {
+        p_transaction_id: 'txn-1',
+        p_provider_event_id: 'refund:rfnd_123',
+        p_cumulative_reversed_subunits: 5_000,
+        p_action: 'reverse',
+        p_reason: 'razorpay_refund_processed',
+      },
+    });
+  });
+
+  it('reverses an opened dispute and restores only that amount when won', async () => {
+    const transaction = {
+      id: 'txn-1',
+      user_id: 'user-1',
+      credits: 100,
+      amount: 10_000,
+      credit_reversed_amount_subunits: 0,
+      razorpay_payment_id: 'pay_123',
+      status: 'success' as const,
+    };
+    const admin = createAdminSupabaseMock({ creditTransaction: transaction });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: disputeBody('payment.dispute.created', 'open'),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    transaction.credit_reversed_amount_subunits = 3_000;
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: disputeBody('payment.dispute.won', 'won'),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls).toEqual(expect.arrayContaining([
+      {
+        name: 'reconcile_razorpay_credit_purchase_adjustment',
+        payload: expect.objectContaining({
+          p_provider_event_id: 'dispute:disp_123:reverse',
+          p_cumulative_reversed_subunits: 3_000,
+          p_action: 'reverse',
+        }),
+      },
+      {
+        name: 'reconcile_razorpay_credit_purchase_adjustment',
+        payload: expect.objectContaining({
+          p_provider_event_id: 'dispute:disp_123:won',
+          p_cumulative_reversed_subunits: 0,
+          p_action: 'restore',
+        }),
+      },
+    ]));
   });
 });

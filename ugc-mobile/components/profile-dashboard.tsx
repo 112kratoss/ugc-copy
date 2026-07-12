@@ -7,6 +7,7 @@ import { router } from 'expo-router';
 import {
   ChevronRight,
   Crown,
+  Gift,
   Heart,
   ImageIcon,
   Pencil,
@@ -264,6 +265,7 @@ export function ProfileDashboard({
               onPress={() => router.push('/seller-dashboard' as never)}
             />
           </View>
+          <InviteAndEarnButton />
           <SellerDashboardButton />
         </>
       )}
@@ -632,6 +634,38 @@ function SellerDashboardButton() {
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Seller Dashboard</AppText>
         <AppText variant="caption" color="muted" numberOfLines={1}>Sales, unlocks, and listings</AppText>
+      </View>
+      <ChevronRight size={20} color={PROFILE_COLORS.faint} />
+    </Pressable>
+  );
+}
+
+function InviteAndEarnButton() {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open Invite and Earn"
+      onPress={() => router.push('/invite' as never)}
+      style={({ pressed }) => ({
+        minHeight: 58,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: `${appTheme.colors.commerce}55`,
+        backgroundColor: `${appTheme.colors.commerce}0f`,
+        paddingHorizontal: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        opacity: pressed ? 0.82 : 1,
+      })}
+    >
+      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: `${appTheme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
+        <Gift size={19} color={appTheme.colors.commerce} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Invite & Earn</AppText>
+        <AppText variant="caption" color="muted" numberOfLines={1}>Share your link and earn bonus credits</AppText>
       </View>
       <ChevronRight size={20} color={PROFILE_COLORS.faint} />
     </Pressable>

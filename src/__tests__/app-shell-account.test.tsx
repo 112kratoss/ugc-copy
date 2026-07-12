@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellAccount from '@/app/components/AppShellAccount';
@@ -65,5 +65,14 @@ describe('AppShellAccount', () => {
     expect(await screen.findByText('1295 credits')).toBeInTheDocument();
     expect(mocks.select).toHaveBeenCalledWith('display_name, avatar_url, credits');
     await waitFor(() => expect(mocks.eq).toHaveBeenCalledWith('id', 'user-1'));
+  });
+
+  it('links the signed-in account menu to Invite & Earn', async () => {
+    render(<AppShellAccount />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+    expect(screen.getByRole('menuitem', { name: /Invite & Earn/i })).toHaveAttribute('href', '/invite');
+    expect(screen.getByText('Earn credits')).toBeInTheDocument();
   });
 });

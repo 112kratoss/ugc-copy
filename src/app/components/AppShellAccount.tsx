@@ -1,7 +1,7 @@
 'use client';
 
 import type { Session } from '@supabase/supabase-js';
-import { ChevronDown, LogOut, Sparkles } from 'lucide-react';
+import { ChevronDown, Gift, LogOut, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -207,10 +207,22 @@ export default function AppShellAccount() {
               </div>
             </div>
             <Link
+              href="/invite"
+              role="menuitem"
+              onClick={() => setAccountOpen(false)}
+              className="ui-focus-ring mt-2 flex min-h-12 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+            >
+              <span className="flex items-center gap-2">
+                <Gift className="h-4 w-4 text-amber-300" aria-hidden />
+                Invite &amp; Earn
+              </span>
+              <span className="text-xs text-amber-200/75">Earn credits</span>
+            </Link>
+            <Link
               href="/profile"
               role="menuitem"
               onClick={() => setAccountOpen(false)}
-              className="ui-focus-ring mt-2 flex min-h-11 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+              className="ui-focus-ring mt-1 flex min-h-11 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
             >
               Profile
               <span className="text-xs text-[var(--ui-text-faint)]">

@@ -7,7 +7,6 @@ import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2, WandSparkles } from 'lucide-react';
 import {
     buildAuthContinuePath,
-    buildProfileSetupPath,
     getSafeAuthNextPath,
 } from '@/lib/auth-onboarding';
 import {
@@ -62,7 +61,7 @@ function LoginContent() {
     const searchParams = useSearchParams();
     const explicitRedirect = searchParams.get('next') || searchParams.get('redirect') || searchParams.get('returnUrl');
     const redirectTo = getSafeAuthNextPath(explicitRedirect);
-    const signupRedirectTo = buildProfileSetupPath(redirectTo);
+    const signupRedirectTo = buildAuthContinuePath(redirectTo);
     const [isLogin, setIsLogin] = useState(searchParams.get('mode') !== 'signup');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');

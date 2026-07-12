@@ -199,7 +199,7 @@ export function navigateToNotificationDeepLink(deepLink: unknown) {
 const NOTIFICATION_ROUTE_PATTERNS = [
   /^\/$/,
   /^\/\(tabs\)(?:\/(?:index|creator|showcase|studio|pricing|profile))?$/,
-  /^\/(?:creator|showcase|studio|pricing|profile|auth|viewer|profile-media-feed|post\/new|seller-dashboard|settings|help|edit-profile)$/,
+  /^\/(?:creator|showcase|studio|pricing|profile|invite|auth|viewer|profile-media-feed|post\/new|seller-dashboard|settings|help|edit-profile)$/,
   /^\/create\/(?:image|video|motion)$/,
   /^\/showcase\/[^/]+$/,
   /^\/creators\/[^/]+$/,

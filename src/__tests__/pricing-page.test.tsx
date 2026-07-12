@@ -155,4 +155,13 @@ describe('pricing page currency storage', () => {
       expect((select as HTMLSelectElement).value).toBe('USD');
     });
   });
+
+  it('shows the referral benefit next to credit-pack pricing', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    expect(screen.getByText('Invite friends. Earn creation credits.')).toBeInTheDocument();
+    expect(screen.getByText(/Your friend gets 5% bonus credits/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Invite & Earn/i })).toHaveAttribute('href', '/invite');
+  });
 });

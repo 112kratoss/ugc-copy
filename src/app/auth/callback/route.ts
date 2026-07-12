@@ -9,6 +9,10 @@ import {
   createAuthRouteClient,
   resolveServerPostAuthPath,
 } from '@/lib/auth-onboarding-server';
+import {
+  clearReferralVisitCookie,
+  finalizePendingReferralForAuth,
+} from '@/lib/referral-route-service';
 
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
@@ -24,13 +28,18 @@ export async function GET(request: Request) {
         const { data, error: userError } = await supabase.auth.getUser();
 
         if (!userError && data.user) {
+          const clearReferralCookie = await finalizePendingReferralForAuth(request, data.user.id);
           const destination = await resolveServerPostAuthPath(
             supabase,
             data.user.id,
             next,
             { skipProfileOnboarding: hasSkippedProfileOnboarding(data.user.user_metadata) }
           );
-          return NextResponse.redirect(new URL(destination, requestUrl.origin));
+          const response = NextResponse.redirect(new URL(destination, requestUrl.origin));
+          if (clearReferralCookie) {
+            clearReferralVisitCookie(response, requestUrl.protocol === 'https:');
+          }
+          return response;
         }
       }
     } catch {

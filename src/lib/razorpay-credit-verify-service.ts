@@ -7,6 +7,7 @@ import {
   CREDIT_ORDER_VERIFY_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { settleCreditPurchaseReferralRewards } from '@/lib/credit-referral-integration';
 import { verifyRazorpayPaymentSignature } from '@/lib/razorpay-signature';
 
 type CreditVerifyBody = {
@@ -132,7 +133,22 @@ export async function verifyCreditRazorpayPaymentForRoute({
   }
 
   if (transaction.status === 'success') {
-    return { ok: true, body: { success: true, alreadyProcessed: true } };
+    const referral = await settleCreditPurchaseReferralRewards({
+      adminSupabase,
+      purchaserUserId: user.id,
+      transactionId: transaction.id,
+      source: 'razorpay_verify',
+    });
+    return {
+      ok: true,
+      body: {
+        success: true,
+        alreadyProcessed: true,
+        ...(referral?.purchaserBonusCredits
+          ? { referralBonusCredits: referral.purchaserBonusCredits }
+          : {}),
+      },
+    };
   }
 
   const { data: rpcSuccess, error: rpcError } = await adminSupabase.rpc('add_credits', {
@@ -142,10 +158,57 @@ export async function verifyCreditRazorpayPaymentForRoute({
     p_payment_id: razorpayPaymentId,
   });
 
-  if (rpcError || !rpcSuccess) {
+  if (rpcError) {
     console.error('RPC add_credits error:', rpcError);
     return { ok: false, status: 500, body: { error: 'Failed to assign credits' } };
   }
 
-  return { ok: true, body: { success: true } };
+  if (!rpcSuccess) {
+    const { data: refreshedData, error: refreshedError } = await userSupabase
+      .from('transactions')
+      .select('id, credits, status')
+      .eq('razorpay_order_id', razorpayOrderId)
+      .eq('user_id', user.id)
+      .single();
+    const refreshed = (refreshedData as CreditTransactionRow | null) ?? null;
+
+    if (refreshedError || refreshed?.status !== 'success') {
+      console.error('RPC add_credits did not settle the transaction:', refreshedError);
+      return { ok: false, status: 500, body: { error: 'Failed to assign credits' } };
+    }
+
+    const referral = await settleCreditPurchaseReferralRewards({
+      adminSupabase,
+      purchaserUserId: user.id,
+      transactionId: transaction.id,
+      source: 'razorpay_verify',
+    });
+    return {
+      ok: true,
+      body: {
+        success: true,
+        alreadyProcessed: true,
+        ...(referral?.purchaserBonusCredits
+          ? { referralBonusCredits: referral.purchaserBonusCredits }
+          : {}),
+      },
+    };
+  }
+
+  const referral = await settleCreditPurchaseReferralRewards({
+    adminSupabase,
+    purchaserUserId: user.id,
+    transactionId: transaction.id,
+    source: 'razorpay_verify',
+  });
+
+  return {
+    ok: true,
+    body: {
+      success: true,
+      ...(referral?.purchaserBonusCredits
+        ? { referralBonusCredits: referral.purchaserBonusCredits }
+        : {}),
+    },
+  };
 }
