@@ -29,7 +29,15 @@ type QueryResult = {
   error: null | { message: string };
 };
 
-function createSupabaseMock({ objectExists }: { objectExists: boolean }) {
+function createSupabaseMock({
+  generationRows = [IMAGE_GENERATION],
+  objectExists,
+  objectInfo = { size: 711_873, contentType: 'image/jpeg' },
+}: {
+  generationRows?: Array<typeof IMAGE_GENERATION>;
+  objectExists: boolean;
+  objectInfo?: { size: number; contentType: string };
+}) {
   const generationUpdates: Array<Record<string, unknown>> = [];
   const postUpdates: Array<Record<string, unknown>> = [];
   const upload = vi.fn();
@@ -79,7 +87,7 @@ function createSupabaseMock({ objectExists }: { objectExists: boolean }) {
 
     execute(): Promise<QueryResult> {
       if (this.action === 'select' && this.table === 'generations') {
-        return Promise.resolve({ data: [IMAGE_GENERATION], error: null });
+        return Promise.resolve({ data: generationRows, error: null });
       }
       if (this.action === 'select' && this.table === 'posts') {
         return Promise.resolve({
@@ -111,8 +119,8 @@ function createSupabaseMock({ objectExists }: { objectExists: boolean }) {
       from: (table: string) => new QueryBuilder(table),
       storage: {
         from: () => ({
-          exists: vi.fn().mockResolvedValue(objectExists
-            ? { data: true, error: null }
+          info: vi.fn().mockResolvedValue(objectExists
+            ? { data: objectInfo, error: null }
             : { data: false, error: { status: 404 } }),
           upload,
           remove,
@@ -208,5 +216,35 @@ describe('legacy temporary media backfill', () => {
     expect(supabase.postUpdates).toHaveLength(0);
     expect(supabase.upload).not.toHaveBeenCalled();
     expect(supabase.remove).not.toHaveBeenCalled();
+  });
+
+  it('fails a targeted run when the requested generation is no longer a pending candidate', async () => {
+    const supabase = createSupabaseMock({ generationRows: [], objectExists: true });
+    const result = await runBackfill({
+      supabase: supabase.client as never,
+      dryRun: true,
+      generationId: IMAGE_GENERATION.id,
+      logger: silentLogger,
+    });
+
+    expect(result).toMatchObject({ selected: 0, migrated: 0, failed: 1, exitCode: 1 });
+  });
+
+  it('refuses to reuse an empty or incompatible deterministic storage object', async () => {
+    const supabase = createSupabaseMock({
+      objectExists: true,
+      objectInfo: { size: 0, contentType: 'text/html' },
+    });
+    const fetcher = vi.fn();
+
+    const result = await runBackfill({
+      supabase: supabase.client as never,
+      dryRun: true,
+      fetcher,
+      logger: silentLogger,
+    });
+
+    expect(result).toMatchObject({ migrated: 0, failed: 1, exitCode: 1 });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

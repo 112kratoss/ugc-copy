@@ -216,9 +216,23 @@ function storageErrorStatus(error) {
     return Number.isFinite(status) ? status : null;
 }
 
+function storageObjectMatchesTarget(data, target) {
+    const size = Number(data?.size);
+    const contentType = String(data?.contentType || '').split(';')[0].trim().toLowerCase();
+    const allowedContentTypes = target.kind === 'image'
+        ? new Set(['image/jpeg', 'image/png', 'image/webp'])
+        : new Set(['video/mp4', 'video/quicktime']);
+    return Number.isFinite(size) && size > 0 && allowedContentTypes.has(contentType);
+}
+
 async function storageObjectExists(supabase, target) {
-    const result = await supabase.storage.from(target.bucket).exists(target.filePath);
-    if (result.data) return true;
+    const result = await supabase.storage.from(target.bucket).info(target.filePath);
+    if (result.data) {
+        if (!storageObjectMatchesTarget(result.data, target)) {
+            throw new Error('existing storage object is empty or has an incompatible media type');
+        }
+        return true;
+    }
     const status = storageErrorStatus(result.error);
     if (result.error && status !== 400 && status !== 404) throw result.error;
     return false;
@@ -379,7 +393,10 @@ export async function runBackfill({
 
     let migrated = 0;
     let skipped = 0;
-    let failed = 0;
+    let failed = generationId && generations.length === 0 ? 1 : 0;
+    if (failed > 0) {
+        logger.log(`[fail] generation ${generationId} is not a pending legacy-media candidate`);
+    }
 
     for (const generation of generations) {
         if (!generation.user_id || !generation.prediction_id || !generation.output_url) {
