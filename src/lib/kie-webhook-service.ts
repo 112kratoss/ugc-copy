@@ -9,7 +9,7 @@ import {
   extractKieWebhookTaskId,
   verifyKieWebhookAuthorization,
 } from '@/lib/kie-webhook';
-import { isWebhookPayloadTooLarge } from '@/lib/webhook-request';
+import { readBoundedWebhookBody } from '@/lib/webhook-request';
 
 type RouteBody = Record<string, unknown>;
 
@@ -18,7 +18,7 @@ export type KieWebhookRouteResult = {
   status: number;
 };
 
-export type KieWebhookRouteRequest = Pick<Request, 'headers' | 'json' | 'url'>;
+export type KieWebhookRouteRequest = Pick<Request, 'body' | 'headers' | 'url'>;
 
 export type KieWebhookRouteEnvironment = Record<string, string | undefined>;
 
@@ -101,7 +101,8 @@ function resolveNowMs(input: KieWebhookRouteInput) {
 
 export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Promise<KieWebhookRouteResult> {
   const { request } = input;
-  if (isWebhookPayloadTooLarge(request)) {
+  const body = await readBoundedWebhookBody(request);
+  if (!body.ok) {
     return {
       body: { error: 'Webhook payload is too large.' },
       status: 413,
@@ -110,7 +111,7 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
 
   let payload: unknown;
   try {
-    payload = await request.json();
+    payload = JSON.parse(body.text);
   } catch {
     return {
       body: { error: 'Invalid JSON payload.' },
@@ -133,7 +134,9 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
     timestamp: request.headers.get('x-webhook-timestamp'),
     signature: request.headers.get('x-webhook-signature'),
     hmacKey: configuredValue(env, 'KIE_WEBHOOK_HMAC_KEY'),
+    previousHmacKey: configuredValue(env, 'KIE_WEBHOOK_HMAC_KEY_PREVIOUS'),
     legacySecret: configuredValue(env, 'WEBHOOK_SECRET'),
+    previousLegacySecret: configuredValue(env, 'WEBHOOK_SECRET_PREVIOUS'),
     requestSecret: url.searchParams.get('secret'),
     nowSeconds: resolveNowSeconds(input),
   });

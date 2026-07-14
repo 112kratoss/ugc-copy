@@ -24,7 +24,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -34,8 +34,14 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Typecheck
-        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck production app
+        run: npm run typecheck
+
+      - name: Typecheck operational scripts
+        run: npm run typecheck:scripts
 
       - name: Build
         run: npm run build
@@ -54,6 +60,9 @@ jobs:
           REVENUECAT_REST_API_KEY: ci-placeholder-revenuecat-key
           REVENUECAT_WEBHOOK_AUTH_TOKEN: ci-placeholder-revenuecat-webhook-token
 
+      - name: Verify packaged FFmpeg runtime
+        run: npm run build:verify
+
   mobile:
     name: Mobile app
     runs-on: ubuntu-latest
@@ -67,7 +76,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ugc-mobile/package-lock.json
 
@@ -81,10 +90,9 @@ jobs:
         run: npm run typecheck
 
   supabase-migrations:
-    name: Supabase migration dry-run
+    name: Supabase migration replay
     runs-on: ubuntu-latest
-    env:
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -92,14 +100,24 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
 
-      - name: Dry-run pending migrations
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.75.0
+
+      - name: Start isolated Supabase database
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "SUPABASE_DB_URL is not configured; skipping Supabase migration dry-run."
-            exit 0
-          fi
+          set -euo pipefail
+          supabase start --exclude gotrue,realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
 
-          npm install --global supabase@2.75.0
-          supabase db push --dry-run --yes --db-url "$SUPABASE_DB_URL"
+      - name: Replay every migration from a clean database
+        run: |
+          set -euo pipefail
+          supabase db reset --local --no-seed --yes
+
+      - name: Stop isolated Supabase database
+        if: always()
+        continue-on-error: true
+        run: supabase stop --no-backup

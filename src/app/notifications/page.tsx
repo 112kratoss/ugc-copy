@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
+import { useCallback, useEffect, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -36,6 +36,21 @@ const CATEGORY_META = {
   system: { color: 'text-cyan-400 border-cyan-500/20 bg-cyan-500/10', Icon: Bell, label: 'System' },
 };
 
+function formatNotificationTime(value: string, currentTimeMs: number | null) {
+  if (currentTimeMs === null) return 'Just now';
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return 'Just now';
+  const diffMs = currentTimeMs - timestamp;
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (diffMs < minute) return 'Just now';
+  if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
+  return `${Math.floor(diffMs / day)}d ago`;
+}
+
 export default function NotificationsPage() {
   const router = useRouter();
   const [notifications, setNotifications] = useState<WebNotification[]>([]);
@@ -43,12 +58,13 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentTimeMs, setCurrentTimeMs] = useState<number | null>(null);
   const [, startTransition] = useTransition();
 
-  const fetchNotifications = async () => {
-    setError(null);
+  const fetchNotifications = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      setError(null);
       if (!session) {
         setIsAuthenticated(false);
         setLoading(false);
@@ -75,16 +91,18 @@ export default function NotificationsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchNotifications();
+    const initialFetchTimer = window.setTimeout(() => {
+      void fetchNotifications();
+    }, 0);
 
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session) {
         setIsAuthenticated(true);
-        fetchNotifications();
+        void fetchNotifications();
       } else {
         setIsAuthenticated(false);
         setNotifications([]);
@@ -93,7 +111,19 @@ export default function NotificationsPage() {
     });
 
     return () => {
+      window.clearTimeout(initialFetchTimer);
       subscription.unsubscribe();
+    };
+  }, [fetchNotifications]);
+
+  useEffect(() => {
+    const updateCurrentTime = () => setCurrentTimeMs(Date.now());
+    const initialFrame = window.requestAnimationFrame(updateCurrentTime);
+    const interval = window.setInterval(updateCurrentTime, 60_000);
+
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -151,20 +181,6 @@ export default function NotificationsPage() {
         router.push(webPath);
       });
     }
-  };
-
-  const formatTime = (value: string) => {
-    const timestamp = Date.parse(value);
-    if (!Number.isFinite(timestamp)) return 'Just now';
-    const diffMs = Date.now() - timestamp;
-    const minute = 60 * 1000;
-    const hour = 60 * minute;
-    const day = 24 * hour;
-
-    if (diffMs < minute) return 'Just now';
-    if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
-    if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
-    return `${Math.floor(diffMs / day)}d ago`;
   };
 
   return (
@@ -271,7 +287,7 @@ export default function NotificationsPage() {
                     </span>
                     <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500 font-medium">
                       <Clock className="h-3 w-3" />
-                      {formatTime(notification.createdAt)}
+                      {formatNotificationTime(notification.createdAt, currentTimeMs)}
                     </span>
                   </div>
                 </div>

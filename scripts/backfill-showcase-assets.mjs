@@ -1,10 +1,14 @@
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 
+import {
+  logBackfillExecutionMode,
+  parseBackfillExecutionMode,
+} from './backfill-execution-mode.mjs';
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
-const dryRun = process.argv.includes('--dry-run');
 
 if (!supabaseUrl || !serviceRoleKey) {
   console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment');
@@ -12,6 +16,9 @@ if (!supabaseUrl || !serviceRoleKey) {
 }
 
 const supabase = createClient(supabaseUrl, serviceRoleKey);
+const executionMode = parseBackfillExecutionMode({ supabaseUrl });
+const dryRun = executionMode.dryRun;
+logBackfillExecutionMode(executionMode);
 
 function detectCategoryFromModel(model) {
   if (model.includes('banana')) return 'image';

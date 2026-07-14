@@ -126,6 +126,7 @@ export function useWorkflowCanvasAssistant({
   }, [activeCanvasId, authHeaders]);
 
   useEffect(() => {
+    // The composer belongs to the active canvas and must not leak between canvases.
     setInput('');
     void loadAssistantState();
   }, [loadAssistantState]);

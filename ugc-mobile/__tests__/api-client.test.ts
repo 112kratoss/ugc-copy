@@ -12,6 +12,22 @@ function jsonResponse(body: unknown) {
 }
 
 describe('mobile api client caching', () => {
+  it('sends an explicit confirmation when deleting an account', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, deleted: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.deleteAccount('DELETE');
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(String(url)).toBe('https://magicbooklet.test/api/account');
+    expect(init.method).toBe('DELETE');
+    expect(JSON.parse(String(init.body))).toEqual({ confirmation: 'DELETE' });
+  });
+
   it('sends a request id with backend calls', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
     const api = createApiClient({

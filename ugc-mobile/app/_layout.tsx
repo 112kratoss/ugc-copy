@@ -1,6 +1,7 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { Stack } from 'expo-router';
+import Constants from 'expo-constants';
+import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
@@ -9,8 +10,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses } from '@/lib/notifications';
+import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { appTheme } from '@/lib/theme';
 
 export {
@@ -54,12 +57,14 @@ function RootLayoutNav() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <NotificationResponseCoordinator />
-        <SafeAreaProvider>
-          <ThemeProvider value={navigationTheme}>
-            <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
-              <StatusBar style="light" backgroundColor={appTheme.colors.background} translucent={false} />
-              <Stack
+        <OnboardingProvider>
+          <NotificationResponseCoordinator />
+          <StartupCoordinator />
+          <SafeAreaProvider>
+            <ThemeProvider value={navigationTheme}>
+              <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
+                <StatusBar style="light" backgroundColor={appTheme.colors.background} translucent={false} />
+                <Stack
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',
                   gestureEnabled: true,
@@ -72,6 +77,8 @@ function RootLayoutNav() {
                 }}
               >
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                <Stack.Screen name="update-required" options={{ headerShown: false, gestureEnabled: false, animation: 'none' }} />
                 <Stack.Screen name="auth" options={{ title: 'Sign in', presentation: 'modal', animation: reducedMotion ? 'none' : 'fade_from_bottom' }} />
                 <Stack.Screen name="create/[tool]" options={{ title: 'Create', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/index" options={{ title: 'Templates', animation: reducedMotion ? 'none' : 'simple_push' }} />
@@ -88,14 +95,52 @@ function RootLayoutNav() {
                 <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
                 <Stack.Screen name="r/[code]" options={{ title: 'Magicbooklet invite' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+                <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
-              </Stack>
-            </View>
-          </ThemeProvider>
-        </SafeAreaProvider>
+                </Stack>
+              </View>
+            </ThemeProvider>
+          </SafeAreaProvider>
+        </OnboardingProvider>
       </AuthProvider>
     </QueryClientProvider>
   );
+}
+
+function StartupCoordinator() {
+  const { api, isLoading, user } = useAuth();
+  const { isHydrated, state, storageAvailable } = useOnboarding();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (!isHydrated || isLoading) return;
+    let active = true;
+    void api.getAppVersion()
+      .then((response) => {
+        if (!active) return;
+        const currentVersion = Constants.expoConfig?.version ?? '0.0.0';
+        if (isAppVersionBelowMinimum(currentVersion, response.mobileCompatibility.minimumAppVersion)) {
+          router.replace('/update-required' as never);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [api, isHydrated, isLoading]);
+
+  useEffect(() => {
+    if (!isHydrated || isLoading || user || !storageAvailable) return;
+    if (pathname !== '/') return;
+    if (state.status === 'not_started' || state.status === 'in_progress') {
+      router.replace('/onboarding' as never);
+    }
+  }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user]);
+
+  if ((!isHydrated || isLoading) && pathname === '/') {
+    return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: appTheme.colors.background }} />;
+  }
+  return null;
 }
 
 function NotificationResponseCoordinator() {

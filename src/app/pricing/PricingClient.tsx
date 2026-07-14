@@ -185,11 +185,8 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
     useEffect(() => {
         const storedCurrency = getStoredCurrencyPreference();
 
-        if (storedCurrency) {
-            setSelectedCurrency(storedCurrency);
-        } else {
-            setSelectedCurrency(inferDefaultCurrency(initialCountryCode));
-        }
+        // Browser storage and locale are available only after the server-safe first render.
+        setSelectedCurrency(storedCurrency ?? inferDefaultCurrency(initialCountryCode));
 
         const fetchFx = async () => {
             try {

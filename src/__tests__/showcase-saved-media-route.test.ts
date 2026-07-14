@@ -32,7 +32,7 @@ const fromMock = vi.fn((table: string) => {
       select(columns: string, options?: { count?: string; head?: boolean }) {
         // Called both for data query and count query.
         const chain: Record<string, unknown> = {
-          eq: vi.fn((_column: string, _value: unknown) => {
+          eq: vi.fn(() => {
             // Count query: .select('post_id', { count: 'exact', head: true }).eq('user_id', user.id)
             if (options?.count === 'exact' && options?.head) {
               return postSavesCountResult();

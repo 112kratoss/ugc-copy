@@ -19,6 +19,10 @@ import type {
   MobilePushTokenRegistration,
   MobileCommerceSyncResponse,
   MotionGenerationRequest,
+  OnboardingEventRequest,
+  OnboardingGoal,
+  OnboardingStateResponse,
+  OnboardingStatus,
   OwnerPostListItem,
   OwnerPostsResponse,
   ProfileResponse,
@@ -33,6 +37,7 @@ import type {
   ReferralOverviewResponse,
   ReferralVisitRequest,
   ReferralVisitResponse,
+  WelcomeCreditResponse,
   PostResourceAttachment,
   PostResourceBundleInput,
   RemixSourceBundle,
@@ -384,8 +389,31 @@ export function createApiClient({
     request,
     getAppVersion: () => request<AppVersionResponse>('/api/app-version', {}, { auth: false }),
     getProfile: () => request<ProfileResponse>('/api/profile'),
+    validateProfile: (body: Partial<ProfileResponse>) =>
+      request<{ ok: true }>('/api/profile/validate', { method: 'POST', body: JSON.stringify(body) }),
     updateProfile: (body: Partial<ProfileResponse>) =>
       request<ProfileResponse>('/api/profile', { method: 'PATCH', body: JSON.stringify(body) }),
+    getOnboardingState: () => request<OnboardingStateResponse>('/api/onboarding/state'),
+    updateOnboardingState: (body: { status?: OnboardingStatus; goal?: OnboardingGoal | null }) =>
+      request<OnboardingStateResponse>('/api/onboarding/state', { method: 'PATCH', body: JSON.stringify(body) }),
+    getWelcomeCredits: () => request<WelcomeCreditResponse>('/api/credits/welcome'),
+    claimWelcomeCredits: () => request<WelcomeCreditResponse>('/api/credits/welcome/claim', {
+      method: 'POST',
+      body: JSON.stringify({ sourceSurface: 'mobile' }),
+    }),
+    recordOnboardingEvent: async (body: OnboardingEventRequest) => {
+      const installationId = await getInstallationId?.().catch(() => null);
+      if (!installationId) return { success: false as const };
+      return request<{ success: true }>('/api/onboarding/events', {
+        method: 'POST',
+        body: JSON.stringify({ ...body, installationId }),
+      });
+    },
+    deleteAccount: (confirmation: 'DELETE') =>
+      request<{ success: boolean; deleted: boolean }>('/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ confirmation }),
+      }),
     getReferralOverview: () =>
       request<ReferralOverviewResponse>('/api/referrals/me'),
     createReferralLink: (body: ReferralLinkRequest = {}) =>

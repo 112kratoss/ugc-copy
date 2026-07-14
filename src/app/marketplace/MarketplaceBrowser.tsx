@@ -85,6 +85,7 @@ export default function MarketplaceBrowser({
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   useEffect(() => {
+    // Navigation supplies a new result page; discard state from the previous query.
     setItems(initialPage.items);
     setPageInfo(initialPage.pageInfo);
     setSearchInput(initialFilters.q);

@@ -26,8 +26,9 @@ import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
 import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showcase';
 import {
   fetchWithProviderTimeout,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
+import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
+import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
 import {
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
@@ -78,6 +79,7 @@ export type ShowcasePublishRequestBody = {
 export type ShowcasePublishServiceDependencies = {
   ensureDurableGenerationMedia: typeof ensureDurableGenerationMedia;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
+  downloadAllowlistedRemoteMedia: typeof downloadAllowlistedRemoteMedia;
   getStoredMediaLocation: typeof getStoredMediaLocation;
   buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
   buildFreeGenerationReferenceBundle: typeof buildFreeGenerationReferenceBundle;
@@ -123,6 +125,8 @@ function resolveDependencies(
   return {
     ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
+    downloadAllowlistedRemoteMedia:
+      dependencies?.downloadAllowlistedRemoteMedia ?? downloadAllowlistedRemoteMedia,
     getStoredMediaLocation: dependencies?.getStoredMediaLocation ?? getStoredMediaLocation,
     buildGenerationReferenceResourceItems:
       dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
@@ -182,12 +186,14 @@ async function createShowcaseDerivative({
   category,
   dependencies,
   generationId,
+  ownerUserId,
   outputUrl,
 }: {
   adminSupabase: SupabaseClient;
   category: ShowcaseCategory;
   dependencies: ShowcasePublishServiceDependencies;
   generationId: string;
+  ownerUserId: string;
   outputUrl: string;
 }) {
   const storedLocation = dependencies.getStoredMediaLocation(outputUrl);
@@ -196,6 +202,9 @@ async function createShowcaseDerivative({
   let contentType: string | null = null;
 
   if (storedLocation) {
+    if (!isStorageObjectOwnedByUser(storedLocation.filePath, ownerUserId)) {
+      throw new Error('Generation media path does not belong to its owner.');
+    }
     sourceName = storedLocation.filePath.split('/').pop() || `${generationId}.${inferExtension(outputUrl, category)}`;
     const { data, error } = await adminSupabase.storage
       .from(storedLocation.bucket)
@@ -208,22 +217,13 @@ async function createShowcaseDerivative({
     fileBlob = data;
     contentType = data.type || null;
   } else if (outputUrl.startsWith('http')) {
-    const response = await dependencies.fetchWithProviderTimeout(
-      outputUrl,
-      {},
-      PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-      fetch,
-      'Showcase source media download',
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch source media from ${outputUrl}`);
-    }
-
-    const url = new URL(outputUrl);
-    sourceName = path.basename(url.pathname) || `${generationId}.${inferExtension(outputUrl, category)}`;
-    fileBlob = await response.blob();
-    contentType = response.headers.get('content-type');
+    const downloaded = await dependencies.downloadAllowlistedRemoteMedia({
+      url: outputUrl,
+      kind: category,
+    });
+    sourceName = downloaded.sourceName || `${generationId}.${inferExtension(outputUrl, category)}`;
+    fileBlob = downloaded.blob;
+    contentType = downloaded.blob.type || null;
   } else {
     throw new Error('Unsupported media source for showcase publishing');
   }
@@ -518,6 +518,7 @@ export async function publishGenerationToShowcaseForRoute({
       nextShowcaseAssetPath = await createShowcaseDerivative({
         adminSupabase,
         generationId,
+        ownerUserId: userId,
         outputUrl: generation.output_url,
         category: detectedCategory ?? 'image',
         dependencies: resolvedDependencies,

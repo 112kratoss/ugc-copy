@@ -26,7 +26,12 @@ export function getSafeAuthNextPath(
 
 export function buildProfileSetupPath(next: string | null | undefined): string {
   const safeNext = getSafeAuthNextPath(next);
-  return `/profile?welcome=1&next=${encodeURIComponent(safeNext)}`;
+  return `/profile?welcome=1&next=${encodeURIComponent(buildWelcomeRewardPath(safeNext))}`;
+}
+
+export function buildWelcomeRewardPath(next: string | null | undefined): string {
+  const safeNext = getSafeAuthNextPath(next);
+  return `/welcome-reward?next=${encodeURIComponent(safeNext)}`;
 }
 
 export function buildAuthContinuePath(next: string | null | undefined): string {

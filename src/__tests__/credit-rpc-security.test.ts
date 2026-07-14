@@ -45,6 +45,7 @@ describe('credit mutation security boundary', () => {
     const sql = readAllMigrations();
     const signatures = [
       'start_ai_usage_event(uuid, integer, text, text, text, text, text, text)',
+      'settle_ai_usage_event(uuid, text, text, jsonb, text)',
       'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
       'attach_generation_provider_task(uuid, text)',
       'settle_generation_failed(text, timestamp with time zone)',

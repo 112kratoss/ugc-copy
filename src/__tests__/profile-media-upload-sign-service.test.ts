@@ -79,6 +79,22 @@ describe('createProfileMediaUploadIntent', () => {
       body: { error: 'Profile images must be 5MB or smaller.' },
     });
 
+    await expect(createProfileMediaUploadIntent({
+      body: {
+        role: 'avatar',
+        fileName: 'legacy.bmp',
+        mimeType: 'image/bmp',
+        sizeBytes: 1234,
+      },
+      userId: 'user-1',
+      client: clientFactory,
+      createUploadId: () => 'upload-id',
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Upload a valid image file.' },
+    });
+
     expect(clientFactory).not.toHaveBeenCalled();
   });
 

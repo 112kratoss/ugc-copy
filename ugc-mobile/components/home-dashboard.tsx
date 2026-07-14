@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { HomeSideMenu } from '@/components/home-side-menu';
+import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { TextPreviewCard } from '@/components/text-preview-card';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
@@ -195,6 +196,8 @@ export function HomeDashboard() {
           activeGenerationCount={activeGenerationCount}
           reduceMotion={reduceMotion}
         />
+
+        <OnboardingResumeCard />
 
         <View style={{ gap: 12 }}>
           <SectionHeader title="Start with a format" actionLabel="All tools" onPress={() => router.push('/(tabs)/creator' as never)} />

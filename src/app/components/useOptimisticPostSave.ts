@@ -96,6 +96,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   const savedStateLookupKey = savedStateLookupIds.join(',');
 
   useEffect(() => {
+    // Server pagination/filter changes replace the optimistic snapshot.
     setItems(initialItems);
     setSavedItemIds(deriveSavedIds(initialItems));
   }, [initialItems]);

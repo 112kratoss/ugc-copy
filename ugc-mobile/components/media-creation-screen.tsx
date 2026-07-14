@@ -40,7 +40,9 @@ import {
   SurfaceSection,
 } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts } from '@/lib/creation-draft-resume';
 import { useReducedMotion } from '@/lib/motion';
+import { trackOnboardingEvent } from '@/lib/onboarding';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
   applyCatalogModelDefaults,
@@ -170,6 +172,7 @@ export function MediaCreationScreen({
   insideTab = false,
   initialPrompt,
   remixSource,
+  guided = false,
 }: {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
@@ -178,6 +181,7 @@ export function MediaCreationScreen({
     generationId?: string | null;
     postId?: string | null;
   };
+  guided?: boolean;
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -204,6 +208,9 @@ export function MediaCreationScreen({
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
   const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const [guidedReferencesExpanded, setGuidedReferencesExpanded] = useState(false);
+  const [draftsHydrated, setDraftsHydrated] = useState(false);
+  const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [isPromptFocused, setIsPromptFocused] = useState(false);
@@ -217,6 +224,36 @@ export function MediaCreationScreen({
   useEffect(() => () => {
     generationPollControllerRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (initialPrompt || remixSource?.generationId) {
+      setDraftsHydrated(true);
+      return () => {
+        active = false;
+      };
+    }
+    void loadPersistedCreationDrafts().then((persisted) => {
+      if (!active) return;
+      if (persisted) {
+        setImageDraft(persisted.image);
+        setVideoDraft(persisted.video);
+        setMotionDraft(persisted.motion);
+      }
+      setDraftsHydrated(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [initialPrompt, remixSource?.generationId]);
+
+  useEffect(() => {
+    if (!draftsHydrated) return;
+    const timer = setTimeout(() => {
+      void persistCreationDrafts({ image: imageDraft, video: videoDraft, motion: motionDraft });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [draftsHydrated, imageDraft, motionDraft, videoDraft]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -360,6 +397,14 @@ export function MediaCreationScreen({
     : bottomInset + 36;
   const issueCount = validation.errors.length + validation.warnings.length + (message ? 1 : 0) + (remixRestoreWarning ? 1 : 0);
   const generateDisabled = isGenerating || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
+  const openAuthForCurrentDraft = () => {
+    router.push({
+      pathname: '/auth',
+      params: {
+        returnTo: `/create/${currentDraft.tool}${guided ? '?guided=1' : ''}`,
+      },
+    } as never);
+  };
 
   const changeTool = (tool: CreatorToolId) => {
     if (isGenerating) {
@@ -368,6 +413,7 @@ export function MediaCreationScreen({
     }
     setActiveTool(tool);
     setAdvancedExpanded(false);
+    setGuidedReferencesExpanded(false);
     setMessage(null);
     setPromptMessage(null);
     setIsPromptFocused(false);
@@ -570,7 +616,7 @@ export function MediaCreationScreen({
       return;
     }
     if (!user) {
-      router.push('/auth');
+      openAuthForCurrentDraft();
       return;
     }
     setMessage(null);
@@ -593,7 +639,7 @@ export function MediaCreationScreen({
   const generate = async () => {
     if (activeGenerationRequestKeyRef.current) return;
     if (!user) {
-      router.push('/auth');
+      openAuthForCurrentDraft();
       return;
     }
     if (!currentCatalogModel || activeQuote.status !== 'ready') {
@@ -622,6 +668,7 @@ export function MediaCreationScreen({
     const pollController = new AbortController();
     generationPollControllerRef.current = pollController;
     setIsGenerating(true);
+    if (guided) void trackOnboardingEvent(api, 'first_generation_started', { goal: currentDraft.tool, step: 'creator' });
     try {
       let started: GenerationStartResponse;
       let finalStatus: GenerationStatusResponse;
@@ -656,6 +703,11 @@ export function MediaCreationScreen({
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } else {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        void clearPersistedCreationDrafts();
+        if (guided) {
+          setShowNotificationPrompt(true);
+          void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: currentDraft.tool, step: 'creator' });
+        }
       }
     } catch (error) {
       if (pollController.signal.aborted) return;
@@ -709,6 +761,37 @@ export function MediaCreationScreen({
     }
 
     if (section === 'references') {
+      if (guided) {
+        return (
+          <DisclosureSection
+            title="References (optional)"
+            body="Add product, face, style, frame, or motion references when you need tighter creative control."
+            accent={activeTool === 'image' ? 'image' : activeTool === 'video' ? 'video' : 'motion'}
+            expanded={guidedReferencesExpanded}
+            onToggle={() => setGuidedReferencesExpanded((expanded) => !expanded)}
+          >
+            <CreationReferences
+              catalog={catalog}
+              activeTool={activeTool}
+              imageDraft={imageDraft}
+              videoDraft={videoDraft}
+              motionDraft={motionDraft}
+              onImageChange={setImageDraft}
+              onVideoChange={setVideoDraft}
+              onMotionChange={setMotionDraft}
+              onUploadImageReferences={() => uploadImageReferences('image')}
+              onUploadVideoReferences={() => uploadImageReferences('video')}
+              onUploadStart={() => uploadSingleImage('start')}
+              onUploadEnd={() => uploadSingleImage('end')}
+              onUploadCharacter={() => uploadSingleImage('character')}
+              onUploadMotionReference={() => uploadReferenceVideo('motion')}
+              onUseImageHandle={(handle) => setImageDraft((draft) => ({ ...draft, prompt: appendHandle(draft.prompt, handle) }))}
+              onUseVideoHandle={(handle) => setVideoDraft((draft) => ({ ...draft, prompt: appendHandle(draft.prompt, handle), referenceMode: 'elements' }))}
+              isUploading={isUploading}
+            />
+          </DisclosureSection>
+        );
+      }
       return (
         <SurfaceSection
           eyebrow={activeTool === 'motion' ? 'Required media' : 'Step 1'}
@@ -830,7 +913,15 @@ export function MediaCreationScreen({
       >
         <CreateHeader meta={meta} activeTool={activeTool} onChange={changeTool} />
 
-        {insideTab ? <TemplateCatalogEntry /> : null}
+        {guided ? (
+          <GuidedCreatorIntro
+            tool={activeTool}
+            prompt={currentDraft.prompt}
+            onSelectPrompt={updatePrompt}
+          />
+        ) : null}
+
+        {insideTab && !guided ? <TemplateCatalogEntry /> : null}
 
         {catalogNotice ? (
           <SurfaceSection eyebrow="Catalog update" title="Model updated" body={catalogNotice} accent={meta.accent}>
@@ -887,6 +978,26 @@ export function MediaCreationScreen({
             }}
           />
         ) : null}
+
+        {showNotificationPrompt ? (
+          <SurfaceSection
+            eyebrow="Stay in the loop"
+            title="Know when longer creations finish"
+            body="Magicbooklet only asks for notification permission after you choose Enable."
+            accent="primary"
+          >
+            <PrimaryButton
+              label="Enable notifications"
+              onPress={() => {
+                void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
+                  registerForMobilePushNotifications(api, { requestPermission: true })
+                ));
+                setShowNotificationPrompt(false);
+              }}
+            />
+            <SecondaryButton label="Not now" onPress={() => setShowNotificationPrompt(false)} />
+          </SurfaceSection>
+        ) : null}
       </ScrollView>
       {showFloatingReviewBar ? (
         <FloatingGenerateReviewBar
@@ -901,6 +1012,77 @@ export function MediaCreationScreen({
         />
       ) : null}
     </View>
+  );
+}
+
+const GUIDED_PROMPTS: Record<CreatorToolId, string[]> = {
+  image: [
+    'Premium product photo on a clean studio set with soft natural shadows',
+    'Bold social campaign visual with cinematic lighting and clear subject focus',
+    'Editorial lifestyle image with warm light and authentic texture',
+  ],
+  video: [
+    'A polished product reveal with a slow camera push and natural sound',
+    'A fast social ad with three clear beats, energetic motion, and a strong finish',
+    'A cinematic lifestyle clip with soft handheld movement and warm evening light',
+  ],
+  motion: [
+    'Match the reference movement naturally while keeping the character consistent',
+    'Use smooth confident movement with stable framing and realistic timing',
+    'Follow the reference motion closely with subtle expression and clean transitions',
+  ],
+};
+
+function GuidedCreatorIntro({
+  tool,
+  prompt,
+  onSelectPrompt,
+}: {
+  tool: CreatorToolId;
+  prompt: string;
+  onSelectPrompt: (prompt: string) => void;
+}) {
+  const meta = TOOL_META[tool];
+  return (
+    <SurfaceSection
+      eyebrow="Your first creation"
+      title={`Start with a ${meta.title.toLowerCase()} idea`}
+      body="Choose a starter or write your own. Nothing runs or spends credits until you press Generate."
+      accent={meta.accent}
+    >
+      <View style={{ gap: 8 }}>
+        {GUIDED_PROMPTS[tool].map((starter, index) => {
+          const active = prompt === starter;
+          const color = accentColor(meta.accent);
+          return (
+            <Pressable
+              key={starter}
+              accessibilityRole="button"
+              accessibilityLabel={`Starter ${index + 1}. ${starter}`}
+              accessibilityState={{ selected: active }}
+              onPress={() => onSelectPrompt(starter)}
+              style={({ pressed }) => ({
+                minHeight: 58,
+                borderRadius: appTheme.radii.lg,
+                borderCurve: 'continuous',
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? `${color}8a` : appTheme.colors.border,
+                backgroundColor: active ? `${color}18` : appTheme.colors.surfaceStrong,
+                paddingHorizontal: 14,
+                paddingVertical: 11,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <AppText variant="caption" color={active ? color : appTheme.colors.textSecondary}>
+                {starter}
+              </AppText>
+            </Pressable>
+          );
+        })}
+      </View>
+      <ReadinessRow label="Tip 1" body="Describe the subject, setting, lighting, and camera or motion in one clear sentence." state="neutral" />
+      <ReadinessRow label="Tip 2" body="Review the live credit cost in the Generate section before starting." state="neutral" />
+    </SurfaceSection>
   );
 }
 

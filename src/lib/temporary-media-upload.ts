@@ -28,8 +28,9 @@ function inferUploadKind(file: File): 'image' | 'video' | 'audio' {
 
 export async function uploadMediaToTemporaryStorage(
   file: File,
-  _ownerUserId = ''
+  ownerUserId = ''
 ): Promise<{ signedUrl: string; storagePath: string }> {
+  void ownerUserId;
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.access_token) {
     throw new Error('Please log in to upload files.');

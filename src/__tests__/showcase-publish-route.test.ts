@@ -638,11 +638,10 @@ describe('/api/showcase/publish route', () => {
       'fetch',
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         requestInit = init;
-        return {
-          ok: true,
-          headers: new Headers({ 'content-type': 'image/jpeg' }),
-          blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
-        } as Response;
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        });
       })
     );
 
@@ -687,10 +686,9 @@ describe('/api/showcase/publish route', () => {
     };
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        headers: new Headers({ 'content-type': 'image/jpeg' }),
-        blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
+      vi.fn(async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
       }))
     );
 
@@ -744,10 +742,9 @@ describe('/api/showcase/publish route', () => {
     };
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        headers: new Headers({ 'content-type': 'image/jpeg' }),
-        blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
+      vi.fn(async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
       }))
     );
 

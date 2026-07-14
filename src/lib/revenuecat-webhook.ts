@@ -2,7 +2,6 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 import {
   buildMobileExternalOrderId,
-  resolveMobileCreditProduct,
   type MobilePurchaseProvider,
 } from '@/lib/mobile-commerce';
 
@@ -58,9 +57,6 @@ export function parseRevenueCatRefundEvent(payload: unknown): ParseResult {
   }
 
   const productId = nonEmptyString(event.product_id);
-  if (!productId || !resolveMobileCreditProduct(productId)) {
-    return { kind: 'ignored' };
-  }
 
   const eventId = nonEmptyString(event.id);
   const transactionId = nonEmptyString(event.transaction_id)
@@ -70,7 +66,8 @@ export function parseRevenueCatRefundEvent(payload: unknown): ParseResult {
   const eventTimestampMs = event.event_timestamp_ms;
 
   if (
-    !eventId
+    !productId
+    || !eventId
     || !transactionId
     || !userId
     || !isUuid(userId)
@@ -79,7 +76,7 @@ export function parseRevenueCatRefundEvent(payload: unknown): ParseResult {
     || !Number.isSafeInteger(eventTimestampMs)
     || eventTimestampMs <= 0
   ) {
-    return { kind: 'invalid', message: 'Incomplete RevenueCat credit refund event.' };
+    return { kind: 'invalid', message: 'Incomplete RevenueCat purchase adjustment event.' };
   }
 
   return {

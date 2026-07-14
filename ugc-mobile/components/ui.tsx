@@ -704,6 +704,7 @@ export function PrimaryButton({
   disabled,
   loading,
   accent = 'primary',
+  size = 'default',
   accessibilityHint,
 }: {
   label: string;
@@ -711,6 +712,7 @@ export function PrimaryButton({
   disabled?: boolean;
   loading?: boolean;
   accent?: ToolAccent;
+  size?: 'default' | 'roomy';
   accessibilityHint?: string;
 }) {
   const fillColor = accentColor(accent);
@@ -735,7 +737,7 @@ export function PrimaryButton({
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
         style={({ pressed }) => ({
-          minHeight: appTheme.touch.default,
+          minHeight: size === 'roomy' ? appTheme.touch.roomy : appTheme.touch.default,
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,

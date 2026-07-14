@@ -473,6 +473,7 @@ export default function CreatorProfileCard({
   };
 
   useEffect(() => {
+    // A newly loaded profile replaces the editable draft and its validation state.
     setForm(initialProfile);
     setSavedProfile(initialProfile);
     setFieldErrors(EMPTY_ERRORS);

@@ -237,9 +237,10 @@ export async function loadRemixSourceBundle(
 
   const recipeInputMedia = !includeInputMedia && options?.postId
     ? await loadGenerationRecipeRemixInputMediaByPostId({
-        postId: options.postId,
-        generationId: typedGeneration.id,
-        adminSupabase,
+      postId: options.postId,
+      generationId: typedGeneration.id,
+      viewerUserId: user.id,
+      adminSupabase,
       })
     : [];
   const accessibleInputMedia = includeInputMedia ? inputMedia : recipeInputMedia;

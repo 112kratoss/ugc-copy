@@ -97,6 +97,7 @@ const COMPLETE_BACKEND_ENVIRONMENT = {
   CRON_SECRET: 'cron-secret',
   OPS_READ_SECRET: 'ops-read-secret',
   KIE_AI_API_KEY: 'kie-key',
+  KIE_PROVIDER_WEBHOOK_SECRET: 'kie-provider-webhook-secret',
   KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
   NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp-key',
   RAZORPAY_KEY_SECRET: 'rzp-secret',

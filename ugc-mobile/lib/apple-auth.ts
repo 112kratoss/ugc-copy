@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 
 type AppleAuthClient = Pick<SupabaseClient['auth'], 'signInWithIdToken' | 'updateUser'>;
 
@@ -49,11 +50,18 @@ export async function signInWithNativeApple(supabase: { auth: AppleAuthClient })
     throw new Error('Apple sign-in is not available on this device.');
   }
 
+  const rawNonce = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '');
+  const hashedNonce = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    rawNonce,
+  );
+
   const credential = await AppleAuthentication.signInAsync({
     requestedScopes: [
       AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
       AppleAuthentication.AppleAuthenticationScope.EMAIL,
     ],
+    nonce: hashedNonce,
   });
 
   if (!credential.identityToken) {
@@ -63,7 +71,7 @@ export async function signInWithNativeApple(supabase: { auth: AppleAuthClient })
   const { error } = await supabase.auth.signInWithIdToken({
     provider: 'apple',
     token: credential.identityToken,
-    access_token: credential.authorizationCode ?? undefined,
+    nonce: rawNonce,
   });
 
   if (error) {

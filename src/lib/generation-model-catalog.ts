@@ -348,7 +348,6 @@ function buildRevision(models: GenerationModelDescriptor[]): string {
 }
 
 export function buildGenerationModelCatalog({
-  platform: _platform,
   schemaVersion,
 }: {
   platform: CatalogPlatform;

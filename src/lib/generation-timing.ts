@@ -42,6 +42,10 @@ const DAY_MS = 24 * HOUR_MS;
 const MIN_PROGRESS_PERCENT = 8;
 const MAX_ACTIVE_PROGRESS_PERCENT = 96;
 
+export function getCurrentTimestampMs(): number {
+  return Date.now();
+}
+
 const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'nano-banana-2': 120_000,
   'nano-banana-pro': 165_000,

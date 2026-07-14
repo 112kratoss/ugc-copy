@@ -1,6 +1,7 @@
 'use client';
 
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
+import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -412,7 +413,14 @@ function ImageReferencesCard({
               <div className="flex gap-3">
                 <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
                   {previewUrl ? (
-                    <img src={previewUrl} alt="" className="h-full w-full object-cover" />
+                    <Image
+                      unoptimized
+                      src={previewUrl}
+                      alt=""
+                      width={64}
+                      height={64}
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-[0.16em] text-zinc-500">
                       Missing
@@ -946,7 +954,14 @@ function LegacyHandledReferencesCard({
               <div className="flex gap-3">
                 <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
                   {previewUrl ? (
-                    <img src={previewUrl} alt="" className="h-full w-full object-cover" />
+                    <Image
+                      unoptimized
+                      src={previewUrl}
+                      alt=""
+                      width={64}
+                      height={64}
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-[0.16em] text-zinc-500">
                       Missing
@@ -1989,10 +2004,13 @@ function NodeEditorContent({
                   }}
                 />
                 {imageInput.imageUrl && (
-                  <img
+                  <Image
+                    unoptimized
                     src={getDisplayMediaUrl(imageInput.storagePath || imageInput.imageUrl || '')}
                     alt=""
-                    className="w-full rounded-2xl border border-white/10"
+                    width={1200}
+                    height={800}
+                    className="h-auto w-full rounded-2xl border border-white/10"
                   />
                 )}
                 <SeedanceAssetStatusCard

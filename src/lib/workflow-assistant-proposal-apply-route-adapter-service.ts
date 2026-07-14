@@ -2,7 +2,6 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
-import { PATCH as patchWorkflowCanvas } from '@/app/api/workflow-canvases/[id]/route';
 import { enforceWorkflowCanvasMutationRateLimit } from '@/app/api/workflow-canvases/workflowCanvasRateLimit';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { authenticateRequest } from '@/lib/server-helpers';
@@ -19,7 +18,6 @@ type WorkflowAssistantProposalApplyRouteDependencies = {
   applyWorkflowAssistantProposalForRoute?: typeof applyWorkflowAssistantProposalForRoute;
   authenticateRequest?: typeof authenticateRequest;
   enforceWorkflowCanvasMutationRateLimit?: typeof enforceWorkflowCanvasMutationRateLimit;
-  patchWorkflowCanvas?: typeof patchWorkflowCanvas;
 };
 
 function resolveDependencies(dependencies: WorkflowAssistantProposalApplyRouteDependencies | undefined) {
@@ -29,7 +27,6 @@ function resolveDependencies(dependencies: WorkflowAssistantProposalApplyRouteDe
     authenticateRequest: dependencies?.authenticateRequest ?? authenticateRequest,
     enforceWorkflowCanvasMutationRateLimit:
       dependencies?.enforceWorkflowCanvasMutationRateLimit ?? enforceWorkflowCanvasMutationRateLimit,
-    patchWorkflowCanvas: dependencies?.patchWorkflowCanvas ?? patchWorkflowCanvas,
   };
 }
 
@@ -58,29 +55,6 @@ async function handleWorkflowAssistantProposalApplyPOST(
     proposalId,
     userId,
     supabase,
-    applyCanvasPatch: async ({ graph, baseRevision }) => {
-      const patchResponse = await dependencies.patchWorkflowCanvas(
-        new Request(`http://localhost/api/workflow-canvases/${id}`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: request.headers.get('Authorization') || '',
-          },
-          body: JSON.stringify({
-            graph,
-            baseRevision,
-          }),
-        }) as never,
-        { params: Promise.resolve({ id }) },
-        { skipRateLimit: true },
-      );
-
-      return {
-        ok: patchResponse.ok,
-        status: patchResponse.status,
-        body: await patchResponse.json().catch(() => ({})),
-      };
-    },
   }));
 }
 

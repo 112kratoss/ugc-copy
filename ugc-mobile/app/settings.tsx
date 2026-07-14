@@ -1,9 +1,11 @@
 import { router } from 'expo-router';
-import { Bell, ChevronRight, CreditCard, Gift, UserRound } from 'lucide-react-native';
-import { Pressable, View } from 'react-native';
+import { Bell, ChevronRight, CreditCard, FileText, Gift, ShieldCheck, Trash2, UserRound } from 'lucide-react-native';
+import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
+import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { useAuth } from '@/lib/auth';
+import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
 
 export default function SettingsScreen() {
@@ -16,6 +18,8 @@ export default function SettingsScreen() {
         title="Account settings."
         body={user ? 'Manage profile details, credits, and app preferences.' : 'Sign in to manage your Magicbooklet account.'}
       />
+
+      <OnboardingResumeCard compact />
 
       <SettingsCard
         icon={<UserRound size={22} color={appTheme.colors.primary} />}
@@ -44,6 +48,36 @@ export default function SettingsScreen() {
         body="Review mobile notification history and creator updates."
         onPress={() => router.push('/studio' as never)}
       />
+
+      <SettingsCard
+        icon={<ShieldCheck size={22} color="#22d3ee" />}
+        title="Privacy policy"
+        body="Review how Magic Booklet collects, uses, stores, and deletes data."
+        onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
+      />
+
+      <SettingsCard
+        icon={<FileText size={22} color={appTheme.colors.muted} />}
+        title="Terms of service"
+        body="Review the terms that apply to accounts, credits, and creations."
+        onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
+      />
+
+      {user ? (
+        <SettingsCard
+          icon={<Trash2 size={22} color={appTheme.colors.danger} />}
+          title="Delete account"
+          body="Permanently delete your account and personal data."
+          onPress={() => router.push('/delete-account' as never)}
+        />
+      ) : (
+        <SettingsCard
+          icon={<Trash2 size={22} color={appTheme.colors.danger} />}
+          title="Account deletion"
+          body="See how to request deletion of an existing Magic Booklet account."
+          onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
+        />
+      )}
     </Screen>
   );
 }

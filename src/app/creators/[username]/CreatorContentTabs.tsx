@@ -194,6 +194,7 @@ export function CreatorContentTabs({
       return;
     }
     if (items.some((item) => item.id === postId)) {
+      // The URL can directly select an item already present in the client page.
       setSelectedItemId(postId);
       return;
     }
@@ -260,10 +261,11 @@ export function CreatorContentTabs({
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [initialData.profile.username, pageInfo.hasMore, pageInfo.nextOffset, session?.access_token, setItems, setSavedItemIds]);
+  }, [initialData.profile.username, pageInfo.hasMore, pageInfo.nextOffset, session, setItems, setSavedItemIds]);
 
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') {
+      // Record the browser capability after mount so server markup remains deterministic.
       setObserverSupported(false);
       return;
     }

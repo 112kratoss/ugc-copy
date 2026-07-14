@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  "include": [
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    ".next",
+    "node_modules",
+    "src/__tests__",
+    "ugc-mobile"
+  ]
+}

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 
+import ffmpegStaticPath from 'ffmpeg-static';
 import sharp from 'sharp';
 
 const PREVIEW_MAX_SIZE = 720;
@@ -72,10 +73,14 @@ async function runFfmpeg(inputPath: string, framePath: string, seekTime: string)
   });
 }
 
-function getFfmpegPath() {
+export function getFfmpegPath() {
   if (process.env.FFMPEG_PATH) {
     return process.env.FFMPEG_PATH;
   }
 
-  return path.join('node_modules', 'ffmpeg-static', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  if (!ffmpegStaticPath) {
+    throw new Error('ffmpeg-static does not provide a binary for this platform. Configure FFMPEG_PATH.');
+  }
+
+  return ffmpegStaticPath;
 }

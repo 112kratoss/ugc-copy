@@ -86,7 +86,7 @@ describe('provider fetch', () => {
     const timeoutSignal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     const globalFetcher = vi.fn(async () => ({ ok: true }) as Response);
-    const injectedFetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({ ok: true }) as Response);
+    const injectedFetcher = vi.fn(async () => ({ ok: true }) as Response);
     vi.stubGlobal('fetch', globalFetcher);
 
     await fetchWithProviderTimeout(

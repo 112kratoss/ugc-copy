@@ -711,9 +711,23 @@ async function loadGenerationRecipeInputMedia(params: {
 export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
   postId: string;
   generationId: string;
+  viewerUserId: string;
   adminSupabase?: SupabaseClient;
 }): Promise<GenerationInputMediaItem[]> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
+  const entitlement = await getPostResourceBundleDetailByPostId(params.postId, {
+    viewerUserId: params.viewerUserId,
+    adminSupabase,
+  });
+  if (
+    !entitlement
+    || !entitlement.viewerCanAccess
+    || !entitlement.allowRemix
+    || entitlement.post?.generationId !== params.generationId
+  ) {
+    return [];
+  }
+
   const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
   if (!post || !isGenerationRecipePostEligible(post) || !post.user_id || post.generation_id !== params.generationId) {
     return [];
@@ -1861,10 +1875,14 @@ export async function getPostResourceBundleDetailByPostId(
   options?: {
     viewerUserId?: string | null;
     countryCode?: string | null;
+    adminSupabase?: SupabaseClient;
   }
 ): Promise<PostResourceBundleDetail | null> {
-  const { viewerUserId = null, countryCode = null } = options ?? {};
-  const adminSupabase = createServiceClient();
+  const {
+    viewerUserId = null,
+    countryCode = null,
+    adminSupabase = createServiceClient(),
+  } = options ?? {};
   const selectBundle = (selectColumns: string) =>
     adminSupabase
       .from('post_resource_bundles')

@@ -1,6 +1,7 @@
 type AuthRouter<Href> = {
   canGoBack?: () => boolean;
   back: () => void;
+  dismissTo?: (href: Href) => void;
   replace: (href: Href) => void;
 };
 
@@ -23,13 +24,14 @@ export function completeAuthScreen<Href>(
   router: AuthRouter<Href>,
   returnTo: string | string[] | null | undefined
 ) {
-  const destination = normalizeAuthReturnTo(returnTo);
-  if (destination) {
-    router.replace(destination as unknown as Href);
+  const destination = (normalizeAuthReturnTo(returnTo) ?? '/(tabs)') as unknown as Href;
+
+  if (router.dismissTo) {
+    router.dismissTo(destination);
     return;
   }
 
-  leaveAuthScreen(router);
+  router.replace(destination);
 }
 
 export function leaveAuthScreen<Href>(router: AuthRouter<Href>) {

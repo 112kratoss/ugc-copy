@@ -150,6 +150,30 @@ export const MOBILE_COMMERCE_RESTORE_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const ACCOUNT_DELETION_RATE_LIMIT = {
+  scope: 'account:delete',
+  limit: 3,
+  windowSeconds: 60 * 60,
+} as const;
+
+export const ONBOARDING_STATE_RATE_LIMIT = {
+  scope: 'onboarding:state',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const ONBOARDING_EVENT_RATE_LIMIT = {
+  scope: 'onboarding:event',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const WELCOME_CREDIT_CLAIM_RATE_LIMIT = {
+  scope: 'credits:welcome-claim',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const MOBILE_PUSH_TOKEN_REGISTER_RATE_LIMIT = {
   scope: 'mobile-push-token:register',
   limit: 20,

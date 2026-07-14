@@ -151,6 +151,10 @@ function createSupabaseMock(
       return { data: true, error: null };
     }
 
+    if (fn === 'claim_generation_start_request') {
+      return { data: 'claimed', error: null };
+    }
+
     if (fn === 'check_backend_rate_limit') {
       return {
         data: {
@@ -387,6 +391,7 @@ describe('/api/generate-video route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-single-shot-start-1',
           'x-request-id': 'video-rate-limit-1',
         },
         body: JSON.stringify({
@@ -475,6 +480,7 @@ describe('/api/generate-video route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-multi-shot-start-1',
         },
         body: JSON.stringify({
           model: 'kling-3.0-video',
@@ -525,6 +531,7 @@ describe('/api/generate-video route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-frame-remix-start-1',
         },
         body: JSON.stringify({
           model: 'kling-3.0-video',
@@ -587,6 +594,7 @@ describe('/api/generate-video route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-seedance-start-1',
         },
         body: JSON.stringify({
           model: 'seedance-2',
@@ -663,6 +671,7 @@ describe('/api/generate-video route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-kling-elements-start-1',
         },
         body: JSON.stringify({
           model: 'kling-3.0-video',

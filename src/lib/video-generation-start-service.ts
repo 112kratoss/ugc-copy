@@ -10,6 +10,7 @@ import {
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
+  hashGenerationStartRequest,
   withGenerationStartIdempotency,
 } from '@/lib/generation-start-idempotency';
 import type { ImageElementDescriptor } from '@/lib/image-elements';
@@ -126,6 +127,7 @@ export async function startVideoGenerationForRoute({
     client: adminSupabase,
     userId,
     idempotencyKey: getGenerationStartIdempotencyKey(request, body),
+    requestHash: hashGenerationStartRequest(body),
     owner: getGenerationStartLockOwner(request),
     start: (clientRequestKeyHash) => startVideoGeneration({
       supabase,

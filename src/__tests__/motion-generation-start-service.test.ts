@@ -51,6 +51,10 @@ function createClientMock({
       return { data: true, error: null };
     }
 
+    if (fn === 'claim_generation_start_request') {
+      return { data: 'claimed', error: null };
+    }
+
     return { data: null, error: null };
   });
 

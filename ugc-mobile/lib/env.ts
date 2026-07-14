@@ -43,6 +43,8 @@ export const env = {
   revenueCatIosApiKey: process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY ?? '',
   revenueCatAndroidApiKey: process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY ?? '',
   easProjectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID ?? '',
+  appStoreUrl: process.env.EXPO_PUBLIC_APP_STORE_URL ?? 'https://apps.apple.com/app/id6773286115',
+  playStoreUrl: process.env.EXPO_PUBLIC_PLAY_STORE_URL ?? 'https://play.google.com/store/apps/details?id=com.magicbooklet.mobile',
 };
 
 export function getMissingMobileEnvKeys() {

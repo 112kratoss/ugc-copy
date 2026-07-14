@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import type {
   AppVersionResponse,
   MediaReadUrlResponse,
@@ -92,6 +93,20 @@ const expectedEndpointKeys = [
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {
+  it('keeps response fixtures inside the exhaustive mobile operation registry', () => {
+    const registeredPaths = new Set([
+      ...Object.values(mobileApiOperationsV1.operations).map((operation) => operation.path),
+      ...mobileApiOperationsV1.fallbackRoutes.map((operation) => operation.path),
+    ]);
+    expect(mobileApiOperationsV1.schemaVersion).toBe(contract.schemaVersion);
+    expect(Object.values(contract.endpoints).every((endpoint) => registeredPaths.has(endpoint.path))).toBe(true);
+    expect(Object.values(mobileApiOperationsV1.operations).every((operation) => (
+      operation.path.startsWith('/api/')
+      && ['GET', 'POST', 'PATCH', 'DELETE'].includes(operation.method)
+      && ['required', 'optional', 'none'].includes(operation.auth)
+    ))).toBe(true);
+  });
+
   it('documents the core mobile backend endpoints and cache boundaries', () => {
     expect(contract.schemaVersion).toBe(1);
     expect(Object.keys(contract.endpoints)).toEqual(expectedEndpointKeys);

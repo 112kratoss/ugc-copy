@@ -8,6 +8,7 @@ type CreditTransactionRow = {
   credits: number;
   amount?: number;
   credit_reversed_amount_subunits?: number;
+  credit_effect_applied?: boolean;
   razorpay_payment_id?: string;
   status: 'pending' | 'success';
 } | null;
@@ -23,6 +24,7 @@ function createAdminSupabaseMock(state: {
   marketplaceOrder?: OrderRow;
   bundleOrder?: OrderRow;
   bundleRpcMode?: 'success' | 'fail-return' | 'error';
+  creditRpcMode?: 'success' | 'false-settled' | 'false-mismatched' | 'false-unsettled' | 'error';
 }) {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
@@ -62,8 +64,23 @@ function createAdminSupabaseMock(state: {
       rpcCalls.push({ name, payload });
 
       if (name === 'add_credits' && state.creditTransaction) {
+        if (state.creditRpcMode === 'error') {
+          return { data: null, error: { message: 'credit rpc failed' } };
+        }
+
+        if (state.creditRpcMode === 'false-unsettled') {
+          return { data: false, error: null };
+        }
+
         state.creditTransaction.status = 'success';
-        return { data: true, error: null };
+        state.creditTransaction.credit_effect_applied = true;
+        state.creditTransaction.razorpay_payment_id = state.creditRpcMode === 'false-mismatched'
+          ? 'pay_other'
+          : String(payload.p_payment_id);
+        return {
+          data: !['false-settled', 'false-mismatched'].includes(state.creditRpcMode ?? ''),
+          error: null,
+        };
       }
 
       if (name === 'settle_referral_purchase_rewards') {
@@ -223,6 +240,72 @@ describe('processRazorpayWebhookForRoute', () => {
       'post_resource_bundle_orders',
       'post_resource_bundle_orders',
     ]);
+  });
+
+  it('accepts an add_credits false result only after verifying concurrent durable settlement', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        status: 'pending',
+      },
+      creditRpcMode: 'false-settled',
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(result).toEqual({ status: 200, body: 'OK' });
+    expect(admin.tableReads).toEqual(['transactions', 'transactions']);
+    expect(admin.rpcCalls).toContainEqual({
+      name: 'settle_referral_purchase_rewards',
+      payload: { p_transaction_id: 'txn-1' },
+    });
+  });
+
+  it('asks Razorpay to retry when add_credits returns false without durable settlement', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        status: 'pending',
+      },
+      creditRpcMode: 'false-unsettled',
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(result).toEqual({ status: 500, body: 'Failed to assign credits' });
+    expect(admin.rpcCalls).not.toContainEqual(expect.objectContaining({
+      name: 'settle_referral_purchase_rewards',
+    }));
+  });
+
+  it('asks Razorpay to retry when a false result resolves to a different payment id', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        status: 'pending',
+      },
+      creditRpcMode: 'false-mismatched',
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 500, body: 'Failed to assign credits' });
+    expect(admin.rpcCalls).not.toContainEqual(expect.objectContaining({
+      name: 'settle_referral_purchase_rewards',
+    }));
   });
 
   it('reconciles a processed partial refund from the provider cumulative amount', async () => {

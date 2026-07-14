@@ -66,10 +66,10 @@ export { getPublicGenerationStartFailure };
 export type { GenerationStartFailureCode, PublicGenerationStartFailure };
 import {
   fetchWithProviderTimeout,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
+import { downloadAllowlistedRemoteMedia, type RemoteMediaKind } from '@/lib/remote-media-security';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
@@ -915,6 +915,14 @@ function getStorageBucket(category: string | null, model: string): 'generated_im
   return 'generated_videos';
 }
 
+function getRemoteMediaKindForBucket(
+  bucket: ReturnType<typeof getStorageBucket>,
+): RemoteMediaKind {
+  if (bucket === 'generated_images') return 'image';
+  if (bucket === 'generated_audio') return 'audio';
+  return 'video';
+}
+
 function getKieImageModelId(model: ImageModelId, referenceCount: number): string {
   if (model === 'grok-imagine-image') {
     return referenceCount > 0 ? 'grok-imagine/image-to-image' : 'grok-imagine/text-to-image';
@@ -991,19 +999,12 @@ async function persistGeneratedOutput(
   const settledAt = completedAt ?? new Date().toISOString();
 
   try {
-    const mediaResponse = await fetchWithProviderTimeout(
-      tempUrl,
-      {},
-      PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-      fetch,
-      'KIE generated media download'
-    );
-    if (!mediaResponse.ok) {
-      throw new Error('Failed to download generated media from KIE');
-    }
-
-    const mediaBlob = await mediaResponse.blob();
-    const extension = inferOutputExtension(tempUrl, mediaBlob.type, generation.category);
+    const downloaded = await downloadAllowlistedRemoteMedia({
+      url: tempUrl,
+      kind: getRemoteMediaKindForBucket(bucket),
+    });
+    const mediaBlob = downloaded.blob;
+    const extension = inferOutputExtension(downloaded.sourceName, mediaBlob.type, generation.category);
     const fileName = `${generation.user_id}/generated_${generation.prediction_id}.${extension}`;
 
     const { error: uploadError } = await supabase.storage
@@ -1050,8 +1051,8 @@ async function persistGeneratedOutput(
     console.error('Error persisting generated output:', error);
     return settleGenerationSucceeded(settlementSupabase, {
       predictionId: generation.prediction_id!,
-      outputUrl: tempUrl,
-      previewUrl: getFallbackPreviewUrl(generation.category, null, tempUrl),
+      outputUrl: null,
+      previewUrl: null,
       previewStatus: 'failed',
       previewAttemptCount: 1,
       previewError: error instanceof Error ? error.message.slice(0, 500) : 'Generated output persistence failed.',
@@ -1078,19 +1079,12 @@ export async function persistGeneratedOutputList(
 
   for (const [index, tempUrl] of tempUrls.entries()) {
     try {
-      const mediaResponse = await fetchWithProviderTimeout(
-        tempUrl,
-        {},
-        PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-        fetch,
-        'KIE generated media download'
-      );
-      if (!mediaResponse.ok) {
-        throw new Error('Failed to download generated media from KIE');
-      }
-
-      const mediaBlob = await mediaResponse.blob();
-      const extension = inferOutputExtension(tempUrl, mediaBlob.type, generation.category);
+      const downloaded = await downloadAllowlistedRemoteMedia({
+        url: tempUrl,
+        kind: getRemoteMediaKindForBucket(bucket),
+      });
+      const mediaBlob = downloaded.blob;
+      const extension = inferOutputExtension(downloaded.sourceName, mediaBlob.type, generation.category);
       const suffix = tempUrls.length > 1 ? `_${index}` : '';
       const fileName = `${generation.user_id}/generated_${generation.prediction_id}${suffix}.${extension}`;
 
@@ -1121,13 +1115,9 @@ export async function persistGeneratedOutputList(
       }
     } catch (error) {
       console.error(`Error persisting generated output ${index}:`, error);
-      outputs.push({
-        index,
-        storagePath: tempUrl,
-      });
       if (index === 0) {
         primaryPreview = {
-          previewUrl: getFallbackPreviewUrl(generation.category, null, tempUrl),
+          previewUrl: null,
           previewThumbhash: null,
           previewStatus: 'failed',
           previewError: error instanceof Error ? error.message.slice(0, 500) : 'Preview generation failed.',
@@ -1244,7 +1234,7 @@ async function syncSingleGenerationStatusFromProviderPayload(
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       } else {
         return settleGenerationSucceeded(creditSupabase, {
           predictionId: generation.prediction_id,
@@ -1283,14 +1273,14 @@ async function syncSingleGenerationStatusFromProviderPayload(
     if (tempUrl) {
       if (generation.model === 'grok-imagine-image') {
         return (await persistGeneratedOutputList(
-          supabase,
+          creditSupabase,
           creditSupabase,
           generation,
           getGenerationResultUrls(result),
           toIsoTimestamp(timing.completedAtMs)
         )).status;
       } else {
-        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       }
     } else {
       return settleGenerationSucceeded(creditSupabase, {
@@ -1348,7 +1338,7 @@ async function syncSingleGenerationStatus(
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       } else {
         return settleGenerationSucceeded(creditSupabase, {
           predictionId: generation.prediction_id,
@@ -1363,7 +1353,7 @@ async function syncSingleGenerationStatus(
 
     const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
     if (generation.status !== nextStatus) {
-      await supabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
+      await creditSupabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
     }
 
     return nextStatus;
@@ -1401,14 +1391,14 @@ async function syncSingleGenerationStatus(
     if (tempUrl) {
       if (generation.model === 'grok-imagine-image') {
         return (await persistGeneratedOutputList(
-          supabase,
+          creditSupabase,
           creditSupabase,
           generation,
           getGenerationResultUrls(result),
           toIsoTimestamp(timing.completedAtMs)
         )).status;
       } else {
-        return persistGeneratedOutput(supabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
       }
     } else {
       return settleGenerationSucceeded(creditSupabase, {
@@ -1424,7 +1414,7 @@ async function syncSingleGenerationStatus(
 
   const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
   if (generation.status !== nextStatus) {
-    await supabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
+    await creditSupabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
   }
   return nextStatus;
 }
@@ -1717,7 +1707,7 @@ export async function startImageGeneration(params: {
 
     if (persistInputMedia) {
       await persistGenerationInputMedia({
-        supabase,
+        supabase: creditSupabase,
         generationId,
         userId,
         candidates: collectImageInputCandidates({
@@ -2369,7 +2359,7 @@ export async function startVideoGeneration(params: {
 
     if (persistInputMedia) {
       await persistGenerationInputMedia({
-        supabase,
+        supabase: creditSupabase,
         generationId,
         userId,
         candidates: videoInputCandidates,
@@ -2427,7 +2417,6 @@ export async function startMotionGeneration(params: {
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
-    supabase,
     creditSupabase,
     userId,
     clientRequestKeyHash = null,
@@ -2502,7 +2491,7 @@ export async function startMotionGeneration(params: {
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
-      supabase,
+      supabase: creditSupabase,
       generationId,
       userId,
       candidates: [

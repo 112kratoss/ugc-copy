@@ -4,7 +4,27 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL)
   : undefined;
 
+const e2eAuthBypassRequested = process.env.E2E_AUTH_BYPASS === "1"
+  || process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "1";
+if (
+  e2eAuthBypassRequested
+  && (process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production")
+) {
+  throw new Error("E2E authentication bypass must never be enabled in a production build.");
+}
+
 const nextConfig: NextConfig = {
+  outputFileTracingIncludes: {
+    "/api/cron/backend-jobs": ["./node_modules/ffmpeg-static/**"],
+    "/api/cron/generation-completions": ["./node_modules/ffmpeg-static/**"],
+    "/api/cron/media-preview-repair": ["./node_modules/ffmpeg-static/**"],
+    "/api/generate": ["./node_modules/ffmpeg-static/**"],
+    "/api/generate-video": ["./node_modules/ffmpeg-static/**"],
+    "/api/generations/[id]/restore-media": ["./node_modules/ffmpeg-static/**"],
+    "/api/posts": ["./node_modules/ffmpeg-static/**"],
+    "/api/posts/[postId]": ["./node_modules/ffmpeg-static/**"],
+    "/api/showcase/publish": ["./node_modules/ffmpeg-static/**"],
+  },
   outputFileTracingExcludes: {
     "**/*": [
       "./audits/**",
@@ -15,9 +35,6 @@ const nextConfig: NextConfig = {
       "./package-lock.json",
       "./scripts/**",
       "./ugc-mobile/**",
-    ],
-    "/api/generate-image": [
-      "./node_modules/ffmpeg-static/**",
     ],
   },
   images: {

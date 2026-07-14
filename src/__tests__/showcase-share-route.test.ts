@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const recordPostShareEventMock = vi.fn(async (_payload?: unknown) => undefined);
-const notifyPostSocialActivityMock = vi.fn(async (_client?: unknown, _payload?: unknown) => undefined);
+const recordPostShareEventMock = vi.fn(async (payload?: unknown) => {
+  void payload;
+});
+const notifyPostSocialActivityMock = vi.fn(async (client?: unknown, payload?: unknown) => {
+  void client;
+  void payload;
+});
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn();

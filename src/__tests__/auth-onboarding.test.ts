@@ -20,7 +20,7 @@ describe('auth onboarding destinations', () => {
     const next = '/create/video?model=kling&recipe=ugc';
 
     expect(buildProfileSetupPath(next)).toBe(
-      '/profile?welcome=1&next=%2Fcreate%2Fvideo%3Fmodel%3Dkling%26recipe%3Dugc'
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fvideo%253Fmodel%253Dkling%2526recipe%253Dugc'
     );
     expect(buildAuthContinuePath(next)).toBe(
       '/auth/continue?next=%2Fcreate%2Fvideo%3Fmodel%3Dkling%26recipe%3Dugc'
@@ -39,21 +39,21 @@ describe('auth onboarding destinations', () => {
 
   it('sends missing or incomplete profiles through setup with their intent intact', () => {
     expect(resolvePostAuthPath(null, null)).toBe(
-      '/profile?welcome=1&next=%2Fcreate'
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate'
     );
     expect(resolvePostAuthPath(null, '/create')).toBe(
-      '/profile?welcome=1&next=%2Fcreate'
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate'
     );
     expect(resolvePostAuthPath({
       username: 'creator-a1b2c3d4',
       displayName: 'New creator',
     }, '/create/image')).toBe(
-      '/profile?welcome=1&next=%2Fcreate%2Fimage'
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fimage'
     );
     expect(resolvePostAuthPath(
       null,
       '/profile?next=%2Fcreations'
-    )).toBe('/profile?welcome=1&next=%2Fcreations');
+    )).toBe('/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreations');
   });
 
   it('returns ready profiles to the requested route', () => {

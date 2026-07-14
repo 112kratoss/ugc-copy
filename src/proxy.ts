@@ -6,31 +6,12 @@ import {
   evaluateMobileClientCompatibility,
   isIdentifiedMobileClient,
 } from '@/lib/mobile-client-compatibility';
+import mobileApiOperationsV1 from '../contracts/mobile-api-operations-v1.json';
 
-const mobileCorsPathPrefixes = [
-  '/api/generate',
-  '/api/generate-image',
-  '/api/generate-video',
-  '/api/app-version',
-  '/api/enhance-prompt',
-  '/api/generation-models',
-  '/api/generations',
-  '/api/marketplace/resources',
-  '/api/mobile/commerce',
-  '/api/mobile/notifications',
-  '/api/posts',
-  '/api/profile',
-  '/api/referrals',
-  '/api/showcase/feed',
-  '/api/showcase/posts',
-  '/api/showcase/publish',
-  '/api/showcase/remix',
-  '/api/showcase/save',
-  '/api/showcase/saved-media',
-  '/api/showcase/share',
-  '/api/source-tools',
-  '/api/uploads/media',
-];
+const mobileCorsRouteTemplates = [
+  ...Object.values(mobileApiOperationsV1.operations),
+  ...mobileApiOperationsV1.fallbackRoutes,
+].map((route) => route.path);
 
 const mobileCorsAllowedHeaders = [
   'Content-Type',
@@ -67,7 +48,12 @@ export function isRootAuthCodeRedirect(request: NextRequest) {
 }
 
 export function isMobileCorsPath(pathname: string) {
-  return mobileCorsPathPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  const pathnameParts = pathname.split('/').filter(Boolean);
+  return mobileCorsRouteTemplates.some((template) => {
+    const templateParts = template.split('/').filter(Boolean);
+    return templateParts.length === pathnameParts.length
+      && templateParts.every((part, index) => part.startsWith(':') || part === pathnameParts[index]);
+  });
 }
 
 function applyMobileCorsHeaders(response: NextResponse) {
@@ -93,7 +79,8 @@ export function proxy(request: NextRequest) {
 
   const isMobilePath = isMobileCorsPath(request.nextUrl.pathname);
   const compatibility = evaluateMobileClientCompatibility(request.headers);
-  if (!compatibility.allowed) {
+  const isCompatibilityPolicyRequest = request.nextUrl.pathname === '/api/app-version';
+  if (!isCompatibilityPolicyRequest && !compatibility.allowed) {
     return NextResponse.json({
       code: compatibility.code,
       error: compatibility.message,

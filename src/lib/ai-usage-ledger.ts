@@ -50,6 +50,13 @@ export type AiUsageLedger = {
   responsePayload?: Record<string, unknown>;
 };
 
+export type AiUsageSettlementResult = {
+  status: 'succeeded' | 'already_succeeded' | 'refunded' | 'already_refunded';
+  eventId: string;
+  settled: boolean;
+  remainingCredits: number | null;
+};
+
 const HEADER_NAME = 'idempotency-key';
 const MAX_KEY_LENGTH = 256;
 
@@ -255,32 +262,84 @@ export async function markAiUsageSucceeded(
   ledger: AiUsageLedger,
   outputText: string,
   responsePayload?: Record<string, unknown>,
-) {
-  const update: Record<string, unknown> = {
-    status: 'succeeded',
-    output_text: outputText.slice(0, 5000),
-  };
-
-  if (responsePayload) {
-    update.response_payload = responsePayload;
-  }
-
-  await client
-    .from('ai_usage_events')
-    .update(update)
-    .eq('id', ledger.eventId);
+): Promise<AiUsageSettlementResult> {
+  return settleAiUsageLedger(client, ledger, {
+    outcome: 'succeeded',
+    outputText,
+    responsePayload,
+  });
 }
 
 export async function refundAiUsageLedger(
   client: SupabaseClient,
   ledger: AiUsageLedger,
   error: unknown,
-) {
-  await client.rpc('refund_ai_usage_event', { p_event_id: ledger.eventId });
-  await client
-    .from('ai_usage_events')
-    .update({
-      error_message: errorMessage(error, 'Unknown error').slice(0, 1000),
-    })
-    .eq('id', ledger.eventId);
+): Promise<AiUsageSettlementResult> {
+  return settleAiUsageLedger(client, ledger, {
+    outcome: 'refunded',
+    errorMessage: errorMessage(error, 'Unknown error'),
+  });
+}
+
+async function settleAiUsageLedger(
+  client: SupabaseClient,
+  ledger: AiUsageLedger,
+  settlement: {
+    outcome: 'succeeded' | 'refunded';
+    outputText?: string;
+    responsePayload?: Record<string, unknown>;
+    errorMessage?: string;
+  },
+): Promise<AiUsageSettlementResult> {
+  let rpcResult: Awaited<ReturnType<SupabaseClient['rpc']>>;
+
+  try {
+    rpcResult = await client.rpc('settle_ai_usage_event', {
+      p_event_id: ledger.eventId,
+      p_outcome: settlement.outcome,
+      p_output_text: settlement.outputText?.slice(0, 5000) ?? null,
+      p_response_payload: settlement.responsePayload ?? null,
+      p_error_message: settlement.errorMessage?.slice(0, 1000) ?? null,
+    });
+  } catch (error) {
+    throw new AiUsageLedgerError(
+      errorMessage(error, 'Failed to settle AI usage.'),
+      500,
+      'USAGE_EVENT_FAILED',
+    );
+  }
+
+  const { data, error } = rpcResult;
+  if (error || !isRecord(data)) {
+    throw new AiUsageLedgerError(
+      errorMessage(error, 'Failed to settle AI usage.'),
+      500,
+      'USAGE_EVENT_FAILED',
+    );
+  }
+
+  const status = typeof data.status === 'string' ? data.status : '';
+  const acceptedStatuses = settlement.outcome === 'succeeded'
+    ? ['succeeded', 'already_succeeded']
+    : ['refunded', 'already_refunded'];
+
+  if (!acceptedStatuses.includes(status) || data.event_id !== ledger.eventId) {
+    const currentStatus = typeof data.current_status === 'string'
+      ? ` Current state: ${data.current_status}.`
+      : '';
+    throw new AiUsageLedgerError(
+      `AI usage settlement was not applied.${currentStatus}`,
+      500,
+      'USAGE_EVENT_FAILED',
+    );
+  }
+
+  return {
+    status: status as AiUsageSettlementResult['status'],
+    eventId: ledger.eventId,
+    settled: data.settled === true,
+    remainingCredits: typeof data.remaining_credits === 'number'
+      ? data.remaining_credits
+      : null,
+  };
 }

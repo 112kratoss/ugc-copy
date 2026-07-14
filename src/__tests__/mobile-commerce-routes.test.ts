@@ -16,9 +16,11 @@ const rpcMock = vi.fn(async () => ({
 const adminClient = { service: 'admin', rpc: rpcMock };
 const createServiceClientFactory = vi.fn(() => adminClient);
 const completeMobileCreditPurchaseMock = vi.fn();
+const completeMobilePurchaseMock = vi.fn();
 const completeMobileMarketplaceUnlockMock = vi.fn();
 const completeMobilePostResourceUnlockMock = vi.fn();
 const normalizeMobileCommercePayloadMock = vi.fn();
+const resolveMobilePurchaseAuthorityMock = vi.fn();
 const verifyMobilePurchaseMock = vi.fn();
 const restoreMobileEntitlementsMock = vi.fn();
 
@@ -37,9 +39,11 @@ vi.mock('@/lib/server-helpers', () => ({
 vi.mock('@/lib/mobile-commerce', () => ({
   MobileCommerceError: MockMobileCommerceError,
   completeMobileCreditPurchase: (...args: unknown[]) => completeMobileCreditPurchaseMock(...args),
+  completeMobilePurchase: (...args: unknown[]) => completeMobilePurchaseMock(...args),
   completeMobileMarketplaceUnlock: (...args: unknown[]) => completeMobileMarketplaceUnlockMock(...args),
   completeMobilePostResourceUnlock: (...args: unknown[]) => completeMobilePostResourceUnlockMock(...args),
   normalizeMobileCommercePayload: (...args: unknown[]) => normalizeMobileCommercePayloadMock(...args),
+  resolveMobilePurchaseAuthority: (...args: unknown[]) => resolveMobilePurchaseAuthorityMock(...args),
   restoreMobileEntitlements: (...args: unknown[]) => restoreMobileEntitlementsMock(...args),
   verifyMobilePurchase: (...args: unknown[]) => verifyMobilePurchaseMock(...args),
 }));
@@ -67,6 +71,8 @@ describe('/api/mobile/commerce routes', () => {
     });
     completeMobileCreditPurchaseMock.mockClear();
     completeMobileCreditPurchaseMock.mockResolvedValue(mobileApiContract.endpoints.mobileCommerceSync.response);
+    completeMobilePurchaseMock.mockClear();
+    completeMobilePurchaseMock.mockResolvedValue(mobileApiContract.endpoints.mobileCommerceSync.response);
     completeMobileMarketplaceUnlockMock.mockClear();
     completeMobilePostResourceUnlockMock.mockClear();
     normalizeMobileCommercePayloadMock.mockClear();
@@ -75,7 +81,17 @@ describe('/api/mobile/commerce routes', () => {
       provider: 'app_store',
       transactionId: 'tx-1',
       receiptToken: 'receipt-1',
-      entitlement: { type: 'credits' },
+      purchaseIntentId: null,
+    });
+    resolveMobilePurchaseAuthorityMock.mockClear();
+    resolveMobilePurchaseAuthorityMock.mockResolvedValue({
+      entitlementType: 'credits',
+      productId: 'credits-1',
+      purchaseIntentId: null,
+      resourceId: null,
+      amountSubunits: 100,
+      currency: 'INR',
+      credits: 42,
     });
     verifyMobilePurchaseMock.mockClear();
     verifyMobilePurchaseMock.mockResolvedValue({
@@ -158,7 +174,8 @@ describe('/api/mobile/commerce routes', () => {
     });
     expect(normalizeMobileCommercePayloadMock).not.toHaveBeenCalled();
     expect(verifyMobilePurchaseMock).not.toHaveBeenCalled();
-    expect(completeMobileCreditPurchaseMock).not.toHaveBeenCalled();
+    expect(resolveMobilePurchaseAuthorityMock).not.toHaveBeenCalled();
+    expect(completeMobilePurchaseMock).not.toHaveBeenCalled();
   });
 
   it('runs commerce sync after passing the backend rate limit', async () => {
@@ -199,10 +216,16 @@ describe('/api/mobile/commerce routes', () => {
       transactionId: 'tx-1',
       receiptToken: 'receipt-1',
     });
-    expect(completeMobileCreditPurchaseMock).toHaveBeenCalledWith({
+    expect(resolveMobilePurchaseAuthorityMock).toHaveBeenCalledWith({
       adminSupabase: adminClient,
       userId: 'buyer-1',
       productId: 'credits-1',
+      purchaseIntentId: null,
+    });
+    expect(completeMobilePurchaseMock).toHaveBeenCalledWith({
+      adminSupabase: adminClient,
+      userId: 'buyer-1',
+      authority: expect.objectContaining({ entitlementType: 'credits' }),
       provider: 'app_store',
       transactionId: 'tx-1',
     });

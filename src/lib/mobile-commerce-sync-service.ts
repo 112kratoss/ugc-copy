@@ -7,10 +7,9 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
   MobileCommerceError,
-  completeMobileCreditPurchase,
-  completeMobileMarketplaceUnlock,
-  completeMobilePostResourceUnlock,
+  completeMobilePurchase,
   normalizeMobileCommercePayload,
+  resolveMobilePurchaseAuthority,
   verifyMobilePurchase,
   type MobileCommerceSyncResult,
 } from '@/lib/mobile-commerce';
@@ -107,6 +106,12 @@ export async function syncMobileCommerceForRoute(
     if (rateLimitResult) return rateLimitResult;
 
     const payload = normalizeMobileCommercePayload(await readRequestBody(input));
+    const authority = await resolveMobilePurchaseAuthority({
+      adminSupabase,
+      userId,
+      productId: payload.productId,
+      purchaseIntentId: payload.purchaseIntentId,
+    });
     const verified = await verifyMobilePurchase({
       userId,
       productId: payload.productId,
@@ -115,38 +120,12 @@ export async function syncMobileCommerceForRoute(
       receiptToken: payload.receiptToken,
     });
 
-    if (payload.entitlement.type === 'credits') {
-      return {
-        ok: true,
-        body: await completeMobileCreditPurchase({
-          adminSupabase,
-          userId,
-          productId: payload.productId,
-          provider: verified.provider,
-          transactionId: verified.transactionId,
-        }),
-      };
-    }
-
-    if (payload.entitlement.type === 'marketplace_unlock') {
-      return {
-        ok: true,
-        body: await completeMobileMarketplaceUnlock({
-          adminSupabase,
-          userId,
-          assetId: payload.entitlement.assetId,
-          provider: verified.provider,
-          transactionId: verified.transactionId,
-        }),
-      };
-    }
-
     return {
       ok: true,
-      body: await completeMobilePostResourceUnlock({
+      body: await completeMobilePurchase({
         adminSupabase,
         userId,
-        postId: payload.entitlement.postId,
+        authority,
         provider: verified.provider,
         transactionId: verified.transactionId,
       }),

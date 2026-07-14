@@ -51,6 +51,10 @@ function createClientMock({
       return { data: true, error: null };
     }
 
+    if (fn === 'claim_generation_start_request') {
+      return { data: 'claimed', error: null };
+    }
+
     return { data: null, error: null };
   });
 
@@ -189,7 +193,9 @@ describe('startImageGenerationForRoute', () => {
     const adminClient = createClientMock();
 
     await startImageGenerationForRoute({
-      request: new Request('http://localhost/api/template-runs/run-1/frames'),
+      request: new Request('http://localhost/api/template-runs/run-1/frames', {
+        headers: { 'idempotency-key': 'image-private-template-start-1' },
+      }),
       body: {
         prompt: 'A private template frame',
         model: 'nano-banana-2',

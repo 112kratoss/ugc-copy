@@ -6,6 +6,7 @@ import { startMotionGeneration } from '@/lib/generation-services';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
+  hashGenerationStartRequest,
   withGenerationStartIdempotency,
 } from '@/lib/generation-start-idempotency';
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
@@ -116,6 +117,7 @@ export async function startMotionGenerationForRoute({
     client: adminSupabase,
     userId,
     idempotencyKey: getGenerationStartIdempotencyKey(request, body),
+    requestHash: hashGenerationStartRequest(body),
     owner: getGenerationStartLockOwner(request),
     start: (clientRequestKeyHash) => startMotionGeneration({
       supabase,

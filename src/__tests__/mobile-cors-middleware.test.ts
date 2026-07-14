@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
 
 import { isMobileCorsPath, isRootAuthCodeRedirect, proxy } from '@/proxy';
+import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
+
+function materializeRouteTemplate(template: string) {
+  return template
+    .replace(':generationId', 'generation-1')
+    .replace(':postId', 'post-1')
+    .replace(':username', 'creator-one')
+    .replace(':slug', 'product-reveal')
+    .replace(':templateId', 'template-1')
+    .replace(':runId', 'run-1')
+    .replace(':stepId', 'step-1')
+    .replace(':resourceId', 'resource-1');
+}
 
 describe('mobile API CORS proxy', () => {
   it('matches mobile API paths without opening unrelated APIs', () => {
@@ -20,6 +33,34 @@ describe('mobile API CORS proxy', () => {
     expect(isMobileCorsPath('/api/source-tools')).toBe(true);
     expect(isMobileCorsPath('/api/uploads/workflow-asset/sign')).toBe(false);
     expect(isMobileCorsPath('/api/razorpay/webhook')).toBe(false);
+  });
+
+  it('covers every route in the shared mobile operation registry', () => {
+    const routes = [
+      ...Object.values(mobileApiOperationsV1.operations),
+      ...mobileApiOperationsV1.fallbackRoutes,
+    ];
+    expect(routes.every((route) => isMobileCorsPath(materializeRouteTemplate(route.path)))).toBe(true);
+  });
+
+  it('answers a valid preflight for every registered mobile route', () => {
+    const paths = new Set([
+      ...Object.values(mobileApiOperationsV1.operations),
+      ...mobileApiOperationsV1.fallbackRoutes,
+    ].map((route) => materializeRouteTemplate(route.path)));
+
+    for (const pathname of paths) {
+      const response = proxy(new NextRequest(`http://localhost${pathname}`, {
+        headers: {
+          'Access-Control-Request-Headers': 'Authorization',
+          'Access-Control-Request-Method': 'POST',
+          Origin: 'http://localhost:8082',
+        },
+        method: 'OPTIONS',
+      }));
+      expect(response.status, pathname).toBe(204);
+      expect(response.headers.get('Access-Control-Allow-Origin'), pathname).toBe('*');
+    }
   });
 
   it('answers mobile API preflight requests', () => {

@@ -197,6 +197,7 @@ export default function PublishToShowcaseModal({
       return;
     }
 
+    // Opening a generation starts a fresh publish draft from its supplied defaults.
     setPublishTitle(defaultTitle);
     setPublishDescription(getDefaultPublishDescription(defaultDescription, paywallPrefill));
     setSellAutoUnlock(Boolean(initialSellAutoUnlock && hasAutoUnlock));
@@ -212,21 +213,28 @@ export default function PublishToShowcaseModal({
     }
 
     const controller = new AbortController();
-    setProfileLoadState('loading');
-    setProfile(null);
+    void Promise.resolve()
+      .then(async () => {
+        if (controller.signal.aborted) {
+          return null;
+        }
 
-    void fetch('/api/profile', {
-      cache: 'no-store',
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
-      signal: controller.signal,
-    })
-      .then(async (response) => {
+        setProfileLoadState('loading');
+        setProfile(null);
+        const response = await fetch('/api/profile', {
+          cache: 'no-store',
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+          signal: controller.signal,
+        });
         if (!response.ok) {
           throw new Error('Profile could not be checked.');
         }
         return response.json() as Promise<ProfileApiResponse>;
       })
       .then((nextProfile) => {
+        if (!nextProfile) {
+          return;
+        }
         setProfile(nextProfile);
         setProfileLoadState('ready');
       })

@@ -1342,12 +1342,12 @@ export async function notifyMobilePurchasesRestored(adminSupabase: SupabaseClien
     userId,
     type: 'purchases_restored',
     category: 'commerce',
-    title: 'Purchases restored',
-    body: 'Your mobile entitlements have been restored.',
+    title: 'Purchase history refreshed',
+    body: 'Your Magic Booklet credit balance was checked against verified purchase history.',
     deepLink: '/profile',
-    objectType: 'restore',
+    objectType: 'purchase_history_refresh',
     objectId: userId,
-    dedupeKey: `restore:${userId}:${new Date().toISOString().slice(0, 10)}`,
+    dedupeKey: `purchase-history-refresh:${userId}:${new Date().toISOString().slice(0, 10)}`,
   });
 }
 

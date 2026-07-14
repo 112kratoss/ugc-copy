@@ -398,6 +398,7 @@ export default function CreationsPage() {
             return 'all';
         })();
 
+        // Browser navigation is the source of truth for these workspace controls.
         setActiveView(nextView);
         setPostVisibilityFilter(nextVisibility);
     }, [searchParams]);
@@ -409,6 +410,7 @@ export default function CreationsPage() {
         }
 
         generationsRef.current = cachedWorkspace.generations;
+        // Hydrate the last user-scoped workspace snapshot before the network refresh completes.
         setGenerations(cachedWorkspace.generations);
         setPosts(cachedWorkspace.posts);
         setProfile(cachedWorkspace.profile);
@@ -645,7 +647,7 @@ export default function CreationsPage() {
         }
     };
 
-    const openPublishModal = async (generation: Generation, options?: {
+    const openPublishModal = useCallback(async (generation: Generation, options?: {
         shareAfterPublish?: boolean;
         showPaidShortcut?: boolean;
         initialSellAutoUnlock?: boolean;
@@ -663,7 +665,7 @@ export default function CreationsPage() {
         } catch {
             // Error state is stored in generationDetailError for the page-level notice.
         }
-    };
+    }, [loadGenerationDetail]);
 
     const closePublishModal = () => {
         setPublishTarget(null);
@@ -1255,6 +1257,7 @@ export default function CreationsPage() {
                         type="button"
                         onClick={() => {
                             setPreviewGen(null);
+                            // This callback runs only after a click; detail loading reads the cache ref then.
                             void openPublishModal(generation);
                         }}
                         className={primaryClass}
@@ -1368,14 +1371,10 @@ export default function CreationsPage() {
         return posts.filter((post) => !post.archivedAt && post.visibility === postVisibilityFilter);
     }, [postVisibilityFilter, posts]);
 
-    const successfulCreationCards = useMemo(
-        () =>
-            filteredSuccessful.map((generation) => ({
-                generation,
-                workspaceState: resolveCreationWorkspaceCardState(generation, posts),
-            })),
-        [filteredSuccessful, posts]
-    );
+    const successfulCreationCards = filteredSuccessful.map((generation) => ({
+        generation,
+        workspaceState: resolveCreationWorkspaceCardState(generation, posts),
+    }));
     const profileReadiness = getCreatorProfileReadiness(profile);
     const publicProfileUsername = profileReadiness.hasClaimedHandle
         ? profile?.username?.trim() || null

@@ -96,6 +96,18 @@ function createAdminClient(options?: {
         return { data: true, error: null };
       }
 
+      if (fn === 'settle_ai_usage_event') {
+        return {
+          data: {
+            status: args.p_outcome,
+            settled: true,
+            event_id: args.p_event_id,
+            remaining_credits: remainingCredits,
+          },
+          error: null,
+        };
+      }
+
       if (fn === 'check_backend_rate_limit') {
         return {
           data: {
@@ -285,9 +297,12 @@ describe('/api/enhance-prompt route', () => {
     expect(Array.isArray(data.appliedSafeguards)).toBe(true);
     expect(data.enhancedPrompt).toContain('a premium product poster');
     expect(data.enhancedPrompt).toContain('Include readable text "SALE"');
-    expect(currentAdminClient.updates[0]).toMatchObject({
-      status: 'succeeded',
-      output_text: data.enhancedPrompt,
+    expect(currentAdminClient.rpcCalls).toContainEqual({
+      fn: 'settle_ai_usage_event',
+      args: expect.objectContaining({
+        p_outcome: 'succeeded',
+        p_output_text: data.enhancedPrompt,
+      }),
     });
   });
 
@@ -427,16 +442,20 @@ describe('/api/enhance-prompt route', () => {
     );
 
     expect(response.status).toBe(502);
-    expect(currentAdminClient.rpcCalls.some((call) => call.fn === 'refund_ai_usage_event')).toBe(true);
+    expect(currentAdminClient.rpcCalls).toContainEqual({
+      fn: 'settle_ai_usage_event',
+      args: expect.objectContaining({
+        p_outcome: 'refunded',
+        p_error_message: 'provider failure',
+      }),
+    });
 
     const data = await response.json();
     expect(data).toMatchObject({
       error: 'Prompt enhancement failed. Your credits have been refunded.',
       remainingCredits: 43,
     });
-    expect(currentAdminClient.updates.at(-1)).toMatchObject({
-      error_message: 'provider failure',
-    });
+    expect(currentAdminClient.updates).toHaveLength(0);
   });
 
   it('skips the provider when the atomic usage start fails', async () => {

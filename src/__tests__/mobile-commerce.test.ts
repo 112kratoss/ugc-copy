@@ -7,6 +7,7 @@ import {
   completeMobileCreditPurchase,
   completeMobileMarketplaceUnlock,
   completeMobilePostResourceUnlock,
+  createMobilePurchaseIntent,
   normalizeMobileCommercePayload,
   restoreMobileEntitlements,
   verifyMobilePurchase,
@@ -141,6 +142,46 @@ function createCreditSupabase(options: {
       },
       async rpc(name: string, args: Record<string, unknown>) {
         rpcCalls.push({ name, args });
+        if (name === 'complete_mobile_purchase') {
+          const productId = String(args.p_product_id);
+          const plan = {
+            'magicbooklet.credits.starter': { amount: 41500, credits: 500 },
+            'magicbooklet.credits.creator': { amount: 166000, credits: 2000 },
+            'magicbooklet.credits.pro': { amount: 830000, credits: 10000 },
+          }[productId];
+          if (!plan) return { data: { status: 'product_not_found' }, error: null };
+          const externalOrderId = String(args.p_external_order_id);
+          let transaction = transactions.find((item) => item.razorpay_order_id === externalOrderId);
+          if (transaction?.status === 'refunded') {
+            return { data: { status: 'revoked' }, error: null };
+          }
+          const alreadyProcessed = transaction?.status === 'success';
+          if (!transaction) {
+            transaction = {
+              id: `txn-mobile-${transactions.length + 1}`,
+              user_id: String(args.p_user_id),
+              razorpay_order_id: externalOrderId,
+              credits: plan.credits,
+              status: 'success',
+            };
+            transactions.push(transaction);
+            credits += plan.credits;
+          }
+          return {
+            data: {
+              status: alreadyProcessed ? 'already_processed' : 'completed',
+              entitlement_type: 'credits',
+              product_id: productId,
+              resource_id: null,
+              amount_subunits: plan.amount,
+              currency: 'INR',
+              credits: plan.credits,
+              remaining_credits: credits,
+              source_record_id: transaction.id,
+            },
+            error: null,
+          };
+        }
         if (name === 'settle_referral_purchase_rewards') {
           return { data: { status: 'not_referred', rewards: [] }, error: null };
         }
@@ -253,21 +294,88 @@ describe('mobile commerce helpers', () => {
     })).toMatchObject({
       provider: 'app_store',
       productId: 'magicbooklet.credits.starter',
-      entitlement: {
-        type: 'credits',
-      },
+      purchaseIntentId: null,
     });
   });
 
-  it('rejects mismatched entitlements', () => {
-    expect(() => normalizeMobileCommercePayload({
+  it('ignores client-selected entitlement authority for fixed credit SKUs', () => {
+    expect(normalizeMobileCommercePayload({
       provider: 'play_store',
       productId: 'magicbooklet.credits.starter',
       entitlement: {
-        type: 'credits',
-        productId: 'magicbooklet.credits.pro',
+        type: 'marketplace_unlock',
+        productId: 'attacker-controlled-product',
+        assetId: 'attacker-controlled-asset',
       },
+    })).toMatchObject({
+      productId: 'magicbooklet.credits.starter',
+      purchaseIntentId: null,
+    });
+  });
+
+  it('requires an opaque server intent for non-credit products', () => {
+    expect(() => normalizeMobileCommercePayload({
+      provider: 'play_store',
+      productId: 'magicbooklet.unlock.tier-900',
+      entitlement: { type: 'marketplace_unlock', assetId: 'asset-attacker' },
     })).toThrow(MobileCommerceError);
+
+    expect(normalizeMobileCommercePayload({
+      provider: 'play_store',
+      productId: 'magicbooklet.unlock.tier-900',
+      purchaseIntentId: '11111111-2222-4333-8444-555555555555',
+    })).toMatchObject({
+      purchaseIntentId: '11111111-2222-4333-8444-555555555555',
+    });
+  });
+
+  it('fails closed when a resource price tier has no provisioned store product', async () => {
+    const rpc = vi.fn(async () => ({
+      data: { status: 'product_not_configured' },
+      error: null,
+    }));
+
+    await expect(createMobilePurchaseIntent({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      entitlementType: 'marketplace_unlock',
+      resourceId: 'asset-1',
+    })).rejects.toMatchObject({
+      status: 409,
+      message: 'No mobile store product is configured for this resource.',
+    });
+    expect(rpc).toHaveBeenCalledWith('create_mobile_purchase_intent', {
+      p_user_id: userId,
+      p_entitlement_type: 'marketplace_unlock',
+      p_resource_id: 'asset-1',
+    });
+  });
+
+  it('returns only the server-selected product and immutable intent quote', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'created',
+        purchase_intent_id: 'intent-marketplace-1',
+        product_id: 'magicbooklet.marketplace.usd900',
+        amount_subunits: 900,
+        currency: 'USD',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+      error: null,
+    }));
+
+    await expect(createMobilePurchaseIntent({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      entitlementType: 'marketplace_unlock',
+      resourceId: 'asset-1',
+    })).resolves.toEqual({
+      purchaseIntentId: 'intent-marketplace-1',
+      productId: 'magicbooklet.marketplace.usd900',
+      amountSubunits: 900,
+      currency: 'USD',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
   });
 
   it('verifies RevenueCat non-subscription purchases', async () => {
@@ -391,7 +499,7 @@ describe('mobile commerce helpers', () => {
       alreadyProcessed: false,
     });
     expect(fakeSupabase.rpcCalls.map((call) => call.name)).toEqual([
-      'add_credits',
+      'complete_mobile_purchase',
       'settle_referral_purchase_rewards',
     ]);
     expect(fakeSupabase.transactions[0]?.razorpay_order_id).toBe(buildMobileExternalOrderId('app_store', '1000000123456789'));
@@ -421,11 +529,12 @@ describe('mobile commerce helpers', () => {
       alreadyProcessed: true,
     });
     expect(fakeSupabase.rpcCalls.map((call) => call.name)).toEqual([
+      'complete_mobile_purchase',
       'settle_referral_purchase_rewards',
     ]);
   });
 
-  it('restores a provider-verified purchase that was locally marked refunded', async () => {
+  it('does not silently reactivate a store transaction that was explicitly revoked', async () => {
     const externalOrderId = buildMobileExternalOrderId('app_store', '1000000123456789');
     const fakeSupabase = createCreditSupabase({
       credits: 100,
@@ -444,27 +553,17 @@ describe('mobile commerce helpers', () => {
       productId: 'magicbooklet.credits.starter',
       provider: 'app_store',
       transactionId: '1000000123456789',
-    })).resolves.toMatchObject({
-      credits: 600,
-      alreadyProcessed: false,
-      message: 'Purchase restored.',
+    })).rejects.toMatchObject({
+      status: 409,
+      message: 'This mobile store transaction has been revoked.',
     });
-    expect(fakeSupabase.rpcCalls[0]).toMatchObject({
-      name: 'reconcile_mobile_credit_purchase_adjustment',
-      args: {
-        p_action: 'restore',
-        p_external_order_id: externalOrderId,
-        p_product_id: 'magicbooklet.credits.starter',
-        p_user_id: userId,
-      },
-    });
+    expect(fakeSupabase.credits).toBe(100);
   });
 
-  it('recovers when a duplicate mobile transaction insert already created the order', async () => {
+  it('settles credit purchases only through the global atomic purchase RPC', async () => {
     const externalOrderId = buildMobileExternalOrderId('app_store', '1000000123456790');
     const fakeSupabase = createCreditSupabase({
       credits: 100,
-      duplicateInsertForOrderId: externalOrderId,
     });
 
     await expect(completeMobileCreditPurchase({
@@ -481,36 +580,77 @@ describe('mobile commerce helpers', () => {
     });
     expect(fakeSupabase.transactions).toHaveLength(1);
     expect(fakeSupabase.rpcCalls.map((call) => call.name)).toEqual([
-      'add_credits',
+      'complete_mobile_purchase',
       'settle_referral_purchase_rewards',
     ]);
+    expect(fakeSupabase.rpcCalls[0]).toMatchObject({
+      args: {
+        p_purchase_intent_id: null,
+        p_external_order_id: externalOrderId,
+      },
+    });
   });
 
   it('uses one atomic database call for mobile marketplace cash unlocks', async () => {
     const disallowedTables: string[] = [];
     const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
-      expect(name).toBe('complete_mobile_marketplace_purchase');
+      expect(name).toBe('complete_mobile_purchase');
       expect(args).toEqual({
         p_user_id: userId,
-        p_asset_id: 'asset-1',
+        p_purchase_intent_id: 'intent-marketplace-1',
+        p_product_id: 'magicbooklet.marketplace.usd900',
+        p_provider: 'app_store',
+        p_store_transaction_id: '1000000123456800',
         p_external_order_id: buildMobileExternalOrderId('app_store', '1000000123456800'),
         p_payment_id: 'mobile_app_store_1000000123456800',
       });
       return {
         data: {
           status: 'completed',
-          asset_id: 'asset-1',
+          entitlement_type: 'marketplace_unlock',
+          product_id: 'magicbooklet.marketplace.usd900',
+          resource_id: 'asset-1',
+          amount_subunits: 900,
+          currency: 'USD',
           seller_user_id: 'seller-1',
         },
         error: null,
       };
     });
-    const from = createNotificationOnlyFromMock(disallowedTables);
+    const notificationFrom = createNotificationOnlyFromMock(disallowedTables);
+    const from = vi.fn((table: string) => {
+      if (table === 'mobile_purchase_intents') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async maybeSingle() {
+            return {
+              data: {
+                id: 'intent-marketplace-1',
+                user_id: userId,
+                product_id: 'magicbooklet.marketplace.usd900',
+                entitlement_type: 'marketplace_unlock',
+                resource_id: 'asset-1',
+                amount_subunits: 900,
+                currency: 'USD',
+                credits: null,
+                status: 'pending',
+                expires_at: '2099-01-01T00:00:00.000Z',
+              },
+              error: null,
+            };
+          },
+        };
+        return query;
+      }
+      return notificationFrom(table);
+    });
 
     await expect(completeMobileMarketplaceUnlock({
       adminSupabase: { rpc, from } as unknown as SupabaseClient,
       userId,
-      assetId: 'asset-1',
+      purchaseIntentId: 'intent-marketplace-1',
+      productId: 'magicbooklet.marketplace.usd900',
       provider: 'app_store',
       transactionId: '1000000123456800',
     })).resolves.toMatchObject({
@@ -527,17 +667,46 @@ describe('mobile commerce helpers', () => {
   it('treats replayed mobile marketplace cash unlocks as already processed', async () => {
     const rpc = vi.fn(async () => ({
       data: {
-        status: 'already_owned',
-        asset_id: 'asset-1',
+        status: 'already_processed',
+        entitlement_type: 'marketplace_unlock',
+        product_id: 'magicbooklet.marketplace.usd900',
+        resource_id: 'asset-1',
+        amount_subunits: 900,
+        currency: 'USD',
         seller_user_id: 'seller-1',
       },
       error: null,
     }));
+    const from = vi.fn(() => {
+      const query = {
+        select() { return query; },
+        eq() { return query; },
+        async maybeSingle() {
+          return {
+            data: {
+              id: 'intent-marketplace-1',
+              user_id: userId,
+              product_id: 'magicbooklet.marketplace.usd900',
+              entitlement_type: 'marketplace_unlock',
+              resource_id: 'asset-1',
+              amount_subunits: 900,
+              currency: 'USD',
+              credits: null,
+              status: 'consumed',
+              expires_at: '2099-01-01T00:00:00.000Z',
+            },
+            error: null,
+          };
+        },
+      };
+      return query;
+    });
 
     await expect(completeMobileMarketplaceUnlock({
-      adminSupabase: { rpc } as unknown as SupabaseClient,
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
       userId,
-      assetId: 'asset-1',
+      purchaseIntentId: 'intent-marketplace-1',
+      productId: 'magicbooklet.marketplace.usd900',
       provider: 'app_store',
       transactionId: '1000000123456800',
     })).resolves.toMatchObject({
@@ -551,29 +720,64 @@ describe('mobile commerce helpers', () => {
   it('uses one atomic database call for mobile post-resource cash unlocks', async () => {
     const disallowedTables: string[] = [];
     const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
-      expect(name).toBe('complete_mobile_post_resource_purchase');
+      expect(name).toBe('complete_mobile_purchase');
       expect(args).toEqual({
         p_user_id: userId,
-        p_post_id: 'post-1',
+        p_purchase_intent_id: 'intent-post-1',
+        p_product_id: 'magicbooklet.post.usd1200',
+        p_provider: 'play_store',
+        p_store_transaction_id: 'GPA.1000-2000-3000',
         p_external_order_id: buildMobileExternalOrderId('play_store', 'GPA.1000-2000-3000'),
         p_payment_id: 'mobile_play_store_GPA.1000-2000-3000',
       });
       return {
         data: {
           status: 'completed',
-          post_id: 'post-1',
+          entitlement_type: 'post_resource_unlock',
+          product_id: 'magicbooklet.post.usd1200',
+          resource_id: 'post-1',
+          amount_subunits: 1200,
+          currency: 'USD',
           bundle_id: 'bundle-1',
           owner_user_id: 'owner-1',
         },
         error: null,
       };
     });
-    const from = createNotificationOnlyFromMock(disallowedTables);
+    const notificationFrom = createNotificationOnlyFromMock(disallowedTables);
+    const from = vi.fn((table: string) => {
+      if (table === 'mobile_purchase_intents') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async maybeSingle() {
+            return {
+              data: {
+                id: 'intent-post-1',
+                user_id: userId,
+                product_id: 'magicbooklet.post.usd1200',
+                entitlement_type: 'post_resource_unlock',
+                resource_id: 'post-1',
+                amount_subunits: 1200,
+                currency: 'USD',
+                credits: null,
+                status: 'pending',
+                expires_at: '2099-01-01T00:00:00.000Z',
+              },
+              error: null,
+            };
+          },
+        };
+        return query;
+      }
+      return notificationFrom(table);
+    });
 
     await expect(completeMobilePostResourceUnlock({
       adminSupabase: { rpc, from } as unknown as SupabaseClient,
       userId,
-      postId: 'post-1',
+      purchaseIntentId: 'intent-post-1',
+      productId: 'magicbooklet.post.usd1200',
       provider: 'play_store',
       transactionId: 'GPA.1000-2000-3000',
     })).resolves.toMatchObject({
@@ -591,20 +795,44 @@ describe('mobile commerce helpers', () => {
     const rpc = vi.fn(async () => ({
       data: {
         status: 'not_paid',
-        post_id: 'post-1',
       },
       error: null,
     }));
+    const from = vi.fn(() => {
+      const query = {
+        select() { return query; },
+        eq() { return query; },
+        async maybeSingle() {
+          return {
+            data: {
+              id: 'intent-post-1',
+              user_id: userId,
+              product_id: 'magicbooklet.post.usd1200',
+              entitlement_type: 'post_resource_unlock',
+              resource_id: 'post-1',
+              amount_subunits: 1200,
+              currency: 'USD',
+              credits: null,
+              status: 'pending',
+              expires_at: '2099-01-01T00:00:00.000Z',
+            },
+            error: null,
+          };
+        },
+      };
+      return query;
+    });
 
     await expect(completeMobilePostResourceUnlock({
-      adminSupabase: { rpc } as unknown as SupabaseClient,
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
       userId,
-      postId: 'post-1',
+      purchaseIntentId: 'intent-post-1',
+      productId: 'magicbooklet.post.usd1200',
       provider: 'play_store',
       transactionId: 'GPA.1000-2000-3000',
     })).rejects.toMatchObject({
       status: 400,
-      message: 'This post unlock does not require a mobile purchase.',
+      message: 'This resource does not require a mobile purchase.',
     });
   });
 

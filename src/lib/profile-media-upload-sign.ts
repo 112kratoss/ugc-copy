@@ -8,6 +8,7 @@ import {
   PROFILE_MEDIA_UPLOAD_SIGN_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
 
 const PROFILE_MEDIA_BUCKET = 'profiles';
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
@@ -101,7 +102,7 @@ function validateProfileMediaMetadata(body: unknown): {
   }
 
   const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim().toLowerCase() : '';
-  if (!mimeType || mimeType === 'image/svg+xml' || !mimeType.startsWith('image/')) {
+  if (!mimeType || !isAllowedStorageBucketMimeType(PROFILE_MEDIA_BUCKET, mimeType)) {
     return { error: 'Upload a valid image file.' };
   }
 

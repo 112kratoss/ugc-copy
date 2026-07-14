@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   getGenerationStartIdempotencyKey,
   hashGenerationStartIdempotencyKey,
+  hashGenerationStartRequest,
   withGenerationStartIdempotency,
 } from '@/lib/generation-start-idempotency';
 
@@ -24,11 +25,15 @@ function createClient(options: {
   generations?: GenerationRow[];
   profiles?: ProfileRow[];
   lockAcquired?: boolean;
+  claimResult?: 'claimed' | 'payload_mismatch';
 }) {
   const generations = options.generations ?? [];
   const profiles = options.profiles ?? [{ id: 'user-1', credits: 42 }];
   const lockAcquired = options.lockAcquired ?? true;
   const rpc = vi.fn(async (fn: string) => {
+    if (fn === 'claim_generation_start_request') {
+      return { data: options.claimResult ?? 'claimed', error: null };
+    }
     if (fn === 'try_acquire_backend_job_lock') {
       return { data: lockAcquired, error: null };
     }
@@ -77,12 +82,15 @@ describe('generation start idempotency', () => {
     expect(getGenerationStartIdempotencyKey(request, { idempotencyKey: 'start-1' })).toBe('start-1');
   });
 
-  it('uses x-request-id as a backwards-compatible fallback key', () => {
+  it('requires an explicit idempotency key instead of accepting a trace id', () => {
     const request = new Request('http://localhost/api/generate-image', {
       headers: { 'x-request-id': ' mobile:retry-safe-1 ' },
     });
 
-    expect(getGenerationStartIdempotencyKey(request, {})).toBe('mobile:retry-safe-1');
+    expect(() => getGenerationStartIdempotencyKey(request, {})).toThrow(expect.objectContaining({
+      status: 400,
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    }));
   });
 
   it('prefers explicit idempotency keys over x-request-id fallback keys', () => {
@@ -96,12 +104,26 @@ describe('generation start idempotency', () => {
     expect(getGenerationStartIdempotencyKey(request, {})).toBe('start-explicit-1');
   });
 
-  it('ignores unusable x-request-id fallback keys without rejecting the request', () => {
+  it('does not treat even a valid-looking x-request-id as a generation key', () => {
     const request = new Request('http://localhost/api/generate-image', {
-      headers: { 'x-request-id': 'x'.repeat(257) },
+      headers: { 'x-request-id': 'trace-only-1' },
     });
 
-    expect(getGenerationStartIdempotencyKey(request, {})).toBeNull();
+    expect(() => getGenerationStartIdempotencyKey(request, {})).toThrow(expect.objectContaining({
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    }));
+  });
+
+  it('hashes semantically identical request bodies consistently', () => {
+    expect(hashGenerationStartRequest({
+      prompt: 'hello',
+      options: { seed: 7, aspectRatio: '16:9' },
+      idempotencyKey: 'one',
+    })).toBe(hashGenerationStartRequest({
+      requestId: 'two',
+      options: { aspectRatio: '16:9', seed: 7 },
+      prompt: 'hello',
+    }));
   });
 
   it('replays an existing generation without running the start function', async () => {
@@ -122,6 +144,7 @@ describe('generation start idempotency', () => {
       client: client as never,
       userId: 'user-1',
       idempotencyKey: 'start-1',
+      requestHash: hashGenerationStartRequest({ prompt: 'first' }),
       owner: 'request-1',
       start,
     });
@@ -144,6 +167,7 @@ describe('generation start idempotency', () => {
       client: client as never,
       userId: 'user-1',
       idempotencyKey: 'start-1',
+      requestHash: hashGenerationStartRequest({ prompt: 'first' }),
       owner: 'request-1',
       start: vi.fn(),
     })).rejects.toMatchObject({
@@ -175,6 +199,7 @@ describe('generation start idempotency', () => {
       client: client as never,
       userId: 'user-1',
       idempotencyKey: 'start-pending',
+      requestHash: hashGenerationStartRequest({ prompt: 'pending' }),
       owner: 'request-1',
       start,
     })).rejects.toMatchObject({
@@ -200,6 +225,7 @@ describe('generation start idempotency', () => {
       client: client as never,
       userId: 'user-1',
       idempotencyKey: 'start-2',
+      requestHash: hashGenerationStartRequest({ prompt: 'second' }),
       owner: 'request-2',
       start,
     });
@@ -211,5 +237,25 @@ describe('generation start idempotency', () => {
       cost: 8,
     });
     expect(start).toHaveBeenCalledWith(hashGenerationStartIdempotencyKey('user-1', 'start-2'));
+  });
+
+  it('rejects reusing an idempotency key for a different request payload', async () => {
+    const { client, rpc } = createClient({ claimResult: 'payload_mismatch' });
+    const start = vi.fn();
+
+    await expect(withGenerationStartIdempotency({
+      client: client as never,
+      userId: 'user-1',
+      idempotencyKey: 'start-reused',
+      requestHash: hashGenerationStartRequest({ prompt: 'different' }),
+      owner: 'request-3',
+      start,
+    })).rejects.toMatchObject({
+      status: 409,
+      code: 'IDEMPOTENCY_KEY_REUSED',
+    });
+
+    expect(start).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalledWith('try_acquire_backend_job_lock', expect.anything());
   });
 });

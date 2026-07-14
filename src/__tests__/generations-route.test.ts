@@ -262,6 +262,30 @@ vi.mock('@/lib/server-helpers', () => ({
 
     return `https://signed.example.com/${normalized.slice(0, slashIndex)}/${normalized.slice(slashIndex + 1)}`;
   },
+  resolveOwnedStoredMediaUrl: async (
+    _supabase: unknown,
+    outputUrl: string,
+    ownerUserId: string,
+  ) => {
+    if (outputUrl.startsWith('http')) {
+      const url = new URL(outputUrl);
+      return url.protocol === 'https:' && !url.username && !url.password ? outputUrl : null;
+    }
+
+    const normalized = outputUrl.replace(/^\/+/, '');
+    const slashIndex = normalized.indexOf('/');
+    if (slashIndex === -1) {
+      return null;
+    }
+
+    const bucket = normalized.slice(0, slashIndex);
+    const filePath = normalized.slice(slashIndex + 1);
+    if (!filePath.startsWith(`${ownerUserId}/`)) {
+      return null;
+    }
+
+    return `https://signed.example.com/${bucket}/${filePath}`;
+  },
 }));
 
 describe('/api/generations route', () => {

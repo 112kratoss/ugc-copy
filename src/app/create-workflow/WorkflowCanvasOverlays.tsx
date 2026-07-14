@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { Layers3, PencilLine, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
 import type { WorkflowCanvasEdge, WorkflowCanvasNode } from '@/lib/workflow-canvas';
 import type {
@@ -116,7 +117,14 @@ function PreviewMediaOverlay({
 
         {preview.kind === 'image' && (
           <div className="overflow-auto rounded-3xl border border-white/10 bg-black/60 p-4">
-            <img src={preview.url} alt={preview.title} className="mx-auto max-h-[76vh] max-w-full rounded-2xl object-contain" />
+            <Image
+              unoptimized
+              src={preview.url}
+              alt={preview.title}
+              width={1600}
+              height={1200}
+              className="mx-auto max-h-[76vh] h-auto max-w-full rounded-2xl object-contain"
+            />
           </div>
         )}
 

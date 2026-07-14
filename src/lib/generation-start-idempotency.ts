@@ -5,7 +5,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { withBackendJobLock } from '@/lib/backend-job-lock';
 
 const HEADER_NAME = 'idempotency-key';
-const REQUEST_ID_HEADER_NAME = 'x-request-id';
 const MAX_KEY_LENGTH = 256;
 const LOCK_TTL_SECONDS = 120;
 const ACTIVE_START_STATUSES = new Set(['pending', 'waiting', 'processing']);
@@ -49,12 +48,6 @@ function readBodyKey(body: Record<string, unknown>): string | null {
   return typeof requestId === 'string' ? requestId : null;
 }
 
-function readRequestIdFallback(request: Request): string | null {
-  const requestId = request.headers.get(REQUEST_ID_HEADER_NAME)?.trim();
-  if (!requestId || requestId.length > MAX_KEY_LENGTH) return null;
-  return requestId;
-}
-
 function normalizeKey(value: string, source: string): string {
   const key = value.trim();
   if (!key) {
@@ -79,7 +72,7 @@ function normalizeKey(value: string, source: string): string {
 export function getGenerationStartIdempotencyKey(
   request: Request,
   body: Record<string, unknown>,
-): string | null {
+): string {
   const headerValue = request.headers.get(HEADER_NAME);
   const bodyValue = readBodyKey(body);
 
@@ -94,7 +87,15 @@ export function getGenerationStartIdempotencyKey(
     );
   }
 
-  return headerKey ?? bodyKey ?? readRequestIdFallback(request);
+  const key = headerKey ?? bodyKey;
+  if (!key) {
+    throw new GenerationStartIdempotencyError(
+      'Idempotency-Key is required for generation requests.',
+      400,
+      'IDEMPOTENCY_KEY_REQUIRED',
+    );
+  }
+  return key;
 }
 
 export function getGenerationStartLockOwner(request: Request): string {
@@ -107,6 +108,54 @@ export function hashGenerationStartIdempotencyKey(userId: string, key: string): 
     .update('\0')
     .update(key)
     .digest('hex');
+}
+
+function canonicalizeRequestValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeRequestValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([first], [second]) => first.localeCompare(second))
+      .map(([key, entryValue]) => [key, canonicalizeRequestValue(entryValue)]),
+  );
+}
+
+export function hashGenerationStartRequest(body: Record<string, unknown>): string {
+  const requestBody = { ...body };
+  delete requestBody.idempotencyKey;
+  delete requestBody.requestId;
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalizeRequestValue(requestBody)))
+    .digest('hex');
+}
+
+async function claimGenerationStartRequest(
+  client: SupabaseClient,
+  userId: string,
+  keyHash: string,
+  requestHash: string,
+): Promise<void> {
+  const { data, error } = await client.rpc('claim_generation_start_request', {
+    p_user_id: userId,
+    p_key_hash: keyHash,
+    p_request_hash: requestHash,
+  });
+  if (error) throw error;
+  if (data === 'payload_mismatch') {
+    throw new GenerationStartIdempotencyError(
+      'This idempotency key was already used for a different generation request.',
+      409,
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+  }
+  if (data !== 'claimed') {
+    throw new GenerationStartIdempotencyError(
+      'Generation idempotency could not be established.',
+      500,
+      'IDEMPOTENCY_CLAIM_FAILED',
+    );
+  }
 }
 
 async function loadCurrentCredits(client: SupabaseClient, userId: string): Promise<number> {
@@ -161,15 +210,13 @@ async function loadExistingGeneration(
 export async function withGenerationStartIdempotency(params: {
   client: SupabaseClient;
   userId: string;
-  idempotencyKey: string | null;
+  idempotencyKey: string;
+  requestHash: string;
   owner: string;
-  start: (keyHash: string | null) => Promise<GenerationStartResult>;
+  start: (keyHash: string) => Promise<GenerationStartResult>;
 }): Promise<GenerationStartResult> {
-  if (!params.idempotencyKey) {
-    return params.start(null);
-  }
-
   const keyHash = hashGenerationStartIdempotencyKey(params.userId, params.idempotencyKey);
+  await claimGenerationStartRequest(params.client, params.userId, keyHash, params.requestHash);
   const existing = await loadExistingGeneration(params.client, params.userId, keyHash);
   if (existing) return existing;
 

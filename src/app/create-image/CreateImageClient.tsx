@@ -57,6 +57,7 @@ import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
     freezeGenerationTiming,
+    getCurrentTimestampMs,
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
@@ -171,6 +172,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const modelCatalog = useWebGenerationModelCatalog();
+    const refetchModelCatalog = modelCatalog.refetch;
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
     const [elements, setElements] = useState<ImageElementDraft[]>([]);
@@ -201,7 +203,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         replaceStart: number;
         replaceEnd: number;
     } | null>(null);
-    
+
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
@@ -223,6 +225,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     useEffect(() => {
         if (remixId) return;
+        // A route prefill intentionally seeds the editable form once it is available.
         if (prefillPrompt) setPrompt(prefillPrompt);
         const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'image' && candidate.id === prefillModel));
         if (prefillModel && (prefillModel in IMAGE_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
@@ -284,6 +287,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (elements.length > model.maxImages) {
             const nextElements = hydrateImageElements(elements.slice(0, model.maxImages));
             elements.slice(model.maxImages).forEach((element) => revokePreviewUrl(element.previewUrl));
+            // Model changes must immediately enforce the provider's reference limit.
             commitElements(nextElements);
             void persistUploadedImageElements(nextElements);
         }
@@ -756,9 +760,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        // The quote response is the external signal that the local catalog is stale.
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
-        modelCatalog.refetch();
-    }, [modelCatalog.refetch, quoteState.error?.code]);
+        refetchModelCatalog();
+    }, [refetchModelCatalog, quoteState.error?.code]);
     const quoteUi = resolveWebGenerationQuoteUi({
         hasCatalog: Boolean(modelCatalog.catalog),
         quoteStatus: quoteState.status,
@@ -840,6 +845,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         };
 
         void resumePendingGeneration();
+        // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleGenerate = async () => {
@@ -863,7 +870,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
-        const startedAtMs = Date.now();
+        const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'image',
             model: selectedModel,
