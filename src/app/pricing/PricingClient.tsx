@@ -186,7 +186,6 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
         const storedCurrency = getStoredCurrencyPreference();
 
         // Browser storage and locale are available only after the server-safe first render.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSelectedCurrency(storedCurrency ?? inferDefaultCurrency(initialCountryCode));
 
         const fetchFx = async () => {

@@ -157,7 +157,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     useEffect(() => {
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (prefillPrompt) setPrompt(prefillPrompt);
         const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'motion' && candidate.id === prefillModel));
         if (prefillModel && (prefillModel in MOTION_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
@@ -671,7 +670,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
         // The quote response is the external signal that the local catalog is stale.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);

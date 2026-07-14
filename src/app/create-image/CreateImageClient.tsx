@@ -203,7 +203,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         replaceStart: number;
         replaceEnd: number;
     } | null>(null);
-    
+
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
@@ -226,7 +226,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     useEffect(() => {
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (prefillPrompt) setPrompt(prefillPrompt);
         const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'image' && candidate.id === prefillModel));
         if (prefillModel && (prefillModel in IMAGE_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
@@ -289,7 +288,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             const nextElements = hydrateImageElements(elements.slice(0, model.maxImages));
             elements.slice(model.maxImages).forEach((element) => revokePreviewUrl(element.previewUrl));
             // Model changes must immediately enforce the provider's reference limit.
-            // eslint-disable-next-line react-hooks/set-state-in-effect
             commitElements(nextElements);
             void persistUploadedImageElements(nextElements);
         }
@@ -763,7 +761,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
         // The quote response is the external signal that the local catalog is stale.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);

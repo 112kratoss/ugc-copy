@@ -300,7 +300,6 @@ export default function ShowcaseReelViewer({
   useEffect(() => {
     const clampedIndex = Math.min(Math.max(initialMediaIndex, 0), Math.max(0, mediaItems.length - 1));
     // Selecting a different reel item resets its media position from the URL state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveMediaIndex(clampedIndex);
   }, [initialMediaIndex, item?.id, mediaItems.length]);
 
@@ -555,7 +554,6 @@ export default function ShowcaseReelViewer({
     let cancelled = false;
 
     // Loading state belongs to the currently visible public recipe request.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPublicRecipeLoadingItemId(item.id);
     setPublicRecipeError(null);
 
@@ -610,7 +608,6 @@ export default function ShowcaseReelViewer({
     ]));
 
     // Signed file URLs are scoped to the currently accessible resource bundle.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setResourceFileUrls({});
 
     if (!item?.id || storagePaths.length === 0) {
@@ -658,7 +655,6 @@ export default function ShowcaseReelViewer({
 
   useEffect(() => {
     // Reference previews cannot carry across reel items.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveReferencePreview(null);
   }, [item?.id]);
 

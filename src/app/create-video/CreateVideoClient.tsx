@@ -492,7 +492,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     useEffect(() => {
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (prefillPrompt) setPrompt(prefillPrompt);
         const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'video' && candidate.id === prefillModel));
         if (prefillModel && (prefillModel in VIDEO_MODELS || isCatalogModel)) setSelectedModel(prefillModel as VideoModelId);
@@ -691,7 +690,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
         // The quote response is the external signal that the local catalog is stale.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
@@ -870,7 +868,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (videoModel.modeOptions?.length) {
             if (!videoModel.modeOptions.some((option) => option.value === mode)) {
                 // Switching models reconciles controls to values supported by the provider.
-                // eslint-disable-next-line react-hooks/set-state-in-effect
                 setMode(videoModel.modeOptions[0].value);
             }
         } else if (mode !== '') {
@@ -914,7 +911,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateVideoElements(elements.slice(0, videoElementSupport.maxElements));
         elements.slice(videoElementSupport.maxElements).forEach((element) => revokeObjectUrl(element.previewUrl));
         // Capability changes must enforce the provider's current element limit.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         commitElements(nextElements);
         void persistVideoElements(nextElements);
     }, [canUseVideoElements, elements, persistVideoElements, videoElementSupport.maxElements]);

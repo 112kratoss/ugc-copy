@@ -399,7 +399,6 @@ export default function CreationsPage() {
         })();
 
         // Browser navigation is the source of truth for these workspace controls.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setActiveView(nextView);
         setPostVisibilityFilter(nextVisibility);
     }, [searchParams]);
@@ -412,7 +411,6 @@ export default function CreationsPage() {
 
         generationsRef.current = cachedWorkspace.generations;
         // Hydrate the last user-scoped workspace snapshot before the network refresh completes.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setGenerations(cachedWorkspace.generations);
         setPosts(cachedWorkspace.posts);
         setProfile(cachedWorkspace.profile);
@@ -1260,7 +1258,6 @@ export default function CreationsPage() {
                         onClick={() => {
                             setPreviewGen(null);
                             // This callback runs only after a click; detail loading reads the cache ref then.
-                            // eslint-disable-next-line react-hooks/refs
                             void openPublishModal(generation);
                         }}
                         className={primaryClass}

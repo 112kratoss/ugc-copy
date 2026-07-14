@@ -198,7 +198,6 @@ export default function PublishToShowcaseModal({
     }
 
     // Opening a generation starts a fresh publish draft from its supplied defaults.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPublishTitle(defaultTitle);
     setPublishDescription(getDefaultPublishDescription(defaultDescription, paywallPrefill));
     setSellAutoUnlock(Boolean(initialSellAutoUnlock && hasAutoUnlock));

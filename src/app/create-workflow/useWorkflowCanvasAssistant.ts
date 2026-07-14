@@ -127,7 +127,6 @@ export function useWorkflowCanvasAssistant({
 
   useEffect(() => {
     // The composer belongs to the active canvas and must not leak between canvases.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInput('');
     void loadAssistantState();
   }, [loadAssistantState]);

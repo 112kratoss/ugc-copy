@@ -195,7 +195,6 @@ export function CreatorContentTabs({
     }
     if (items.some((item) => item.id === postId)) {
       // The URL can directly select an item already present in the client page.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedItemId(postId);
       return;
     }
@@ -267,7 +266,6 @@ export function CreatorContentTabs({
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') {
       // Record the browser capability after mount so server markup remains deterministic.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setObserverSupported(false);
       return;
     }

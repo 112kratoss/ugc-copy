@@ -308,7 +308,6 @@ export default function ShowcaseClient({
         const postParam = searchParams.get('post');
         const mediaParam = Number(searchParams.get('media'));
         // Browser history is the source of truth for the active reel and media index.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
 
         if (!postParam) {
@@ -446,7 +445,6 @@ export default function ShowcaseClient({
             );
         // A server navigation replaces the feed snapshot and its pagination/filter state.
         setItems(visibleInitialItems);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setPageInfo(initialFeed.pageInfo);
         setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
         setIsLoadingMore(false);
