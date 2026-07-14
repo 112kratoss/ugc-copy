@@ -7,7 +7,7 @@ import {
   loadGenerationInputMediaMap,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { getStoredMediaLocation, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { getStoredMediaLocation, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
 
@@ -107,6 +107,7 @@ function inferVisualContentType(value: string | null): string | null {
 async function getPersistedOutputUrls(
   workflowSettings: Record<string, unknown> | null,
   adminSupabase: OwnerGenerationsRouteClient,
+  ownerUserId: string,
 ): Promise<string[]> {
   const outputs = workflowSettings?.outputs;
   if (!Array.isArray(outputs)) {
@@ -124,7 +125,7 @@ async function getPersistedOutputUrls(
         return null;
       }
 
-      return resolveStoredMediaUrl(adminSupabase, storagePath);
+      return resolveOwnedStoredMediaUrl(adminSupabase, storagePath, ownerUserId);
     }),
   );
 
@@ -142,6 +143,7 @@ function resolveShowcaseAssetUrl(
 async function resolveGenerationOutputUrl(
   adminSupabase: OwnerGenerationsRouteClient,
   generation: GenerationRow,
+  ownerUserId: string,
 ): Promise<string | null> {
   if (generation.showcase_asset_path) {
     return resolveShowcaseAssetUrl(adminSupabase, generation.showcase_asset_path);
@@ -151,17 +153,18 @@ async function resolveGenerationOutputUrl(
     return null;
   }
 
-  return resolveStoredMediaUrl(adminSupabase, generation.output_url);
+  return resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, ownerUserId);
 }
 
 async function resolveGenerationPreviewUrl(
   adminSupabase: OwnerGenerationsRouteClient,
   generation: GenerationRow,
   outputUrl: string | null,
+  ownerUserId: string,
 ): Promise<string | null> {
   const previewSource = generation.preview_url || generation.thumbnail_url || null;
   if (previewSource) {
-    return resolveStoredMediaUrl(adminSupabase, previewSource);
+    return resolveOwnedStoredMediaUrl(adminSupabase, previewSource, ownerUserId);
   }
 
   if (generation.category === 'image') {
@@ -442,7 +445,7 @@ export async function listOwnerGenerationsForRoute({
     const template = templateMetadata.get(generation.id) ?? null;
     const workflowSettings = template ? null : getWorkflowSettings(generation.workflow_settings);
     const outputCount = getWorkflowOutputCount(workflowSettings);
-    const outputUrls = summaryOnly ? [] : await getPersistedOutputUrls(workflowSettings, adminSupabase);
+    const outputUrls = summaryOnly ? [] : await getPersistedOutputUrls(workflowSettings, adminSupabase, userId);
     const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
     const inputMedia = summaryOnly || template
       ? []
@@ -464,8 +467,8 @@ export async function listOwnerGenerationsForRoute({
         workflowSettings,
         inputMedia,
       });
-    const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation);
-    const previewUrl = await resolveGenerationPreviewUrl(adminSupabase, generation, outputUrl);
+    const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation, userId);
+    const previewUrl = await resolveGenerationPreviewUrl(adminSupabase, generation, outputUrl, userId);
     const classification = classifyVisualMedia({
       category: generation.category,
       contentType: inferVisualContentType(generation.output_url),

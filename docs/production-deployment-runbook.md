@@ -24,7 +24,9 @@ The protected backend health endpoint reports only missing capability names, nev
 - Scheduler authentication: `CRON_SECRET`.
 - Protected ops dashboard authentication: `OPS_READ_SECRET`.
 - Generation provider: `KIE_AI_API_KEY`.
-- Generation webhook authentication: `KIE_WEBHOOK_HMAC_KEY` or legacy `WEBHOOK_SECRET`.
+- Generation webhook ingress: `KIE_PROVIDER_WEBHOOK_SECRET` (with legacy `WEBHOOK_SECRET` accepted only during rotation). KIE callbacks go to the Supabase `kie-webhook` Edge Function, never directly to the HMAC-only application endpoint.
+- Generation webhook forwarding authentication: `KIE_WEBHOOK_HMAC_KEY`; the Edge Function signs the provider task id and a five-minute timestamp before forwarding to Vercel. `KIE_PROVIDER_WEBHOOK_SECRET_PREVIOUS`, `KIE_WEBHOOK_HMAC_KEY_PREVIOUS`, and `WEBHOOK_SECRET_PREVIOUS` are temporary rotation-only variables and should be removed after in-flight jobs expire.
+- Provider media import allowlist: `MEDIA_IMPORT_HOST_ALLOWLIST` (comma-separated HTTPS hostnames; `*.example.com` matches subdomains only). Include every provider CDN host that can appear in temporary generation output URLs. Imports fail closed when a host is absent, redirects leave the allowlist, DNS resolves privately, the media type is invalid, or the response exceeds its byte limit.
 - Razorpay: `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`.
 - RevenueCat: `REVENUECAT_SECRET_API_KEY` or `REVENUECAT_REST_API_KEY`, plus `REVENUECAT_WEBHOOK_AUTH_TOKEN`.
 - Invite attribution hashing: `REFERRAL_ATTRIBUTION_HASH_SECRET` set to a dedicated long random secret.

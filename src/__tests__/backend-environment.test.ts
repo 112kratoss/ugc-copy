@@ -17,6 +17,7 @@ const COMPLETE_ENVIRONMENT = {
   OPS_READ_SECRET: 'ops-read-secret',
   KIE_AI_API_KEY: 'kie-key',
   KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
+  KIE_PROVIDER_WEBHOOK_SECRET: 'kie-provider-webhook-secret',
   NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp-key',
   RAZORPAY_KEY_SECRET: 'rzp-secret',
   RAZORPAY_WEBHOOK_SECRET: 'rzp-webhook-secret',
@@ -79,6 +80,7 @@ describe('backend environment contract', () => {
     expect(template).toContain('CRON_SECRET=');
     expect(template).toContain('OPS_READ_SECRET=');
     expect(template).toContain('KIE_WEBHOOK_HMAC_KEY=');
+    expect(template).toContain('KIE_PROVIDER_WEBHOOK_SECRET=');
     expect(template).toContain('REVENUECAT_WEBHOOK_AUTH_TOKEN=');
     expect(template).toContain('REFERRAL_ATTRIBUTION_HASH_SECRET=');
     expect(template).toContain('APPLE_TEAM_ID=');

@@ -464,7 +464,7 @@ describe('generation services', () => {
       prediction_id: 'task-callback-1',
     });
     expect(providerBody).toMatchObject({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
     });
   });
 
@@ -589,7 +589,7 @@ describe('generation services', () => {
       prediction_id: 'task-sfx-durable-1',
     });
     expect(providerBody).toMatchObject({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
     });
   });
 
@@ -983,7 +983,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
       model: 'gpt-image-2-text-to-image',
       input: {
         prompt: 'A premium skincare product hero image.',
@@ -1159,7 +1159,7 @@ describe('generation services', () => {
       client_request_key_hash: 'b'.repeat(64),
     });
     expect(providerBody).toMatchObject({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
     });
   });
 
@@ -1488,7 +1488,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
       model: 'grok-imagine/text-to-image',
       input: {
         prompt: 'A surreal product launch poster.',
@@ -1791,7 +1791,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
       model: 'grok-imagine/text-to-video',
       input: {
         prompt: 'A playful product reveal with quick camera energy.',
@@ -1855,10 +1855,10 @@ describe('generation services', () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (!init?.body) {
-        return {
-          ok: true,
-          blob: async () => new Blob(['start-frame'], { type: 'image/jpeg' }),
-        } as Response;
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        });
       }
       providerBody = JSON.parse(String(init.body));
       return {
@@ -1882,7 +1882,7 @@ describe('generation services', () => {
     });
 
     expect(providerBody).toEqual({
-      callBackUrl: 'https://magicbooklet.com/api/webhooks/kie?generationId=gen-1&secret=test-webhook-secret',
+      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
       model: 'grok-imagine/image-to-video',
       input: {
         prompt: 'Animate the still with a slow push-in.',
@@ -2352,10 +2352,10 @@ describe('generation services', () => {
       })
       .mockImplementationOnce(async (_input: RequestInfo | URL, init?: RequestInit) => {
         mediaInit = init;
-        return {
-          ok: true,
-          blob: async () => new Blob(['audio'], { type: 'audio/mpeg' }),
-        } as Response;
+        return new Response(new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00, 0x00]), {
+          status: 200,
+          headers: { 'content-type': 'audio/mpeg' },
+        });
       });
 
     const { supabase, generations, uploads, rpcCalls } = createSupabaseMock([{

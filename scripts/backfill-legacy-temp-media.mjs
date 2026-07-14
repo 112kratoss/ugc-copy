@@ -1,5 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 
+import {
+    logBackfillExecutionMode,
+    parseBackfillExecutionMode,
+} from './backfill-execution-mode.mjs';
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -10,7 +15,9 @@ if (!supabaseUrl || !serviceRoleKey) {
 
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 const LEGACY_HOST = 'tempfile.aiquickdraw.com';
-const dryRun = process.argv.includes('--dry-run');
+const executionMode = parseBackfillExecutionMode({ supabaseUrl });
+const dryRun = executionMode.dryRun;
+logBackfillExecutionMode(executionMode);
 
 function inferMediaTarget(generation, responseContentType) {
     const pathname = (() => {

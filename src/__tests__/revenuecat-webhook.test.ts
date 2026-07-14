@@ -95,7 +95,7 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
-  it('ignores cancellation events for products outside the credit catalog', async () => {
+  it('passes non-credit product cancellations to the global entitlement ledger', async () => {
     const { POST } = await import('@/app/api/mobile/commerce/revenuecat-webhook/route');
     const response = await POST(webhookRequest({ ...refundEvent, product_id: 'monthly.subscription' }, 'Bearer revenuecat-webhook-secret', {
       'x-request-id': 'revenuecat-webhook-noncatalog-1',
@@ -103,7 +103,9 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
 
     expect(response.status).toBe(200);
     expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-noncatalog-1');
-    expect(rpcMock).not.toHaveBeenCalled();
+    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_purchase_adjustment', expect.objectContaining({
+      p_product_id: 'monthly.subscription',
+    }));
   });
 
   it('reconciles a refunded Play Store credit purchase', async () => {
@@ -115,7 +117,7 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
     expect(response.status).toBe(200);
     expectPrivateNoStoreTraceHeaders(response, 'revenuecat-webhook-success-1');
     expect(await response.json()).toEqual({ received: true, result: 'refunded' });
-    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_purchase_adjustment', {
+    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_purchase_adjustment', {
       p_action: 'refund',
       p_event_id: 'event-refund-1',
       p_event_timestamp_ms: 1_766_000_000_000,
@@ -140,7 +142,7 @@ describe('/api/mobile/commerce/revenuecat-webhook', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_credit_purchase_adjustment', expect.objectContaining({
+    expect(rpcMock).toHaveBeenCalledWith('reconcile_mobile_purchase_adjustment', expect.objectContaining({
       p_action: 'restore',
       p_external_order_id: 'mobile_app_store_2000000123456789',
     }));

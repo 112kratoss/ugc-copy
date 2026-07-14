@@ -6,6 +6,7 @@ import {
   TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
 
 export type TemporaryMediaUploadSignClient = Parameters<typeof enforceBackendRateLimit>[0] & {
   storage: {
@@ -117,7 +118,7 @@ function validateUploadMetadata(body: unknown): {
   }
 
   const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim().toLowerCase() : '';
-  if (!mimeType || mimeType === 'image/svg+xml' || !mimeType.startsWith(`${kind}/`)) {
+  if (!mimeType || !isAllowedStorageMediaMimeType(kind, mimeType)) {
     return { error: `Upload a valid ${kind} file.` };
   }
 

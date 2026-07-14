@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 
 import {
   AiUsageLedgerError,
+  markAiUsageSucceeded,
+  refundAiUsageLedger,
   startAiUsageLedger,
 } from '@/lib/ai-usage-ledger';
 
@@ -110,6 +112,18 @@ function createDb(options?: {
 
         if (fn === 'refund_credits' || fn === 'refund_ai_usage_event') {
           return { data: true, error: null };
+        }
+
+        if (fn === 'settle_ai_usage_event') {
+          return {
+            data: {
+              status: args.p_outcome,
+              settled: true,
+              event_id: args.p_event_id,
+              remaining_credits: remainingCredits,
+            },
+            error: null,
+          };
         }
 
         throw new Error(`Unexpected rpc: ${fn}`);
@@ -436,6 +450,86 @@ describe('AI usage ledger', () => {
       name: 'AiUsageLedgerError',
       status: 401,
       code: 'AI_USAGE_PROFILE_NOT_FOUND',
+    });
+  });
+
+  it('settles a successful AI usage event atomically through the state-machine RPC', async () => {
+    const db = createDb({ remainingCredits: 88 });
+
+    const result = await markAiUsageSucceeded(db.client as never, {
+      eventId: 'usage-1',
+      remainingCredits: 88,
+      cost: 2,
+      userId: 'user-1',
+    }, 'enhanced prompt', { enhancedPrompt: 'enhanced prompt' });
+
+    expect(result).toEqual({
+      status: 'succeeded',
+      eventId: 'usage-1',
+      settled: true,
+      remainingCredits: 88,
+    });
+    expect(db.rpcCalls).toEqual([{
+      fn: 'settle_ai_usage_event',
+      args: {
+        p_event_id: 'usage-1',
+        p_outcome: 'succeeded',
+        p_output_text: 'enhanced prompt',
+        p_response_payload: { enhancedPrompt: 'enhanced prompt' },
+        p_error_message: null,
+      },
+    }]);
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it('refunds credits and records the failure in the same retry-safe RPC', async () => {
+    const db = createDb({ remainingCredits: 90 });
+
+    await expect(refundAiUsageLedger(db.client as never, {
+      eventId: 'usage-1',
+      remainingCredits: 88,
+      cost: 2,
+      userId: 'user-1',
+    }, new Error('provider timeout'))).resolves.toMatchObject({
+      status: 'refunded',
+      eventId: 'usage-1',
+    });
+
+    expect(db.rpcCalls).toEqual([{
+      fn: 'settle_ai_usage_event',
+      args: {
+        p_event_id: 'usage-1',
+        p_outcome: 'refunded',
+        p_output_text: null,
+        p_response_payload: null,
+        p_error_message: 'provider timeout',
+      },
+    }]);
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it('fails closed when the database reports an incompatible AI usage transition', async () => {
+    const client = {
+      rpc: vi.fn(async () => ({
+        data: {
+          status: 'transition_conflict',
+          settled: false,
+          event_id: 'usage-1',
+          current_status: 'refunded',
+        },
+        error: null,
+      })),
+    };
+
+    await expect(markAiUsageSucceeded(client as never, {
+      eventId: 'usage-1',
+      remainingCredits: 88,
+      cost: 2,
+      userId: 'user-1',
+    }, 'enhanced prompt')).rejects.toMatchObject({
+      name: 'AiUsageLedgerError',
+      code: 'USAGE_EVENT_FAILED',
+      status: 500,
     });
   });
 });

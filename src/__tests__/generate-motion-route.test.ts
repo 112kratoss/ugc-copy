@@ -145,6 +145,10 @@ function createSupabaseMock(
       return { data: true, error: null };
     }
 
+    if (fn === 'claim_generation_start_request') {
+      return { data: 'claimed', error: null };
+    }
+
     if (fn === 'check_backend_rate_limit') {
       return {
         data: {
@@ -365,6 +369,7 @@ describe('/api/generate route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'motion-descriptors-start-1',
           'x-request-id': 'motion-rate-limit-1',
         },
         body: JSON.stringify({
@@ -458,6 +463,7 @@ describe('/api/generate route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'motion-missing-webhook-start-1',
         },
         body: JSON.stringify({
           model: 'kling-3.0',

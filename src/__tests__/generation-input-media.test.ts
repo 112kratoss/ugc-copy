@@ -6,17 +6,11 @@ describe('generation input media persistence', () => {
     vi.restoreAllMocks();
   });
 
-  it('bounds external input media downloads with a timeout signal', async () => {
+  it('routes external input media through the guarded downloader', async () => {
     const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
-    const timeoutSignal = AbortSignal.abort();
-    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
-    let requestInit: RequestInit | undefined;
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      requestInit = init;
-      return {
-        ok: true,
-        blob: async () => new Blob(['image'], { type: 'image/png' }),
-      } as Response;
+    const downloadRemoteMedia = vi.fn(async () => ({
+      blob: new Blob(['image'], { type: 'image/png' }),
+      sourceName: 'reference.png',
     }));
 
     const upload = vi.fn(async () => ({ error: null }));
@@ -44,10 +38,13 @@ describe('generation input media persistence', () => {
         label: 'Reference image',
         sourceUrl: 'https://provider.example.com/reference.png',
       }],
+      downloadRemoteMedia,
     });
 
-    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
-    expect(requestInit?.signal).toBe(timeoutSignal);
+    expect(downloadRemoteMedia).toHaveBeenCalledWith({
+      url: 'https://provider.example.com/reference.png',
+      kind: 'image',
+    });
     expect(upload).toHaveBeenCalledWith(
       'user-1/gen-1/00-reference_image.png',
       expect.any(Blob),
@@ -59,5 +56,31 @@ describe('generation input media persistence', () => {
       media_type: 'image',
       storage_path: 'generation_inputs/user-1/gen-1/00-reference_image.png',
     }));
+  });
+
+  it('does not read a storage path outside the authenticated user prefix', async () => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const download = vi.fn();
+    const upload = vi.fn();
+    const insert = vi.fn();
+    const supabase = {
+      storage: { from: vi.fn(() => ({ download, upload })) },
+      from: vi.fn(() => ({ insert })),
+    };
+
+    await persistGenerationInputMedia({
+      supabase: supabase as never,
+      generationId: 'gen-1',
+      userId: 'attacker-1',
+      candidates: [{
+        mediaType: 'image',
+        role: 'reference_image',
+        sourceStoragePath: 'generation_inputs/victim-1/public-generation/00-reference_image.png',
+      }],
+    });
+
+    expect(download).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
   });
 });

@@ -53,6 +53,25 @@ describe('KIE webhook helpers', () => {
     })).toBe(true);
   });
 
+  it('accepts the previous HMAC key during rotation', async () => {
+    const { verifyKieWebhookAuthorization } = await import('@/lib/kie-webhook');
+    const timestamp = '1782039000';
+    const signature = createHmac('sha256', 'previous-hmac-key')
+      .update(`task-rotating.${timestamp}`)
+      .digest('base64');
+
+    expect(verifyKieWebhookAuthorization({
+      taskId: 'task-rotating',
+      timestamp,
+      signature,
+      hmacKey: 'current-hmac-key',
+      previousHmacKey: 'previous-hmac-key',
+      legacySecret: null,
+      requestSecret: null,
+      nowSeconds: 1782039000,
+    })).toBe(true);
+  });
+
   it('rejects signed callbacks outside the replay window', async () => {
     const { verifyKieWebhookAuthorization } = await import('@/lib/kie-webhook');
     const timestamp = '1782038000';
@@ -99,31 +118,43 @@ describe('KIE webhook helpers', () => {
     })).toBe(true);
   });
 
-  it('builds a secretless callback URL when HMAC is configured', async () => {
+  it('builds a secret-protected provider ingress URL when HMAC forwarding is configured', async () => {
     const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+    const previousSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const previousHmacKey = process.env.KIE_WEBHOOK_HMAC_KEY;
+    const previousProviderSecret = process.env.KIE_PROVIDER_WEBHOOK_SECRET;
     const previousSecret = process.env.WEBHOOK_SECRET;
     process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com/';
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     process.env.KIE_WEBHOOK_HMAC_KEY = 'hmac-key';
+    process.env.KIE_PROVIDER_WEBHOOK_SECRET = 'provider-secret';
     delete process.env.WEBHOOK_SECRET;
 
     try {
       const { buildKieWebhookCallbackUrl } = await import('@/lib/kie-webhook');
 
-      expect(buildKieWebhookCallbackUrl()).toBe('https://magicbooklet.com/api/webhooks/kie');
+      expect(buildKieWebhookCallbackUrl()).toBe(
+        'https://project.supabase.co/functions/v1/kie-webhook?secret=provider-secret',
+      );
     } finally {
       restoreEnv('NEXT_PUBLIC_SITE_URL', previousSiteUrl);
+      restoreEnv('NEXT_PUBLIC_SUPABASE_URL', previousSupabaseUrl);
       restoreEnv('KIE_WEBHOOK_HMAC_KEY', previousHmacKey);
+      restoreEnv('KIE_PROVIDER_WEBHOOK_SECRET', previousProviderSecret);
       restoreEnv('WEBHOOK_SECRET', previousSecret);
     }
   });
 
   it('includes a local generation id in callback URLs when provided', async () => {
     const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+    const previousSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const previousHmacKey = process.env.KIE_WEBHOOK_HMAC_KEY;
+    const previousProviderSecret = process.env.KIE_PROVIDER_WEBHOOK_SECRET;
     const previousSecret = process.env.WEBHOOK_SECRET;
     process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com/';
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     delete process.env.KIE_WEBHOOK_HMAC_KEY;
+    delete process.env.KIE_PROVIDER_WEBHOOK_SECRET;
     process.env.WEBHOOK_SECRET = 'webhook-secret';
 
     try {
@@ -134,7 +165,9 @@ describe('KIE webhook helpers', () => {
       );
     } finally {
       restoreEnv('NEXT_PUBLIC_SITE_URL', previousSiteUrl);
+      restoreEnv('NEXT_PUBLIC_SUPABASE_URL', previousSupabaseUrl);
       restoreEnv('KIE_WEBHOOK_HMAC_KEY', previousHmacKey);
+      restoreEnv('KIE_PROVIDER_WEBHOOK_SECRET', previousProviderSecret);
       restoreEnv('WEBHOOK_SECRET', previousSecret);
     }
   });

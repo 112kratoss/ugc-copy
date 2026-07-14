@@ -143,7 +143,7 @@ describe('ProfileActions', () => {
 
   it('shows loading feedback while follow is pending', async () => {
     let resolveFollow: (value: Response) => void = () => undefined;
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/profile/follow?')) {
         return {
           ok: true,

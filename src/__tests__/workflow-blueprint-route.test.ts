@@ -105,6 +105,18 @@ function createAdminClient(options?: {
         return { data: true, error: null };
       }
 
+      if (fn === 'settle_ai_usage_event') {
+        return {
+          data: {
+            status: args.p_outcome,
+            settled: true,
+            event_id: args.p_event_id,
+            remaining_credits: remainingCredits,
+          },
+          error: null,
+        };
+      }
+
       throw new Error(`Unexpected rpc: ${fn}`);
     }),
     from: vi.fn((table: string) => {

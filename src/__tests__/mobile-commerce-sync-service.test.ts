@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  completeMobileCreditPurchase: vi.fn(),
-  completeMobileMarketplaceUnlock: vi.fn(),
-  completeMobilePostResourceUnlock: vi.fn(),
+  completeMobilePurchase: vi.fn(),
   normalizeMobileCommercePayload: vi.fn(),
+  resolveMobilePurchaseAuthority: vi.fn(),
   verifyMobilePurchase: vi.fn(),
 }));
 
@@ -17,10 +16,9 @@ class MockMobileCommerceError extends Error {
 
 vi.mock('@/lib/mobile-commerce', () => ({
   MobileCommerceError: MockMobileCommerceError,
-  completeMobileCreditPurchase: (...args: unknown[]) => mocks.completeMobileCreditPurchase(...args),
-  completeMobileMarketplaceUnlock: (...args: unknown[]) => mocks.completeMobileMarketplaceUnlock(...args),
-  completeMobilePostResourceUnlock: (...args: unknown[]) => mocks.completeMobilePostResourceUnlock(...args),
+  completeMobilePurchase: (...args: unknown[]) => mocks.completeMobilePurchase(...args),
   normalizeMobileCommercePayload: (...args: unknown[]) => mocks.normalizeMobileCommercePayload(...args),
+  resolveMobilePurchaseAuthority: (...args: unknown[]) => mocks.resolveMobilePurchaseAuthority(...args),
   verifyMobilePurchase: (...args: unknown[]) => mocks.verifyMobilePurchase(...args),
 }));
 
@@ -64,36 +62,34 @@ describe('mobile commerce sync service', () => {
     rateLimitRpc = createRateLimitRpc();
     adminSupabase = { service: 'admin', rpc: rateLimitRpc };
     getAdminSupabase = vi.fn(() => adminSupabase);
-    mocks.completeMobileCreditPurchase.mockReset();
-    mocks.completeMobileMarketplaceUnlock.mockReset();
-    mocks.completeMobilePostResourceUnlock.mockReset();
+    mocks.completeMobilePurchase.mockReset();
     mocks.normalizeMobileCommercePayload.mockReset();
+    mocks.resolveMobilePurchaseAuthority.mockReset();
     mocks.verifyMobilePurchase.mockReset();
     mocks.normalizeMobileCommercePayload.mockReturnValue({
       productId: 'credits-1',
       provider: 'app_store',
       transactionId: 'tx-1',
       receiptToken: 'receipt-1',
-      entitlement: { type: 'credits' },
+      purchaseIntentId: null,
+    });
+    mocks.resolveMobilePurchaseAuthority.mockResolvedValue({
+      entitlementType: 'credits',
+      productId: 'credits-1',
+      purchaseIntentId: null,
+      resourceId: null,
+      amountSubunits: 100,
+      currency: 'INR',
+      credits: 42,
     });
     mocks.verifyMobilePurchase.mockResolvedValue({
       provider: 'app_store',
       transactionId: 'verified-tx-1',
     });
-    mocks.completeMobileCreditPurchase.mockResolvedValue({
+    mocks.completeMobilePurchase.mockResolvedValue({
       success: true,
       entitlement: 'credits',
       credits: 42,
-    });
-    mocks.completeMobileMarketplaceUnlock.mockResolvedValue({
-      success: true,
-      entitlement: 'marketplace_unlock',
-      assetId: 'asset-1',
-    });
-    mocks.completeMobilePostResourceUnlock.mockResolvedValue({
-      success: true,
-      entitlement: 'post_resource_unlock',
-      postId: 'post-1',
     });
   });
 
@@ -112,6 +108,7 @@ describe('mobile commerce sync service', () => {
     });
     expect(getAdminSupabase).not.toHaveBeenCalled();
     expect(mocks.normalizeMobileCommercePayload).not.toHaveBeenCalled();
+    expect(mocks.resolveMobilePurchaseAuthority).not.toHaveBeenCalled();
     expect(mocks.verifyMobilePurchase).not.toHaveBeenCalled();
   });
 
@@ -143,6 +140,7 @@ describe('mobile commerce sync service', () => {
       p_window_seconds: 600,
     });
     expect(mocks.normalizeMobileCommercePayload).not.toHaveBeenCalled();
+    expect(mocks.resolveMobilePurchaseAuthority).not.toHaveBeenCalled();
     expect(mocks.verifyMobilePurchase).not.toHaveBeenCalled();
   });
 
@@ -169,10 +167,16 @@ describe('mobile commerce sync service', () => {
       transactionId: 'tx-1',
       receiptToken: 'receipt-1',
     });
-    expect(mocks.completeMobileCreditPurchase).toHaveBeenCalledWith({
+    expect(mocks.resolveMobilePurchaseAuthority).toHaveBeenCalledWith({
       adminSupabase,
       userId: 'buyer-1',
       productId: 'credits-1',
+      purchaseIntentId: null,
+    });
+    expect(mocks.completeMobilePurchase).toHaveBeenCalledWith({
+      adminSupabase,
+      userId: 'buyer-1',
+      authority: expect.objectContaining({ entitlementType: 'credits' }),
       provider: 'app_store',
       transactionId: 'verified-tx-1',
     });
@@ -186,7 +190,21 @@ describe('mobile commerce sync service', () => {
       provider: 'play_store',
       transactionId: 'tx-marketplace-1',
       receiptToken: 'receipt-marketplace-1',
-      entitlement: { type: 'marketplace_unlock', assetId: 'asset-1' },
+      purchaseIntentId: 'intent-marketplace-1',
+    });
+    mocks.resolveMobilePurchaseAuthority.mockResolvedValueOnce({
+      entitlementType: 'marketplace_unlock',
+      productId: 'asset-product-1',
+      purchaseIntentId: 'intent-marketplace-1',
+      resourceId: 'asset-1',
+      amountSubunits: 900,
+      currency: 'USD',
+      credits: null,
+    });
+    mocks.completeMobilePurchase.mockResolvedValueOnce({
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId: 'asset-1',
     });
     mocks.verifyMobilePurchase.mockResolvedValueOnce({
       provider: 'play_store',
@@ -204,7 +222,21 @@ describe('mobile commerce sync service', () => {
       provider: 'app_store',
       transactionId: 'tx-post-1',
       receiptToken: 'receipt-post-1',
-      entitlement: { type: 'post_resource_unlock', postId: 'post-1' },
+      purchaseIntentId: 'intent-post-1',
+    });
+    mocks.resolveMobilePurchaseAuthority.mockResolvedValueOnce({
+      entitlementType: 'post_resource_unlock',
+      productId: 'post-product-1',
+      purchaseIntentId: 'intent-post-1',
+      resourceId: 'post-1',
+      amountSubunits: 1200,
+      currency: 'USD',
+      credits: null,
+    });
+    mocks.completeMobilePurchase.mockResolvedValueOnce({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId: 'post-1',
     });
     mocks.verifyMobilePurchase.mockResolvedValueOnce({
       provider: 'app_store',
@@ -227,17 +259,23 @@ describe('mobile commerce sync service', () => {
       entitlement: 'post_resource_unlock',
       postId: 'post-1',
     });
-    expect(mocks.completeMobileMarketplaceUnlock).toHaveBeenCalledWith({
+    expect(mocks.completeMobilePurchase).toHaveBeenNthCalledWith(1, {
       adminSupabase,
       userId: 'buyer-1',
-      assetId: 'asset-1',
+      authority: expect.objectContaining({
+        entitlementType: 'marketplace_unlock',
+        resourceId: 'asset-1',
+      }),
       provider: 'play_store',
       transactionId: 'verified-marketplace-1',
     });
-    expect(mocks.completeMobilePostResourceUnlock).toHaveBeenCalledWith({
+    expect(mocks.completeMobilePurchase).toHaveBeenNthCalledWith(2, {
       adminSupabase,
       userId: 'buyer-1',
-      postId: 'post-1',
+      authority: expect.objectContaining({
+        entitlementType: 'post_resource_unlock',
+        resourceId: 'post-1',
+      }),
       provider: 'app_store',
       transactionId: 'verified-post-1',
     });

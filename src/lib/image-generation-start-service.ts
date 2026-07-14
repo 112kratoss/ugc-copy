@@ -6,6 +6,7 @@ import { startImageGeneration } from '@/lib/generation-services';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
+  hashGenerationStartRequest,
   withGenerationStartIdempotency,
 } from '@/lib/generation-start-idempotency';
 import type { ImageElementDescriptor } from '@/lib/image-elements';
@@ -96,6 +97,7 @@ export async function startImageGenerationForRoute({
     client: adminSupabase,
     userId,
     idempotencyKey,
+    requestHash: hashGenerationStartRequest(body),
     owner: getGenerationStartLockOwner(request),
     start: (clientRequestKeyHash) => startImageGeneration({
       supabase,

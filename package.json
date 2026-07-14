@@ -21,8 +21,11 @@
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
     "build": "next build",
+    "build:verify": "node scripts/check-ffmpeg-build-artifact.mjs",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "typecheck:scripts": "tsc --project tsconfig.scripts.json --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test"
   },

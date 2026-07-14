@@ -81,6 +81,29 @@ describe('RevenueCat webhook route adapter service', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it('uses the bounded body reader even when Content-Length is absent', async () => {
+    const rpc = vi.fn();
+    const createServiceClient = vi.fn(() => ({ rpc }));
+    const readBoundedWebhookBody = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'too_large' as const,
+    }));
+
+    const response = await postRevenueCatWebhookRouteResponse({
+      request: webhookRequest(refundPayload),
+      dependencies: {
+        createServiceClient,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        readBoundedWebhookBody,
+      },
+    });
+
+    expect(response.status).toBe(413);
+    expect(readBoundedWebhookBody).toHaveBeenCalledTimes(1);
+    expect(createServiceClient).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it('reconciles valid credit refund events through the Supabase RPC', async () => {
     const rpc = vi.fn(async () => ({
       data: { status: 'refunded', rewards: [] },
@@ -103,7 +126,7 @@ describe('RevenueCat webhook route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('revenuecat-webhook-success-1');
     await expect(response.json()).resolves.toEqual({ received: true, result: 'refunded' });
     expect(createServiceClient).toHaveBeenCalledTimes(1);
-    expect(rpc).toHaveBeenCalledWith('reconcile_mobile_credit_purchase_adjustment', {
+    expect(rpc).toHaveBeenCalledWith('reconcile_mobile_purchase_adjustment', {
       p_action: 'refund',
       p_event_id: 'event-refund-1',
       p_event_timestamp_ms: 1_766_000_000_000,
@@ -111,5 +134,43 @@ describe('RevenueCat webhook route adapter service', () => {
       p_product_id: 'magicbooklet.credits.creator',
       p_user_id: '6a0bf06c-2829-45c7-93c1-06f5fe4bc15d',
     });
+  });
+
+  it('returns a retryable error until a backfilled order is bound to its real product', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'legacy_product_unbound',
+        entitlement_type: 'marketplace_unlock',
+        amount_subunits: 900,
+        currency: 'USD',
+        rewards: [],
+      },
+      error: null,
+    }));
+    const logError = vi.fn();
+
+    const response = await postRevenueCatWebhookRouteResponse({
+      request: webhookRequest({
+        ...refundPayload,
+        event: {
+          ...refundPayload.event,
+          product_id: 'magicbooklet.marketplace.usd900',
+        },
+      }),
+      dependencies: {
+        createServiceClient: () => ({ rpc }) as never,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        logError,
+      },
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'Refund reconciliation failed.' });
+    expect(logError).toHaveBeenCalledWith(
+      'RevenueCat purchase adjustment reconciliation failed:',
+      expect.objectContaining({
+        message: 'Backfilled mobile transaction mobile_play_store_GPA.1234-5678-9012-34567 requires catalog binding to magicbooklet.marketplace.usd900',
+      }),
+    );
   });
 });

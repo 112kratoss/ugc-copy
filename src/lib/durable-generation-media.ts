@@ -6,10 +6,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getStoredMediaLocation, type MediaBucket } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/models';
-import {
-  fetchWithProviderTimeout,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-} from '@/lib/provider-fetch';
+import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
+import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
 
 export type GeneratedMediaBucket = Extract<MediaBucket, 'generated_images' | 'generated_videos' | 'generated_audio'>;
 export type GenerationMediaKind = 'image' | 'video' | 'audio';
@@ -130,8 +128,12 @@ export async function persistGenerationMediaBlob(params: {
 
 async function loadShowcaseDerivative(
   supabase: SupabaseClient,
-  showcaseAssetPath: string
+  showcaseAssetPath: string,
+  generationId: string,
 ): Promise<{ blob: Blob; sourceName: string } | null> {
+  if (!showcaseAssetPath.startsWith(`showcase/${generationId}/`)) {
+    return null;
+  }
   const { data, error } = await supabase.storage
     .from('showcase_media')
     .download(showcaseAssetPath);
@@ -148,10 +150,15 @@ async function loadShowcaseDerivative(
 
 async function loadOutputSource(
   supabase: SupabaseClient,
-  outputUrl: string
+  outputUrl: string,
+  userId: string,
+  kind: GenerationMediaKind,
 ): Promise<{ blob: Blob; sourceName: string } | null> {
   const storedLocation = getStoredMediaLocation(outputUrl);
   if (storedLocation) {
+    if (!isStorageObjectOwnedByUser(storedLocation.filePath, userId)) {
+      return null;
+    }
     const { data, error } = await supabase.storage
       .from(storedLocation.bucket)
       .download(storedLocation.filePath);
@@ -170,21 +177,11 @@ async function loadOutputSource(
     return null;
   }
 
-  const response = await fetchWithProviderTimeout(
-    outputUrl,
-    {},
-    PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-    fetch,
-    'Generation media download'
-  );
-  if (!response.ok) {
+  try {
+    return await downloadAllowlistedRemoteMedia({ url: outputUrl, kind });
+  } catch {
     return null;
   }
-
-  return {
-    blob: await response.blob(),
-    sourceName: path.basename(new URL(outputUrl).pathname) || 'generation-media',
-  };
 }
 
 export async function ensureDurableGenerationMedia(params: {
@@ -198,7 +195,11 @@ export async function ensureDurableGenerationMedia(params: {
     ? getStoredMediaLocation(params.generation.outputUrl)
     : null;
 
-  if (existingLocation && isGeneratedMediaBucket(existingLocation.bucket)) {
+  if (
+    existingLocation
+    && isGeneratedMediaBucket(existingLocation.bucket)
+    && isStorageObjectOwnedByUser(existingLocation.filePath, params.generation.userId)
+  ) {
     return {
       outputUrl: params.generation.outputUrl!,
       createdLocation: null,
@@ -206,11 +207,20 @@ export async function ensureDurableGenerationMedia(params: {
   }
 
   const showcaseSource = params.generation.showcaseAssetPath
-    ? await loadShowcaseDerivative(params.supabase, params.generation.showcaseAssetPath)
+    ? await loadShowcaseDerivative(
+        params.supabase,
+        params.generation.showcaseAssetPath,
+        params.generation.id,
+      )
     : null;
   const source = showcaseSource ?? (
     params.generation.outputUrl
-      ? await loadOutputSource(params.supabase, params.generation.outputUrl)
+      ? await loadOutputSource(
+          params.supabase,
+          params.generation.outputUrl,
+          params.generation.userId,
+          getGenerationMediaKind(params.generation),
+        )
       : null
   );
 

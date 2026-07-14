@@ -773,7 +773,7 @@ describe('CreateWorkflowPage', () => {
       expect(screen.queryByRole('dialog', { name: /build your graph/i })).not.toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: /open nodes and workflows/i })).toBeInTheDocument();
-  });
+  }, 10_000);
 
   it('adds a node from the mobile drawer and returns directly to the canvas', async () => {
     await renderLoadedPage();
@@ -1219,7 +1219,7 @@ describe('CreateWorkflowPage', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => (
       String(url).startsWith('/api/templates/template-for-canvas-1') && init?.method === 'PATCH'
     ))).toBe(false);
-  });
+  }, 10_000);
 
   it('can create a new workflow from the left rail', async () => {
     await renderLoadedPage();

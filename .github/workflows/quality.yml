@@ -24,7 +24,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -34,8 +34,14 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Typecheck
-        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck production app
+        run: npm run typecheck
+
+      - name: Typecheck operational scripts
+        run: npm run typecheck:scripts
 
       - name: Build
         run: npm run build
@@ -54,6 +60,9 @@ jobs:
           REVENUECAT_REST_API_KEY: ci-placeholder-revenuecat-key
           REVENUECAT_WEBHOOK_AUTH_TOKEN: ci-placeholder-revenuecat-webhook-token
 
+      - name: Verify packaged FFmpeg runtime
+        run: npm run build:verify
+
   mobile:
     name: Mobile app
     runs-on: ubuntu-latest
@@ -67,7 +76,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ugc-mobile/package-lock.json
 
@@ -92,14 +101,17 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
+
+      - name: Require the migration validation database
+        run: |
+          set -euo pipefail
+          : "${SUPABASE_DB_URL:?SUPABASE_DB_URL must be configured for migration validation}"
+
+      - name: Install pinned Supabase CLI
+        run: npm install --global supabase@2.75.0
 
       - name: Dry-run pending migrations
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "SUPABASE_DB_URL is not configured; skipping Supabase migration dry-run."
-            exit 0
-          fi
-
-          npm install --global supabase@2.75.0
+          set -euo pipefail
           supabase db push --dry-run --yes --db-url "$SUPABASE_DB_URL"

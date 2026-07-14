@@ -70,6 +70,41 @@ function createRouteRequest(url: string) {
 function createAdminClientMock() {
   return {
     from: vi.fn((table: string) => {
+      if (table === 'post_resource_bundles') {
+        const query = {
+          select() {
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async maybeSingle() {
+            return { data: null, error: null };
+          },
+        };
+        return query;
+      }
+
+      if (table === 'profiles') {
+        return {
+          select() {
+            return {
+              async in() {
+                return {
+                  data: [{
+                    id: 'creator-1',
+                    username: 'creator',
+                    display_name: 'Creator',
+                    avatar_url: null,
+                  }],
+                  error: null,
+                };
+              },
+            };
+          },
+        };
+      }
+
       if (table === 'generation_input_media') {
         return {
           select() {

@@ -4,7 +4,7 @@ import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { verifyRazorpaySignature } from '@/lib/razorpay-signature';
 import { processRazorpayWebhookForRoute } from '@/lib/razorpay-webhook-service';
 import { createServiceClient } from '@/lib/server-helpers';
-import { isWebhookPayloadTooLarge } from '@/lib/webhook-request';
+import { isWebhookPayloadTooLarge, readBoundedWebhookBody } from '@/lib/webhook-request';
 
 type RazorpayWebhookRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
@@ -42,7 +42,11 @@ async function handleRazorpayWebhookPOST(
       return new Response('Webhook payload too large', { status: 413 });
     }
 
-    const body = await request.text();
+    const boundedBody = await readBoundedWebhookBody(request);
+    if (!boundedBody.ok) {
+      return new Response('Webhook payload too large', { status: 413 });
+    }
+    const body = boundedBody.text;
     const signature = request.headers.get('x-razorpay-signature');
 
     if (!signature) {

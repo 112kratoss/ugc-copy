@@ -157,6 +157,10 @@ function createSupabaseMock(
       return { data: true, error: null };
     }
 
+    if (fn === 'claim_generation_start_request') {
+      return { data: 'claimed', error: null };
+    }
+
     if (fn === 'check_backend_rate_limit') {
       return {
         data: {
@@ -299,10 +303,16 @@ describe('/api/generate-image route', () => {
     createUserClientMock.mockImplementation(() => currentSupabaseMock.client);
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ code: 200, data: { taskId: 'task-1' } }),
-      }))
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'GET') {
+          return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+            status: 200,
+            headers: { 'Content-Type': 'image/jpeg' },
+          });
+        }
+
+        return Response.json({ code: 200, data: { taskId: 'task-1' } });
+      })
     );
   });
 
@@ -385,6 +395,7 @@ describe('/api/generate-image route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'image-route-fallback-1',
           'x-request-id': 'image-route-fallback-1',
         },
         body: JSON.stringify({
@@ -508,6 +519,7 @@ describe('/api/generate-image route', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer token',
+          'Idempotency-Key': 'image-elements-start-1',
         },
         body: JSON.stringify({
           prompt: 'A refreshed creator frame',
@@ -873,10 +885,10 @@ describe('/api/generate-image route', () => {
           } as Response;
         }
 
-        return {
-          ok: true,
-          blob: async () => new Blob(['image'], { type: 'image/jpeg' }),
-        } as Response;
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/jpeg' },
+        });
       })
     );
 

@@ -74,6 +74,22 @@ describe('createWorkflowAssetUploadIntent', () => {
       error: 'Video uploads must be 250MB or smaller.',
     });
 
+    await expect(createWorkflowAssetUploadIntent({
+      body: {
+        bucket: 'generated_audio',
+        mimeType: 'audio/flac',
+        fileName: 'voice.flac',
+        sizeBytes: 1234,
+      },
+      userId: 'user-1',
+      client: clientFactory,
+      createUploadId: () => 'upload-id-1',
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      error: 'Upload a valid audio file.',
+    });
+
     expect(clientFactory).not.toHaveBeenCalled();
   });
 

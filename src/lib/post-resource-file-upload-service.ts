@@ -12,29 +12,36 @@ import type { PostResourceAttachment } from '@/lib/post-resource-bundles';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
-const ALLOWED_RESOURCE_FILE_EXTENSIONS = new Set([
-  '.json',
-  '.txt',
-  '.md',
-  '.markdown',
-  '.csv',
-  '.yaml',
-  '.yml',
-  '.pdf',
-  '.zip',
-  '.gz',
-  '.workflow',
+const RESOURCE_FILE_CONTENT_TYPE_BY_EXTENSION = new Map([
+  ['.json', 'application/json'],
+  ['.txt', 'text/plain'],
+  ['.md', 'text/markdown'],
+  ['.markdown', 'text/markdown'],
+  ['.csv', 'text/csv'],
+  ['.yaml', 'text/yaml'],
+  ['.yml', 'text/yaml'],
+  ['.pdf', 'application/pdf'],
+  ['.zip', 'application/zip'],
+  ['.gz', 'application/gzip'],
+  ['.workflow', 'application/json'],
 ]);
 const ALLOWED_RESOURCE_FILE_TYPES = new Set([
+  'application/csv',
   'application/json',
   'application/pdf',
   'application/gzip',
+  'application/octet-stream',
+  'application/x-yaml',
   'application/x-gzip',
   'application/zip',
   'application/x-zip-compressed',
+  'application/yaml',
+  'text/comma-separated-values',
   'text/csv',
   'text/markdown',
   'text/plain',
+  'text/x-markdown',
+  'text/x-yaml',
   'text/yaml',
 ]);
 const BLOCKED_RESOURCE_FILE_EXTENSIONS = new Set([
@@ -104,19 +111,24 @@ function sanitizeFileName(fileName: string): string {
   return `${safeStem}${extension || '.bin'}`;
 }
 
-function isAllowedResourceFile(file: File): boolean {
+function resolveResourceFileContentType(file: File): string | null {
   const extension = path.extname(file.name).toLowerCase();
   const contentType = file.type.toLowerCase();
 
   if (BLOCKED_RESOURCE_FILE_EXTENSIONS.has(extension)) {
-    return false;
+    return null;
   }
 
-  if (contentType && ALLOWED_RESOURCE_FILE_TYPES.has(contentType)) {
-    return true;
+  const inferredContentType = RESOURCE_FILE_CONTENT_TYPE_BY_EXTENSION.get(extension);
+  if (!inferredContentType) {
+    return null;
   }
 
-  return ALLOWED_RESOURCE_FILE_EXTENSIONS.has(extension);
+  if (!contentType || contentType === 'application/octet-stream') {
+    return inferredContentType;
+  }
+
+  return ALLOWED_RESOURCE_FILE_TYPES.has(contentType) ? contentType : null;
 }
 
 function createRateLimitResult(error: BackendRateLimitError): PostResourceFileUploadResult {
@@ -165,7 +177,8 @@ export async function uploadPostResourceFileForRoute({
     return { ok: false, status: 400, body: { error: 'Resource files must be 50MB or smaller.' } };
   }
 
-  if (!isAllowedResourceFile(file)) {
+  const contentType = resolveResourceFileContentType(file);
+  if (!contentType) {
     return {
       ok: false,
       status: 400,
@@ -181,7 +194,7 @@ export async function uploadPostResourceFileForRoute({
     .from(RESOURCE_FILES_BUCKET)
     .upload(storagePath, file, {
       cacheControl: '3600',
-      contentType: file.type || 'application/octet-stream',
+      contentType,
       upsert: false,
     });
 
@@ -198,7 +211,7 @@ export async function uploadPostResourceFileForRoute({
         label: file.name,
         kind: 'file',
         storagePath,
-        contentType: file.type || 'application/octet-stream',
+        contentType,
         sizeBytes: file.size,
       },
     },

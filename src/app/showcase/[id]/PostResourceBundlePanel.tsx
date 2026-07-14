@@ -434,7 +434,7 @@ export default function PostResourceBundlePanel({
     }
 
     return data.signedUrl as string;
-  }, [postId, session?.access_token]);
+  }, [postId, session]);
 
   const resolveResourceFileUrl = async (storagePath: string): Promise<string | null> => {
     if (!isFree && !ensureAuthenticated()) {

@@ -96,6 +96,8 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   const savedStateLookupKey = savedStateLookupIds.join(',');
 
   useEffect(() => {
+    // Server pagination/filter changes replace the optimistic snapshot.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setItems(initialItems);
     setSavedItemIds(deriveSavedIds(initialItems));
   }, [initialItems]);

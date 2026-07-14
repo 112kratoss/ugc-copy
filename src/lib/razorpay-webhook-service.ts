@@ -14,6 +14,7 @@ type CreditTransactionRow = {
   credits: number;
   amount?: number;
   credit_reversed_amount_subunits?: number;
+  credit_effect_applied?: boolean;
   razorpay_payment_id?: string | null;
   status: 'created' | 'pending' | 'success' | string;
 };
@@ -103,7 +104,7 @@ export async function processRazorpayWebhookForRoute({
   async function handleCreditTransaction(orderId: string, paymentId: string): Promise<HandlerResult> {
     const { data: txn, error: txnError } = await getSupabaseAdmin()
       .from('transactions')
-      .select('id, user_id, credits, status')
+      .select('id, user_id, credits, status, razorpay_payment_id, credit_effect_applied')
       .eq('razorpay_order_id', orderId)
       .maybeSingle();
 
@@ -128,7 +129,7 @@ export async function processRazorpayWebhookForRoute({
       return { handled: true, shouldRetry: false };
     }
 
-    const { error: rpcError } = await getSupabaseAdmin().rpc('add_credits', {
+    const { data: rpcSuccess, error: rpcError } = await getSupabaseAdmin().rpc('add_credits', {
       p_user_id: typedTxn.user_id,
       p_credits: typedTxn.credits,
       p_transaction_id: typedTxn.id,
@@ -138,6 +139,31 @@ export async function processRazorpayWebhookForRoute({
     if (rpcError) {
       console.error('Webhook: add_credits RPC failed', rpcError);
       return { handled: true, shouldRetry: true };
+    }
+
+    if (!rpcSuccess) {
+      const { data: refreshedTransaction, error: refreshedError } = await getSupabaseAdmin()
+        .from('transactions')
+        .select('id, status, razorpay_payment_id, credit_effect_applied')
+        .eq('id', typedTxn.id)
+        .maybeSingle();
+      const refreshed = (refreshedTransaction as CreditTransactionRow | null) ?? null;
+
+      if (refreshedError) {
+        console.error('Webhook: Failed to reload credit transaction after add_credits returned false', refreshedError);
+        return { handled: true, shouldRetry: true };
+      }
+
+      if (
+        refreshed?.status !== 'success'
+        || refreshed.credit_effect_applied !== true
+        || refreshed.razorpay_payment_id !== paymentId
+      ) {
+        console.error('Webhook: Credit transaction remained unresolved after add_credits returned false', orderId);
+        return { handled: true, shouldRetry: true };
+      }
+
+      console.log('Webhook: Credit transaction settled during concurrent verification', orderId);
     }
 
     await settleCreditPurchaseReferralRewards({

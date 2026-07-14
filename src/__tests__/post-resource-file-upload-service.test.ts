@@ -91,6 +91,47 @@ describe('uploadPostResourceFileForRoute', () => {
     expect(client.upload).not.toHaveBeenCalled();
   });
 
+  it('rejects an unsupported MIME type even when the resource extension is allowed', async () => {
+    const client = createClient();
+
+    const result = await uploadPostResourceFileForRoute({
+      client: client.client,
+      userId: 'user-1',
+      readFormData: vi.fn(async () => formDataWithFile(new File(['fake'], 'guide.pdf', {
+        type: 'application/x-uncommon-document',
+      }))),
+      createUploadId: () => 'upload-id',
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(client.upload).not.toHaveBeenCalled();
+  });
+
+  it('normalizes generic mobile workflow exports to their canonical storage MIME type', async () => {
+    const client = createClient();
+
+    const result = await uploadPostResourceFileForRoute({
+      client: client.client,
+      userId: 'user-1',
+      readFormData: vi.fn(async () => formDataWithFile(new File(['{}'], 'campaign.workflow', {
+        type: 'application/octet-stream',
+      }))),
+      createUploadId: () => 'upload-id',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: {
+        attachment: { contentType: 'application/json' },
+      },
+    });
+    expect(client.upload).toHaveBeenCalledWith(
+      'user-1/upload-id-campaign.workflow',
+      expect.any(File),
+      expect.objectContaining({ contentType: 'application/json' }),
+    );
+  });
+
   it('uploads allowed files with sanitized storage paths and returns attachment metadata', async () => {
     const client = createClient();
 

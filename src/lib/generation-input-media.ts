@@ -8,11 +8,12 @@ import {
 } from '@/lib/image-elements';
 import { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket } from '@/lib/media-urls';
 import {
-  fetchWithProviderTimeout,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-} from '@/lib/provider-fetch';
+  downloadAllowlistedRemoteMedia,
+  isAllowlistedRemoteMediaUrl,
+} from '@/lib/remote-media-security';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
+import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
 
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 
@@ -172,11 +173,13 @@ function isFetchableUrl(value: string | null | undefined): value is string {
 
 async function downloadCandidateBlob(
   supabase: SupabaseClient,
-  candidate: PersistGenerationInputCandidate
+  candidate: PersistGenerationInputCandidate,
+  userId: string,
+  downloadRemoteMedia: typeof downloadAllowlistedRemoteMedia,
 ): Promise<{ blob: Blob; sourceName: string | null } | null> {
   const storageLocation = normalizeStoragePath(candidate.sourceStoragePath);
 
-  if (storageLocation) {
+  if (storageLocation && isStorageObjectOwnedByUser(storageLocation.filePath, userId)) {
     try {
       const { data, error } = await supabase.storage
         .from(storageLocation.bucket)
@@ -197,21 +200,10 @@ async function downloadCandidateBlob(
     return null;
   }
 
-  const response = await fetchWithProviderTimeout(
-    candidate.sourceUrl,
-    {},
-    PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-    fetch,
-    'Generation input media download'
-  );
-  if (!response.ok) {
-    throw new Error(`Failed to download input media: ${response.status}`);
-  }
-
-  return {
-    blob: await response.blob(),
-    sourceName: candidate.sourceUrl,
-  };
+  return downloadRemoteMedia({
+    url: candidate.sourceUrl,
+    kind: candidate.mediaType,
+  });
 }
 
 export async function persistGenerationInputMedia(params: {
@@ -219,8 +211,10 @@ export async function persistGenerationInputMedia(params: {
   generationId: string | null | undefined;
   userId: string;
   candidates: PersistGenerationInputCandidate[];
+  downloadRemoteMedia?: typeof downloadAllowlistedRemoteMedia;
 }) {
   const { supabase, generationId, userId } = params;
+  const downloadRemoteMedia = params.downloadRemoteMedia ?? downloadAllowlistedRemoteMedia;
   const candidates = params.candidates.filter(
     (candidate) => candidate.sourceStoragePath || isFetchableUrl(candidate.sourceUrl)
   );
@@ -231,7 +225,7 @@ export async function persistGenerationInputMedia(params: {
 
   for (const [index, candidate] of candidates.entries()) {
     try {
-      const downloaded = await downloadCandidateBlob(supabase, candidate);
+      const downloaded = await downloadCandidateBlob(supabase, candidate, userId, downloadRemoteMedia);
       if (!downloaded) {
         continue;
       }
@@ -299,11 +293,16 @@ function getDefaultInputLabel(role: string, index: number): string {
 async function buildStoredInputUrl(
   supabase: SupabaseClient,
   storagePath: string,
-  mode: 'proxy' | 'signed'
+  mode: 'proxy' | 'signed',
+  ownerUserId: string,
 ): Promise<string | null> {
   const location = normalizeStoragePath(storagePath);
   if (!location) {
-    return isFetchableUrl(storagePath) ? storagePath : null;
+    return isAllowlistedRemoteMediaUrl(storagePath) ? storagePath : null;
+  }
+  if (!isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
+    console.error(`Refused to sign generation input outside owner prefix: ${storagePath}`);
+    return null;
   }
 
   if (mode === 'proxy') {
@@ -324,7 +323,11 @@ async function buildStoredInputUrl(
   return data.signedUrl;
 }
 
-function mapInputMediaRow(row: GenerationInputMediaRow, url: string | null): GenerationInputMediaItem {
+function mapInputMediaRow(
+  row: GenerationInputMediaRow,
+  url: string | null,
+  storagePath: string | null,
+): GenerationInputMediaItem {
   return {
     id: row.id,
     generationId: row.generation_id,
@@ -332,7 +335,7 @@ function mapInputMediaRow(row: GenerationInputMediaRow, url: string | null): Gen
     role: row.role,
     label: normalizeLabel(row.label, getDefaultInputLabel(row.role, row.sort_order ?? 0)),
     url,
-    storagePath: row.storage_path,
+    storagePath,
     sourceGenerationId: row.source_generation_id,
     sortOrder: row.sort_order ?? 0,
     metadata: row.metadata ?? {},
@@ -363,10 +366,14 @@ export async function loadGenerationInputMediaMap(params: {
     }
 
     for (const row of (data ?? []) as GenerationInputMediaRow[]) {
+      const location = normalizeStoragePath(row.storage_path);
+      const trustedStoragePath = location
+        ? (isStorageObjectOwnedByUser(location.filePath, row.user_id) ? row.storage_path : null)
+        : (isAllowlistedRemoteMediaUrl(row.storage_path) ? row.storage_path : null);
       const url = params.urlMode === 'none'
         ? null
-        : await buildStoredInputUrl(params.supabase, row.storage_path, params.urlMode);
-      const item = mapInputMediaRow(row, url);
+        : await buildStoredInputUrl(params.supabase, row.storage_path, params.urlMode, row.user_id);
+      const item = mapInputMediaRow(row, url, trustedStoragePath);
       const nextItems = inputMap.get(row.generation_id) ?? [];
       nextItems.push(item);
       inputMap.set(row.generation_id, nextItems);
@@ -380,11 +387,16 @@ export async function loadGenerationInputMediaMap(params: {
 
 async function resolveLegacyStorageUrl(
   supabase: SupabaseClient,
-  storagePath: string
+  storagePath: string,
+  ownerUserId: string | null,
 ): Promise<string | null> {
   const location = normalizeStoragePath(storagePath);
   if (!location) {
-    return isFetchableUrl(storagePath) ? storagePath : null;
+    return isAllowlistedRemoteMediaUrl(storagePath) ? storagePath : null;
+  }
+  if (!ownerUserId || !isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
+    console.error(`Refused to sign legacy generation input outside owner prefix: ${storagePath}`);
+    return null;
   }
 
   const { data, error } = await supabase.storage
@@ -435,7 +447,7 @@ async function resolveLegacySourceGenerationUrl(params: {
     return null;
   }
 
-  return resolveLegacyStorageUrl(supabase, sourceGeneration.output_url);
+  return resolveLegacyStorageUrl(supabase, sourceGeneration.output_url, sourceGeneration.user_id);
 }
 
 function createLegacyInputItem(params: {
@@ -496,8 +508,9 @@ async function resolveDescriptorLegacyItem(params: {
 
   let url: string | null = null;
   if (descriptor.storagePath) {
-    url = await resolveLegacyStorageUrl(params.supabase, descriptor.storagePath);
-  } else if (descriptor.sourceGenerationId) {
+    url = await resolveLegacyStorageUrl(params.supabase, descriptor.storagePath, params.ownerUserId);
+  }
+  if (!url && descriptor.sourceGenerationId) {
     url = await resolveLegacySourceGenerationUrl({
       supabase: params.supabase,
       sourceGenerationId: descriptor.sourceGenerationId,
@@ -532,8 +545,9 @@ export async function buildLegacyGenerationInputMedia(params: {
   const pushElement = async (element: ImageElementDescriptor, index: number) => {
     let url: string | null = null;
     if (element.storagePath) {
-      url = await resolveLegacyStorageUrl(params.supabase, element.storagePath);
-    } else if (element.sourceGenerationId) {
+      url = await resolveLegacyStorageUrl(params.supabase, element.storagePath, params.ownerUserId);
+    }
+    if (!url && element.sourceGenerationId) {
       url = await resolveLegacySourceGenerationUrl({
         supabase: params.supabase,
         sourceGenerationId: element.sourceGenerationId,
@@ -566,7 +580,7 @@ export async function buildLegacyGenerationInputMedia(params: {
   const seedanceAssets = getSeedanceAssets(params.workflowSettings.seedanceAssets);
   for (const [index, asset] of (seedanceAssets?.images ?? []).entries()) {
     const sourceUrl = getSeedanceSourceUrl(asset);
-    if (!sourceUrl || items.some((item) => item.url === sourceUrl || item.metadata.sourceUrl === sourceUrl)) {
+    if (!sourceUrl || !isAllowlistedRemoteMediaUrl(sourceUrl) || items.some((item) => item.url === sourceUrl || item.metadata.sourceUrl === sourceUrl)) {
       continue;
     }
 
@@ -609,7 +623,7 @@ export async function buildLegacyGenerationInputMedia(params: {
 
   for (const [index, asset] of (seedanceAssets?.videos ?? []).entries()) {
     const sourceUrl = getSeedanceSourceUrl(asset);
-    if (!sourceUrl) continue;
+    if (!sourceUrl || !isAllowlistedRemoteMediaUrl(sourceUrl)) continue;
     items.push(createLegacyInputItem({
       generationId: params.generationId,
       mediaType: 'video',
@@ -623,7 +637,7 @@ export async function buildLegacyGenerationInputMedia(params: {
 
   for (const [index, asset] of (seedanceAssets?.audios ?? []).entries()) {
     const sourceUrl = getSeedanceSourceUrl(asset);
-    if (!sourceUrl) continue;
+    if (!sourceUrl || !isAllowlistedRemoteMediaUrl(sourceUrl)) continue;
     items.push(createLegacyInputItem({
       generationId: params.generationId,
       mediaType: 'audio',

@@ -45,6 +45,7 @@ let generationInputRows: Array<{
   sort_order: number | null;
   metadata: Record<string, unknown> | null;
 }>;
+let viewerHasPurchased: boolean;
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
@@ -68,6 +69,27 @@ vi.mock('@/lib/server-helpers', () => ({
           async maybeSingle() {
             return {
               data: bundleRow,
+              error: null,
+            };
+          },
+        };
+
+        return query;
+      }
+
+      if (table === 'post_resource_bundle_purchases') {
+        const query = {
+          select() {
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async maybeSingle() {
+            return {
+              data: viewerHasPurchased
+                ? { bundle_id: 'bundle-1', buyer_user_id: 'viewer-1' }
+                : null,
               error: null,
             };
           },
@@ -288,6 +310,7 @@ describe('post resource bundle server access', () => {
       sort_order: 0,
       metadata: {},
     }];
+    viewerHasPurchased = false;
   });
 
   it('reveals published free recipe resources to anonymous viewers', async () => {
@@ -324,6 +347,68 @@ describe('post resource bundle server access', () => {
       prompt: 1,
       reference_image: 1,
     });
+  });
+
+  it('does not expose paid remix inputs before the viewer purchases the bundle', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      allow_remix: true,
+    };
+    const { loadGenerationRecipeRemixInputMediaByPostId } = await import(
+      '@/lib/post-resource-bundles-server'
+    );
+
+    await expect(loadGenerationRecipeRemixInputMediaByPostId({
+      postId: 'post-1',
+      generationId: 'gen-1',
+      viewerUserId: 'viewer-1',
+    })).resolves.toEqual([]);
+  });
+
+  it('exposes paid remix inputs only after purchase and explicit remix opt-in', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      allow_remix: true,
+    };
+    viewerHasPurchased = true;
+    const { loadGenerationRecipeRemixInputMediaByPostId } = await import(
+      '@/lib/post-resource-bundles-server'
+    );
+
+    const media = await loadGenerationRecipeRemixInputMediaByPostId({
+      postId: 'post-1',
+      generationId: 'gen-1',
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(media).toEqual([
+      expect.objectContaining({
+        id: 'input-1',
+        storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+        url: 'https://signed.example.com/owner-1/gen-1/00-reference-image.png',
+      }),
+    ]);
+  });
+
+  it('does not expose remix inputs when the bundle owner disabled remixing', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'free',
+      allow_remix: false,
+    };
+    const { loadGenerationRecipeRemixInputMediaByPostId } = await import(
+      '@/lib/post-resource-bundles-server'
+    );
+
+    await expect(loadGenerationRecipeRemixInputMediaByPostId({
+      postId: 'post-1',
+      generationId: 'gen-1',
+      viewerUserId: 'viewer-1',
+    })).resolves.toEqual([]);
   });
 
   it('builds a public generation recipe when no saved bundle exists', async () => {

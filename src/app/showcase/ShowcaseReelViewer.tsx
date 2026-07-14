@@ -279,7 +279,9 @@ export default function ShowcaseReelViewer({
   const nextItem = selectedIndex >= 0 && selectedIndex < items.length - 1 ? items[selectedIndex + 1] : null;
   const selectedFeedItemId = item?.id ?? null;
   const feedEventItemRef = useRef<ShowcaseFeedItem | null>(item);
-  feedEventItemRef.current = item;
+  useEffect(() => {
+    feedEventItemRef.current = item;
+  }, [item]);
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
   const mediaItems = item ? getItemMediaItems(item) : [];
@@ -297,6 +299,8 @@ export default function ShowcaseReelViewer({
 
   useEffect(() => {
     const clampedIndex = Math.min(Math.max(initialMediaIndex, 0), Math.max(0, mediaItems.length - 1));
+    // Selecting a different reel item resets its media position from the URL state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveMediaIndex(clampedIndex);
   }, [initialMediaIndex, item?.id, mediaItems.length]);
 
@@ -354,7 +358,7 @@ export default function ShowcaseReelViewer({
     }
 
     return data.bundle as ReelBundleRefreshPayload;
-  }, [session?.access_token]);
+  }, [session]);
 
   const openUnlockCheckout = () => {
     if (!item?.asset) {
@@ -550,6 +554,8 @@ export default function ShowcaseReelViewer({
 
     let cancelled = false;
 
+    // Loading state belongs to the currently visible public recipe request.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPublicRecipeLoadingItemId(item.id);
     setPublicRecipeError(null);
 
@@ -603,6 +609,8 @@ export default function ShowcaseReelViewer({
         .filter((storagePath): storagePath is string => Boolean(storagePath)),
     ]));
 
+    // Signed file URLs are scoped to the currently accessible resource bundle.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setResourceFileUrls({});
 
     if (!item?.id || storagePaths.length === 0) {
@@ -649,6 +657,8 @@ export default function ShowcaseReelViewer({
   }, [activeAccessibleResources, item?.id, session?.access_token]);
 
   useEffect(() => {
+    // Reference previews cannot carry across reel items.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveReferencePreview(null);
   }, [item?.id]);
 

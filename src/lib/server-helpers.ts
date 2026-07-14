@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
+import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 let cachedServiceClient: SupabaseClient | null = null;
@@ -125,6 +126,32 @@ export async function resolveStoredMediaUrl(
     }
 
     return buildMediaProxyUrl(location.bucket, location.filePath);
+}
+
+/**
+ * Resolves media referenced by a user-owned database row without allowing the
+ * service role to sign another user's object path.
+ */
+export async function resolveOwnedStoredMediaUrl(
+    adminSupabase: SupabaseClient,
+    outputUrl: string,
+    ownerUserId: string
+): Promise<string | null> {
+    const location = getStoredMediaLocation(outputUrl);
+    if (location) {
+        if (!isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
+            console.error(`Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}`);
+            return null;
+        }
+        return resolveStoredMediaUrl(adminSupabase, outputUrl);
+    }
+
+    try {
+        const url = new URL(outputUrl);
+        return url.protocol === 'https:' && !url.username && !url.password ? outputUrl : null;
+    } catch {
+        return null;
+    }
 }
 
 // ─── Authentication ───────────────────────────────────────────────────────────

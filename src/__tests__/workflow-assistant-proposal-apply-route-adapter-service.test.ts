@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { postWorkflowAssistantProposalApplyRouteResponse } from '@/lib/workflow-assistant-proposal-apply-route-adapter-service';
-import type { WorkflowCanvasGraph } from '@/lib/workflow-canvas';
 
 function createContext(canvasId = 'canvas-1', proposalId = 'proposal-1') {
   return {
@@ -20,7 +19,6 @@ describe('workflow assistant proposal apply route adapter service', () => {
     const authenticateRequest = vi.fn(async () => NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
     const enforceWorkflowCanvasMutationRateLimit = vi.fn();
     const applyWorkflowAssistantProposalForRoute = vi.fn();
-    const patchWorkflowCanvas = vi.fn();
 
     const response = await postWorkflowAssistantProposalApplyRouteResponse({
       request: new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/proposals/proposal-1/apply', {
@@ -32,7 +30,6 @@ describe('workflow assistant proposal apply route adapter service', () => {
         applyWorkflowAssistantProposalForRoute,
         authenticateRequest,
         enforceWorkflowCanvasMutationRateLimit,
-        patchWorkflowCanvas,
       },
     });
 
@@ -42,7 +39,6 @@ describe('workflow assistant proposal apply route adapter service', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
     expect(enforceWorkflowCanvasMutationRateLimit).not.toHaveBeenCalled();
     expect(applyWorkflowAssistantProposalForRoute).not.toHaveBeenCalled();
-    expect(patchWorkflowCanvas).not.toHaveBeenCalled();
   });
 
   it('returns mutation rate-limit responses before applying the proposal', async () => {
@@ -61,7 +57,6 @@ describe('workflow assistant proposal apply route adapter service', () => {
         applyWorkflowAssistantProposalForRoute,
         authenticateRequest: vi.fn(async () => ({ supabase, userId: 'user-1' })),
         enforceWorkflowCanvasMutationRateLimit: vi.fn(async () => rateLimitResponse),
-        patchWorkflowCanvas: vi.fn(),
       },
     });
 
@@ -73,42 +68,15 @@ describe('workflow assistant proposal apply route adapter service', () => {
     expect(applyWorkflowAssistantProposalForRoute).not.toHaveBeenCalled();
   });
 
-  it('delegates valid apply requests through the canvas PATCH bridge with rate-limit skipped', async () => {
+  it('delegates valid apply requests to the atomic proposal application service', async () => {
     const supabase = createSupabase();
-    const patchWorkflowCanvas = vi.fn(async () => NextResponse.json({
-      canvas: {
-        id: 'canvas-1',
-        revision: 5,
+    const applyWorkflowAssistantProposalForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: {
+        canvas: { id: 'canvas-1', revision: 5 },
+        proposal: { id: 'proposal-1', status: 'applied' },
       },
     }));
-    const proposedGraph = {
-      version: 1,
-      nodes: [],
-      edges: [],
-    } as unknown as WorkflowCanvasGraph;
-    const applyWorkflowAssistantProposalForRoute = vi.fn(async ({
-      applyCanvasPatch,
-    }: {
-      applyCanvasPatch: (input: {
-        canvasId: string;
-        graph: WorkflowCanvasGraph;
-        baseRevision: number;
-      }) => Promise<{ ok: boolean; status: number; body: Record<string, unknown> }>;
-    }) => {
-      const patchResult = await applyCanvasPatch({
-        canvasId: 'canvas-1',
-        graph: proposedGraph,
-        baseRevision: 4,
-      });
-
-      return {
-        ok: true as const,
-        body: {
-          canvas: patchResult.body.canvas,
-          proposal: { id: 'proposal-1', status: 'applied' },
-        },
-      };
-    });
 
     const response = await postWorkflowAssistantProposalApplyRouteResponse({
       request: new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/proposals/proposal-1/apply', {
@@ -123,7 +91,6 @@ describe('workflow assistant proposal apply route adapter service', () => {
         applyWorkflowAssistantProposalForRoute,
         authenticateRequest: vi.fn(async () => ({ supabase, userId: 'user-1' })),
         enforceWorkflowCanvasMutationRateLimit: vi.fn(async () => null),
-        patchWorkflowCanvas,
       },
     });
 
@@ -140,15 +107,5 @@ describe('workflow assistant proposal apply route adapter service', () => {
       supabase,
       userId: 'user-1',
     }));
-    expect(patchWorkflowCanvas).toHaveBeenCalledTimes(1);
-    const [patchRequest, patchContext, patchOptions] = patchWorkflowCanvas.mock.calls[0];
-    expect((patchRequest as Request).url).toBe('http://localhost/api/workflow-canvases/canvas-1');
-    expect((patchRequest as Request).headers.get('Authorization')).toBe('Bearer user-token');
-    await expect((patchRequest as Request).json()).resolves.toEqual({
-      graph: proposedGraph,
-      baseRevision: 4,
-    });
-    await expect((patchContext as { params: Promise<{ id: string }> }).params).resolves.toEqual({ id: 'canvas-1' });
-    expect(patchOptions).toEqual({ skipRateLimit: true });
   });
 });

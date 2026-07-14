@@ -67,6 +67,18 @@ function createAdminClient({ rateLimitAllowed = true } = {}) {
         return { data: true, error: null };
       }
 
+      if (fn === 'settle_ai_usage_event') {
+        return {
+          data: {
+            status: args.p_outcome,
+            settled: true,
+            event_id: args.p_event_id,
+            remaining_credits: 94,
+          },
+          error: null,
+        };
+      }
+
       throw new Error(`Unexpected rpc: ${fn}`);
     }),
     from: vi.fn((table: string) => {
@@ -239,6 +251,7 @@ describe('workflow blueprint service', () => {
     expect(adminClient.rpcCalls.map((call) => call.fn)).toEqual([
       'check_backend_rate_limit',
       'start_ai_usage_event',
+      'settle_ai_usage_event',
     ]);
     expect(providerFetch).toHaveBeenCalledWith(
       'https://api.kie.ai/gemini-3-flash/v1/chat/completions',
@@ -252,11 +265,14 @@ describe('workflow blueprint service', () => {
       fetch,
       'KIE workflow blueprint',
     );
-    expect(adminClient.updates).toContainEqual(expect.objectContaining({
-      status: 'succeeded',
-      response_payload: expect.objectContaining({
+    expect(adminClient.rpcCalls).toContainEqual({
+      fn: 'settle_ai_usage_event',
+      args: expect.objectContaining({
+        p_outcome: 'succeeded',
+        p_response_payload: expect.objectContaining({
         remainingCredits: 94,
       }),
-    }));
+      }),
+    });
   });
 });

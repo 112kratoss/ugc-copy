@@ -78,6 +78,7 @@ import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
     freezeGenerationTiming,
+    getCurrentTimestampMs,
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
@@ -402,6 +403,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const modelCatalog = useWebGenerationModelCatalog();
+    const refetchModelCatalog = modelCatalog.refetch;
     const remixId = prefill.remixId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
@@ -489,6 +491,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     useEffect(() => {
         if (remixId) return;
+        // A route prefill intentionally seeds the editable form once it is available.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (prefillPrompt) setPrompt(prefillPrompt);
         const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'video' && candidate.id === prefillModel));
         if (prefillModel && (prefillModel in VIDEO_MODELS || isCatalogModel)) setSelectedModel(prefillModel as VideoModelId);
@@ -686,9 +690,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        // The quote response is the external signal that the local catalog is stale.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
-        modelCatalog.refetch();
-    }, [modelCatalog.refetch, quoteState.error?.code]);
+        refetchModelCatalog();
+    }, [refetchModelCatalog, quoteState.error?.code]);
     const quoteUi = resolveWebGenerationQuoteUi({
         hasCatalog: Boolean(modelCatalog.catalog),
         quoteStatus: quoteState.status,
@@ -863,6 +869,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     useEffect(() => {
         if (videoModel.modeOptions?.length) {
             if (!videoModel.modeOptions.some((option) => option.value === mode)) {
+                // Switching models reconciles controls to values supported by the provider.
+                // eslint-disable-next-line react-hooks/set-state-in-effect
                 setMode(videoModel.modeOptions[0].value);
             }
         } else if (mode !== '') {
@@ -905,6 +913,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         const nextElements = hydrateVideoElements(elements.slice(0, videoElementSupport.maxElements));
         elements.slice(videoElementSupport.maxElements).forEach((element) => revokeObjectUrl(element.previewUrl));
+        // Capability changes must enforce the provider's current element limit.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         commitElements(nextElements);
         void persistVideoElements(nextElements);
     }, [canUseVideoElements, elements, persistVideoElements, videoElementSupport.maxElements]);
@@ -2222,6 +2232,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         };
 
         void resumePendingGeneration();
+        // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleGenerate = async () => {
@@ -2329,7 +2341,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
-        const startedAtMs = Date.now();
+        const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimatedGenerationTotalMs;
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'video',

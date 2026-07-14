@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import { createApiClient, type MagicbookletApiClient } from '../lib/api-client';
 
 type ContractEndpointKey = keyof typeof mobileApiContract.endpoints;
@@ -157,7 +158,114 @@ const successCases: Array<{
   { key: 'updateMobileNotificationPreferences', call: (api) => api.updateMobileNotificationPreferences({ pushEnabled: false }) },
 ];
 
+type RegisteredOperationKey = keyof typeof mobileApiOperationsV1.operations;
+
+const extendedOperationCases: Array<{
+  key: RegisteredOperationKey;
+  call: (api: MagicbookletApiClient) => Promise<unknown>;
+}> = [
+  { key: 'validateProfile', call: (api) => api.validateProfile({ displayName: 'Creator One' }) },
+  { key: 'getOnboardingState', call: (api) => api.getOnboardingState() },
+  { key: 'updateOnboardingState', call: (api) => api.updateOnboardingState({ status: 'in_progress' }) },
+  { key: 'getWelcomeCredits', call: (api) => api.getWelcomeCredits() },
+  { key: 'claimWelcomeCredits', call: (api) => api.claimWelcomeCredits() },
+  {
+    key: 'recordOnboardingEvent',
+    call: (api) => api.recordOnboardingEvent({
+      clientEventId: 'event-1',
+      eventName: 'started',
+      platform: 'ios',
+      occurredAt: '2026-07-14T12:00:00.000Z',
+    }),
+  },
+  { key: 'deleteAccount', call: (api) => api.deleteAccount('DELETE') },
+  { key: 'getReferralOverview', call: (api) => api.getReferralOverview() },
+  { key: 'createReferralLink', call: (api) => api.createReferralLink() },
+  { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
+  { key: 'claimReferral', call: (api) => api.claimReferral({ code: 'CREATOR1' }) },
+  {
+    key: 'recordShowcaseFeedEvent',
+    call: (api) => api.recordShowcaseFeedEvent({
+      clientEventId: 'feed-event-1',
+      postId: 'post-1',
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+    }),
+  },
+  { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('creator-one') },
+  { key: 'getCreatorFollowState', call: (api) => api.getCreatorFollowState('creator-1') },
+  { key: 'setCreatorFollowing', call: (api) => api.setCreatorFollowing('creator-1', true) },
+  { key: 'getRemixSourceBundle', call: (api) => api.getRemixSourceBundle('generation-1') },
+  { key: 'listMediaTemplates', call: (api) => api.listMediaTemplates({ limit: 10 }) },
+  { key: 'getMediaTemplate', call: (api) => api.getMediaTemplate('product-reveal') },
+  { key: 'createMediaTemplateRun', call: (api) => api.createMediaTemplateRun('template-1') },
+  { key: 'getTemplateRun', call: (api) => api.getTemplateRun('run-1') },
+  {
+    key: 'signTemplateRunInput',
+    call: (api) => api.signTemplateRunInput('run-1', {
+      slotKey: 'product',
+      fileName: 'product.png',
+      mimeType: 'image/png',
+      sizeBytes: 1234,
+    }),
+  },
+  {
+    key: 'finalizeTemplateRunInput',
+    call: (api) => api.finalizeTemplateRunInput('run-1', {
+      inputs: [{ slotKey: 'product', storagePath: 'template_inputs/user-1/product.png' }],
+    }),
+  },
+  { key: 'startTemplateRun', call: (api) => api.startTemplateRun('run-1') },
+  { key: 'retryTemplateRunStep', call: (api) => api.retryTemplateRunStep('run-1', 'step-1') },
+  { key: 'approveTemplateRunStep', call: (api) => api.approveTemplateRunStep('run-1', 'step-1') },
+  { key: 'cancelTemplateRun', call: (api) => api.cancelTemplateRun('run-1') },
+];
+
+const legacyOperationAliases: Partial<Record<ContractEndpointKey, RegisteredOperationKey>> = {
+  appVersion: 'getAppVersion',
+  mediaUploadIntent: 'createMediaUpload',
+  mediaReadUrl: 'createMediaReadUrl',
+  mobileCommerceSync: 'syncMobilePurchase',
+  mobileCommerceRestore: 'restoreMobilePurchases',
+  mobileNotifications: 'listMobileNotifications',
+};
+
 describe('mobile shared API v1 contract fixture', () => {
+  it('registers every public API client operation in the shared route contract', () => {
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn() as unknown as typeof fetch,
+    });
+    const clientOperations = Object.keys(api).filter((key) => key !== 'request').sort();
+    expect(clientOperations).toEqual(Object.keys(mobileApiOperationsV1.operations).sort());
+
+    const exercisedOperations = [
+      ...successCases.map(({ key }) => legacyOperationAliases[key] ?? key),
+      ...extendedOperationCases.map(({ key }) => key),
+    ].sort();
+    expect(exercisedOperations).toEqual(Object.keys(mobileApiOperationsV1.operations).sort());
+  });
+
+  it.each(extendedOperationCases)('keeps $key aligned with its registered method and route', async ({ key, call }) => {
+    const operation = mobileApiOperationsV1.operations[key];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      expect((init?.method ?? 'GET').toUpperCase()).toBe(operation.method);
+      expect(matchesPathTemplate(operation.path, url.pathname)).toBe(true);
+      return jsonResponse({});
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      getInstallationId: async () => 'installation-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await call(api).catch(() => undefined);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it.each(successCases)('consumes the $key response example through the mobile API client', async ({ key, call }) => {
     const api = clientForEndpoint(key);
     await expect(call(api)).resolves.toEqual(contract.endpoints[key].response);

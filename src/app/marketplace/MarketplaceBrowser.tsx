@@ -85,6 +85,8 @@ export default function MarketplaceBrowser({
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   useEffect(() => {
+    // Navigation supplies a new result page; discard state from the previous query.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setItems(initialPage.items);
     setPageInfo(initialPage.pageInfo);
     setSearchInput(initialFilters.q);

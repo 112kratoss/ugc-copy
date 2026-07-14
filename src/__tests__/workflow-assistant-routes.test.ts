@@ -82,9 +82,50 @@ let existingUsageEvent: {
 } | null = null;
 let adminRpcCalls: string[] = [];
 let assistantRateLimitAllowed = true;
+let currentCanvasRevision = canvasRow.revision;
 
 function createWorkflowSupabaseMock() {
   return {
+    async rpc(fn: string, args?: Record<string, unknown>) {
+      if (fn !== 'apply_workflow_canvas_assistant_proposal') {
+        throw new Error(`Unexpected workflow rpc: ${fn}`);
+      }
+      const proposal = assistantProposals.find((candidate) => (
+        candidate.id === args?.p_proposal_id
+        && candidate.canvas_id === args?.p_canvas_id
+        && candidate.user_id === canvasRow.user_id
+      ));
+      if (!proposal) return { data: { outcome: 'not_found' }, error: null };
+
+      if (currentCanvasRevision !== proposal.base_revision) {
+        proposal.status = 'discarded';
+        proposal.discarded_at = '2026-04-16T08:20:00.000Z';
+        return {
+          data: {
+            outcome: 'conflict',
+            canvas: { ...canvasRow, revision: currentCanvasRevision },
+            proposal: { ...proposal },
+          },
+          error: null,
+        };
+      }
+
+      proposal.status = 'applied';
+      proposal.applied_at = '2026-04-16T08:20:00.000Z';
+      currentCanvasRevision += 1;
+      return {
+        data: {
+          outcome: 'applied',
+          canvas: {
+            ...canvasRow,
+            graph: args?.p_merged_graph,
+            revision: currentCanvasRevision,
+          },
+          proposal: { ...proposal },
+        },
+        error: null,
+      };
+    },
     from(table: string) {
       if (table === 'workflow_canvases') {
         return {
@@ -97,14 +138,14 @@ function createWorkflowSupabaseMock() {
               },
               async maybeSingle() {
                 if (filters.id === canvasRow.id && filters.user_id === canvasRow.user_id) {
-                  return { data: { ...canvasRow }, error: null };
+                  return { data: { ...canvasRow, revision: currentCanvasRevision }, error: null };
                 }
 
                 return { data: null, error: { message: 'not found' } };
               },
               async single() {
                 if (filters.id === canvasRow.id && filters.user_id === canvasRow.user_id) {
-                  return { data: { ...canvasRow }, error: null };
+                  return { data: { ...canvasRow, revision: currentCanvasRevision }, error: null };
                 }
 
                 return { data: null, error: { message: 'not found' } };
@@ -350,6 +391,18 @@ function createAdminSupabaseMock() {
         return Promise.resolve({ data: true, error: null });
       }
 
+      if (fn === 'settle_ai_usage_event') {
+        return Promise.resolve({
+          data: {
+            status: args?.p_outcome,
+            settled: true,
+            event_id: args?.p_event_id,
+            remaining_credits: remainingCredits,
+          },
+          error: null,
+        });
+      }
+
       if (fn === 'check_backend_rate_limit') {
         return Promise.resolve({
           data: {
@@ -459,6 +512,7 @@ beforeEach(() => {
   existingUsageEvent = null;
   adminRpcCalls = [];
   assistantRateLimitAllowed = true;
+  currentCanvasRevision = canvasRow.revision;
   mocks.authenticateRequest.mockResolvedValue({
     userId: canvasRow.user_id,
     supabase: createWorkflowSupabaseMock(),
@@ -596,7 +650,8 @@ describe('workflow assistant routes', () => {
     expect(data.proposal.summary).toBe('Added a lightning transformation workflow.');
     expect(data.proposal.proposed_graph.nodes.some((node: { data: { managed?: boolean } }) => node.data.managed)).toBe(true);
     expect(assistantProposals[0].status).toBe('ready');
-    expect(usageEventUpdates.some((update) => update.status === 'succeeded')).toBe(true);
+    expect(adminRpcCalls).toContain('settle_ai_usage_event');
+    expect(usageEventUpdates).toHaveLength(0);
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
     expect(mocks.fetch).toHaveBeenCalledWith(
       'https://api.kie.ai/gemini-3-flash/v1/chat/completions',
@@ -700,13 +755,7 @@ describe('workflow assistant routes', () => {
   });
 
   it('marks a proposal discarded when apply hits a stale canvas revision', async () => {
-    mocks.patchWorkflowCanvas.mockResolvedValue(NextResponse.json({
-      error: 'Workflow canvas has newer changes.',
-      canvas: {
-        ...canvasRow,
-        revision: canvasRow.revision + 2,
-      },
-    }, { status: 409 }));
+    currentCanvasRevision = canvasRow.revision + 2;
 
     const { POST } = await import('@/app/api/workflow-canvases/[id]/assistant/proposals/[proposalId]/apply/route');
     const response = await POST(

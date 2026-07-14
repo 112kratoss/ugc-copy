@@ -70,6 +70,18 @@ function createClient({
       return { data: true, error: null };
     }
 
+    if (fn === 'settle_ai_usage_event') {
+      return {
+        data: {
+          status: args.p_outcome,
+          settled: true,
+          event_id: args.p_event_id,
+          remaining_credits: remainingCredits,
+        },
+        error: null,
+      };
+    }
+
     return { data: null, error: null };
   });
   const from = vi.fn((table: string) => {
@@ -205,13 +217,16 @@ describe('enhancePromptForUser', () => {
         appliedSafeguards: ['artifact safeguard', 'metadata safeguard'],
       },
     });
-    expect(client.updates[0]).toMatchObject({
-      status: 'succeeded',
-      output_text: 'final enhanced prompt',
-      response_payload: {
+    expect(client.rpcCalls).toContainEqual({
+      fn: 'settle_ai_usage_event',
+      args: expect.objectContaining({
+        p_outcome: 'succeeded',
+        p_output_text: 'final enhanced prompt',
+        p_response_payload: expect.objectContaining({
         enhancedPrompt: 'final enhanced prompt',
         remainingCredits: 41,
-      },
+      }),
+      }),
     });
   });
 
@@ -239,10 +254,12 @@ describe('enhancePromptForUser', () => {
     expect(client.rpcCalls.map((call) => call.fn)).toEqual([
       'check_backend_rate_limit',
       'start_ai_usage_event',
-      'refund_ai_usage_event',
+      'settle_ai_usage_event',
     ]);
-    expect(client.updates.at(-1)).toMatchObject({
-      error_message: 'provider failure',
+    expect(client.rpcCalls.at(-1)?.args).toMatchObject({
+      p_outcome: 'refunded',
+      p_error_message: 'provider failure',
     });
+    expect(client.updates).toHaveLength(0);
   });
 });

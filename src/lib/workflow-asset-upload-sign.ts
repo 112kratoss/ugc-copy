@@ -6,6 +6,7 @@ import {
   WORKFLOW_ASSET_UPLOAD_SIGN_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
 
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
 
@@ -132,7 +133,7 @@ function validateUploadMetadata(body: unknown): {
 
   const bucketConfig = WORKFLOW_ASSET_BUCKETS[bucket];
   const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim().toLowerCase() : '';
-  if (!mimeType || mimeType === 'image/svg+xml' || !mimeType.startsWith(`${bucketConfig.kind}/`)) {
+  if (!mimeType || !isAllowedStorageBucketMimeType(bucket, mimeType)) {
     return { error: `Upload a valid ${bucketConfig.kind} file.` };
   }
 

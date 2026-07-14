@@ -473,6 +473,8 @@ export default function CreatorProfileCard({
   };
 
   useEffect(() => {
+    // A newly loaded profile replaces the editable draft and its validation state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm(initialProfile);
     setSavedProfile(initialProfile);
     setFieldErrors(EMPTY_ERRORS);

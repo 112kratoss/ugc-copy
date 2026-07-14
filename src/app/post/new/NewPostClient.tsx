@@ -1047,7 +1047,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resourceWorkflowUrl,
   ]);
   const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
-  const completionChecklist = useMemo(() => [
+  const completionChecklist = [
     {
       label: 'Proof added',
       complete: hasMediaProof || trimmedBody.length >= 24,
@@ -1063,14 +1063,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       complete: resourceAccessMode === 'none' || hasResourceContent,
       detail: resourceAccessMode === 'none' ? 'No unlock selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
     },
-  ], [
-    hasMediaProof,
-    hasResourceContent,
-    proofMode,
-    resourceAccessMode,
-    selectedResourceKinds,
-    trimmedBody,
-  ]);
+  ];
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
 
   useEffect(() => () => {
@@ -1082,6 +1075,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   }, [mediaPreviewItems]);
 
   useEffect(() => {
+    // A different generation or entry intent starts a fresh paywall-prefill session.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDidApplyGenerationPaywallPrefill(false);
     setDidFocusPriceInput(false);
   }, [generationId, isCreationPaywallManagementIntent, isGeneratedPaywallIntent]);
@@ -1092,6 +1087,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (!Object.values(resourceSelections).some(Boolean)) {
+      // Enabling an unlock requires at least one resource kind.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setResourceSelections((current) => ({
         ...current,
         prompt: true,
@@ -1105,6 +1102,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (resourceAttachmentRows.length === 0) {
+      // Selecting files materializes the first editable attachment row.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setResourceAttachmentRows([createAttachmentRow()]);
     }
   }, [resourceAttachmentRows.length, resourceSelections.files]);
@@ -1116,6 +1115,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
     const paywallPrefill = prefilledGeneration.paywallPrefill;
     if (!paywallPrefill || !hasUsableGenerationPaywallPrefill(paywallPrefill)) {
+      // Mark this generation as inspected even when it has no usable paywall payload.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDidApplyGenerationPaywallPrefill(true);
       return;
     }
@@ -1178,6 +1179,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   useEffect(() => {
     if (!generationId || !session?.access_token) {
+      // Removing the generation route context clears its derived draft data.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPrefilledGeneration(null);
       setGenerationError(null);
       return;
@@ -1276,6 +1279,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   useEffect(() => {
     if (prefilledGeneration && madeWithRows.length === 1 && !madeWithRows[0].toolLabel) {
+      // A generation-backed post is authored by this product unless the user overrides it.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setMadeWithRows([{
         id: 'mw-0',
         toolLabel: 'magicbooklet',

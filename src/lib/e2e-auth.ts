@@ -4,6 +4,31 @@ export const E2E_AUTH_COOKIE_NAME = 'e2e-auth';
 const E2E_AUTH_COOKIE_VALUE = 'workflow-user';
 export const E2E_AUTH_CREDITS = 25;
 
+type E2EAuthEnvironment = {
+  E2E_AUTH_BYPASS?: string;
+  NEXT_PUBLIC_E2E_AUTH_BYPASS?: string;
+  NODE_ENV?: string;
+  VERCEL_ENV?: string;
+};
+
+export function resolveE2EAuthBypass({
+  environment = process.env,
+  isBrowser,
+}: {
+  environment?: E2EAuthEnvironment;
+  isBrowser: boolean;
+}) {
+  const privateBypassRequested = environment.E2E_AUTH_BYPASS === '1';
+  const publicBypassRequested = environment.NEXT_PUBLIC_E2E_AUTH_BYPASS === '1';
+  const productionRuntime = environment.NODE_ENV === 'production' || environment.VERCEL_ENV === 'production';
+
+  if (productionRuntime && (privateBypassRequested || publicBypassRequested)) {
+    throw new Error('E2E authentication bypass must never be enabled in a production runtime.');
+  }
+
+  return isBrowser ? publicBypassRequested : privateBypassRequested;
+}
+
 export function createE2ESession(): Session {
   return {
     access_token: 'e2e-access-token',
@@ -35,7 +60,9 @@ export function createE2ESession(): Session {
 }
 
 export function isE2EAuthBypassEnabled() {
-  return process.env.E2E_AUTH_BYPASS === '1' || process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === '1';
+  return resolveE2EAuthBypass({
+    isBrowser: typeof document !== 'undefined',
+  });
 }
 
 export function hasE2EAuthCookie(cookieValue: string | null | undefined) {

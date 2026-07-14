@@ -285,9 +285,12 @@ export default function ShowcaseClient({
     );
     const directPostRequestRef = useRef<string | null>(null);
     const selectedItemIdRef = useRef<string | null>(selectedItemId);
-    selectedItemIdRef.current = selectedItemId;
-    feedItemsForEventsRef.current = items;
-    feedSessionIdForEventsRef.current = feedSessionId;
+
+    useEffect(() => {
+        selectedItemIdRef.current = selectedItemId;
+        feedItemsForEventsRef.current = items;
+        feedSessionIdForEventsRef.current = feedSessionId;
+    }, [feedSessionId, items, selectedItemId]);
 
     const currentShowcasePath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
@@ -304,6 +307,8 @@ export default function ShowcaseClient({
     useEffect(() => {
         const postParam = searchParams.get('post');
         const mediaParam = Number(searchParams.get('media'));
+        // Browser history is the source of truth for the active reel and media index.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
 
         if (!postParam) {
@@ -439,7 +444,9 @@ export default function ShowcaseClient({
                 anonymousHiddenPostIdsRef.current,
                 anonymousHiddenCreatorIdsRef.current
             );
+        // A server navigation replaces the feed snapshot and its pagination/filter state.
         setItems(visibleInitialItems);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setPageInfo(initialFeed.pageInfo);
         setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
         setIsLoadingMore(false);
@@ -519,7 +526,7 @@ export default function ShowcaseClient({
         initialFeed,
         isAuthLoading,
         resource,
-        session?.access_token,
+        session,
         setItems,
         setSavedItemIds,
         sort,
@@ -650,7 +657,7 @@ export default function ShowcaseClient({
         pageInfo.nextCursor,
         pageInfo.nextOffset,
         resource,
-        session?.access_token,
+        session,
         setItems,
         setSavedItemIds,
         sort,

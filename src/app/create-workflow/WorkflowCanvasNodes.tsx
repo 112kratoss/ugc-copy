@@ -10,6 +10,7 @@ import {
   type PropsWithChildren,
   type ReactNode,
 } from 'react';
+import Image from 'next/image';
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -734,7 +735,14 @@ const ImageInputNode = memo(function ImageInputNode({ data, dragging }: NodeProp
       minHeight={previewUrl ? undefined : 108}
       preview={previewUrl ? (
         <PreviewMediaLink href={previewUrl} label="Open image input preview" kind="image" disabled={dragging}>
-          <img src={previewUrl} alt="" className={`h-28 w-full rounded-xl border border-white/10 object-cover ${dragging ? '' : 'transition group-hover:scale-[1.02]'}`} />
+          <Image
+            unoptimized
+            src={previewUrl}
+            alt=""
+            width={640}
+            height={224}
+            className={`h-28 w-full rounded-xl border border-white/10 object-cover ${dragging ? '' : 'transition group-hover:scale-[1.02]'}`}
+          />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -843,7 +851,14 @@ const ImageGenerateNode = memo(function ImageGenerateNode({ data, dragging }: No
       minHeight={previewUrl ? undefined : 132}
       preview={previewUrl ? (
         <PreviewMediaLink href={previewUrl} label="Open generated image" kind="image" disabled={dragging}>
-          <img src={previewUrl} alt="" className={`h-28 w-full rounded-xl border border-white/10 object-cover ${dragging ? '' : 'transition group-hover:scale-[1.02]'}`} />
+          <Image
+            unoptimized
+            src={previewUrl}
+            alt=""
+            width={640}
+            height={224}
+            className={`h-28 w-full rounded-xl border border-white/10 object-cover ${dragging ? '' : 'transition group-hover:scale-[1.02]'}`}
+          />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -1042,7 +1057,14 @@ const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: Node
           disabled={dragging}
         >
           {isImage ? (
-            <img src={previewUrl} alt="" className="h-28 w-full rounded-xl border border-violet-400/15 object-cover" />
+            <Image
+              unoptimized
+              src={previewUrl}
+              alt=""
+              width={640}
+              height={224}
+              className="h-28 w-full rounded-xl border border-violet-400/15 object-cover"
+            />
           ) : (
             <video src={previewUrl} className="h-28 w-full rounded-xl border border-violet-400/15 object-cover" muted playsInline />
           )}

@@ -51,6 +51,10 @@ function createClientMock({
       return { data: true, error: null };
     }
 
+    if (fn === 'claim_generation_start_request') {
+      return { data: 'claimed', error: null };
+    }
+
     return { data: null, error: null };
   });
 
@@ -194,7 +198,9 @@ describe('startVideoGenerationForRoute', () => {
     const adminClient = createClientMock();
 
     await startVideoGenerationForRoute({
-      request: new Request('http://localhost/api/template-runs/run-1/start'),
+      request: new Request('http://localhost/api/template-runs/run-1/start', {
+        headers: { 'idempotency-key': 'video-private-template-start-1' },
+      }),
       body: {
         prompt: 'A private template video',
         model: 'kling-3.0-video',

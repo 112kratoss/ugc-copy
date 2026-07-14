@@ -64,6 +64,17 @@ describe('createTemporaryMediaUploadIntent', () => {
       error: 'Video uploads must be 250MB or smaller.',
     });
 
+    await expect(createTemporaryMediaUploadIntent({
+      body: { kind: 'image', mimeType: 'image/bmp', fileName: 'legacy.bmp', sizeBytes: 1234 },
+      userId: 'user-1',
+      client: clientFactory,
+      createUploadId: () => 'upload-id-1',
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      error: 'Upload a valid image file.',
+    });
+
     expect(clientFactory).not.toHaveBeenCalled();
   });
 

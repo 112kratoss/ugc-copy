@@ -85,6 +85,13 @@ export function isMissingWorkflowCanvasAssistantSchemaError(error: unknown) {
   return (
     normalizedError.code === '42P01' ||
     normalizedError.code === '42p01' ||
+    (
+      (
+        normalizedError.code === '42883' ||
+        normalizedError.code === 'PGRST202' ||
+        normalizedError.code === 'pgrst202'
+      ) && text.includes('apply_workflow_canvas_assistant_proposal')
+    ) ||
     text.includes('workflow_canvas_assistant_messages') ||
     text.includes('workflow_canvas_assistant_proposals')
   );

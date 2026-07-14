@@ -61,22 +61,58 @@ function jsonResponse(body: Record<string, unknown>, status: number) {
   });
 }
 
+async function readBoundedBody(request: Request, maxBytes = 256 * 1024): Promise<string | null> {
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) return null;
+  if (!request.body) return '';
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let totalBytes = 0;
+  let body = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel('Webhook payload too large');
+        return null;
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    return body + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 serve(async (request: Request) => {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405);
   }
 
-  const legacySecret = configuredValue('WEBHOOK_SECRET');
-  if (!legacySecret) {
-    return jsonResponse({ error: 'Webhook secret is not configured' }, 500);
+  const providerSecrets = [
+    configuredValue('KIE_PROVIDER_WEBHOOK_SECRET'),
+    configuredValue('KIE_PROVIDER_WEBHOOK_SECRET_PREVIOUS'),
+    configuredValue('WEBHOOK_SECRET'),
+    configuredValue('WEBHOOK_SECRET_PREVIOUS'),
+  ].filter((secret): secret is string => Boolean(secret));
+  if (providerSecrets.length === 0) {
+    return jsonResponse({ error: 'Provider webhook secret is not configured' }, 500);
   }
 
   const incomingUrl = new URL(request.url);
-  if (!safeEqual(legacySecret, incomingUrl.searchParams.get('secret'))) {
+  const requestSecret = incomingUrl.searchParams.get('secret');
+  if (!providerSecrets.some((secret) => safeEqual(secret, requestSecret))) {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 
-  const body = await request.text();
+  const body = await readBoundedBody(request);
+  if (body === null) {
+    return jsonResponse({ error: 'Webhook payload too large' }, 413);
+  }
   let payload: unknown;
   try {
     payload = JSON.parse(body);
@@ -95,16 +131,24 @@ serve(async (request: Request) => {
     'Content-Type': request.headers.get('content-type') || 'application/json',
   });
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  let forwardUrl = `${siteUrl.replace(/\/$/, '')}/api/webhooks/kie`;
+  const forwardUrl = new URL(`${siteUrl.replace(/\/$/, '')}/api/webhooks/kie`);
+  const generationId = incomingUrl.searchParams.get('generationId')?.trim();
+  if (generationId) {
+    forwardUrl.searchParams.set('generationId', generationId);
+  }
 
   if (hmacKey) {
     headers.set('x-webhook-timestamp', timestamp);
     headers.set('x-webhook-signature', await buildSignature(taskId, timestamp, hmacKey));
   } else {
-    forwardUrl = `${forwardUrl}?secret=${encodeURIComponent(legacySecret)}`;
+    const legacySecret = configuredValue('WEBHOOK_SECRET');
+    if (!legacySecret) {
+      return jsonResponse({ error: 'Webhook forwarding secret is not configured' }, 500);
+    }
+    forwardUrl.searchParams.set('secret', legacySecret);
   }
 
-  const response = await fetch(forwardUrl, {
+  const response = await fetch(forwardUrl.toString(), {
     method: 'POST',
     headers,
     body,
