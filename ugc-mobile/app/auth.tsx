@@ -1,13 +1,17 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AlertCircle, Apple, ArrowLeft, Eye, LockKeyhole, Mail, Sparkles, X } from 'lucide-react-native';
-import { useState } from 'react';
+import { AlertCircle, ArrowLeft, Eye, LockKeyhole, Mail, Sparkles, X } from 'lucide-react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/lib/auth';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
+import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { completeAuthScreen, leaveAuthScreen } from '@/lib/auth-navigation';
+import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
+import googleSignInAndroid from '../assets/images/google-signin-android.png';
 
 const workspace = {
   background: appTheme.colors.background,
@@ -26,7 +30,7 @@ export default function AuthScreen() {
     returnTo?: string | string[];
     mode?: string | string[];
   }>();
-  const { signInWithPassword, signUpWithPassword, signInWithApple, isAuthConfigured, missingEnvKeys } = useAuth();
+  const { user, signInWithPassword, signUpWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
   const initialMode = (Array.isArray(requestedMode) ? requestedMode[0] : requestedMode) === 'signup'
     ? 'signup'
     : 'login';
@@ -37,10 +41,27 @@ export default function AuthScreen() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const isCompact = width < 390 || height < 820;
   const canSubmit = isAuthConfigured && email.trim().length > 0 && password.length >= 6;
+  const hasCompletedAuth = useRef(false);
+
+  const finishAuth = useCallback(() => {
+    if (hasCompletedAuth.current) {
+      return;
+    }
+
+    hasCompletedAuth.current = true;
+    completeAuthScreen(router, returnTo);
+  }, [returnTo]);
+
+  useEffect(() => {
+    if (user) {
+      finishAuth();
+    }
+  }, [finishAuth, user]);
 
   const submit = async () => {
     setIsSubmitting(true);
@@ -51,7 +72,7 @@ export default function AuthScreen() {
       } else {
         await signUpWithPassword(email.trim(), password);
       }
-      completeAuthScreen(router, returnTo);
+      finishAuth();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Authentication failed.');
     } finally {
@@ -64,13 +85,28 @@ export default function AuthScreen() {
     setError(null);
     try {
       await signInWithApple(mode);
-      completeAuthScreen(router, returnTo);
+      finishAuth();
     } catch (nextError) {
       if (!isAppleAuthCanceled(nextError)) {
         setError(nextError instanceof Error ? nextError.message : 'Apple sign-in failed.');
       }
     } finally {
       setIsAppleSubmitting(false);
+    }
+  };
+
+  const signInWithNativeGoogle = async () => {
+    setIsGoogleSubmitting(true);
+    setError(null);
+    try {
+      await signInWithGoogle();
+      finishAuth();
+    } catch (nextError) {
+      if (!isGoogleAuthCanceled(nextError)) {
+        setError(nextError instanceof Error ? nextError.message : 'Google sign-in failed.');
+      }
+    } finally {
+      setIsGoogleSubmitting(false);
     }
   };
 
@@ -107,12 +143,15 @@ export default function AuthScreen() {
             onTogglePassword={() => setShowPassword((current) => !current)}
             onSubmit={submit}
             onAppleSignIn={signInWithNativeApple}
+            onGoogleSignIn={signInWithNativeGoogle}
             canSubmit={canSubmit}
             isSubmitting={isSubmitting}
             isAppleSubmitting={isAppleSubmitting}
+            isGoogleSubmitting={isGoogleSubmitting}
             isAuthConfigured={isAuthConfigured}
             missingEnvKeys={missingEnvKeys}
             showAppleSignIn={Platform.OS === 'ios'}
+            showGoogleSignIn={Platform.OS === 'android'}
           />
         </View>
       </ScrollView>
@@ -161,12 +200,15 @@ function AuthPanel({
   onTogglePassword,
   onSubmit,
   onAppleSignIn,
+  onGoogleSignIn,
   canSubmit,
   isSubmitting,
   isAppleSubmitting,
+  isGoogleSubmitting,
   isAuthConfigured,
   missingEnvKeys,
   showAppleSignIn,
+  showGoogleSignIn,
 }: {
   mode: 'login' | 'signup';
   onModeChange: (mode: 'login' | 'signup') => void;
@@ -178,12 +220,15 @@ function AuthPanel({
   onTogglePassword: () => void;
   onSubmit: () => void;
   onAppleSignIn: () => void;
+  onGoogleSignIn: () => void;
   canSubmit: boolean;
   isSubmitting: boolean;
   isAppleSubmitting: boolean;
+  isGoogleSubmitting: boolean;
   isAuthConfigured: boolean;
   missingEnvKeys: string[];
   showAppleSignIn: boolean;
+  showGoogleSignIn: boolean;
 }) {
   return (
     <View
@@ -254,14 +299,56 @@ function AuthPanel({
             <Text style={{ color: workspace.faint, fontSize: 12, fontWeight: '600' }}>or continue with</Text>
             <View style={{ flex: 1, height: 1, backgroundColor: workspace.border }} />
           </View>
-          <SocialButton
-            label="Apple"
-            onPress={onAppleSignIn}
-            disabled={!isAuthConfigured || isAppleSubmitting}
-            loading={isAppleSubmitting}
+          <View
+            pointerEvents={!isAuthConfigured || isAppleSubmitting ? 'none' : 'auto'}
+            style={{ opacity: !isAuthConfigured || isAppleSubmitting ? appTheme.opacity.disabled : 1 }}
           >
-            <Apple size={23} color={workspace.text} fill={workspace.text} strokeWidth={1.2} />
-          </SocialButton>
+            <AppleAuthentication.AppleAuthenticationButton
+              accessibilityLabel="Sign in with Apple"
+              buttonType={mode === 'signup'
+                ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
+                : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              cornerRadius={17}
+              onPress={onAppleSignIn}
+              style={{ width: '100%', height: 48 }}
+            />
+          </View>
+        </>
+      ) : null}
+
+      {showGoogleSignIn ? (
+        <>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: workspace.border }} />
+            <Text style={{ color: workspace.faint, fontSize: 12, fontWeight: '600' }}>or continue with</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: workspace.border }} />
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={mode === 'signup' ? 'Sign up with Google' : 'Sign in with Google'}
+            accessibilityHint="Opens Google authentication and returns to Magic Booklet"
+            accessibilityState={{ busy: isGoogleSubmitting, disabled: !isAuthConfigured || isGoogleSubmitting }}
+            disabled={!isAuthConfigured || isGoogleSubmitting}
+            onPress={onGoogleSignIn}
+            style={({ pressed }) => ({
+              minHeight: 48,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: !isAuthConfigured || isGoogleSubmitting ? appTheme.opacity.disabled : pressed ? 0.78 : 1,
+            })}
+          >
+            {isGoogleSubmitting ? (
+              <ActivityIndicator color={workspace.text} />
+            ) : (
+              <Image
+                accessibilityIgnoresInvertColors
+                resizeMode="contain"
+                source={googleSignInAndroid}
+                style={{ width: 216, height: 48 }}
+              />
+            )}
+          </Pressable>
         </>
       ) : null}
 
@@ -275,6 +362,30 @@ function AuthPanel({
             <Text style={{ color: workspace.primary, fontWeight: '700' }}>{mode === 'login' ? 'Sign up' : 'Sign in'}</Text>
           </Text>
         </Pressable>
+      </View>
+
+      <View style={{ alignItems: 'center', gap: 6 }}>
+        <Text style={{ color: workspace.faint, fontSize: 11, lineHeight: 17, textAlign: 'center' }}>
+          By continuing, you agree to the Magic Booklet terms and acknowledge the privacy policy.
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Open privacy policy"
+            onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
+            hitSlop={8}
+          >
+            <Text style={{ color: workspace.primary, fontSize: 12, fontWeight: '700' }}>Privacy Policy</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Open terms of service"
+            onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
+            hitSlop={8}
+          >
+            <Text style={{ color: workspace.primary, fontSize: 12, fontWeight: '700' }}>Terms of Service</Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -397,43 +508,6 @@ function PrimaryButton({
           {label}
         </Text>
       )}
-    </Pressable>
-  );
-}
-
-function SocialButton({
-  children,
-  label,
-  onPress,
-  disabled,
-  loading,
-}: {
-  children: React.ReactNode;
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      disabled={disabled || loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flex: 1,
-        minHeight: 48,
-        borderRadius: 17,
-        borderCurve: 'continuous',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: appTheme.colors.panelSoft,
-        opacity: disabled ? 0.48 : pressed ? 0.76 : 1,
-        borderWidth: 1,
-        borderColor: workspace.border,
-      })}
-    >
-      {loading ? <ActivityIndicator color={workspace.text} /> : children}
     </Pressable>
   );
 }

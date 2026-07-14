@@ -18,6 +18,7 @@ export default function CreateToolScreen() {
     prompt?: string | string[];
     remix?: string | string[];
     remixPost?: string | string[];
+    guided?: string | string[];
   }>();
   const initialToolParam = firstParam(params.tool);
   if (!isTool(initialToolParam)) {
@@ -33,6 +34,7 @@ export default function CreateToolScreen() {
   const initialPrompt = firstParam(params.prompt);
   const remixId = firstParam(params.remix);
   const remixPostId = firstParam(params.remixPost);
+  const guided = firstParam(params.guided) === '1';
   const remixSource = remixId
     ? {
         generationId: remixId,
@@ -46,6 +48,7 @@ export default function CreateToolScreen() {
       initialTool={initialTool}
       initialPrompt={initialPrompt}
       remixSource={remixSource}
+      guided={guided}
     />
   );
 }

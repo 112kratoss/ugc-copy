@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import Link from "next/link";
 
 import { createMetadata, siteConfig } from "@/lib/seo";
 
@@ -51,6 +52,7 @@ export default function PrivacyPolicy() {
                             <li>Device and browser information</li>
                             <li>IP address</li>
                             <li>Pages visited and features used</li>
+                            <li>Onboarding steps viewed, completion or skip status, and the creation goal you select</li>
                             <li>Time and date of visits</li>
                         </ul>
 
@@ -74,6 +76,7 @@ export default function PrivacyPolicy() {
                             <li>Improve our AI models and Service quality</li>
                             <li>Detect and prevent fraud or abuse</li>
                             <li>Attribute referrals, issue promotional credits, and measure referral-program performance</li>
+                            <li>Measure onboarding completion and help creators reach their first successful generation</li>
                             <li>Comply with legal obligations</li>
                         </ul>
                     </section>
@@ -92,6 +95,9 @@ export default function PrivacyPolicy() {
                         <p className="mt-4">
                             Uploaded content is stored temporarily for processing and may be deleted after
                             a reasonable period. Generated videos are stored in your account until you delete them.
+                        </p>
+                        <p className="mt-4">
+                            Raw onboarding interaction events use a pseudonymous installation identifier and are retained for up to 90 days. They do not include your prompts, uploaded media, email address, or arbitrary profile content; longer-term reporting uses aggregated results.
                         </p>
                     </section>
 
@@ -124,6 +130,10 @@ export default function PrivacyPolicy() {
                             <a href={`mailto:${siteConfig.privacyEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                 {siteConfig.privacyEmail}
                             </a>
+                            . For permanent account deletion instructions, visit our{" "}
+                            <Link href="/delete-account" className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
+                                account deletion page
+                            </Link>.
                         </p>
                     </section>
 

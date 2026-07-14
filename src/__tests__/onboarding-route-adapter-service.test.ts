@@ -1,0 +1,99 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { describe, expect, it, vi } from 'vitest';
+
+import { postWelcomeCreditsClaimRouteResponse } from '@/lib/onboarding-route-adapter-service';
+
+function queryResult(data: unknown) {
+  const query = {
+    select: vi.fn(),
+    eq: vi.fn(),
+    maybeSingle: vi.fn(async () => ({ data, error: null })),
+  };
+  query.select.mockReturnValue(query);
+  query.eq.mockReturnValue(query);
+  return query;
+}
+
+describe('onboarding route adapter service', () => {
+  it('returns the camel-case welcome-credit contract after an atomic claim', async () => {
+    const user = {
+      id: '4f65b4aa-2ac5-4f35-9291-5cc663fe7f0d',
+      created_at: '2026-07-13T15:00:00.000Z',
+    };
+    const program = queryResult({
+      program_key: 'welcome_credits_v1',
+      amount: 25,
+      promotional_amount: 25,
+      enabled: true,
+      activated_at: '2026-07-13T14:00:00.000Z',
+    });
+    const grant = queryResult({
+      amount: 25,
+      promotional_amount: 25,
+      credits_balance_after: 50,
+      promotional_credits_balance_after: 25,
+      claimed_at: '2026-07-13T15:01:00.000Z',
+    });
+    const profile = queryResult({
+      credits: 50,
+      promotional_credits: 25,
+      username: 'new-creator',
+      display_name: 'New Creator',
+    });
+    const rpc = vi.fn(async () => ({
+      data: { status: 'claimed', promotional_amount: 25 },
+      error: null,
+    }));
+    const admin = {
+      from: vi.fn((table: string) => {
+        if (table === 'credit_grant_programs') return program;
+        if (table === 'credit_grants') return grant;
+        if (table === 'profiles') return profile;
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+      rpc,
+    } as unknown as SupabaseClient;
+    const userClient = {
+      auth: {
+        getUser: vi.fn(async () => ({ data: { user }, error: null })),
+      },
+    } as unknown as SupabaseClient;
+
+    const response = await postWelcomeCreditsClaimRouteResponse({
+      request: new Request('https://app.example/api/credits/welcome/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceSurface: 'mobile' }),
+      }),
+      dependencies: {
+        createUserClient: vi.fn(() => userClient),
+        createServiceClient: vi.fn(() => admin),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 10,
+          remaining: 9,
+          retryAfterSeconds: 0,
+          resetAt: '2026-07-13T15:02:00.000Z',
+        })),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      programKey: 'welcome_credits_v1',
+      status: 'claimed',
+      amount: 25,
+      promotionalAmount: 25,
+      credits: 50,
+      promotionalCredits: 25,
+      claimedAt: '2026-07-13T15:01:00.000Z',
+      identityComplete: true,
+    });
+    expect(rpc).toHaveBeenCalledWith('claim_credit_grant_program', {
+      p_user_id: user.id,
+      p_program_key: 'welcome_credits_v1',
+      p_source_surface: 'mobile',
+    });
+  });
+});

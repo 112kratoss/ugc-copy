@@ -168,6 +168,18 @@ describe('mobile notifications helper', () => {
     expect(notificationsMocks.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
   });
 
+  it('does not invoke the app notification fallback during an ordinary cold start', async () => {
+    notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue(null);
+    const handleResponse = vi.fn(async () => true);
+
+    const { syncLastNotificationResponse } = await import('../lib/notifications');
+
+    await expect(syncLastNotificationResponse({ handleResponse })).resolves.toBe(false);
+    expect(handleResponse).not.toHaveBeenCalled();
+    expect(routerMocks.push).not.toHaveBeenCalled();
+    expect(notificationsMocks.clearLastNotificationResponseAsync).not.toHaveBeenCalled();
+  });
+
   it('routes referral reward notifications to Invite & Earn', async () => {
     notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue({
       notification: {

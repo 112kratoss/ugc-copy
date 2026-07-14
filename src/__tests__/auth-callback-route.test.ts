@@ -117,7 +117,7 @@ describe('/auth/continue', () => {
       error: null,
     });
     mocks.resolveServerPostAuthPath.mockResolvedValue(
-      '/profile?welcome=1&next=%2Fcreate'
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate'
     );
   });
 
@@ -134,7 +134,7 @@ describe('/auth/continue', () => {
       { skipProfileOnboarding: false }
     );
     expect(response.headers.get('location')).toBe(
-      'https://magicbooklet.com/profile?welcome=1&next=%2Fcreate'
+      'https://magicbooklet.com/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate'
     );
   });
 });

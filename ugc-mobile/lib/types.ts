@@ -50,6 +50,59 @@ export interface ProfileResponse {
   tiktokHandle: string | null;
   location: string | null;
   credits: number | null;
+  promotionalCredits?: number | null;
+  marketplaceSpendableCredits?: number | null;
+}
+
+export type OnboardingGoal = 'image' | 'video' | 'motion';
+export type OnboardingStatus = 'not_started' | 'in_progress' | 'skipped' | 'completed';
+export type OnboardingEventName =
+  | 'started'
+  | 'screen_viewed'
+  | 'skipped'
+  | 'auth_started'
+  | 'auth_succeeded'
+  | 'auth_canceled'
+  | 'username_saved'
+  | 'username_conflict'
+  | 'reward_viewed'
+  | 'reward_claimed'
+  | 'reward_deferred'
+  | 'reward_failed'
+  | 'guided_creator_opened'
+  | 'first_generation_started'
+  | 'first_generation_succeeded';
+
+export interface OnboardingStateResponse {
+  state: {
+    flowVersion: number;
+    status: OnboardingStatus;
+    goal: OnboardingGoal | null;
+    usernameCompletedAt: string | null;
+    rewardClaimedAt: string | null;
+    completedAt: string | null;
+    updatedAt: string | null;
+  };
+}
+
+export interface WelcomeCreditResponse {
+  programKey: string;
+  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'not_eligible' | 'unavailable';
+  amount: number;
+  promotionalAmount: number;
+  credits: number;
+  promotionalCredits: number;
+  claimedAt: string | null;
+  identityComplete: boolean;
+}
+
+export interface OnboardingEventRequest {
+  clientEventId: string;
+  eventName: OnboardingEventName;
+  platform: 'ios' | 'android';
+  goal?: OnboardingGoal | null;
+  step?: string | null;
+  occurredAt: string;
 }
 
 export interface ReferralProgramSummary {

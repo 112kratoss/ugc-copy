@@ -15,9 +15,11 @@ const platformState = vi.hoisted(() => ({
 }));
 
 const authState = vi.hoisted(() => ({
+  user: null as { id: string } | null,
   signInWithPassword: vi.fn(),
   signUpWithPassword: vi.fn(),
   signInWithApple: vi.fn(),
+  signInWithGoogle: vi.fn(),
   isAuthConfigured: true,
   missingEnvKeys: [] as string[],
 }));
@@ -29,13 +31,22 @@ vi.mock('expo-router', () => ({
   router: {
     canGoBack: vi.fn(() => false),
     back: vi.fn(),
+    dismissTo: vi.fn(),
     replace: vi.fn(),
   },
   useLocalSearchParams: () => ({}),
 }));
 
+vi.mock('expo-apple-authentication', () => ({
+  AppleAuthenticationButton: ({ ...props }: MockProps) => React.createElement('apple-authentication-button', props),
+  AppleAuthenticationButtonStyle: { WHITE: 'WHITE' },
+  AppleAuthenticationButtonType: { SIGN_IN: 'SIGN_IN', SIGN_UP: 'SIGN_UP' },
+}));
+
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  Image: (props: MockProps) => React.createElement('image', props),
+  Linking: { openURL: vi.fn() },
   Platform: {
     get OS() {
       return platformState.os;
@@ -70,7 +81,6 @@ vi.mock('react-native-svg', () => ({
 
 vi.mock('lucide-react-native', () => ({
   AlertCircle: (props: MockProps) => React.createElement('alert-circle-icon', props),
-  Apple: (props: MockProps) => React.createElement('apple-icon', props),
   ArrowLeft: (props: MockProps) => React.createElement('arrow-left-icon', props),
   Eye: (props: MockProps) => React.createElement('eye-icon', props),
   LockKeyhole: (props: MockProps) => React.createElement('lock-icon', props),
@@ -88,13 +98,20 @@ vi.mock('@/lib/apple-auth', () => ({
   isAppleAuthCanceled: () => false,
 }));
 
+vi.mock('@/lib/google-auth', () => ({
+  isGoogleAuthCanceled: () => false,
+}));
+
 import AuthScreen from '../app/auth';
 
 describe('AuthScreen Apple sign-in', () => {
   beforeEach(() => {
     platformState.os = 'ios';
+    authState.user = null;
     authState.signInWithApple.mockReset();
     authState.signInWithApple.mockResolvedValue(undefined);
+    authState.signInWithGoogle.mockReset();
+    authState.signInWithGoogle.mockResolvedValue(undefined);
   });
 
   it('starts Apple sign-in in login mode on iOS', async () => {
@@ -104,10 +121,42 @@ describe('AuthScreen Apple sign-in', () => {
     });
 
     await renderer.act(async () => {
-      tree!.root.findByProps({ accessibilityLabel: 'Apple' }).props.onPress();
+      tree!.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
     });
 
     expect(authState.signInWithApple).toHaveBeenCalledWith('login');
+  });
+
+  it('dismisses the auth flow after Apple sign-in succeeds', async () => {
+    const { router } = await import('expo-router');
+    const dismissTo = vi.mocked(router.dismissTo);
+    dismissTo.mockClear();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+    });
+
+    expect(dismissTo).toHaveBeenCalledTimes(1);
+    expect(dismissTo).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('automatically dismisses auth when a session already exists', async () => {
+    const { router } = await import('expo-router');
+    const dismissTo = vi.mocked(router.dismissTo);
+    dismissTo.mockClear();
+    authState.user = { id: 'user-1' };
+
+    await renderer.act(async () => {
+      renderer.create(<AuthScreen />);
+    });
+
+    expect(dismissTo).toHaveBeenCalledTimes(1);
+    expect(dismissTo).toHaveBeenCalledWith('/(tabs)');
   });
 
   it('hides Apple sign-in outside iOS', () => {
@@ -118,6 +167,30 @@ describe('AuthScreen Apple sign-in', () => {
       tree = renderer.create(<AuthScreen />);
     });
 
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Apple' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Sign in with Apple' })).toHaveLength(0);
+  });
+
+  it('starts Google sign-in on Android', async () => {
+    platformState.os = 'android';
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Sign in with Google' }).props.onPress();
+    });
+
+    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show Google sign-in on iOS', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Sign in with Google' })).toHaveLength(0);
   });
 });

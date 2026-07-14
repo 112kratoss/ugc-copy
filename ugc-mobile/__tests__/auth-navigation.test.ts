@@ -39,28 +39,46 @@ describe('auth return navigation', () => {
     expect(normalizeAuthReturnTo('/creators\\luna')).toBeNull();
   });
 
-  it('replaces auth with a valid creator return path', () => {
+  it('dismisses auth to a valid creator return path', () => {
+    const router = {
+      canGoBack: vi.fn(() => true),
+      back: vi.fn(),
+      dismissTo: vi.fn(),
+      replace: vi.fn(),
+    };
+
+    completeAuthScreen(router, '/creators/luna');
+
+    expect(router.dismissTo).toHaveBeenCalledWith('/creators/luna');
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(router.back).not.toHaveBeenCalled();
+  });
+
+  it('dismisses the whole auth flow to tabs when no safe return path exists', () => {
+    const router = {
+      canGoBack: vi.fn(() => false),
+      back: vi.fn(),
+      dismissTo: vi.fn(),
+      replace: vi.fn(),
+    };
+
+    completeAuthScreen(router, 'https://example.com');
+
+    expect(router.dismissTo).toHaveBeenCalledWith('/(tabs)');
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(router.back).not.toHaveBeenCalled();
+  });
+
+  it('falls back to replacing auth when dismissTo is unavailable', () => {
     const router = {
       canGoBack: vi.fn(() => true),
       back: vi.fn(),
       replace: vi.fn(),
     };
 
-    completeAuthScreen(router, '/creators/luna');
-
-    expect(router.replace).toHaveBeenCalledWith('/creators/luna');
-    expect(router.back).not.toHaveBeenCalled();
-  });
-
-  it('uses the normal auth exit when a return path is unsafe', () => {
-    const router = {
-      canGoBack: vi.fn(() => false),
-      back: vi.fn(),
-      replace: vi.fn(),
-    };
-
-    completeAuthScreen(router, 'https://example.com');
+    completeAuthScreen(router, undefined);
 
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(router.back).not.toHaveBeenCalled();
   });
 });

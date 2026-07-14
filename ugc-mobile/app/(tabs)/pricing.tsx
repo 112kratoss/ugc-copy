@@ -21,7 +21,6 @@ import {
   isIapConfigured,
   purchasePackage,
   resolveCreditEntitlement,
-  restorePurchases,
 } from '@/lib/iap';
 import {
   DEFAULT_MOBILE_PRICING_PLAN_ID,
@@ -249,7 +248,7 @@ export default function PricingScreen() {
 
   const storeLabel = os === 'ios' ? 'App Store' : os === 'android' ? 'Play Store' : 'Native only';
 
-  const restore = async () => {
+  const refreshBalance = async () => {
     if (!user) {
       router.push('/auth');
       return;
@@ -259,13 +258,12 @@ export default function PricingScreen() {
     setNotice(null);
     setNoticeTone('neutral');
     try {
-      const customerInfo = isConfigured ? await restorePurchases() : null;
       await api.restoreMobilePurchases();
       await refreshProfile();
-      setNotice(customerInfo ? 'Purchases restored and entitlements synced.' : 'Server-side entitlements refreshed.');
+      setNotice('Your credit balance was refreshed from your Magic Booklet purchase history.');
       setNoticeTone('success');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Restore failed.');
+      setNotice(error instanceof Error ? error.message : 'Credit balance refresh failed.');
       setNoticeTone('danger');
     } finally {
       setBusyProductId(null);
@@ -392,9 +390,10 @@ export default function PricingScreen() {
           accent="primary"
         />
         <SecondaryButton
-          label={busyProductId === 'restore' ? 'Restoring...' : 'Restore purchases'}
-          onPress={() => void restore()}
+          label={busyProductId === 'restore' ? 'Refreshing...' : 'Refresh credit balance'}
+          onPress={() => void refreshBalance()}
           disabled={!user || busyProductId !== null}
+          accessibilityHint="Checks your Magic Booklet account for previously credited purchases without opening the App Store restore flow"
         />
       </View>
     </Screen>

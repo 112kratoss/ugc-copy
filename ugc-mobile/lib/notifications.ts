@@ -260,6 +260,10 @@ async function handleNotificationResponse(
   response: Notifications.NotificationResponse | null | undefined,
   options: { handleResponse?: MobileNotificationResponseHandler } = {},
 ) {
+  if (!response) {
+    return false;
+  }
+
   const responseKey = getNotificationResponseKey(response);
   if (responseKey && responseKey === lastHandledNotificationResponseKey) {
     return false;

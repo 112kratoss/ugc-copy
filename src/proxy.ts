@@ -12,12 +12,14 @@ const mobileCorsPathPrefixes = [
   '/api/generate-image',
   '/api/generate-video',
   '/api/app-version',
+  '/api/credits',
   '/api/enhance-prompt',
   '/api/generation-models',
   '/api/generations',
   '/api/marketplace/resources',
   '/api/mobile/commerce',
   '/api/mobile/notifications',
+  '/api/onboarding',
   '/api/posts',
   '/api/profile',
   '/api/referrals',
@@ -93,7 +95,8 @@ export function proxy(request: NextRequest) {
 
   const isMobilePath = isMobileCorsPath(request.nextUrl.pathname);
   const compatibility = evaluateMobileClientCompatibility(request.headers);
-  if (!compatibility.allowed) {
+  const isCompatibilityPolicyRequest = request.nextUrl.pathname === '/api/app-version';
+  if (!isCompatibilityPolicyRequest && !compatibility.allowed) {
     return NextResponse.json({
       code: compatibility.code,
       error: compatibility.message,

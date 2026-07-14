@@ -1,4 +1,4 @@
-import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
+import Purchases, { LOG_LEVEL, type PurchasesPackage } from 'react-native-purchases';
 
 import { env } from './env';
 import { normalizePurchasedPackage, type NormalizedNativePurchase } from './iap-purchase';
@@ -84,8 +84,4 @@ export async function purchasePackage(
 ): Promise<NormalizedNativePurchase> {
   const result = await Purchases.purchasePackage(item);
   return normalizePurchasedPackage(result, os);
-}
-
-export async function restorePurchases(): Promise<CustomerInfo> {
-  return Purchases.restorePurchases();
 }

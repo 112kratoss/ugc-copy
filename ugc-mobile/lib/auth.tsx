@@ -6,6 +6,7 @@ import { AppState, Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
 import { signInWithNativeApple } from './apple-auth';
+import { signInWithGoogleOAuth } from './google-auth';
 import { createApiClient, type MagicbookletApiClient } from './api-client';
 import { getFeedInstallationId } from './feed-installation-id';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
@@ -41,7 +42,9 @@ interface AuthContextValue {
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUpWithPassword: (email: string, password: string) => Promise<void>;
   signInWithApple: (mode: AuthMode) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateCredits: (credits: number | null) => void;
 }
@@ -252,12 +255,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   };
 
+  const signInWithGoogle = async () => {
+    if (!isSupabaseConfigured) {
+      throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
+    }
+
+    if (Platform.OS !== 'android') {
+      throw new Error('Google sign-in is available on Android only in this app.');
+    }
+
+    try {
+      await initializeSupabaseAuth();
+      await signInWithGoogleOAuth(supabase);
+    } catch (error) {
+      throw normalizeSupabaseAuthError(error);
+    }
+
+    await refreshProfile();
+  };
+
   const signOut = async () => {
     if (isSupabaseConfigured) {
       await unregisterMobilePushNotifications(api);
       await supabase.auth.signOut();
       await clearPersistedSupabaseAuthSession();
     }
+    resetAuthState();
+    router.replace('/auth');
+  };
+
+  const deleteAccount = async () => {
+    if (!session?.user) {
+      throw new Error('Sign in before deleting your account.');
+    }
+
+    await unregisterMobilePushNotifications(api).catch((error) => {
+      console.warn('Could not unregister push notifications before account deletion', error);
+    });
+    await api.deleteAccount('DELETE');
+    await clearPersistedSupabaseAuthSession();
     resetAuthState();
     router.replace('/auth');
   };
@@ -275,7 +311,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithPassword,
         signUpWithPassword,
         signInWithApple,
+        signInWithGoogle,
         signOut,
+        deleteAccount,
         refreshProfile,
         updateCredits: setCredits,
       }}

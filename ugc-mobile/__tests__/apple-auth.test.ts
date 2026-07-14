@@ -9,7 +9,14 @@ const appleAuth = vi.hoisted(() => ({
   },
 }));
 
+const cryptoMock = vi.hoisted(() => ({
+  CryptoDigestAlgorithm: { SHA256: 'SHA256' },
+  digestStringAsync: vi.fn(),
+  randomUUID: vi.fn(),
+}));
+
 vi.mock('expo-apple-authentication', () => appleAuth);
+vi.mock('expo-crypto', () => cryptoMock);
 
 import {
   isAppleAuthCanceled,
@@ -30,6 +37,12 @@ describe('native Apple auth', () => {
     appleAuth.isAvailableAsync.mockReset();
     appleAuth.signInAsync.mockReset();
     appleAuth.isAvailableAsync.mockResolvedValue(true);
+    cryptoMock.randomUUID
+      .mockReset()
+      .mockReturnValueOnce('11111111-1111-1111-1111-111111111111')
+      .mockReturnValueOnce('22222222-2222-2222-2222-222222222222');
+    cryptoMock.digestStringAsync.mockReset();
+    cryptoMock.digestStringAsync.mockResolvedValue('hashed-apple-nonce');
     appleAuth.signInAsync.mockResolvedValue({
       identityToken: 'apple-id-token',
       authorizationCode: 'apple-authorization-code',
@@ -41,7 +54,7 @@ describe('native Apple auth', () => {
     });
   });
 
-  it('signs into Supabase with the native Apple identity token and authorization code', async () => {
+  it('signs into Supabase with the native Apple identity token and verified nonce', async () => {
     const supabase = createSupabaseMock();
     supabase.auth.signInWithIdToken.mockResolvedValue({ data: {}, error: null });
     supabase.auth.updateUser.mockResolvedValue({ data: {}, error: null });
@@ -50,11 +63,12 @@ describe('native Apple auth', () => {
 
     expect(appleAuth.signInAsync).toHaveBeenCalledWith({
       requestedScopes: ['FULL_NAME', 'EMAIL'],
+      nonce: 'hashed-apple-nonce',
     });
     expect(supabase.auth.signInWithIdToken).toHaveBeenCalledWith({
       provider: 'apple',
       token: 'apple-id-token',
-      access_token: 'apple-authorization-code',
+      nonce: '1111111111111111111111111111111122222222222222222222222222222222',
     });
     expect(supabase.auth.updateUser).toHaveBeenCalledWith({
       data: {

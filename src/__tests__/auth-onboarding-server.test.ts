@@ -52,7 +52,7 @@ describe('server-side auth profile routing', () => {
       supabase.client as never,
       'user-1',
       '/create/image'
-    )).resolves.toBe('/profile?welcome=1&next=%2Fcreate%2Fimage');
+    )).resolves.toBe('/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fimage');
   });
 
   it('fails safely into setup if profile readiness cannot be loaded', async () => {
@@ -63,7 +63,7 @@ describe('server-side auth profile routing', () => {
       supabase.client as never,
       'user-1',
       '/create'
-    )).resolves.toBe('/profile?welcome=1&next=%2Fcreate');
+    )).resolves.toBe('/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
