@@ -90,10 +90,9 @@ jobs:
         run: npm run typecheck
 
   supabase-migrations:
-    name: Supabase migration dry-run
+    name: Supabase migration replay
     runs-on: ubuntu-latest
-    env:
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -103,15 +102,19 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Require the migration validation database
-        run: |
-          set -euo pipefail
-          : "${SUPABASE_DB_URL:?SUPABASE_DB_URL must be configured for migration validation}"
-
       - name: Install pinned Supabase CLI
         run: npm install --global supabase@2.75.0
 
-      - name: Dry-run pending migrations
+      - name: Start isolated Supabase database
         run: |
           set -euo pipefail
-          supabase db push --dry-run --yes --db-url "$SUPABASE_DB_URL"
+          supabase start --exclude gotrue,realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+      - name: Replay every migration from a clean database
+        run: |
+          set -euo pipefail
+          supabase db reset --local --no-seed --yes
+
+      - name: Stop isolated Supabase database
+        if: always()
+        run: supabase stop --no-backup
