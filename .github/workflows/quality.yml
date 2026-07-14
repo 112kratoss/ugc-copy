@@ -103,7 +103,9 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Install pinned Supabase CLI
-        run: npm install --global supabase@2.75.0
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.75.0
 
       - name: Start isolated Supabase database
         run: |
@@ -117,4 +119,5 @@ jobs:
 
       - name: Stop isolated Supabase database
         if: always()
+        continue-on-error: true
         run: supabase stop --no-backup
