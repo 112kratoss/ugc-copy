@@ -1,3 +1,7 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { request as httpsRequest } from 'node:https';
+import { isIP } from 'node:net';
+import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 
 import { createClient } from '@supabase/supabase-js';
@@ -15,11 +19,20 @@ const LEGACY_DOWNLOAD_HOSTS = new Set([
 ]);
 const MAX_REDIRECTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
+const SIGNATURE_PREFIX_BYTES = 64;
+const SIGNATURE_TAIL_BYTES = 16;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MEDIA_LIMITS = {
     generated_images: 25 * 1024 * 1024,
     generated_videos: 250 * 1024 * 1024,
 };
+const MIME_TARGETS = new Map([
+    ['image/jpeg', { bucket: 'generated_images', extension: 'jpg', kind: 'image' }],
+    ['image/png', { bucket: 'generated_images', extension: 'png', kind: 'image' }],
+    ['image/webp', { bucket: 'generated_images', extension: 'webp', kind: 'image' }],
+    ['video/mp4', { bucket: 'generated_videos', extension: 'mp4', kind: 'video' }],
+    ['video/quicktime', { bucket: 'generated_videos', extension: 'mov', kind: 'video' }],
+]);
 
 function readArgument(argv, name) {
     const prefix = `${name}=`;
@@ -49,11 +62,7 @@ export function parseGenerationIdArgument(argv = process.argv.slice(2)) {
 
 function safePathSegment(value) {
     return typeof value === 'string'
-        && value.length > 0
-        && !value.includes('/')
-        && !value.includes('\\')
-        && value !== '.'
-        && value !== '..';
+        && /^[A-Za-z0-9_-]{1,200}$/.test(value);
 }
 
 export function inferMediaTarget(generation, responseContentType = null) {
@@ -66,23 +75,17 @@ export function inferMediaTarget(generation, responseContentType = null) {
     })();
 
     const contentType = String(responseContentType || '').split(';')[0].trim().toLowerCase();
-    const hasResponseContentType = responseContentType !== null && responseContentType !== undefined;
-    const allowedResponseContentTypes = new Set([
-        'image/jpeg',
-        'image/png',
-        'image/webp',
-        'video/mp4',
-        'video/quicktime',
-    ]);
-    if (hasResponseContentType && !allowedResponseContentTypes.has(contentType)) {
-        return null;
+    if (responseContentType !== null && responseContentType !== undefined) {
+        const responseTarget = MIME_TARGETS.get(contentType);
+        const expectedTarget = inferMediaTarget(generation, null);
+        if (!responseTarget || !expectedTarget || responseTarget.kind !== expectedTarget.kind) return null;
+        return { ...responseTarget, contentType };
     }
     const model = String(generation.model || '').toLowerCase();
     const category = String(generation.category || '').toLowerCase();
     const extensionMatch = pathname.match(/\.([a-z0-9]+)$/);
     const extensionFromPath = extensionMatch?.[1] ?? '';
-    const isVideo = contentType.startsWith('video/')
-        || ['video', 'motion', 'ugc-ad'].includes(category)
+    const isVideo = ['video', 'motion', 'ugc-ad'].includes(category)
         || ['mp4', 'mov'].includes(extensionFromPath)
         || model.includes('motion-control')
         || model.startsWith('kling');
@@ -96,18 +99,11 @@ export function inferMediaTarget(generation, responseContentType = null) {
         };
     }
 
-    const isImage = contentType.startsWith('image/')
-        || category === 'image'
+    const isImage = category === 'image'
         || ['png', 'jpg', 'jpeg', 'webp'].includes(extensionFromPath);
     if (!isImage) return null;
 
-    const contentTypeExtension = {
-        'image/jpeg': 'jpg',
-        'image/png': 'png',
-        'image/webp': 'webp',
-    }[contentType];
-    const extension = contentTypeExtension
-        || (extensionFromPath === 'jpeg' ? 'jpg' : extensionFromPath)
+    const extension = (extensionFromPath === 'jpeg' ? 'jpg' : extensionFromPath)
         || 'png';
     if (!['png', 'jpg', 'webp'].includes(extension)) return null;
 
@@ -119,11 +115,10 @@ export function inferMediaTarget(generation, responseContentType = null) {
     };
 }
 
-export function buildStorageTarget(generation, responseContentType = null) {
+function buildStorageTargetFromMedia(generation, media) {
     if (!safePathSegment(generation.user_id) || !safePathSegment(generation.prediction_id)) {
         return null;
     }
-    const media = inferMediaTarget(generation, responseContentType);
     if (!media) return null;
     const filePath = `${generation.user_id}/generated_${generation.prediction_id}.${media.extension}`;
     return {
@@ -131,6 +126,25 @@ export function buildStorageTarget(generation, responseContentType = null) {
         dbPath: `${media.bucket}/${filePath}`,
         filePath,
     };
+}
+
+export function buildStorageTarget(generation, responseContentType = null) {
+    return buildStorageTargetFromMedia(
+        generation,
+        inferMediaTarget(generation, responseContentType),
+    );
+}
+
+export function buildPotentialStorageTargets(generation) {
+    const expected = inferMediaTarget(generation, null);
+    if (!expected) return [];
+    const targets = [];
+    for (const [contentType, media] of MIME_TARGETS) {
+        if (media.kind !== expected.kind) continue;
+        const target = buildStorageTargetFromMedia(generation, { ...media, contentType });
+        if (target) targets.push(target);
+    }
+    return targets;
 }
 
 function parseDownloadUrl(value, { initial = false } = {}) {
@@ -154,16 +168,168 @@ function parseDownloadUrl(value, { initial = false } = {}) {
     return url;
 }
 
-async function fetchLegacyResponse(rawUrl, fetcher = fetch) {
+function parseIpv4(address) {
+    if (isIP(address) !== 4) return null;
+    const octets = address.split('.').map(Number);
+    return octets.length === 4
+        && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)
+        ? octets
+        : null;
+}
+
+function expandIpv6(address) {
+    if (isIP(address) !== 6) return null;
+    let normalized = address.toLowerCase().split('%')[0] ?? '';
+    const ipv4Tail = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+    if (ipv4Tail) {
+        const octets = parseIpv4(ipv4Tail);
+        if (!octets) return null;
+        normalized = normalized.slice(0, -ipv4Tail.length)
+            + `${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`;
+    }
+
+    const halves = normalized.split('::');
+    if (halves.length > 2) return null;
+    const left = halves[0] ? halves[0].split(':') : [];
+    const right = halves[1] ? halves[1].split(':') : [];
+    const missing = 8 - left.length - right.length;
+    if ((halves.length === 1 && missing !== 0) || missing < 0) return null;
+    const groups = [...left, ...Array.from({ length: missing }, () => '0'), ...right];
+    if (groups.length !== 8 || groups.some((group) => !/^[a-f0-9]{1,4}$/.test(group))) return null;
+    return groups.map((group) => Number.parseInt(group, 16));
+}
+
+export function isPrivateOrSpecialIp(address) {
+    const ipv4 = parseIpv4(address);
+    if (ipv4) {
+        const [a, b, c] = ipv4;
+        return a === 0
+            || a === 10
+            || a === 127
+            || (a === 100 && b >= 64 && b <= 127)
+            || (a === 169 && b === 254)
+            || (a === 172 && b >= 16 && b <= 31)
+            || (a === 192 && b === 0 && (c === 0 || c === 2))
+            || (a === 192 && b === 88 && c === 99)
+            || (a === 192 && b === 168)
+            || (a === 198 && (b === 18 || b === 19))
+            || (a === 198 && b === 51 && c === 100)
+            || (a === 203 && b === 0 && c === 113)
+            || a >= 224;
+    }
+
+    const words = expandIpv6(address);
+    if (!words) return true;
+    const [first, second, third, fourth, , sixth, seventh, eighth] = words;
+    if (words.slice(0, 7).every((word) => word === 0) && eighth <= 1) return true;
+    if (words.slice(0, 6).every((word) => word === 0)) return true;
+    if (words.slice(0, 5).every((word) => word === 0) && sixth === 0xffff) {
+        return isPrivateOrSpecialIp(`${seventh >> 8}.${seventh & 0xff}.${eighth >> 8}.${eighth & 0xff}`);
+    }
+    if ((first & 0xfe00) === 0xfc00) return true;
+    if ((first & 0xffc0) === 0xfe80) return true;
+    if ((first & 0xff00) === 0xff00) return true;
+    if (first === 0x0100 && second === 0 && third === 0 && fourth === 0) return true;
+    if (first === 0x2001 && second === 0x0db8) return true;
+    if (first === 0x2001 && (second === 0 || second === 2 || (second >= 0x10 && second <= 0x1f))) return true;
+    if (first === 0x0064 && second === 0xff9b && third === 1) return true;
+    if (first === 0x2002) {
+        const embedded = `${second >> 8}.${second & 0xff}.${third >> 8}.${third & 0xff}`;
+        if (isPrivateOrSpecialIp(embedded)) return true;
+    }
+    return (first & 0xe000) !== 0x2000;
+}
+
+async function defaultDnsLookup(hostname) {
+    return dnsLookup(hostname, { all: true, verbatim: true });
+}
+
+async function resolvePublicDns(hostname, lookup) {
+    const literalFamily = isIP(hostname);
+    const addresses = literalFamily
+        ? [{ address: hostname, family: literalFamily }]
+        : await lookup(hostname);
+    if (
+        !Array.isArray(addresses)
+        || addresses.length === 0
+        || addresses.some(({ address, family }) => (
+            typeof address !== 'string'
+            || ![4, 6].includes(Number(family))
+            || isIP(address) !== Number(family)
+            || isPrivateOrSpecialIp(address)
+        ))
+    ) {
+        throw new Error('download host resolves to a private or unsafe address');
+    }
+    return addresses.map(({ address, family }) => ({ address, family: Number(family) }));
+}
+
+function createPinnedLookup(addresses) {
+    return (_hostname, options, callback) => {
+        const requestedFamily = typeof options === 'number'
+            ? options
+            : Number(options?.family || 0);
+        const candidates = requestedFamily
+            ? addresses.filter(({ family }) => family === requestedFamily)
+            : addresses;
+        if (candidates.length === 0) {
+            const error = new Error('No validated address matches the requested family');
+            error.code = 'ENOTFOUND';
+            callback(error);
+            return;
+        }
+        if (typeof options === 'object' && options?.all) {
+            callback(null, candidates);
+            return;
+        }
+        callback(null, candidates[0].address, candidates[0].family);
+    };
+}
+
+async function fetchPinnedHttpsResponse(url, addresses) {
+    return new Promise((resolve, reject) => {
+        const request = httpsRequest(url, {
+            method: 'GET',
+            headers: { Accept: 'image/*, video/*' },
+            lookup: createPinnedLookup(addresses),
+            signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        }, (response) => {
+            const status = Number(response.statusCode || 0);
+            const headers = new Headers();
+            for (const [name, rawValue] of Object.entries(response.headers)) {
+                if (Array.isArray(rawValue)) {
+                    for (const value of rawValue) headers.append(name, value);
+                } else if (rawValue !== undefined) {
+                    headers.set(name, rawValue);
+                }
+            }
+            resolve({
+                body: Readable.toWeb(response),
+                headers,
+                ok: status >= 200 && status < 300,
+                status,
+            });
+        });
+        request.on('error', reject);
+        request.end();
+    });
+}
+
+async function fetchLegacyResponse(rawUrl, fetcher = null, lookup = defaultDnsLookup) {
     let url = parseDownloadUrl(rawUrl, { initial: true });
 
     for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
-        const response = await fetcher(url, {
-            method: 'GET',
-            redirect: 'manual',
-            signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-            headers: { Accept: 'image/*, video/*' },
-        });
+        const addresses = await resolvePublicDns(url.hostname, lookup);
+        // Tests may inject a controlled fetcher. Real operator runs use the
+        // pinned HTTPS request so DNS cannot change between validation and use.
+        const response = fetcher
+            ? await fetcher(url, {
+                method: 'GET',
+                redirect: 'manual',
+                signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+                headers: { Accept: 'image/*, video/*' },
+            })
+            : await fetchPinnedHttpsResponse(url, addresses);
 
         if (response.status >= 300 && response.status < 400) {
             const location = response.headers.get('location');
@@ -181,66 +347,218 @@ async function fetchLegacyResponse(rawUrl, fetcher = fetch) {
     throw new Error('download redirect limit exceeded');
 }
 
-async function readBoundedResponse(response, maxBytes) {
-    const contentLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-        await response.body?.cancel();
+function ascii(bytes, start, length) {
+    return String.fromCharCode(...bytes.subarray(start, start + length));
+}
+
+function uint32BigEndian(bytes, offset) {
+    return ((bytes[offset] * 0x1000000)
+        + (bytes[offset + 1] << 16)
+        + (bytes[offset + 2] << 8)
+        + bytes[offset + 3]) >>> 0;
+}
+
+function uint32LittleEndian(bytes, offset) {
+    return (bytes[offset]
+        + (bytes[offset + 1] << 8)
+        + (bytes[offset + 2] << 16)
+        + (bytes[offset + 3] * 0x1000000)) >>> 0;
+}
+
+function isRecognizedMp4Brand(brand) {
+    return /^(?:isom|iso[2-9]|avc[1-9]|mp4[1-9]|dash|M4(?:[ABP] |V[ HP])|F4[ABPV] |MSNV|3g[p2e][0-9a-z])$/.test(brand);
+}
+
+function hasMediaSignature(prefix, tail, totalBytes, contentType) {
+    if (contentType === 'image/jpeg') {
+        return totalBytes >= 5
+            && prefix[0] === 0xff
+            && prefix[1] === 0xd8
+            && prefix[2] === 0xff
+            && tail[tail.length - 2] === 0xff
+            && tail[tail.length - 1] === 0xd9;
+    }
+    if (contentType === 'image/png') {
+        return totalBytes >= 20
+            && prefix[0] === 0x89
+            && ascii(prefix, 1, 3) === 'PNG'
+            && prefix[4] === 0x0d
+            && prefix[5] === 0x0a
+            && prefix[6] === 0x1a
+            && prefix[7] === 0x0a
+            && ascii(tail, tail.length - 8, 4) === 'IEND'
+            && tail[tail.length - 4] === 0xae
+            && tail[tail.length - 3] === 0x42
+            && tail[tail.length - 2] === 0x60
+            && tail[tail.length - 1] === 0x82;
+    }
+    if (contentType === 'image/webp') {
+        return totalBytes >= 12
+            && ascii(prefix, 0, 4) === 'RIFF'
+            && ascii(prefix, 8, 4) === 'WEBP'
+            && uint32LittleEndian(prefix, 4) + 8 === totalBytes;
+    }
+    if (contentType === 'video/mp4' || contentType === 'video/quicktime') {
+        if (totalBytes < 16 || ascii(prefix, 4, 4) !== 'ftyp') return false;
+        const boxSize = uint32BigEndian(prefix, 0);
+        if (boxSize < 16 || boxSize > totalBytes) return false;
+        const brands = [ascii(prefix, 8, 4)];
+        const availableBoxBytes = Math.min(boxSize, prefix.length);
+        for (let offset = 16; offset + 4 <= availableBoxBytes; offset += 4) {
+            brands.push(ascii(prefix, offset, 4));
+        }
+        if (contentType === 'video/quicktime') return brands[0] === 'qt  ';
+        return brands[0] !== 'qt  ' && brands.some(isRecognizedMp4Brand);
+    }
+    return false;
+}
+
+function assertMediaSignature(prefix, tail, totalBytes, target) {
+    if (!hasMediaSignature(prefix, tail, totalBytes, target.contentType)) {
+        throw new Error('media bytes do not match the declared content type');
+    }
+}
+
+function readDeclaredContentLength(response, maxBytes) {
+    const rawValue = response.headers.get('content-length');
+    if (rawValue === null) return null;
+    const normalized = rawValue.trim();
+    if (!/^\d+$/.test(normalized)) throw new Error('download returned an invalid content length');
+    const contentLength = Number(normalized);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
         throw new Error(`download exceeds ${maxBytes} bytes`);
+    }
+    return contentLength;
+}
+
+async function readBoundedResponse(response, target, { collect }) {
+    const maxBytes = MEDIA_LIMITS[target.bucket];
+    const responseContentType = String(response.headers.get('content-type') || '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+    if (responseContentType !== target.contentType) {
+        await response.body?.cancel();
+        throw new Error('download content type changed before persistence');
+    }
+    let contentLength;
+    try {
+        contentLength = readDeclaredContentLength(response, maxBytes);
+    } catch (error) {
+        await response.body?.cancel();
+        throw error;
     }
     if (!response.body) throw new Error('download returned an empty body');
 
     const reader = response.body.getReader();
-    const chunks = [];
+    const destination = collect && contentLength !== null
+        ? Buffer.allocUnsafe(contentLength)
+        : null;
+    const chunks = collect && destination === null ? [] : null;
+    let prefix = Buffer.alloc(0);
+    let tail = Buffer.alloc(0);
     let totalBytes = 0;
     try {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             if (!value) continue;
-            totalBytes += value.byteLength;
-            if (totalBytes > maxBytes) {
+            const chunk = Buffer.from(value);
+            const nextTotal = totalBytes + chunk.byteLength;
+            if (nextTotal > maxBytes || (contentLength !== null && nextTotal > contentLength)) {
                 await reader.cancel('download is too large');
-                throw new Error(`download exceeds ${maxBytes} bytes`);
+                throw new Error(contentLength !== null
+                    ? 'download body does not match its declared content length'
+                    : `download exceeds ${maxBytes} bytes`);
             }
-            chunks.push(Buffer.from(value));
+            if (prefix.length < SIGNATURE_PREFIX_BYTES) {
+                const remaining = SIGNATURE_PREFIX_BYTES - prefix.length;
+                prefix = Buffer.concat([prefix, chunk.subarray(0, remaining)]);
+            }
+            tail = chunk.length >= SIGNATURE_TAIL_BYTES
+                ? chunk.subarray(chunk.length - SIGNATURE_TAIL_BYTES)
+                : Buffer.concat([tail, chunk]).subarray(-SIGNATURE_TAIL_BYTES);
+            if (destination) chunk.copy(destination, totalBytes);
+            else if (chunks) chunks.push(chunk);
+            totalBytes = nextTotal;
         }
     } finally {
         reader.releaseLock();
     }
     if (totalBytes === 0) throw new Error('download returned an empty body');
-    return Buffer.concat(chunks, totalBytes);
+    if (contentLength !== null && totalBytes !== contentLength) {
+        throw new Error('download body does not match its declared content length');
+    }
+    assertMediaSignature(prefix, tail, totalBytes, target);
+    if (!collect) return null;
+    return destination ?? Buffer.concat(chunks, totalBytes);
 }
 
 function storageErrorStatus(error) {
-    const status = Number(error?.statusCode ?? error?.status);
-    return Number.isFinite(status) ? status : null;
+    const status = Number(error?.status);
+    if (Number.isFinite(status)) return status;
+    const statusCode = Number(error?.statusCode);
+    return Number.isFinite(statusCode) ? statusCode : null;
 }
 
-function storageObjectMatchesTarget(data, target) {
-    const size = Number(data?.size);
-    const contentType = String(data?.contentType || '').split(';')[0].trim().toLowerCase();
-    const allowedContentTypes = target.kind === 'image'
-        ? new Set(['image/jpeg', 'image/png', 'image/webp'])
-        : new Set(['video/mp4', 'video/quicktime']);
-    return Number.isFinite(size) && size > 0 && allowedContentTypes.has(contentType);
+function storageObjectIsMissing(error) {
+    const status = storageErrorStatus(error);
+    const code = String(error?.statusCode ?? error?.code ?? '').trim().toLowerCase();
+    const message = String(error?.message ?? '').trim().toLowerCase();
+    return status === 404
+        || code === '404'
+        || code === 'not_found'
+        || code === 'nosuchkey'
+        || (status === 400 && message === 'object not found');
+}
+
+function normalizedContentType(value) {
+    return String(value || '').split(';')[0].trim().toLowerCase();
 }
 
 async function storageObjectExists(supabase, target) {
     const result = await supabase.storage.from(target.bucket).info(target.filePath);
     if (result.data) {
-        if (!storageObjectMatchesTarget(result.data, target)) {
-            throw new Error('existing storage object is empty or has an incompatible media type');
+        const size = Number(result.data.size);
+        const contentType = normalizedContentType(result.data.contentType);
+        if (
+            !Number.isSafeInteger(size)
+            || size <= 0
+            || size > MEDIA_LIMITS[target.bucket]
+            || contentType !== target.contentType
+        ) {
+            throw new Error('existing storage object has an invalid size or content type');
         }
+
+        const download = await supabase.storage.from(target.bucket).download(target.filePath);
+        if (download.error || !download.data) throw download.error ?? new Error('existing storage object could not be read');
+        if (
+            download.data.size <= 0
+            || download.data.size > MEDIA_LIMITS[target.bucket]
+            || download.data.size !== size
+            || normalizedContentType(download.data.type) !== target.contentType
+        ) throw new Error('existing storage object bytes do not match its metadata');
+        const [prefix, tail] = await Promise.all([
+            download.data.slice(0, SIGNATURE_PREFIX_BYTES).arrayBuffer(),
+            download.data.slice(-SIGNATURE_TAIL_BYTES).arrayBuffer(),
+        ]);
+        assertMediaSignature(Buffer.from(prefix), Buffer.from(tail), size, target);
         return true;
     }
-    const status = storageErrorStatus(result.error);
-    if (result.error && status !== 400 && status !== 404) throw result.error;
-    return false;
+    if (result.error && storageObjectIsMissing(result.error)) return false;
+    if (result.error) throw result.error;
+    throw new Error('storage object lookup returned no metadata or explicit not-found error');
 }
 
-async function removeUploadedObject(supabase, target) {
-    const result = await supabase.storage.from(target.bucket).remove([target.filePath]);
-    if (result.error) throw result.error;
+async function findExistingStorageTarget(supabase, generation) {
+    const matches = [];
+    for (const target of buildPotentialStorageTargets(generation)) {
+        if (await storageObjectExists(supabase, target)) matches.push(target);
+    }
+    if (matches.length > 1) {
+        throw new Error('multiple deterministic storage objects exist for this generation');
+    }
+    return matches[0] ?? null;
 }
 
 async function storageTargetIsReferenced(supabase, target) {
@@ -256,102 +574,62 @@ async function storageTargetIsReferenced(supabase, target) {
     ]);
     if (generationResult.error) throw generationResult.error;
     if (postResult.error) throw postResult.error;
-    return (generationResult.count ?? 0) > 0 || (postResult.count ?? 0) > 0;
+    if (
+        !Number.isSafeInteger(generationResult.count)
+        || generationResult.count < 0
+        || !Number.isSafeInteger(postResult.count)
+        || postResult.count < 0
+    ) {
+        throw new Error('database did not return exact media reference counts');
+    }
+    return generationResult.count > 0 || postResult.count > 0;
 }
 
 async function fetchLinkedPosts(supabase, generation, target) {
     const { data, error } = await supabase
         .from('posts')
-        .select('id, output_url')
-        .eq('generation_id', generation.id)
-        .eq('user_id', generation.user_id);
+        .select('id, user_id, output_url')
+        .eq('generation_id', generation.id);
     if (error) throw error;
 
-    const posts = data ?? [];
+    if (!Array.isArray(data)) throw new Error('linked post lookup returned an invalid response');
+    const posts = data;
     const conflicting = posts.find((post) => (
-        post.output_url !== generation.output_url
-        && post.output_url !== target.dbPath
-        && post.output_url !== null
+        post.user_id !== generation.user_id
+        || (
+            post.output_url !== generation.output_url
+            && post.output_url !== target.dbPath
+            && post.output_url !== null
+        )
     ));
     if (conflicting) {
-        throw new Error(`linked post ${conflicting.id} has a different output URL`);
+        throw new Error(`linked post ${conflicting.id} conflicts with the generation owner or output URL`);
     }
     return posts;
 }
 
-function generationRelinkValues(generation, dbPath) {
-    const values = { output_url: dbPath };
-    if (generation.preview_status === 'failed') {
-        Object.assign(values, {
-            preview_url: null,
-            preview_thumbhash: null,
-            preview_status: 'pending',
-            preview_attempt_count: 0,
-            preview_error: null,
-            preview_generated_at: null,
-        });
-    }
-    return values;
-}
-
-function generationRollbackValues(generation) {
-    return {
-        output_url: generation.output_url,
-        preview_url: generation.preview_url,
-        preview_thumbhash: generation.preview_thumbhash,
-        preview_status: generation.preview_status,
-        preview_attempt_count: generation.preview_attempt_count,
-        preview_error: generation.preview_error,
-        preview_generated_at: generation.preview_generated_at,
-    };
-}
-
 async function relinkGenerationAndPosts(supabase, generation, target) {
-    const linkedPosts = await fetchLinkedPosts(supabase, generation, target);
-    const { data: updatedGenerations, error: generationError } = await supabase
-        .from('generations')
-        .update(generationRelinkValues(generation, target.dbPath))
-        .eq('id', generation.id)
-        .eq('user_id', generation.user_id)
-        .eq('output_url', generation.output_url)
-        .select('id');
-    if (generationError) throw generationError;
-    if (updatedGenerations?.length !== 1) {
-        throw new Error('generation changed before it could be relinked');
+    const { data, error } = await supabase.rpc('relink_legacy_generation_media', {
+        p_generation_id: generation.id,
+        p_expected_output_url: generation.output_url,
+        p_new_output_url: target.dbPath,
+    });
+    if (error) throw error;
+    const postsChanged = Number(data?.posts_changed);
+    if (
+        !data
+        || Array.isArray(data)
+        || !['relinked', 'already_relinked'].includes(data.status)
+        || data.generation_id !== generation.id
+        || data.output_url !== target.dbPath
+        || typeof data.generation_changed !== 'boolean'
+        || (data.status === 'relinked') !== data.generation_changed
+        || !Number.isSafeInteger(postsChanged)
+        || postsChanged < 0
+    ) {
+        throw new Error('atomic legacy media relink returned an invalid response');
     }
-
-    const postIds = linkedPosts
-        .filter((post) => post.output_url === generation.output_url)
-        .map((post) => post.id);
-    if (postIds.length === 0) return 0;
-
-    const { data: updatedPosts, error: postError } = await supabase
-        .from('posts')
-        .update({ output_url: target.dbPath })
-        .in('id', postIds)
-        .eq('user_id', generation.user_id)
-        .eq('output_url', generation.output_url)
-        .select('id');
-    if (!postError && updatedPosts?.length === postIds.length) return postIds.length;
-
-    const { error: postRollbackError } = await supabase
-        .from('posts')
-        .update({ output_url: generation.output_url })
-        .in('id', postIds)
-        .eq('user_id', generation.user_id)
-        .eq('output_url', target.dbPath);
-    const { data: rolledBackGenerations, error: generationRollbackError } = await supabase
-        .from('generations')
-        .update(generationRollbackValues(generation))
-        .eq('id', generation.id)
-        .eq('user_id', generation.user_id)
-        .eq('output_url', target.dbPath)
-        .select('id');
-
-    if (postRollbackError || generationRollbackError || rolledBackGenerations?.length !== 1) {
-        throw new Error('linked post update failed and the compensating rollback was incomplete');
-    }
-    throw postError ?? new Error('linked post update count did not match');
+    return postsChanged;
 }
 
 async function fetchLegacyGenerations(supabase, generationId) {
@@ -363,7 +641,7 @@ async function fetchLegacyGenerations(supabase, generationId) {
         const to = from + pageSize - 1;
         let query = supabase
             .from('generations')
-            .select('id, user_id, prediction_id, output_url, model, category, created_at, preview_url, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at')
+            .select('id, user_id, prediction_id, output_url, model, category, created_at')
             .eq('status', 'succeeded')
             .like('output_url', `https://${LEGACY_HOST}/%`);
         if (generationId) query = query.eq('id', generationId);
@@ -385,7 +663,8 @@ export async function runBackfill({
     supabase,
     dryRun,
     generationId = null,
-    fetcher = fetch,
+    fetcher = null,
+    lookup = defaultDnsLookup,
     logger = console,
 }) {
     const generations = await fetchLegacyGenerations(supabase, generationId);
@@ -429,34 +708,42 @@ export async function runBackfill({
         let target = initialTarget;
         let uploaded = false;
         let relinked = false;
+        let linkedPostsChecked = false;
         try {
-            const existingObject = await storageObjectExists(supabase, initialTarget);
-            if (!existingObject) {
-                const response = await fetchLegacyResponse(generation.output_url, fetcher);
+            const existingTarget = await findExistingStorageTarget(supabase, generation);
+            let existingObject = Boolean(existingTarget);
+            if (existingTarget) target = existingTarget;
+
+            if (!existingTarget) {
+                const response = await fetchLegacyResponse(generation.output_url, fetcher, lookup);
                 if (!response.ok) {
                     await response.body?.cancel();
                     throw new Error(`download returned ${response.status}`);
                 }
 
+                const responseContentType = response.headers.get('content-type');
+                if (!responseContentType) {
+                    await response.body?.cancel();
+                    throw new Error('download did not declare a content type');
+                }
                 const responseTarget = buildStorageTarget(
                     generation,
-                    response.headers.get('content-type'),
+                    responseContentType,
                 );
                 if (!responseTarget || responseTarget.bucket !== initialTarget.bucket) {
                     await response.body?.cancel();
                     throw new Error('download content type does not match the generation');
                 }
                 target = responseTarget;
+                const fileBuffer = await readBoundedResponse(response, target, {
+                    collect: !dryRun,
+                });
+                existingObject = await storageObjectExists(supabase, target);
+                await fetchLinkedPosts(supabase, generation, target);
+                linkedPostsChecked = true;
 
-                if (dryRun) {
-                    const contentLength = Number(response.headers.get('content-length'));
-                    if (Number.isFinite(contentLength) && contentLength > MEDIA_LIMITS[target.bucket]) {
-                        await response.body?.cancel();
-                        throw new Error(`download exceeds ${MEDIA_LIMITS[target.bucket]} bytes`);
-                    }
-                    await response.body?.cancel();
-                } else {
-                    const fileBuffer = await readBoundedResponse(response, MEDIA_LIMITS[target.bucket]);
+                if (!dryRun && !existingObject) {
+                    if (!fileBuffer) throw new Error('downloaded media buffer is unavailable');
                     const { error: uploadError } = await supabase.storage
                         .from(target.bucket)
                         .upload(target.filePath, fileBuffer, {
@@ -467,6 +754,8 @@ export async function runBackfill({
                     uploaded = true;
                 }
             }
+
+            if (!linkedPostsChecked) await fetchLinkedPosts(supabase, generation, target);
 
             if (dryRun) {
                 const action = existingObject ? 'reuse existing object' : 'download and persist';
@@ -486,7 +775,7 @@ export async function runBackfill({
                     if (stillReferenced) {
                         logger.error(`[warn] ${generation.id} retained uploaded media because a database row still references it`);
                     } else {
-                        await removeUploadedObject(supabase, target);
+                        logger.error(`[warn] ${generation.id} retained uploaded media for a safe deterministic retry after relinking failed`);
                     }
                 } catch (cleanupError) {
                     logger.error(`[warn] ${generation.id} retained uploaded media because cleanup safety could not be verified: ${cleanupError instanceof Error ? cleanupError.message : 'unknown error'}`);
