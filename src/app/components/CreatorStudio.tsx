@@ -68,22 +68,25 @@ interface CreatorToolCardProps {
   tool: CreatorToolDefinition;
   variant?: 'suite' | 'launchpad';
   preview?: ReactNode;
+  prefetch?: boolean;
 }
 
 export function CreatorToolCard({
   tool,
   variant = 'suite',
   preview,
+  prefetch,
 }: CreatorToolCardProps) {
   const theme = getAccentClasses(tool.accent);
   const Icon = tool.icon;
   const isLaunchpad = variant === 'launchpad';
-  const prefetch = tool.id === 'workflow' || tool.id === 'video' ? false : undefined;
+  const resolvedPrefetch = prefetch
+    ?? (tool.id === 'workflow' || tool.id === 'video' ? false : undefined);
 
   return (
     <Link
       href={tool.href}
-      prefetch={prefetch}
+      prefetch={resolvedPrefetch}
       className={clsx(
         'ui-card ui-card-interactive ui-focus-ring group relative block h-full cursor-pointer overflow-hidden bg-[var(--ui-surface-1)]',
         theme.border,

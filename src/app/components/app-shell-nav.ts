@@ -18,7 +18,6 @@ export interface AppNavItem {
   href: string;
   description: string;
   icon: LucideIcon;
-  prefetch?: false;
   match: (pathname: string) => boolean;
 }
 
@@ -86,7 +85,6 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     href: '/create-workflow',
     description: 'Build reusable prompt and generation systems',
     icon: Workflow,
-    prefetch: false,
     match: (pathname) =>
       isExactOrChild(pathname, '/create-workflow') ||
       isExactOrChild(pathname, '/ai-workflow-builder') ||

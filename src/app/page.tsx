@@ -173,7 +173,7 @@ export default async function Home() {
               <Button href="/create" variant="primary" icon={ArrowRight}>
                 Start creating
               </Button>
-              <Button href="/showcase" variant="secondary">
+              <Button href="/showcase" prefetch={false} variant="secondary">
                 Browse the feed
               </Button>
             </div>
@@ -188,9 +188,7 @@ export default async function Home() {
                 <Link
                   key={tool.id}
                   href={tool.href}
-                  prefetch={
-                    tool.id === 'workflow' || tool.id === 'video' ? false : undefined
-                  }
+                  prefetch={false}
                   className="ui-focus-ring group flex min-h-14 items-center gap-3 rounded-[20px] border border-transparent px-3 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-subtle)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 >
                   <span className={`flex h-9 w-9 items-center justify-center rounded-[13px] border transition ${theme.iconWrap}`}>
@@ -210,6 +208,7 @@ export default async function Home() {
             actionHref="/create"
             actionLabel="Launchpad"
             actionIcon={ArrowRight}
+            actionPrefetch={false}
             align="center"
             compact
             className="mb-5"
@@ -221,6 +220,7 @@ export default async function Home() {
                 key={tool.id}
                 tool={tool}
                 variant="suite"
+                prefetch={false}
                 preview={
                   previewByTool[tool.id] ? (
                     <CreatorToolPreview
@@ -248,7 +248,7 @@ export default async function Home() {
               <Link
                 key={model.name}
                 href={model.href}
-                prefetch={model.href.includes('/create-video') ? false : undefined}
+                prefetch={false}
                 className="ui-card ui-card-interactive ui-focus-ring group flex min-h-28 items-center justify-between gap-5 overflow-hidden p-5"
               >
                 <div
@@ -282,7 +282,7 @@ export default async function Home() {
                 title="Could not load the creator feed"
                 body="Your creation tools are still available. Check the connection, then try the feed again."
               />
-              <Link href="/?retryFeed=1" className="ui-button ui-button-secondary ui-focus-ring">Retry feed</Link>
+              <Link href="/?retryFeed=1" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">Retry feed</Link>
             </div>
           ) : (
             <DeferredHomeShowcasePreviewGrid
@@ -298,10 +298,10 @@ export default async function Home() {
         <div className="studio-shell flex flex-col items-center justify-between gap-4 sm:flex-row">
           <p>© {new Date().getFullYear()} magicbooklet.</p>
           <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Legal and support">
-            <Link href="/contact" className="hover:text-[var(--ui-text-primary)]">Contact</Link>
-            <Link href="/privacy" className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
-            <Link href="/terms" className="hover:text-[var(--ui-text-primary)]">Terms</Link>
-            <Link href="/cancellation" className="hover:text-[var(--ui-text-primary)]">Cancellation</Link>
+            <Link href="/contact" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Contact</Link>
+            <Link href="/privacy" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
+            <Link href="/terms" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Terms</Link>
+            <Link href="/cancellation" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Cancellation</Link>
           </nav>
         </div>
       </footer>

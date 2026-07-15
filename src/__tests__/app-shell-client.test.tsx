@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import type { ComponentPropsWithoutRef } from 'react';
 import { renderToString } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,6 +10,15 @@ let mockedPathname = '/';
 vi.mock('next/navigation', () => ({
   usePathname: () => mockedPathname,
   useRouter: () => ({ push: vi.fn() }),
+}));
+
+vi.mock('next/link', () => ({
+  default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
+    <a
+      {...props}
+      data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+    />
+  ),
 }));
 
 describe('AppShellClient', () => {
@@ -71,6 +81,30 @@ describe('AppShellClient', () => {
       within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
         .queryByRole('link', { name: /invite/i })
     ).not.toBeInTheDocument();
+  });
+
+  it('does not prefetch shell navigation during first paint', () => {
+    render(
+      <AppShellClient>
+        <div>Page content</div>
+      </AppShellClient>
+    );
+
+    const desktopNavigation = screen.getByRole('complementary', {
+      name: 'Primary navigation',
+    });
+    const mobileNavigation = screen.getByRole('navigation', {
+      name: 'Primary mobile navigation',
+    });
+
+    for (const link of [
+      ...within(desktopNavigation).getAllByRole('link'),
+      ...within(mobileNavigation).getAllByRole('link'),
+      screen.getByRole('link', { name: 'New creation' }),
+      screen.getByRole('link', { name: 'Open alerts' }),
+    ]) {
+      expect(link).toHaveAttribute('data-prefetch', 'false');
+    }
   });
 
   it('opens an accessible mobile drawer and closes it with Escape', () => {

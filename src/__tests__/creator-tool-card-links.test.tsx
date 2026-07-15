@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +19,15 @@ const homeShowcasePreviewGridMock = vi.fn(({
 
 vi.mock('@/app/components/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('next/link', () => ({
+  default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
+    <a
+      {...props}
+      data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+    />
+  ),
 }));
 
 vi.mock('@/app/components/DeferredHomeShowcasePreviewGrid', () => ({
@@ -269,6 +278,19 @@ describe('creator tool card links', () => {
       initialSession: null,
       initialCredits: null,
     });
+  });
+
+  it('only prefetches the primary homepage action during first paint', async () => {
+    render(await Home());
+    expect(screen.getByRole('link', { name: 'Start creating' })).not.toHaveAttribute('data-prefetch');
+    expect(screen.getByRole('link', { name: 'Browse the feed' })).toHaveAttribute(
+      'data-prefetch',
+      'false'
+    );
+    expect(screen.getByText('Create Image').closest('a')).toHaveAttribute(
+      'data-prefetch',
+      'false'
+    );
   });
 
   it('keeps the cacheable homepage renderable when showcase content is unavailable', async () => {
