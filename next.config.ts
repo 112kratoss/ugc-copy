@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL)
   : undefined;
+const showcasePreconnectHeaders = supabaseUrl
+  ? [{ key: "Link", value: `<${supabaseUrl.origin}>; rel=preconnect` }]
+  : [];
 
 const e2eAuthBypassRequested = process.env.E2E_AUTH_BYPASS === "1"
   || process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "1";
@@ -57,6 +60,9 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      ...(showcasePreconnectHeaders.length > 0
+        ? [{ source: "/showcase", headers: showcasePreconnectHeaders }]
+        : []),
       {
         source: "/(.*)",
         headers: [

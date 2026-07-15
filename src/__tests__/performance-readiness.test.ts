@@ -17,6 +17,7 @@ describe('production performance readiness', () => {
   });
 
   it('bounds media-heavy first renders and yields the remaining showcase hydration work', () => {
+    const nextConfig = readProjectFile('next.config.ts');
     const showcaseModel = readProjectFile('src/lib/showcase.ts');
     const showcaseClient = readProjectFile('src/app/showcase/ShowcaseClient.tsx');
     const marketplacePolicy = readProjectFile('src/lib/marketplace-resource-list-cache-policy.ts');
@@ -29,6 +30,8 @@ describe('production performance readiness', () => {
     expect(showcaseClient).toMatch(/href="\/post\/new"[\s\S]*?prefetch={false}/);
     expect(showcaseClient).toMatch(/href="\/marketplace"[\s\S]*?prefetch={false}/);
     expect(readProjectFile('src/lib/preview-images.ts')).toContain('if (isGeneratedPreviewImage(src))');
+    expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
+    expect(nextConfig).toContain('{ source: "/showcase", headers: showcasePreconnectHeaders }');
     expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 12');
   });
 
