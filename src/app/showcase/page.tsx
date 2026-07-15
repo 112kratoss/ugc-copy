@@ -4,6 +4,8 @@ import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
+    SHOWCASE_INITIAL_PAGE_SIZE,
+    SHOWCASE_INITIAL_RENDER_COUNT,
     SHOWCASE_PAGE_SIZE,
     normalizeShowcaseCategory,
     normalizeShowcaseOffset,
@@ -28,7 +30,7 @@ function getFirstValue(value: string | string[] | undefined): string | undefined
 }
 
 function getPriorityVideoPoster(feed: ShowcaseFeedPage): string | null {
-    const priorityItem = feed.items.find((item) => (
+    const priorityItem = feed.items.slice(0, SHOWCASE_INITIAL_RENDER_COUNT).find((item) => (
         item.postFormat !== 'text'
         && (Boolean(item.mediaItems?.length) || Boolean(item.mediaUrl && item.mediaKind))
     ));
@@ -89,13 +91,14 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         getFirstValue(resolvedSearchParams.page),
         SHOWCASE_PAGE_SIZE
     );
+    const initialLimit = offset === 0 ? SHOWCASE_INITIAL_PAGE_SIZE : SHOWCASE_PAGE_SIZE;
 
     const [initialFeed, sourceToolOptions] = await Promise.all([
       getShowcaseFeedPage({
         category,
         sort,
         offset,
-        limit: SHOWCASE_PAGE_SIZE,
+        limit: initialLimit,
         viewerUserId: null,
         tool,
         unlock,

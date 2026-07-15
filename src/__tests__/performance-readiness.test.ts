@@ -16,6 +16,22 @@ describe('production performance readiness', () => {
     expect(nextConfig).toMatch(/experimental:\s*{[\s\S]*?inlineCss:\s*true/);
   });
 
+  it('bounds media-heavy first renders and yields the remaining showcase hydration work', () => {
+    const showcaseModel = readProjectFile('src/lib/showcase.ts');
+    const showcaseClient = readProjectFile('src/app/showcase/ShowcaseClient.tsx');
+    const marketplacePolicy = readProjectFile('src/lib/marketplace-resource-list-cache-policy.ts');
+
+    expect(showcaseModel).toContain('SHOWCASE_INITIAL_RENDER_COUNT = 2');
+    expect(showcaseModel).toContain('SHOWCASE_INITIAL_PAGE_SIZE = 6');
+    expect(showcaseClient).toContain('items.slice(0, renderedItemCount)');
+    expect(showcaseClient).toContain('requestIdleCallback(callback, { timeout })');
+    expect(showcaseClient).toContain("rootMargin: '400px 0px'");
+    expect(showcaseClient).toMatch(/href="\/post\/new"[\s\S]*?prefetch={false}/);
+    expect(showcaseClient).toMatch(/href="\/marketplace"[\s\S]*?prefetch={false}/);
+    expect(readProjectFile('src/lib/preview-images.ts')).toContain('if (isGeneratedPreviewImage(src))');
+    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 12');
+  });
+
   it('ships Vercel real-user Core Web Vitals collection from the root layout', () => {
     const packageJson = JSON.parse(readProjectFile('package.json')) as {
       dependencies?: Record<string, string>;

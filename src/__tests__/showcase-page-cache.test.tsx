@@ -62,6 +62,7 @@ describe('ShowcasePage cacheability', () => {
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
       viewerUserId: null,
       countryCode: null,
+      limit: 6,
     }));
   });
 
@@ -99,5 +100,36 @@ describe('ShowcasePage cacheability', () => {
     expect(preloads).toHaveLength(1);
     expect(preloads[0]).toHaveAttribute('href', 'https://example.com/video-preview.webp');
     expect(preloads[0]).toHaveAttribute('fetchpriority', 'high');
+  });
+
+  it('does not preload media outside the progressively rendered prefix', async () => {
+    getShowcaseFeedPageMock.mockResolvedValue({
+      items: [
+        { id: 'text-1', postFormat: 'text', mediaItems: [] },
+        { id: 'text-2', postFormat: 'text', mediaItems: [] },
+        {
+          id: 'deferred-video',
+          postFormat: 'media',
+          mediaItems: [{
+            id: 'deferred-cover',
+            url: 'https://example.com/deferred.mp4',
+            previewUrl: 'https://example.com/deferred.webp',
+            mediaKind: 'video',
+            sortOrder: 0,
+          }],
+        },
+      ],
+      pageInfo: {
+        hasMore: false,
+        nextOffset: null,
+        limit: 12,
+        offset: 0,
+      },
+    });
+    const { default: ShowcasePage } = await import('@/app/showcase/page');
+
+    render(await ShowcasePage({ searchParams: Promise.resolve({}) }));
+
+    expect(document.querySelector('link[rel="preload"][as="image"]')).toBeNull();
   });
 });

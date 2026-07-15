@@ -1,6 +1,6 @@
 import { OptionalAuth } from '@/app/components/RouteAuthBoundary';
 
-export default async function ShowcaseLayout({
+export default function ShowcaseLayout({
   children,
 }: {
   children: React.ReactNode;

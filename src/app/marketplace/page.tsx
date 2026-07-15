@@ -13,6 +13,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
+import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 
 interface MarketplacePageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -42,7 +43,7 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
     tool,
     q,
     sort,
-    limit: 24,
+    limit: MARKETPLACE_INITIAL_PAGE_SIZE,
     offset: 0,
     countryCode: null,
     }),
@@ -54,7 +55,7 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
       hasMore: false,
       nextOffset: null,
       offset: 0,
-      limit: 24,
+      limit: MARKETPLACE_INITIAL_PAGE_SIZE,
     },
   };
 

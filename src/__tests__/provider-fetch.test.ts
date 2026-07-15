@@ -170,6 +170,9 @@ describe('provider fetch', () => {
   });
 
   it('records durable provider telemetry for failed HTTP responses', async () => {
+    // A full-suite worker may have evaluated provider-fetch for another test
+    // file before this per-test mock is installed.
+    vi.resetModules();
     const recordProviderDependencyEvent = vi.fn(async () => undefined);
     vi.doMock('@/lib/provider-dependency-telemetry', () => ({
       recordProviderDependencyEvent,

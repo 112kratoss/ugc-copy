@@ -71,7 +71,10 @@ import {
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getStoredMediaLocation } from '@/lib/media-urls';
 import { loadPostMediaItemsMap } from '@/lib/post-media';
-import { shouldCacheMarketplaceResourceListBasePage } from '@/lib/marketplace-resource-list-cache-policy';
+import {
+  MARKETPLACE_DEFAULT_PAGE_SIZE,
+  shouldCacheMarketplaceResourceListBasePage,
+} from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import {
@@ -1977,6 +1980,7 @@ const getCachedMarketplaceResourceListBase = unstable_cache(
     filter: MarketplaceResourceFilter,
     resource: MarketplaceResourceKindFilter,
     sort: MarketplaceResourceSort,
+    limit: number,
   ) => getMarketplaceResourceListBase({
     filter,
     resource,
@@ -1984,9 +1988,9 @@ const getCachedMarketplaceResourceListBase = unstable_cache(
     q: null,
     sort,
     offset: 0,
-    limit: 24,
+    limit,
   }),
-  ['marketplace-resource-list-base-v2'],
+  ['marketplace-resource-list-base-v3'],
   {
     revalidate: 60,
     tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
@@ -2001,9 +2005,10 @@ async function loadCachedMarketplaceResourceListBase(
   filter: MarketplaceResourceFilter,
   resource: MarketplaceResourceKindFilter,
   sort: MarketplaceResourceSort,
+  limit: number,
 ) {
   try {
-    return await getCachedMarketplaceResourceListBase(filter, resource, sort);
+    return await getCachedMarketplaceResourceListBase(filter, resource, sort, limit);
   } catch (error) {
     if (isMissingIncrementalCacheError(error)) {
       return getMarketplaceResourceListBase({
@@ -2013,7 +2018,7 @@ async function loadCachedMarketplaceResourceListBase(
         q: null,
         sort,
         offset: 0,
-        limit: 24,
+        limit,
       });
     }
 
@@ -2048,7 +2053,7 @@ export async function getMarketplaceResourceList(
     q = null,
     sort = 'recent',
     offset = 0,
-    limit = 24,
+    limit = MARKETPLACE_DEFAULT_PAGE_SIZE,
     countryCode = null,
   } = options ?? {};
   const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
@@ -2060,7 +2065,7 @@ export async function getMarketplaceResourceList(
     tool: normalizedToolFilter,
     query: normalizedQuery,
   })
-    ? await loadCachedMarketplaceResourceListBase(filter, resource, sort)
+    ? await loadCachedMarketplaceResourceListBase(filter, resource, sort, limit)
     : await getMarketplaceResourceListBase({
       filter,
       resource,

@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
@@ -194,6 +194,7 @@ describe('ShowcaseClient save actions', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -233,6 +234,110 @@ describe('ShowcaseClient save actions', () => {
       });
       expect(eventRequest).toBeDefined();
     });
+  });
+
+  it('hydrates only the first two cards and reveals the rest during idle periods', async () => {
+    const idleCallbacks: IdleRequestCallback[] = [];
+    vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    }));
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const items = Array.from({ length: 5 }, (_, index) => createShowcaseItem({
+      id: `post-${index + 1}`,
+      generationId: `gen-${index + 1}`,
+      title: `Campaign ${index + 1}`,
+      mediaUrl: `https://example.com/campaign-${index + 1}.jpg`,
+    }));
+
+    renderShowcase(items);
+
+    expect(screen.getByText('Campaign 1')).toBeInTheDocument();
+    expect(screen.getByText('Campaign 2')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign 3')).not.toBeInTheDocument();
+    expect(idleCallbacks).toHaveLength(1);
+
+    act(() => {
+      idleCallbacks.shift()?.({
+        didTimeout: false,
+        timeRemaining: () => 50,
+      });
+    });
+
+    expect(screen.getByText('Campaign 3')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign 4')).not.toBeInTheDocument();
+  });
+
+  it('waits for all initial cards before establishing an anonymous feed session', () => {
+    vi.useFakeTimers();
+    authState.session = null;
+    authState.user = null;
+    const idleCallbacks: IdleRequestCallback[] = [];
+    vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    }));
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/showcase/feed?')) {
+        return new Promise<Response>(() => undefined);
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ success: true }),
+      } as Response);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const items = Array.from({ length: 5 }, (_, index) => createShowcaseItem({
+      id: `anonymous-post-${index + 1}`,
+      generationId: `anonymous-gen-${index + 1}`,
+      title: `Anonymous Campaign ${index + 1}`,
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(items)}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    for (let index = 0; index < 3; index += 1) {
+      act(() => {
+        idleCallbacks.shift()?.({
+          didTimeout: false,
+          timeRemaining: () => 50,
+        });
+      });
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/showcase\/feed\?/),
+        expect.anything()
+      );
+    }
+
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/showcase\/feed\?/),
+      expect.anything()
+    );
+
+    act(() => {
+      idleCallbacks.shift()?.({
+        didTimeout: false,
+        timeRemaining: () => 50,
+      });
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
+      headers: undefined,
+    }));
   });
 
   it('records an unsave only after the save API confirms removal', async () => {
@@ -844,7 +949,7 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
-    expect(await screen.findByText('Anonymous discovery')).toBeInTheDocument();
+    expect(await screen.findByText('Anonymous discovery', {}, { timeout: 2_000 })).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
       headers: undefined,
     }));

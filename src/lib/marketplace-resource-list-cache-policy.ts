@@ -6,7 +6,12 @@ type MarketplaceResourceListCachePolicyOptions = {
   bypassCache?: boolean;
 };
 
-const CACHEABLE_MARKETPLACE_PAGE_LIMIT = 24;
+export const MARKETPLACE_INITIAL_PAGE_SIZE = 12;
+export const MARKETPLACE_DEFAULT_PAGE_SIZE = 24;
+
+function isCacheableMarketplacePageLimit(limit: number) {
+  return limit === MARKETPLACE_INITIAL_PAGE_SIZE || limit === MARKETPLACE_DEFAULT_PAGE_SIZE;
+}
 
 export function shouldCacheMarketplaceResourceListBasePage(
   options: MarketplaceResourceListCachePolicyOptions,
@@ -14,7 +19,7 @@ export function shouldCacheMarketplaceResourceListBasePage(
   return (
     !options.bypassCache
     && options.offset === 0
-    && options.limit === CACHEABLE_MARKETPLACE_PAGE_LIMIT
+    && isCacheableMarketplacePageLimit(options.limit)
     && !options.tool
     && !options.query
   );

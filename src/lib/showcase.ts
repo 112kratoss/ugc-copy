@@ -9,6 +9,10 @@ import type {
 import type { VisualMediaDescriptor } from '@/lib/media-descriptor';
 
 export const SHOWCASE_PAGE_SIZE = 12;
+export const SHOWCASE_INITIAL_PAGE_SIZE = 6;
+// Keep the server-rendered/hydrated feed small. Remaining cards are revealed
+// during browser idle periods so media-heavy feeds do not monopolize startup.
+export const SHOWCASE_INITIAL_RENDER_COUNT = 2;
 
 export type ShowcaseCategory = 'all' | 'image' | 'video' | 'text';
 export type ShowcaseSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';

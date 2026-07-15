@@ -9,6 +9,7 @@ import {
   normalizeMarketplaceResourceSort,
 } from '@/lib/post-resource-bundles';
 import { getMarketplaceResourceList } from '@/lib/post-resource-bundles-server';
+import { MARKETPLACE_DEFAULT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { slugifySourceTool } from '@/lib/source-tools';
 
@@ -57,7 +58,10 @@ async function handleMarketplaceResourceListGET(
       q: (searchParams.get('q') ?? '').trim().slice(0, 80),
       sort: normalizeMarketplaceResourceSort(searchParams.get('sort')),
       offset,
-      limit: Math.min(48, Math.max(1, normalizeNumber(searchParams.get('limit'), 24))),
+      limit: Math.min(48, Math.max(1, normalizeNumber(
+        searchParams.get('limit'),
+        MARKETPLACE_DEFAULT_PAGE_SIZE,
+      ))),
       countryCode: request.headers.get('x-vercel-ip-country'),
     });
 

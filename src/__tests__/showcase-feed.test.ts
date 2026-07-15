@@ -606,7 +606,7 @@ describe('showcase feed', () => {
 
     expect(nextCacheState.definitions).toEqual([
       {
-        keyParts: ['marketplace-resource-list-base-v2'],
+        keyParts: ['marketplace-resource-list-base-v3'],
         options: {
           revalidate: 60,
           tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],

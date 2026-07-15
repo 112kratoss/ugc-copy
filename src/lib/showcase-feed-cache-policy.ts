@@ -1,4 +1,12 @@
-import { SHOWCASE_PAGE_SIZE, type ShowcaseSort } from '@/lib/showcase';
+import {
+  SHOWCASE_INITIAL_PAGE_SIZE,
+  SHOWCASE_PAGE_SIZE,
+  type ShowcaseSort,
+} from '@/lib/showcase';
+
+function isSupportedBootstrapLimit(limit: number) {
+  return limit === SHOWCASE_INITIAL_PAGE_SIZE || limit === SHOWCASE_PAGE_SIZE;
+}
 
 export function shouldCacheIdentitylessForYouBootstrap(options: {
   sort: ShowcaseSort;
@@ -12,7 +20,7 @@ export function shouldCacheIdentitylessForYouBootstrap(options: {
 }) {
   return options.sort === 'for-you'
     && options.offset === 0
-    && options.limit === SHOWCASE_PAGE_SIZE
+    && isSupportedBootstrapLimit(options.limit)
     && !options.toolSlug
     && !options.viewerUserId
     && !options.anonymousKeyHash
@@ -27,7 +35,7 @@ export function shouldCacheViewerNeutralShowcaseBasePage(options: {
   bypassCache?: boolean;
 }) {
   return options.offset === 0
-    && (options.limit === 1 || options.limit === SHOWCASE_PAGE_SIZE)
+    && (options.limit === 1 || isSupportedBootstrapLimit(options.limit))
     && !options.toolSlug
     && !options.bypassCache;
 }

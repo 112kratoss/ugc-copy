@@ -52,6 +52,8 @@ describe('MarketplacePage', () => {
     expect(headersMock).not.toHaveBeenCalled();
     expect(getMarketplaceResourceListMock).toHaveBeenCalledWith(expect.objectContaining({
       countryCode: null,
+      limit: 12,
+      offset: 0,
     }));
     expect(screen.getByRole('heading', {
       name: /buy the reusable parts behind community posts/i,
