@@ -42,6 +42,11 @@ import {
 } from '@/lib/showcase';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getPersonalizedShowcaseFeedPage } from '@/lib/showcase-feed-personalization';
+import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import {
+  shouldCacheIdentitylessForYouBootstrap,
+  shouldCacheViewerNeutralShowcaseBasePage,
+} from '@/lib/showcase-feed-cache-policy';
 
 interface ProfileSummary {
   id: string;
@@ -944,12 +949,121 @@ async function getLegacyShowcaseFeedPageBase(
 
 const getCachedShowcaseFeedPageBase = unstable_cache(
   getShowcaseFeedPageBase,
-  ['showcase-feed-base'],
-  { revalidate: 60 }
+  ['showcase-feed-base-v2'],
+  { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
 function isMissingIncrementalCacheError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('incrementalCache missing');
+}
+
+async function getShowcaseForYouFeedPage(params: {
+  category: ShowcaseCategory;
+  offset: number;
+  limit: number;
+  toolSlug: string | null;
+  unlockFilter: ShowcaseUnlockFilter;
+  resourceFilter: ShowcaseResourceFilter;
+  viewerUserId: string | null;
+  anonymousKeyHash: string | null;
+  cursor: string | null;
+  adminSupabase?: ReturnType<typeof createServiceClient>;
+}): Promise<ShowcaseFeedPage> {
+  const adminSupabase = params.adminSupabase ?? createServiceClient();
+
+  return getPersonalizedShowcaseFeedPage({
+    anonymousKeyHash: params.anonymousKeyHash,
+    cursor: params.cursor,
+    filters: {
+      category: params.category,
+      toolSlug: params.toolSlug,
+      unlockFilter: params.unlockFilter,
+      resourceFilter: params.resourceFilter,
+    },
+    hydratePostIds: async (postIds) => {
+      const rows = await fetchPostRowsByIds(postIds, adminSupabase);
+      if (rows === null) return [];
+      const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+      return items.filter((item) => (
+        (!params.toolSlug || item.sourceToolSlug === params.toolSlug)
+        && itemMatchesFeedFilters(
+          item,
+          params.category,
+          params.unlockFilter,
+          params.resourceFilter
+        )
+      ));
+    },
+    fallbackItems: async (target) => {
+      const page = await getShowcaseFeedPageBase(
+        params.category,
+        'recent',
+        0,
+        target,
+        params.toolSlug,
+        params.unlockFilter,
+        params.resourceFilter,
+      );
+      return page.items;
+    },
+    limit: params.limit,
+    offset: params.offset,
+    serviceClient: adminSupabase,
+    viewerUserId: params.viewerUserId,
+  });
+}
+
+const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
+  async (
+    category: ShowcaseCategory,
+    limit: number,
+    unlockFilter: ShowcaseUnlockFilter,
+    resourceFilter: ShowcaseResourceFilter,
+  ) => getShowcaseForYouFeedPage({
+    category,
+    offset: 0,
+    limit,
+    toolSlug: null,
+    unlockFilter,
+    resourceFilter,
+    viewerUserId: null,
+    anonymousKeyHash: null,
+    cursor: null,
+  }),
+  ['showcase-for-you-bootstrap-v2'],
+  { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
+);
+
+async function loadIdentitylessShowcaseForYouBootstrap(
+  category: ShowcaseCategory,
+  limit: number,
+  unlockFilter: ShowcaseUnlockFilter,
+  resourceFilter: ShowcaseResourceFilter,
+) {
+  try {
+    return await getCachedIdentitylessShowcaseForYouBootstrap(
+      category,
+      limit,
+      unlockFilter,
+      resourceFilter,
+    );
+  } catch (error) {
+    if (isMissingIncrementalCacheError(error)) {
+      return getShowcaseForYouFeedPage({
+        category,
+        offset: 0,
+        limit,
+        toolSlug: null,
+        unlockFilter,
+        resourceFilter,
+        viewerUserId: null,
+        anonymousKeyHash: null,
+        cursor: null,
+      });
+    }
+
+    throw error;
+  }
 }
 
 async function loadShowcaseFeedPageBase(
@@ -994,44 +1108,42 @@ export async function getShowcaseFeedPage(options: {
   const unlockFilter = options.unlock ?? 'all';
   const resourceFilter = options.resource ?? 'all';
   const baseFeed = sort === 'for-you'
-    ? await getPersonalizedShowcaseFeedPage({
-      anonymousKeyHash: options.anonymousKeyHash ?? null,
-      cursor: options.cursor ?? null,
-      filters: {
+    ? shouldCacheIdentitylessForYouBootstrap({
+      sort,
+      offset,
+      limit,
+      toolSlug,
+      viewerUserId,
+      anonymousKeyHash: options.anonymousKeyHash,
+      cursor: options.cursor,
+      bypassCache: options.bypassCache,
+    })
+      ? await loadIdentitylessShowcaseForYouBootstrap(
         category,
+        limit,
+        unlockFilter,
+        resourceFilter,
+      )
+      : await getShowcaseForYouFeedPage({
+        category,
+        offset,
+        limit,
         toolSlug,
         unlockFilter,
         resourceFilter,
-      },
-      hydratePostIds: async (postIds) => {
-        const rows = await fetchPostRowsByIds(postIds);
-        if (rows === null) return [];
-        const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
-        return items.filter((item) => (
-          (!toolSlug || item.sourceToolSlug === toolSlug)
-          && itemMatchesFeedFilters(item, category, unlockFilter, resourceFilter)
-        ));
-      },
-      fallbackItems: async (target) => {
-        const page = await getShowcaseFeedPageBase(
-          category,
-          'recent',
-          0,
-          target,
-          toolSlug,
-          unlockFilter,
-          resourceFilter,
-        );
-        return page.items;
-      },
-      limit,
+        viewerUserId,
+        anonymousKeyHash: options.anonymousKeyHash ?? null,
+        cursor: options.cursor ?? null,
+        adminSupabase,
+      })
+    : shouldCacheViewerNeutralShowcaseBasePage({
       offset,
-      serviceClient: adminSupabase,
-      viewerUserId,
+      limit,
+      toolSlug,
+      bypassCache: options.bypassCache,
     })
-    : options.bypassCache
-      ? await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
-      : await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
+      ? await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
+      : await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
   const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
   const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
 

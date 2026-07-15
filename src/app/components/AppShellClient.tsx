@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   APP_NAV_ITEMS,
@@ -26,6 +26,10 @@ const NAV_GROUPS = [
   { label: 'Explore', ids: ['marketplace', 'workflow'] },
   { label: 'Account', ids: ['invite', 'alerts', 'profile'] },
 ] as const;
+
+const subscribeToHydration = () => () => undefined;
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean }) {
   const Icon = item.icon;
@@ -142,7 +146,16 @@ function Brand({ compact = false }: { compact?: boolean }) {
 }
 
 export default function AppShellClient({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname() || '/';
+  const routePathname = usePathname() || '/';
+  const hasMounted = useSyncExternalStore(
+    subscribeToHydration,
+    getHydratedSnapshot,
+    getServerHydratedSnapshot
+  );
+  // The statically rendered root route can be evaluated with an internal Next
+  // pathname in production. Keep only that route neutral for the first client
+  // render so its markup matches the server shell, then activate Home.
+  const pathname = routePathname === '/' && !hasMounted ? '' : routePathname;
   const [mobileOpen, setMobileOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);

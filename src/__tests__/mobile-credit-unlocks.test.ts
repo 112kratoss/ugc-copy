@@ -443,11 +443,13 @@ describe('credit-funded mobile unlocks', () => {
 
   it('unlocks a paid post resource bundle by spending credits', async () => {
     const fakeSupabase = createBundleCreditSupabase({ credits: 1000 });
+    const invalidateMarketplaceResourceListCache = vi.fn();
 
     await expect(unlockPostResourceBundleWithCredits({
       adminSupabase: fakeSupabase.client,
       userId,
       postId: 'post-1',
+      invalidateMarketplaceResourceListCache,
     })).resolves.toMatchObject({
       success: true,
       entitlement: 'post_resource_unlock',
@@ -456,6 +458,7 @@ describe('credit-funded mobile unlocks', () => {
       alreadyProcessed: false,
     });
     expect(fakeSupabase.bundlePurchases).toEqual([{ bundle_id: 'bundle-1', buyer_user_id: userId }]);
+    expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledOnce();
   });
 
   it('returns already processed when the user already owns the bundle', async () => {
@@ -463,11 +466,13 @@ describe('credit-funded mobile unlocks', () => {
       credits: 100,
       purchases: [{ bundle_id: 'bundle-1', buyer_user_id: userId }],
     });
+    const invalidateMarketplaceResourceListCache = vi.fn();
 
     await expect(unlockPostResourceBundleWithCredits({
       adminSupabase: fakeSupabase.client,
       userId,
       postId: 'post-1',
+      invalidateMarketplaceResourceListCache,
     })).resolves.toMatchObject({
       success: true,
       entitlement: 'post_resource_unlock',
@@ -475,6 +480,7 @@ describe('credit-funded mobile unlocks', () => {
       credits: 100,
       alreadyProcessed: true,
     });
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
   });
 
   it('rejects unlocks when the user does not have enough credits', async () => {

@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+const cacheMocks = vi.hoisted(() => ({
+  invalidateShowcaseFeedCache: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import { deleteOwnerPostForRoute } from '@/lib/post-delete-service';
 
@@ -145,6 +151,10 @@ function createSupabaseMock({
 }
 
 describe('deleteOwnerPostForRoute', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('blocks paid posts with sales unless force delete is explicitly requested', async () => {
     const { client, calls } = createSupabaseMock({
       post: {
@@ -201,6 +211,7 @@ describe('deleteOwnerPostForRoute', () => {
     expect(calls.audits).toHaveLength(0);
     expect(calls.deletes).toHaveLength(0);
     expect(calls.removals).toHaveLength(0);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('force deletes a paid post after auditing, unpublishing its generation, and removing the showcase asset', async () => {
@@ -290,6 +301,7 @@ describe('deleteOwnerPostForRoute', () => {
         paths: ['posts/post-1/cover.jpg'],
       },
     ]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('does not delete the post when bundle state cannot be loaded for the audit decision', async () => {

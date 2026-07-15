@@ -28,9 +28,9 @@ import {
 } from '@/components/onboarding-booklet';
 import { OnboardingWelcome } from '@/components/onboarding-welcome';
 
-import imagePreview from '../assets/images/onboarding-pages/image.png';
-import videoPreview from '../assets/images/onboarding-pages/video.png';
-import motionPreview from '../assets/images/onboarding-pages/motion.png';
+import imagePreview from '../assets/images/onboarding-pages/image.jpg';
+import videoPreview from '../assets/images/onboarding-pages/video.jpg';
+import motionPreview from '../assets/images/onboarding-pages/motion.jpg';
 
 const GOALS: BookletGoal[] = [
   {

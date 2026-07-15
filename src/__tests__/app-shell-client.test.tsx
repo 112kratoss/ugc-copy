@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentPropsWithoutRef } from 'react';
 import { renderToString } from 'react-dom/server';
+import { hydrateRoot } from 'react-dom/client';
+import { act } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/app/components/AppShellClient';
@@ -27,7 +29,7 @@ describe('AppShellClient', () => {
     document.body.style.overflow = '';
   });
 
-  it('uses the home shell title when the pathname is empty', () => {
+  it('uses the home shell title after mounting when the pathname is empty', () => {
     mockedPathname = '';
 
     render(
@@ -38,6 +40,42 @@ describe('AppShellClient', () => {
 
     expect(within(screen.getByRole('banner')).getByText('Home')).toBeInTheDocument();
     expect(screen.getByText('Page content')).toBeInTheDocument();
+  });
+
+  it('hydrates the root shell without recovering from a route markup mismatch', async () => {
+    mockedPathname = '/_not-found';
+    const serverHtml = renderToString(
+      <AppShellClient>
+        <div>Home content</div>
+      </AppShellClient>
+    );
+    const container = document.createElement('div');
+    container.innerHTML = serverHtml;
+    document.body.appendChild(container);
+    mockedPathname = '/';
+    const onRecoverableError = vi.fn();
+
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(
+        container,
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>,
+        { onRecoverableError }
+      );
+    });
+
+    expect(onRecoverableError).not.toHaveBeenCalled();
+    expect(within(container).getByRole('banner')).toHaveTextContent('Home');
+    expect(
+      within(container)
+        .getAllByRole('link', { name: 'Home' })
+        .some((link) => link.getAttribute('aria-current') === 'page')
+    ).toBe(true);
+
+    await act(async () => root!.unmount());
+    container.remove();
   });
 
   it('server-renders the current route title instead of a stale home title', () => {

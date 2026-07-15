@@ -190,6 +190,15 @@ function createAdminClientMock() {
                 error: null,
               };
             }),
+            createSignedUrls: vi.fn(async (filePaths: string[]) => ({
+              data: filePaths.map((filePath) => {
+                const signedUrl = signedUploads.get(filePath);
+                return signedUrl
+                  ? { error: null, path: filePath, signedUrl }
+                  : { error: 'Missing asset', path: filePath, signedUrl: null };
+              }),
+              error: null,
+            })),
           };
         }
 
@@ -197,6 +206,14 @@ function createAdminClientMock() {
           return {
             createSignedUrl: vi.fn(async (filePath: string) => ({
               data: { signedUrl: `https://signed.example.com/generation-inputs/${filePath}` },
+              error: null,
+            })),
+            createSignedUrls: vi.fn(async (filePaths: string[]) => ({
+              data: filePaths.map((filePath) => ({
+                error: null,
+                path: filePath,
+                signedUrl: `https://signed.example.com/generation-inputs/${filePath}`,
+              })),
               error: null,
             })),
           };

@@ -23,6 +23,7 @@ import {
   type PostMediaPersistInput,
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
   isCreatorProfileCheckError,
   isCreatorProfileReadinessError,
@@ -302,74 +303,82 @@ export async function publishPreparedPost({
     return { ok: false, status: 500, body: { error: 'Failed to create post.' } };
   }
 
-  try {
-    await resolvedDependencies.insertPostMediaItems({
-      supabase: adminSupabase,
-      postId: post.postId,
-      mediaItems: persistedMediaItems,
-    });
-  } catch (mediaError) {
-    console.error('Failed to save post media:', mediaError);
-    await cleanupUploadedMedia();
-    await adminSupabase.from('posts').delete().eq('id', post.postId);
-    if (isMissingPostMediaSchemaError(mediaError)) {
-      return { ok: false, status: 500, body: { error: MISSING_POST_MEDIA_SCHEMA_ERROR } };
-    }
-    return { ok: false, status: 500, body: { error: 'Failed to save post media.' } };
-  }
-
-  if (temporaryUploadPathsToCleanup.length > 0) {
-    const cleanupUpload = await adminSupabase.storage
-      .from(UPLOADS_BUCKET)
-      .remove(temporaryUploadPathsToCleanup);
-    if (cleanupUpload.error) {
-      console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
-    }
-  }
+  const didMutateSharedFeed = post.visibility === 'public';
 
   try {
-    await resolvedDependencies.insertPostSourceTools({
-      supabase: adminSupabase,
-      postId: post.postId,
-      ownerUserId,
-      mediaKind: getSubmissionSourceMediaKind(submission),
-      sourceTools: submission.sourceTools,
-    });
-  } catch (sourceToolsError) {
-    console.error('Failed to insert post_source_tools:', sourceToolsError);
-    await cleanupUploadedMedia();
-    const cleanupPost = await adminSupabase
-      .from('posts')
-      .delete()
-      .eq('id', post.postId);
-    if (cleanupPost.error) {
-      console.warn('Failed to remove post after source tool metadata failure:', cleanupPost.error);
+    try {
+      await resolvedDependencies.insertPostMediaItems({
+        supabase: adminSupabase,
+        postId: post.postId,
+        mediaItems: persistedMediaItems,
+      });
+    } catch (mediaError) {
+      console.error('Failed to save post media:', mediaError);
+      await cleanupUploadedMedia();
+      await adminSupabase.from('posts').delete().eq('id', post.postId);
+      if (isMissingPostMediaSchemaError(mediaError)) {
+        return { ok: false, status: 500, body: { error: MISSING_POST_MEDIA_SCHEMA_ERROR } };
+      }
+      return { ok: false, status: 500, body: { error: 'Failed to save post media.' } };
     }
-    const isValidationError = sourceToolsError instanceof PostSourceToolsWriteError
-      && sourceToolsError.isValidationError;
+
+    if (temporaryUploadPathsToCleanup.length > 0) {
+      const cleanupUpload = await adminSupabase.storage
+        .from(UPLOADS_BUCKET)
+        .remove(temporaryUploadPathsToCleanup);
+      if (cleanupUpload.error) {
+        console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
+      }
+    }
+
+    try {
+      await resolvedDependencies.insertPostSourceTools({
+        supabase: adminSupabase,
+        postId: post.postId,
+        ownerUserId,
+        mediaKind: getSubmissionSourceMediaKind(submission),
+        sourceTools: submission.sourceTools,
+      });
+    } catch (sourceToolsError) {
+      console.error('Failed to insert post_source_tools:', sourceToolsError);
+      await cleanupUploadedMedia();
+      const cleanupPost = await adminSupabase
+        .from('posts')
+        .delete()
+        .eq('id', post.postId);
+      if (cleanupPost.error) {
+        console.warn('Failed to remove post after source tool metadata failure:', cleanupPost.error);
+      }
+      const isValidationError = sourceToolsError instanceof PostSourceToolsWriteError
+        && sourceToolsError.isValidationError;
+      return {
+        ok: false,
+        status: isValidationError ? 400 : 500,
+        body: {
+          error: isValidationError ? sourceToolsError.message : 'Failed to save source tool metadata.',
+          field: isValidationError ? 'sourceTools' : undefined,
+        },
+      };
+    }
+
     return {
-      ok: false,
-      status: isValidationError ? 400 : 500,
+      ok: true,
       body: {
-        error: isValidationError ? sourceToolsError.message : 'Failed to save source tool metadata.',
-        field: isValidationError ? 'sourceTools' : undefined,
+        success: true,
+        postId: post.postId,
+        visibility: post.visibility,
+        showcasePath: post.visibility === 'private' ? null : `/showcase/${post.postId}`,
+        ownerPath: `/post/${post.postId}/edit`,
+        resourceBundlePath:
+          post.bundleStatus === 'draft' || post.visibility === 'private'
+            ? `/post/${post.postId}/edit#resources`
+            : `/showcase/${post.postId}#resources`,
+        resourceBundleStatus: post.bundleStatus,
       },
     };
+  } finally {
+    if (didMutateSharedFeed) {
+      invalidateShowcaseFeedCache();
+    }
   }
-
-  return {
-    ok: true,
-    body: {
-      success: true,
-      postId: post.postId,
-      visibility: post.visibility,
-      showcasePath: post.visibility === 'private' ? null : `/showcase/${post.postId}`,
-      ownerPath: `/post/${post.postId}/edit`,
-      resourceBundlePath:
-        post.bundleStatus === 'draft' || post.visibility === 'private'
-          ? `/post/${post.postId}/edit#resources`
-          : `/showcase/${post.postId}#resources`,
-      resourceBundleStatus: post.bundleStatus,
-    },
-  };
 }

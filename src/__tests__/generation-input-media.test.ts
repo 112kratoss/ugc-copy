@@ -84,3 +84,188 @@ describe('generation input media persistence', () => {
     expect(insert).not.toHaveBeenCalled();
   });
 });
+
+describe('generation input media loading', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('batch-signs unique owned paths once per storage bucket', async () => {
+    const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
+    const rows = [
+      {
+        id: 'input-1',
+        generation_id: 'gen-1',
+        user_id: 'user-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Product',
+        storage_path: 'generation_inputs/user-1/gen-1/product.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: null,
+      },
+      {
+        id: 'input-2',
+        generation_id: 'gen-1',
+        user_id: 'user-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Logo',
+        storage_path: 'uploads/user-1/logo.png',
+        source_generation_id: null,
+        sort_order: 1,
+        metadata: null,
+      },
+      {
+        id: 'input-3',
+        generation_id: 'gen-2',
+        user_id: 'user-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Shared logo',
+        storage_path: 'uploads/user-1/logo.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: null,
+      },
+    ];
+    const signers = new Map<string, ReturnType<typeof vi.fn>>();
+    const storageFrom = vi.fn((bucket: string) => {
+      const createSignedUrls = vi.fn(async (paths: string[]) => ({
+        data: paths.map((path) => ({
+          error: null,
+          path,
+          signedUrl: `https://signed.example.com/${bucket}/${path}`,
+        })),
+        error: null,
+      }));
+      signers.set(bucket, createSignedUrls);
+      return { createSignedUrls };
+    });
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({
+            order: vi.fn(async () => ({ data: rows, error: null })),
+          })),
+        })),
+      })),
+      storage: { from: storageFrom },
+    };
+
+    const result = await loadGenerationInputMediaMap({
+      supabase: supabase as never,
+      generationIds: ['gen-1', 'gen-2', 'gen-1'],
+      urlMode: 'signed',
+    });
+
+    expect(storageFrom).toHaveBeenCalledTimes(2);
+    expect(signers.get('generation_inputs')).toHaveBeenCalledWith(
+      ['user-1/gen-1/product.png'],
+      3600,
+    );
+    expect(signers.get('uploads')).toHaveBeenCalledWith(['user-1/logo.png'], 3600);
+    expect(result.get('gen-1')?.map((item) => item.url)).toEqual([
+      'https://signed.example.com/generation_inputs/user-1/gen-1/product.png',
+      'https://signed.example.com/uploads/user-1/logo.png',
+    ]);
+    expect(result.get('gen-2')?.[0]?.url).toBe(
+      'https://signed.example.com/uploads/user-1/logo.png',
+    );
+  });
+
+  it('does not sign or expose a storage object outside the row owner prefix', async () => {
+    const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const storageFrom = vi.fn();
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({
+            order: vi.fn(async () => ({
+              data: [{
+                id: 'input-1',
+                generation_id: 'gen-1',
+                user_id: 'user-1',
+                media_type: 'image',
+                role: 'reference_image',
+                label: null,
+                storage_path: 'uploads/user-2/private.png',
+                source_generation_id: null,
+                sort_order: 0,
+                metadata: null,
+              }],
+              error: null,
+            })),
+          })),
+        })),
+      })),
+      storage: { from: storageFrom },
+    };
+
+    const result = await loadGenerationInputMediaMap({
+      supabase: supabase as never,
+      generationIds: ['gen-1'],
+      urlMode: 'signed',
+    });
+
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(result.get('gen-1')?.[0]).toMatchObject({ url: null, storagePath: null });
+    expect(consoleError).toHaveBeenCalledWith(
+      'Refused to sign generation input outside owner prefix: uploads/user-2/private.png',
+    );
+  });
+
+  it('keeps successful signed URLs when another file in the batch fails', async () => {
+    const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const rows = ['ok.png', 'missing.png'].map((fileName, index) => ({
+      id: `input-${index}`,
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: null,
+      storage_path: `uploads/user-1/${fileName}`,
+      source_generation_id: null,
+      sort_order: index,
+      metadata: null,
+    }));
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({
+            order: vi.fn(async () => ({ data: rows, error: null })),
+          })),
+        })),
+      })),
+      storage: {
+        from: vi.fn(() => ({
+          createSignedUrls: vi.fn(async () => ({
+            data: [
+              {
+                error: null,
+                path: 'user-1/ok.png',
+                signedUrl: 'https://signed.example.com/uploads/user-1/ok.png',
+              },
+              { error: 'Object not found', path: 'user-1/missing.png', signedUrl: null },
+            ],
+            error: null,
+          })),
+        })),
+      },
+    };
+
+    const result = await loadGenerationInputMediaMap({
+      supabase: supabase as never,
+      generationIds: ['gen-1'],
+      urlMode: 'signed',
+    });
+
+    expect(result.get('gen-1')?.map((item) => item.url)).toEqual([
+      'https://signed.example.com/uploads/user-1/ok.png',
+      null,
+    ]);
+  });
+});

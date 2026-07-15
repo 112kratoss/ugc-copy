@@ -55,6 +55,14 @@ vi.mock('@/lib/server-helpers', () => ({
           data: { signedUrl: `https://signed.example.com/${filePath}` },
           error: null,
         })),
+        createSignedUrls: vi.fn(async (filePaths: string[]) => ({
+          data: filePaths.map((filePath) => ({
+            error: null,
+            path: filePath,
+            signedUrl: `https://signed.example.com/${filePath}`,
+          })),
+          error: null,
+        })),
       })),
     },
     from(table: string) {

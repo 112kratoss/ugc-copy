@@ -14,6 +14,7 @@ interface ShowcaseMediaCarouselProps {
   mode?: 'feed' | 'detail' | 'reel';
   className?: string;
   autoPlayVideo?: boolean;
+  priority?: boolean;
   onOpen?: (index: number) => void;
   onIndexChange?: (index: number) => void;
   onMediaReady?: (index: number) => void;
@@ -30,6 +31,7 @@ export default function ShowcaseMediaCarousel({
   mode = 'feed',
   className = '',
   autoPlayVideo,
+  priority = false,
   onOpen,
   onIndexChange,
   onMediaReady,
@@ -44,6 +46,7 @@ export default function ShowcaseMediaCarousel({
     return cover?.width && cover?.height ? cover.width / cover.height : null;
   });
   const [isInViewport, setIsInViewport] = useState(mode !== 'feed');
+  const [isNearViewport, setIsNearViewport] = useState(mode !== 'feed');
   const [isInteracting, setIsInteracting] = useState(false);
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -78,6 +81,20 @@ export default function ShowcaseMediaCarousel({
     return () => {
       observer.disconnect();
     };
+  }, [mode]);
+
+  useEffect(() => {
+    const carousel = carouselRef.current;
+    if (mode !== 'feed' || !carousel || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsNearViewport(Boolean(entry?.isIntersecting)),
+      { rootMargin: '320px 0px', threshold: 0 }
+    );
+    observer.observe(carousel);
+    return () => observer.disconnect();
   }, [mode]);
 
   useEffect(() => {
@@ -119,6 +136,11 @@ export default function ShowcaseMediaCarousel({
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
   const feedPreviewUrl = mode === 'feed' ? activeItem.previewUrl ?? null : null;
+  const shouldLoadFeedPoster = mode !== 'feed'
+    || priority
+    || isNearViewport
+    || isInViewport
+    || isInteracting;
 
   return (
     <div ref={carouselRef} className={className}>
@@ -180,7 +202,7 @@ export default function ShowcaseMediaCarousel({
                 ref={activeVideoRef}
                 key={activeItem.id}
                 src={shouldAttachVideo ? activeItem.url : undefined}
-                poster={feedPreviewUrl ?? undefined}
+                poster={shouldLoadFeedPoster ? feedPreviewUrl ?? undefined : undefined}
                 muted={!showControls}
                 controls={showControls}
                 autoPlay={shouldPlayVideo}
@@ -207,7 +229,8 @@ export default function ShowcaseMediaCarousel({
               previewSrc={feedPreviewUrl ?? activeItem.url}
               fallbackSrc={activeItem.url}
               alt={title}
-              sizes="(min-width: 1280px) 25vw, (min-width: 768px) 33vw, 100vw"
+              sizes="(min-width: 1280px) 25vw, (min-width: 768px) 33vw, (min-width: 640px) 50vw, 100vw"
+              priority={priority}
               onLoad={() => onMediaReady?.(activeIndex)}
               className="object-cover"
             />

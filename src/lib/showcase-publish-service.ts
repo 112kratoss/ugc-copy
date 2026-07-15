@@ -37,6 +37,7 @@ import {
   isCreatorProfileCheckError,
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
@@ -670,6 +671,8 @@ export async function publishGenerationToShowcaseForRoute({
     }
     return { ok: false, status: 500, body: { error: 'Failed to sync showcase post' } };
   }
+
+  invalidateShowcaseFeedCache();
 
   if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
     const removalResult = await adminSupabase.storage

@@ -23,6 +23,7 @@ import {
   type RawShowcaseSourceKind,
   type ShowcaseVisibility,
 } from '@/lib/showcase';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 
@@ -269,6 +270,8 @@ export async function deleteOwnerPostForRoute({
     console.error('Failed to delete post:', deleteError);
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
+
+  invalidateShowcaseFeedCache();
 
   if (removableShowcasePath) {
     await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove([removableShowcasePath]);

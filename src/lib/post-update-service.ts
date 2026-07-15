@@ -28,6 +28,7 @@ import {
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
   normalizeSourceToolInputWithCatalog,
@@ -563,6 +564,8 @@ export async function updateOwnerPostForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
   }
 
+  let didMutate = false;
+
   try {
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
     if (!post) {
@@ -741,6 +744,7 @@ export async function updateOwnerPostForRoute({
       hasBundlePayload: hasResourceBundlePayload,
       bundle: resourceBundle,
     });
+    didMutate = true;
 
     if (submittedMediaItems) {
       const mediaError = await replaceEditedPostMedia({
@@ -809,5 +813,9 @@ export async function updateOwnerPostForRoute({
       };
     }
     return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
+  } finally {
+    if (didMutate) {
+      invalidateShowcaseFeedCache();
+    }
   }
 }

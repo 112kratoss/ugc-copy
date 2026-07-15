@@ -7,6 +7,7 @@ import {
   POST_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 type ArchivedPostRow = {
   id: string;
@@ -100,6 +101,8 @@ export async function archiveOwnerPostForRoute({
     };
   }
 
+  invalidateShowcaseFeedCache();
+
   await adminSupabase
     .from('post_resource_bundles')
     .update({ status: 'draft' })
@@ -172,6 +175,8 @@ export async function restoreOwnerPostForRoute({
       body: { error: 'Post not found.' },
     };
   }
+
+  invalidateShowcaseFeedCache();
 
   return {
     ok: true,

@@ -81,9 +81,9 @@ const DASHBOARD_COLORS = {
 } as const;
 
 const TOOL_PREVIEW_IMAGES = {
-  kingdom: require('../assets/images/home-previews/image.png'),
-  city: require('../assets/images/home-previews/video.png'),
-  runner: require('../assets/images/home-previews/motion.png'),
+  kingdom: require('../assets/images/home-previews/image.jpg'),
+  city: require('../assets/images/home-previews/video.jpg'),
+  runner: require('../assets/images/home-previews/motion.jpg'),
 } as const;
 
 export function HomeDashboard() {
@@ -108,7 +108,8 @@ export function HomeDashboard() {
   const generationsQuery = useQuery({
     queryKey: ['home-generations', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.listGenerations(true),
+    queryFn: () => api.listGenerations(true, { limit: 12 }),
+    staleTime: 1000 * 60,
   });
 
   const profileQuery = useQuery({
@@ -126,13 +127,31 @@ export function HomeDashboard() {
   });
 
   useEffect(() => {
-    if (!isFocused || !user) return;
-    void generationsQuery.refetch?.();
-    if (menuVisible) void sellerPostsQuery.refetch?.();
-  }, [isFocused, menuVisible, user?.id]);
+    if (
+      !isFocused
+      || !user
+      || generationsQuery.isFetching
+      || !generationsQuery.isStale
+    ) return;
+    void generationsQuery.refetch();
+  }, [generationsQuery.isFetching, generationsQuery.isStale, isFocused, user?.id]);
+
+  useEffect(() => {
+    if (
+      !isFocused
+      || !user
+      || !menuVisible
+      || sellerPostsQuery.isFetching
+      || !sellerPostsQuery.isStale
+    ) return;
+    void sellerPostsQuery.refetch();
+  }, [isFocused, menuVisible, sellerPostsQuery.isFetching, sellerPostsQuery.isStale, user?.id]);
+
+  const discoveryReady = !user || generationsQuery.isFetched;
 
   const showcaseQuery = useInfiniteQuery({
     queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }, user?.id),
+    enabled: discoveryReady,
     initialPageParam: 0,
     queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({ offset: pageParam, sort: 'recent' })),
     getNextPageParam: getNextShowcaseFeedOffset,
@@ -141,6 +160,7 @@ export function HomeDashboard() {
 
   const marketplaceQuery = useQuery({
     queryKey: ['home-marketplace-resources'],
+    enabled: discoveryReady,
     queryFn: () => api.listMarketplaceResources({ limit: 6, sort: 'recent' }),
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
   });

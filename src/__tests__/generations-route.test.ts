@@ -222,6 +222,14 @@ vi.mock('@/lib/server-helpers', () => ({
               data: { signedUrl: `https://signed.example.com/${bucket}/${filePath}` },
               error: null,
             }),
+            createSignedUrls: async (filePaths: string[]) => ({
+              data: filePaths.map((filePath) => ({
+                error: null,
+                path: filePath,
+                signedUrl: `https://signed.example.com/${bucket}/${filePath}`,
+              })),
+              error: null,
+            }),
             getPublicUrl: (filePath: string) => ({
               data: { publicUrl: `https://public.example.com/${bucket}/${filePath}` },
             }),

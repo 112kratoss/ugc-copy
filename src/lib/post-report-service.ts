@@ -7,6 +7,7 @@ import {
   POST_REPORT_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const REPORT_REASONS = new Set([
   'spam',
@@ -79,11 +80,13 @@ export async function submitPostReportForRoute({
   reporterUserId,
   readBody,
   createAdminSupabase,
+  invalidateFeedCache = invalidateShowcaseFeedCache,
 }: {
   postId: string;
   reporterUserId: string;
   readBody: () => Promise<unknown>;
   createAdminSupabase: () => SupabaseClient;
+  invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
 }): Promise<PostReportRouteResult> {
   const body = normalizeBody(await readBody());
   const reason = normalizeReason(body.reason);
@@ -150,6 +153,8 @@ export async function submitPostReportForRoute({
     console.error('Failed to create post report:', error);
     return { ok: false, status: 500, body: { error: 'Failed to submit report.' } };
   }
+
+  invalidateFeedCache();
 
   return { ok: true, body: { success: true } };
 }

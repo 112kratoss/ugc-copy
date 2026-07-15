@@ -7,7 +7,7 @@ import { AppText, PrimaryButton } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 
-import bookletHero from '../assets/images/onboarding-booklet-hero.png';
+import bookletHero from '../assets/images/onboarding-booklet-hero.jpg';
 
 type OnboardingWelcomeProps = {
   availableHeight: number;

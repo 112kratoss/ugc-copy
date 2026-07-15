@@ -10,6 +10,7 @@ import {
   notifyMobilePurchasesRestored,
   notifyPostResourceUnlockCompleted,
 } from '@/lib/mobile-notifications';
+import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
   fetchWithProviderTimeout,
@@ -556,12 +557,14 @@ export async function completeMobilePurchase({
   authority,
   provider,
   transactionId,
+  invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
   authority: MobilePurchaseAuthority;
   provider: MobilePurchaseProvider;
   transactionId: string;
+  invalidateMarketplaceResourceListCache?: () => void;
 }): Promise<MobileCommerceSyncResult> {
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
   const { data, error } = await adminSupabase.rpc('complete_mobile_purchase', {
@@ -657,6 +660,7 @@ export async function completeMobilePurchase({
   const bundleId = normalizeOptionalString(data.bundle_id);
   if (!alreadyProcessed) {
     if (!ownerUserId || !bundleId) throw new MobileCommerceError('Failed to unlock post resources.', 500);
+    invalidateMarketplaceResourceListCache();
     await notifyPostResourceUnlockCompleted(adminSupabase, {
       buyerUserId: userId,
       ownerUserId,
@@ -877,6 +881,7 @@ export async function completeMobilePostResourceUnlock({
   productId,
   provider,
   transactionId,
+  invalidateMarketplaceResourceListCache,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
@@ -884,6 +889,7 @@ export async function completeMobilePostResourceUnlock({
   productId: string;
   provider: MobilePurchaseProvider;
   transactionId: string;
+  invalidateMarketplaceResourceListCache?: () => void;
 }): Promise<MobileCommerceSyncResult> {
   const authority = await resolveMobilePurchaseAuthority({
     adminSupabase,
@@ -894,17 +900,26 @@ export async function completeMobilePostResourceUnlock({
   if (authority.entitlementType !== 'post_resource_unlock') {
     throw new MobileCommerceError('Purchase intent is not a post resource unlock.', 409);
   }
-  return completeMobilePurchase({ adminSupabase, userId, authority, provider, transactionId });
+  return completeMobilePurchase({
+    adminSupabase,
+    userId,
+    authority,
+    provider,
+    transactionId,
+    invalidateMarketplaceResourceListCache,
+  });
 }
 
 export async function unlockPostResourceBundleWithCredits({
   adminSupabase,
   userId,
   postId,
+  invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
   postId: string;
+  invalidateMarketplaceResourceListCache?: () => void;
 }): Promise<MobileCommerceSyncResult> {
   const { data, error } = await adminSupabase.rpc('unlock_post_resource_bundle_with_credits', {
     p_user_id: userId,
@@ -946,6 +961,7 @@ export async function unlockPostResourceBundleWithCredits({
     if (!ownerUserId || !bundleId) {
       throw new MobileCommerceError('Failed to unlock post resources.', 500);
     }
+    invalidateMarketplaceResourceListCache();
     await notifyPostResourceUnlockCompleted(adminSupabase, {
       buyerUserId: userId,
       ownerUserId,

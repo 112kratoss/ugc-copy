@@ -1,4 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const cacheMocks = vi.hoisted(() => ({
+  SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
+  invalidateShowcaseFeedCache: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import { preparePostCreationSubmission } from '@/lib/post-creation-submission-service';
 import {
@@ -12,6 +19,10 @@ const sourceToolCatalog: SourceToolOption[] = [
 ];
 
 describe('publishPreparedPost', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('publishes prepared text posts with marketplace checks and route payload paths', async () => {
     const formData = new FormData();
     formData.set('postFormat', 'text');
@@ -88,6 +99,59 @@ describe('publishPreparedPost', () => {
         resourceBundleStatus: null,
       },
     });
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates after a public post commit when follow-up media persistence fails', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'A public post that commits before its metadata write fails.');
+    formData.set('visibility', 'public');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const deleteEq = vi.fn(async () => ({ error: null }));
+    const dependencies = {
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      createPostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-1',
+        visibility: 'public' as const,
+        bundleId: null,
+        bundleStatus: null,
+      })),
+      insertPostMediaItems: vi.fn(async () => {
+        throw new Error('post media insert failed');
+      }),
+      insertPostSourceTools: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostPublishDependencies;
+
+    const result = await publishPreparedPost({
+      adminSupabase: {
+        storage: { from: vi.fn() },
+        from: vi.fn(() => ({
+          delete: vi.fn(() => ({ eq: deleteEq })),
+        })),
+      },
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to save post media.' },
+    });
+    expect(dependencies.createPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+    expect(deleteEq).toHaveBeenCalledWith('id', 'post-1');
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('returns a profile repair action before creating an incomplete public post', async () => {
@@ -131,6 +195,7 @@ describe('publishPreparedPost', () => {
       },
     });
     expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('treats a failed profile check as a retryable server failure', async () => {

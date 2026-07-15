@@ -11,6 +11,7 @@ interface OptimizedPreviewImageProps {
   className?: string;
   loading?: 'eager' | 'lazy';
   priority?: boolean;
+  fallbackToUnoptimized?: boolean;
   onLoad?: (event: SyntheticEvent<HTMLImageElement>) => void;
 }
 
@@ -61,20 +62,37 @@ export function OptimizedPreviewImage({
   className = '',
   loading = 'lazy',
   priority = false,
+  fallbackToUnoptimized = false,
   onLoad,
 }: OptimizedPreviewImageProps) {
   const [failedPreviewSrc, setFailedPreviewSrc] = useState<string | null>(null);
+  const [failedRenderedSrc, setFailedRenderedSrc] = useState<string | null>(null);
   const previewFailed = failedPreviewSrc === previewSrc;
 
   const src = previewFailed && fallbackSrc ? fallbackSrc : previewSrc;
-  const canFallback = Boolean(!previewFailed && fallbackSrc && fallbackSrc !== previewSrc);
+  const isFallbackAttempt = Boolean(previewFailed && fallbackSrc);
+  const renderedSrcFailed = failedRenderedSrc === src;
+  const canFallback = Boolean(
+    !previewFailed
+    && fallbackSrc
+    && (
+      fallbackSrc !== previewSrc
+      || (fallbackToUnoptimized && canOptimizePreviewImage(previewSrc))
+    )
+  );
   const handleError = () => {
     if (canFallback) {
       setFailedPreviewSrc(previewSrc);
+    } else {
+      setFailedRenderedSrc(src);
     }
   };
 
-  if (canOptimizePreviewImage(src)) {
+  if (renderedSrcFailed) {
+    return null;
+  }
+
+  if (!(isFallbackAttempt && fallbackToUnoptimized) && canOptimizePreviewImage(src)) {
     return (
       <Image
         key={src}

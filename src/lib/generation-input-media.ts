@@ -356,37 +356,87 @@ function getDefaultInputLabel(role: string, index: number): string {
   return `Reference image ${index + 1}`;
 }
 
-async function buildStoredInputUrl(
-  supabase: SupabaseClient,
-  storagePath: string,
-  mode: 'proxy' | 'signed',
-  ownerUserId: string,
-): Promise<string | null> {
-  const location = normalizeStoragePath(storagePath);
+interface PreparedGenerationInputMediaRow {
+  row: GenerationInputMediaRow;
+  location: { bucket: string; filePath: string } | null;
+  trustedStoragePath: string | null;
+}
+
+function getStorageObjectKey(bucket: string, filePath: string): string {
+  return `${bucket}\u0000${filePath}`;
+}
+
+function prepareGenerationInputMediaRow(
+  row: GenerationInputMediaRow,
+  reportOwnershipFailure: boolean,
+): PreparedGenerationInputMediaRow {
+  const location = normalizeStoragePath(row.storage_path);
   if (!location) {
-    return isAllowlistedRemoteMediaUrl(storagePath) ? storagePath : null;
-  }
-  if (!isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
-    console.error(`Refused to sign generation input outside owner prefix: ${storagePath}`);
-    return null;
-  }
-
-  if (mode === 'proxy') {
-    return isMediaBucket(location.bucket)
-      ? buildMediaProxyUrl(location.bucket, location.filePath)
-      : null;
+    return {
+      row,
+      location: null,
+      trustedStoragePath: isAllowlistedRemoteMediaUrl(row.storage_path) ? row.storage_path : null,
+    };
   }
 
-  const { data, error } = await supabase.storage
-    .from(location.bucket)
-    .createSignedUrl(location.filePath, 3600);
-
-  if (error || !data?.signedUrl) {
-    console.error(`Failed to sign generation input ${storagePath}:`, error);
-    return null;
+  if (!isStorageObjectOwnedByUser(location.filePath, row.user_id)) {
+    if (reportOwnershipFailure) {
+      console.error(`Refused to sign generation input outside owner prefix: ${row.storage_path}`);
+    }
+    return { row, location, trustedStoragePath: null };
   }
 
-  return data.signedUrl;
+  return { row, location, trustedStoragePath: row.storage_path };
+}
+
+async function signPreparedGenerationInputMedia(
+  supabase: SupabaseClient,
+  preparedRows: PreparedGenerationInputMediaRow[],
+): Promise<Map<string, string>> {
+  const pathsByBucket = new Map<string, Set<string>>();
+
+  for (const prepared of preparedRows) {
+    if (!prepared.location || !prepared.trustedStoragePath) {
+      continue;
+    }
+
+    const paths = pathsByBucket.get(prepared.location.bucket) ?? new Set<string>();
+    paths.add(prepared.location.filePath);
+    pathsByBucket.set(prepared.location.bucket, paths);
+  }
+
+  const signedUrls = new Map<string, string>();
+  await Promise.all(Array.from(pathsByBucket, async ([bucket, pathSet]) => {
+    const paths = Array.from(pathSet);
+
+    try {
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .createSignedUrls(paths, 3600);
+
+      if (error || !data) {
+        console.error(`Failed to batch-sign generation inputs in ${bucket}:`, error);
+        return;
+      }
+
+      data.forEach((result, index) => {
+        const filePath = result.path ?? paths[index];
+        if (!filePath || result.error || !result.signedUrl) {
+          console.error(
+            `Failed to sign generation input ${bucket}/${filePath ?? 'unknown'}:`,
+            result.error,
+          );
+          return;
+        }
+
+        signedUrls.set(getStorageObjectKey(bucket, filePath), result.signedUrl);
+      });
+    } catch (error) {
+      console.error(`Failed to batch-sign generation inputs in ${bucket}:`, error);
+    }
+  }));
+
+  return signedUrls;
 }
 
 function mapInputMediaRow(
@@ -431,14 +481,29 @@ export async function loadGenerationInputMediaMap(params: {
       throw error;
     }
 
-    for (const row of (data ?? []) as GenerationInputMediaRow[]) {
-      const location = normalizeStoragePath(row.storage_path);
-      const trustedStoragePath = location
-        ? (isStorageObjectOwnedByUser(location.filePath, row.user_id) ? row.storage_path : null)
-        : (isAllowlistedRemoteMediaUrl(row.storage_path) ? row.storage_path : null);
-      const url = params.urlMode === 'none'
-        ? null
-        : await buildStoredInputUrl(params.supabase, row.storage_path, params.urlMode, row.user_id);
+    const preparedRows = ((data ?? []) as GenerationInputMediaRow[]).map((row) =>
+      prepareGenerationInputMediaRow(row, params.urlMode !== 'none')
+    );
+    const signedUrls = params.urlMode === 'signed'
+      ? await signPreparedGenerationInputMedia(params.supabase, preparedRows)
+      : new Map<string, string>();
+
+    for (const prepared of preparedRows) {
+      const { row, location, trustedStoragePath } = prepared;
+      let url: string | null = null;
+
+      if (params.urlMode !== 'none' && trustedStoragePath) {
+        if (!location) {
+          url = trustedStoragePath;
+        } else if (params.urlMode === 'proxy') {
+          url = isMediaBucket(location.bucket)
+            ? buildMediaProxyUrl(location.bucket, location.filePath)
+            : null;
+        } else {
+          url = signedUrls.get(getStorageObjectKey(location.bucket, location.filePath)) ?? null;
+        }
+      }
+
       const item = mapInputMediaRow(row, url, trustedStoragePath);
       const nextItems = inputMap.get(row.generation_id) ?? [];
       nextItems.push(item);

@@ -128,7 +128,7 @@ export default function NewPostScreen() {
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.listGenerations(true),
+    queryFn: () => api.listGenerations(true, { limit: 100 }),
   });
 
   const postQuery = useQuery({

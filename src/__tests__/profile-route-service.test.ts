@@ -197,6 +197,7 @@ describe('profile route service', () => {
         credits: 25,
       }],
     });
+    const invalidateFeedCache = vi.fn();
 
     const result = await updateProfileForRoute({
       userId: user.id,
@@ -206,6 +207,7 @@ describe('profile route service', () => {
         bio: 'UGC creator for product demos.',
       },
       client: client.client,
+      invalidateFeedCache,
     });
 
     expect(client.upserts[0]).toMatchObject({
@@ -224,12 +226,14 @@ describe('profile route service', () => {
         credits: 25,
       },
     });
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('returns stable username conflict errors from profile upserts', async () => {
     const client = createClient({
       upsertError: { code: '23505', message: 'duplicate key' },
     });
+    const invalidateFeedCache = vi.fn();
 
     await expect(updateProfileForRoute({
       userId: user.id,
@@ -238,11 +242,13 @@ describe('profile route service', () => {
         displayName: 'Creator Name',
       },
       client: client.client,
+      invalidateFeedCache,
     })).resolves.toEqual({
       ok: false,
       status: 409,
       error: 'That username is already taken.',
       fieldErrors: { username: 'That username is already taken.' },
     });
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 });

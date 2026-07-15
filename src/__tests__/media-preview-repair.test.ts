@@ -118,8 +118,12 @@ describe('media preview repair retries', () => {
       })),
       storage: { from: storageFrom },
     };
+    const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaPreviews(supabase as never, { batchSize: 10 });
+    const summary = await repairMediaPreviews(supabase as never, {
+      batchSize: 10,
+      invalidateFeedCache,
+    });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
     expect(storageFrom).toHaveBeenCalledWith('showcase_media');
@@ -134,6 +138,7 @@ describe('media preview repair retries', () => {
         payload: expect.objectContaining({ preview_status: 'ready' }),
       }),
     ]));
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('bounds external generation media downloads with a timeout signal', async () => {
@@ -175,8 +180,12 @@ describe('media preview repair retries', () => {
       })),
       storage: { from: vi.fn() },
     };
+    const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaPreviews(supabase as never, { batchSize: 10 });
+    const summary = await repairMediaPreviews(supabase as never, {
+      batchSize: 10,
+      invalidateFeedCache,
+    });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
     expect(timeoutSpy).toHaveBeenCalledWith(60_000);
@@ -190,5 +199,23 @@ describe('media preview repair retries', () => {
         payload: expect.objectContaining({ preview_status: 'ready' }),
       }),
     ]));
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the feed cache intact when no preview repair completes', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => createSelectChain({ data: [], error: null })),
+      })),
+    };
+    const invalidateFeedCache = vi.fn();
+
+    await expect(repairMediaPreviews(supabase as never, {
+      batchSize: 10,
+      invalidateFeedCache,
+    })).resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
+
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 });

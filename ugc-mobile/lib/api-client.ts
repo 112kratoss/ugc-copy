@@ -102,6 +102,10 @@ export interface SaveShowcasePostOptions {
   sourceSurface?: string;
 }
 
+export interface GenerationListOptions {
+  limit?: number;
+}
+
 export interface SaveShowcasePostResponse {
   success: boolean;
   isSaved: boolean;
@@ -436,8 +440,12 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    listGenerations: async (includeArchived = true) => {
-      const response = await request<{ generations: GenerationListItem[] }>(`/api/generations${buildQuery({ includeArchived })}`);
+    listGenerations: async (includeArchived = true, options: GenerationListOptions = {}) => {
+      const response = await request<{ generations: GenerationListItem[] }>(`/api/generations${buildQuery({
+        detail: 'summary',
+        includeArchived,
+        limit: options.limit,
+      })}`);
       return {
         ...response,
         generations: response.generations.map((item) => normalizeGenerationMediaUrls(root, item)),

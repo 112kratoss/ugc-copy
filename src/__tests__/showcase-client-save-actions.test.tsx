@@ -96,11 +96,11 @@ function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): Showcase
 }
 
 function createFeed(
-  item: ShowcaseFeedItem,
+  itemOrItems: ShowcaseFeedItem | ShowcaseFeedItem[],
   pageInfo: Partial<ShowcaseFeedPage['pageInfo']> = {}
 ): ShowcaseFeedPage {
   return {
-    items: [item],
+    items: Array.isArray(itemOrItems) ? itemOrItems : [itemOrItems],
     pageInfo: {
       hasMore: false,
       nextOffset: null,
@@ -111,10 +111,10 @@ function createFeed(
   };
 }
 
-function renderShowcase(item: ShowcaseFeedItem) {
+function renderShowcase(itemOrItems: ShowcaseFeedItem | ShowcaseFeedItem[]) {
   return render(
     <ShowcaseClient
-      initialFeed={createFeed(item)}
+      initialFeed={createFeed(itemOrItems)}
       initialCategory="all"
       initialSort="recent"
       initialTool={null}
@@ -417,7 +417,7 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getByRole('link', { name: /open full page/i })).toHaveAttribute('data-prefetch', 'false');
   });
 
-  it('lazy-loads image previews in the public showcase grid', () => {
+  it('prioritizes the first image preview in the public showcase grid', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       json: async () => [],
@@ -426,8 +426,28 @@ describe('ShowcaseClient save actions', () => {
     renderShowcase(createShowcaseItem());
 
     const image = screen.getByRole('img', { name: 'Campaign Frame' });
-    expect(image).toHaveAttribute('loading', 'lazy');
+    expect(image).toHaveAttribute('loading', 'eager');
+    expect(image).toHaveAttribute('fetchpriority', 'high');
     expect(image).toHaveAttribute('decoding', 'async');
+  });
+
+  it('prioritizes the first visual preview when a text post leads the feed', () => {
+    renderShowcase([
+      createShowcaseItem({
+        id: 'text-post',
+        title: 'Creator note',
+        postFormat: 'text',
+        category: 'text',
+        body: 'A useful production note.',
+      }),
+      createShowcaseItem({
+        id: 'visual-post',
+        title: 'First visual frame',
+      }),
+    ]);
+
+    expect(screen.getByRole('img', { name: 'First visual frame' }))
+      .toHaveAttribute('fetchpriority', 'high');
   });
 
   it('adds a shareable post URL when a feed card opens and returns through history on close', async () => {

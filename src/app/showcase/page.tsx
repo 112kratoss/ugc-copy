@@ -10,6 +10,7 @@ import {
     normalizeShowcaseResourceFilter,
     normalizeShowcaseSort,
     normalizeShowcaseUnlockFilter,
+    type ShowcaseFeedPage,
 } from '@/lib/showcase';
 import { createMetadata } from '@/lib/seo';
 
@@ -19,10 +20,25 @@ type ShowcasePageProps = {
 
 const SHOWCASE_PARAM_KEYS = new Set(['category', 'sort', 'offset', 'page', 'tool', 'unlock', 'resource']);
 
-export const revalidate = 60;
+// This page is query-dynamic. The viewer-neutral feed loaders own their TTLs.
 
 function getFirstValue(value: string | string[] | undefined): string | undefined {
     return Array.isArray(value) ? value[0] : value;
+}
+
+function getPriorityVideoPoster(feed: ShowcaseFeedPage): string | null {
+    const priorityItem = feed.items.find((item) => (
+        item.postFormat !== 'text'
+        && (Boolean(item.mediaItems?.length) || Boolean(item.mediaUrl && item.mediaKind))
+    ));
+    if (!priorityItem) {
+        return null;
+    }
+
+    const cover = priorityItem.mediaItems
+        ?.slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder)[0];
+    return cover?.mediaKind === 'video' ? cover.previewUrl ?? null : null;
 }
 
 export async function generateMetadata({ searchParams }: ShowcasePageProps): Promise<Metadata> {
@@ -85,16 +101,27 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
       }),
       listSourceToolsCatalog(),
     ]);
+    const priorityVideoPoster = getPriorityVideoPoster(initialFeed);
 
     return (
-        <ShowcaseClient
-            initialFeed={initialFeed}
-            initialCategory={category}
-            initialSort={sort}
-            initialTool={tool}
-            initialUnlock={unlock}
-            initialResource={resource}
-            sourceToolOptions={sourceToolOptions}
-        />
+        <>
+            {priorityVideoPoster ? (
+                <link
+                    rel="preload"
+                    as="image"
+                    href={priorityVideoPoster}
+                    fetchPriority="high"
+                />
+            ) : null}
+            <ShowcaseClient
+                initialFeed={initialFeed}
+                initialCategory={category}
+                initialSort={sort}
+                initialTool={tool}
+                initialUnlock={unlock}
+                initialResource={resource}
+                sourceToolOptions={sourceToolOptions}
+            />
+        </>
     );
 }

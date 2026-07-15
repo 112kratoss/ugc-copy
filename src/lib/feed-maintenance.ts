@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+
 const POST_STATS_REFRESH_LIMIT = 1000;
 const USER_INTEREST_REFRESH_LIMIT = 1000;
 const USER_INTEREST_LOOKBACK_DAYS = 90;
@@ -66,7 +68,10 @@ function retentionSummary(value: unknown): FeedRetentionSummary {
  */
 export async function maintainFeedPersonalization(
   client: SupabaseClient,
-  options: { now?: Date } = {},
+  options: {
+    now?: Date;
+    invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  } = {},
 ): Promise<FeedMaintenanceSummary> {
   const now = options.now ?? new Date();
   if (!Number.isFinite(now.getTime())) {
@@ -81,6 +86,11 @@ export async function maintainFeedPersonalization(
   if (statsResult.error) {
     throw rpcError('refresh_post_feed_stats', statsResult.error);
   }
+  const postStatsRefreshed = nonNegativeInteger(
+    statsResult.data,
+    'refresh_post_feed_stats',
+  );
+  (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
 
   const interestsResult = await client.rpc('refresh_user_interest_weights', {
     p_as_of: asOf,
@@ -104,7 +114,7 @@ export async function maintainFeedPersonalization(
 
   return {
     asOf,
-    postStatsRefreshed: nonNegativeInteger(statsResult.data, 'refresh_post_feed_stats'),
+    postStatsRefreshed,
     userInterestProfilesRefreshed: nonNegativeInteger(
       interestsResult.data,
       'refresh_user_interest_weights',

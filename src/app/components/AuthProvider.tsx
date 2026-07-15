@@ -1,11 +1,15 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
 import {
     getClientE2EAuthState,
 } from '@/lib/e2e-auth';
+import {
+    useHasHydratedSupabaseAuthCookieHint,
+    useSupabaseAuthCookieHint,
+} from '@/app/components/useSupabaseAuthCookieHint';
 
 type BrowserSupabaseClient = typeof import('@/lib/supabase')['supabase'];
 
@@ -58,9 +62,14 @@ export function AuthProvider({
     hasResolvedInitialState?: boolean;
 }) {
     const [clientE2EAuth] = useState(() => getClientE2EAuthState());
+    const hasAuthCookieHint = useSupabaseAuthCookieHint();
+    const hasHydratedAuthCookieHint = useHasHydratedSupabaseAuthCookieHint();
     const [session, setSession] = useState<Session | null>(initialSession ?? clientE2EAuth?.session ?? null);
     const [credits, setCredits] = useState<number | null>(initialCredits ?? clientE2EAuth?.credits ?? null);
     const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
+    const witnessedAuthCookieRef = useRef(hasAuthCookieHint);
+    const authEpochRef = useRef(0);
+    const tokenEpochRef = useRef(0);
 
     useEffect(() => {
         if (clientE2EAuth) {
@@ -70,33 +79,109 @@ export function AuthProvider({
         let isActive = true;
         let unsubscribeAuthState: (() => void) | null = null;
         let cancelDeferredSubscription: (() => void) | undefined;
+        let authSequence = 0;
+        let acceptedAccessToken = hasResolvedInitialState ? initialSession?.access_token ?? null : null;
+        let acceptedUserId = hasResolvedInitialState ? initialSession?.user?.id ?? null : null;
+        const pendingAccessTokens = new Set<string>();
+        const queuedUserUpdates = new Map<string, Session>();
+        const deferredAuthSyncIds = new Set<number>();
 
-        const syncSessionState = async (nextSession?: Session | null) => {
+        const clearAuthState = () => {
+            authEpochRef.current += 1;
+            tokenEpochRef.current += 1;
+            authSequence += 1;
+            acceptedAccessToken = null;
+            acceptedUserId = null;
+            pendingAccessTokens.clear();
+            queuedUserUpdates.clear();
+            deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+            deferredAuthSyncIds.clear();
+            setSession(null);
+            setCredits(null);
+            setIsLoading(false);
+        };
+
+        const syncSessionState = async (
+            candidateSession: Session | null,
+            expectedAuthEpoch: number,
+            expectedTokenEpoch: number,
+        ) => {
+            const sequence = ++authSequence;
             const supabase = await getBrowserSupabase();
-            const resolvedSession =
-                nextSession !== undefined
-                    ? nextSession
-                    : (await supabase.auth.getSession()).data.session;
 
-            if (!isActive) {
+            if (
+                !isActive
+                || sequence !== authSequence
+                || expectedAuthEpoch !== authEpochRef.current
+            ) {
                 return;
             }
 
-            setSession(resolvedSession ?? null);
-
-            if (!resolvedSession?.user) {
-                setCredits(null);
-                setIsLoading(false);
+            if (!candidateSession?.user?.id) {
+                clearAuthState();
                 return;
+            }
+
+            let verifiedUser: User | null = null;
+            let verificationFailed = false;
+            try {
+                const { data, error } = await supabase.auth.getUser(candidateSession.access_token);
+                verifiedUser = data.user;
+                verificationFailed = Boolean(error);
+            } catch {
+                verificationFailed = true;
+            } finally {
+                pendingAccessTokens.delete(candidateSession.access_token);
+                const queuedUserUpdate = queuedUserUpdates.get(candidateSession.access_token);
+                if (queuedUserUpdate) {
+                    queuedUserUpdates.delete(candidateSession.access_token);
+                    const timeoutId = window.setTimeout(() => {
+                        deferredAuthSyncIds.delete(timeoutId);
+                        if (isActive) {
+                            handleAuthChange('USER_UPDATED', queuedUserUpdate);
+                        }
+                    }, 0);
+                    deferredAuthSyncIds.add(timeoutId);
+                }
+            }
+
+            if (
+                !isActive
+                || sequence !== authSequence
+                || expectedAuthEpoch !== authEpochRef.current
+            ) {
+                return;
+            }
+
+            if (verificationFailed || !verifiedUser || verifiedUser.id !== candidateSession.user.id) {
+                clearAuthState();
+                return;
+            }
+
+            const resolvedSession = { ...candidateSession, user: verifiedUser };
+            acceptedAccessToken = candidateSession.access_token;
+            acceptedUserId = verifiedUser.id;
+            if (expectedTokenEpoch === tokenEpochRef.current) {
+                setSession(resolvedSession);
+            } else {
+                setSession((currentSession) => (
+                    currentSession?.user.id === verifiedUser.id
+                        ? { ...currentSession, user: verifiedUser }
+                        : currentSession
+                ));
             }
 
             const { data: profile } = await supabase
                 .from('profiles')
                 .select('credits')
-                .eq('id', resolvedSession.user.id)
+                .eq('id', verifiedUser.id)
                 .single();
 
-            if (!isActive) {
+            if (
+                !isActive
+                || sequence !== authSequence
+                || expectedAuthEpoch !== authEpochRef.current
+            ) {
                 return;
             }
 
@@ -104,9 +189,42 @@ export function AuthProvider({
             setIsLoading(false);
         };
 
-        if (!hasResolvedInitialState) {
-            void syncSessionState();
-        }
+        const handleAuthChange = (event: string, candidateSession: Session | null) => {
+            if (!candidateSession?.user?.id) {
+                clearAuthState();
+                return;
+            }
+
+            const accessToken = candidateSession?.access_token ?? null;
+            if (event === 'TOKEN_REFRESHED' && acceptedUserId === candidateSession.user.id) {
+                tokenEpochRef.current += 1;
+                acceptedAccessToken = accessToken;
+                setSession(candidateSession);
+                return;
+            }
+
+            if (accessToken) {
+                if (pendingAccessTokens.has(accessToken)) {
+                    if (event === 'USER_UPDATED') {
+                        queuedUserUpdates.set(accessToken, candidateSession);
+                    }
+                    return;
+                }
+                if (event !== 'USER_UPDATED' && accessToken === acceptedAccessToken) {
+                    return;
+                }
+                pendingAccessTokens.add(accessToken);
+            }
+
+            const expectedAuthEpoch = ++authEpochRef.current;
+            const expectedTokenEpoch = ++tokenEpochRef.current;
+
+            const timeoutId = window.setTimeout(() => {
+                deferredAuthSyncIds.delete(timeoutId);
+                void syncSessionState(candidateSession, expectedAuthEpoch, expectedTokenEpoch);
+            }, 0);
+            deferredAuthSyncIds.add(timeoutId);
+        };
 
         const subscribeToAuthChanges = async () => {
             const supabase = await getBrowserSupabase();
@@ -114,17 +232,28 @@ export function AuthProvider({
                 return;
             }
 
-            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-                void syncSessionState(nextSession);
+            const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+                handleAuthChange(event, nextSession);
             });
             unsubscribeAuthState = () => subscription.unsubscribe();
         };
 
-        if (hasResolvedInitialState) {
+        const hadAuthCookieHint = witnessedAuthCookieRef.current;
+        if (hasAuthCookieHint) {
+            witnessedAuthCookieRef.current = true;
+        }
+        const didLoseAuthCookie = hasHydratedAuthCookieHint
+            && !hasAuthCookieHint
+            && hadAuthCookieHint;
+
+        if (didLoseAuthCookie) {
+            witnessedAuthCookieRef.current = false;
+            clearAuthState();
+        } else if (hasResolvedInitialState) {
             cancelDeferredSubscription = scheduleIdle(() => {
                 void subscribeToAuthChanges();
             });
-        } else {
+        } else if (hasAuthCookieHint) {
             void subscribeToAuthChanges();
         }
 
@@ -136,36 +265,83 @@ export function AuthProvider({
                 return;
             }
 
-            void syncSessionState();
+            void getBrowserSupabase().then(async (supabase) => {
+                const expectedAuthEpoch = ++authEpochRef.current;
+                const { data: { session: currentSession } } = await supabase.auth.getSession();
+                if (expectedAuthEpoch !== authEpochRef.current) {
+                    return;
+                }
+                await syncSessionState(
+                    currentSession,
+                    expectedAuthEpoch,
+                    tokenEpochRef.current,
+                );
+            });
         };
 
         window.addEventListener('credits_updated', handleCreditsUpdated);
 
         return () => {
             isActive = false;
+            authEpochRef.current += 1;
+            tokenEpochRef.current += 1;
             cancelDeferredSubscription?.();
             unsubscribeAuthState?.();
+            deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
             window.removeEventListener('credits_updated', handleCreditsUpdated);
         };
-    }, [clientE2EAuth, hasResolvedInitialState]);
+    }, [
+        clientE2EAuth,
+        hasAuthCookieHint,
+        hasHydratedAuthCookieHint,
+        hasResolvedInitialState,
+        initialSession,
+    ]);
 
     const refreshSessionState = async () => {
+        const expectedAuthEpoch = ++authEpochRef.current;
+        const expectedTokenEpoch = tokenEpochRef.current;
         setIsLoading(true);
         const supabase = await getBrowserSupabase();
+        if (expectedAuthEpoch !== authEpochRef.current) {
+            return;
+        }
         const { data: { session: nextSession } } = await supabase.auth.getSession();
-        setSession(nextSession ?? null);
-
-        if (!nextSession?.user) {
+        if (expectedAuthEpoch !== authEpochRef.current) {
+            return;
+        }
+        if (!nextSession?.user?.id) {
+            setSession(null);
             setCredits(null);
             setIsLoading(false);
             return;
         }
 
+        const { data: { user: verifiedUser }, error: verificationError } =
+            await supabase.auth.getUser(nextSession.access_token);
+        if (expectedAuthEpoch !== authEpochRef.current) {
+            return;
+        }
+        if (verificationError || !verifiedUser || verifiedUser.id !== nextSession.user.id) {
+            setSession(null);
+            setCredits(null);
+            setIsLoading(false);
+            return;
+        }
+
+        if (expectedTokenEpoch === tokenEpochRef.current) {
+            setSession({ ...nextSession, user: verifiedUser });
+        }
+
         const { data: profile } = await supabase
             .from('profiles')
             .select('credits')
-            .eq('id', nextSession.user.id)
+            .eq('id', verifiedUser.id)
             .single();
+
+        if (expectedAuthEpoch !== authEpochRef.current) {
+            return;
+        }
 
         setCredits(profile?.credits ?? null);
         setIsLoading(false);
@@ -181,13 +357,19 @@ export function AuthProvider({
         }
     };
 
+    const resolvedIsLoading = !hasResolvedInitialState
+        && !clientE2EAuth
+        && !hasAuthCookieHint
+        ? false
+        : isLoading;
+
     return (
         <AuthContext.Provider
             value={{
                 session,
                 user: session?.user ?? null,
                 credits,
-                isLoading,
+                isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,
             }}

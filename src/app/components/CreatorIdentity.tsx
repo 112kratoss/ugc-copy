@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { getUserInitials } from '@/lib/profile';
 import type { ShowcaseCreator } from '@/lib/showcase';
 
@@ -22,12 +23,19 @@ export default function CreatorIdentity({
   const content = (
     <>
       {creator.avatar ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={creator.avatar}
-          alt={`${creator.name} avatar`}
-          className={`${compact ? 'h-8 w-8' : 'h-10 w-10'} rounded-full object-cover border border-white/10`}
-        />
+        <span
+          className={`${compact ? 'h-8 w-8 text-[11px]' : 'h-10 w-10 text-xs'} relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 font-semibold text-zinc-200`}
+        >
+          <span aria-hidden="true">{getUserInitials(creator.name)}</span>
+          <OptimizedPreviewImage
+            previewSrc={creator.avatar}
+            fallbackSrc={creator.avatar}
+            fallbackToUnoptimized
+            alt={`${creator.name} avatar`}
+            sizes={compact ? '32px' : '40px'}
+            className="object-cover"
+          />
+        </span>
       ) : (
         <div
           className={`${compact ? 'h-8 w-8 text-[11px]' : 'h-10 w-10 text-xs'} rounded-full border border-white/10 bg-white/5 text-zinc-200 flex items-center justify-center font-semibold`}

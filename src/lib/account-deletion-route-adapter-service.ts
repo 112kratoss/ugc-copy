@@ -10,6 +10,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const USER_PREFIX_BUCKETS = [
   'profiles',
@@ -41,6 +42,7 @@ type AccountDeletionDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  invalidateShowcaseFeedCache?: typeof invalidateShowcaseFeedCache;
   logError?: typeof console.error;
   now?: () => Date;
 };
@@ -223,6 +225,7 @@ export async function deleteAccountRouteResponse({
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    invalidateShowcaseFeedCache: dependencies?.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache,
     logError: dependencies?.logError ?? console.error,
     now: dependencies?.now ?? (() => new Date()),
   };
@@ -278,6 +281,7 @@ export async function deleteAccountRouteResponse({
   try {
     const preparation = await prepareAccountDeletion(admin, user.id);
     if (preparation.alreadyCompleted) {
+      resolved.invalidateShowcaseFeedCache();
       return applyPrivateNoStoreApiResponseHeaders(
         NextResponse.json({ success: true, deleted: true, alreadyDeleted: true }),
         request,
@@ -299,6 +303,8 @@ export async function deleteAccountRouteResponse({
       // account is gone, returning a retryable failure would be misleading.
       resolved.logError('Account deletion completion stage could not be persisted:', stageError);
     }
+
+    resolved.invalidateShowcaseFeedCache();
 
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({ success: true, deleted: true }),

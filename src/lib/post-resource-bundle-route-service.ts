@@ -15,6 +15,7 @@ import {
   getPostResourceBundleDetailByPostId,
   savePostResourceBundle,
 } from '@/lib/post-resource-bundles-server';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 type PostResourceBundleBody = {
   resourceBundle?: PostResourceBundleInput | null;
@@ -183,6 +184,10 @@ export async function putPostResourceBundleForRoute({
     postVisibility: typedPost.visibility as 'public' | 'unlisted' | 'private',
     bundle: resourceBundle,
   });
+
+  if (typedPost.visibility === 'public') {
+    invalidateShowcaseFeedCache();
+  }
 
   return {
     ok: true,

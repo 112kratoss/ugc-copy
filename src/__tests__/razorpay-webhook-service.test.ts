@@ -242,6 +242,27 @@ describe('processRazorpayWebhookForRoute', () => {
     ]);
   });
 
+  it('invalidates the marketplace list after completing a bundle purchase', async () => {
+    const admin = createAdminSupabaseMock({
+      bundleOrder: {
+        id: 'bundle-order-1',
+        buyer_user_id: 'user-1',
+        status: 'created',
+      },
+      bundleRpcMode: 'success',
+    });
+    const invalidateMarketplaceResourceListCache = vi.fn();
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+      invalidateMarketplaceResourceListCache,
+    });
+
+    expect(result).toEqual({ status: 200, body: 'OK' });
+    expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
+  });
+
   it('accepts an add_credits false result only after verifying concurrent durable settlement', async () => {
     const admin = createAdminSupabaseMock({
       creditTransaction: {

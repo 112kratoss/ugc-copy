@@ -8,14 +8,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
-  fetchQuery: vi.fn(),
   getSession: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
+  queryClient: { fetchQuery: vi.fn() },
   sessionResolve: null as null | ((result: unknown) => void),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ fetchQuery: state.fetchQuery }),
+  useQueryClient: () => state.queryClient,
 }));
 
 vi.mock('expo-constants', () => ({
@@ -37,7 +37,10 @@ vi.mock('../lib/env', () => ({
 }));
 
 vi.mock('../lib/api-client', () => ({
-  createApiClient: () => ({ getProfile: vi.fn() }),
+  createApiClient: (options: { getAccessToken: () => Promise<string | null> }) => ({
+    getAccessTokenForTest: options.getAccessToken,
+    getProfile: vi.fn(),
+  }),
 }));
 
 vi.mock('../lib/feed-installation-id', () => ({ getFeedInstallationId: vi.fn() }));
@@ -79,6 +82,7 @@ const session = {
   access_token: 'access-token',
   refresh_token: 'refresh-token',
   expires_in: 3600,
+  expires_at: Math.floor(Date.now() / 1000) + 3600,
   token_type: 'bearer',
   user: { id: 'user-1', email: 'creator@example.com' },
 };
@@ -86,14 +90,14 @@ const session = {
 describe('AuthProvider startup performance', () => {
   beforeEach(() => {
     state.authCallback = null;
-    state.fetchQuery.mockReset();
+    state.queryClient.fetchQuery.mockReset();
     state.getSession.mockReset();
     state.profileResolve = null;
     state.sessionResolve = null;
     state.getSession.mockImplementation(() => new Promise((resolve) => {
       state.sessionResolve = resolve;
     }));
-    state.fetchQuery.mockImplementation(() => new Promise((resolve) => {
+    state.queryClient.fetchQuery.mockImplementation(() => new Promise((resolve) => {
       state.profileResolve = resolve;
     }));
   });
@@ -125,12 +129,19 @@ describe('AuthProvider startup performance', () => {
     expect(latest.current?.isLoading).toBe(false);
     expect(latest.current?.user?.id).toBe('user-1');
     expect(latest.current?.credits).toBeNull();
-    expect(state.fetchQuery).toHaveBeenCalledTimes(1);
+    expect(state.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
+
+    const getAccessToken = (latest.current?.api as unknown as {
+      getAccessTokenForTest: () => Promise<string | null>;
+    }).getAccessTokenForTest;
+    await expect(getAccessToken()).resolves.toBe('access-token');
+    await expect(getAccessToken()).resolves.toBe('access-token');
+    expect(state.getSession).toHaveBeenCalledTimes(1);
 
     renderer.act(() => {
       state.authCallback?.('SIGNED_IN', session);
     });
-    expect(state.fetchQuery).toHaveBeenCalledTimes(1);
+    expect(state.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
 
     await renderer.act(async () => {
       state.profileResolve?.({ credits: 37 });

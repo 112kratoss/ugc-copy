@@ -143,6 +143,15 @@ const queryState = vi.hoisted(() => ({
   generations: [] as Array<Record<string, unknown>>,
   ownerPosts: [] as Array<Record<string, unknown>>,
   savedItems: [] as Array<Record<string, unknown>>,
+  generationsIsFetched: false,
+  generationsIsFetching: false,
+  generationsIsStale: false,
+  ownerPostsIsFetched: false,
+  ownerPostsIsFetching: false,
+  ownerPostsIsStale: false,
+  savedMediaIsFetched: false,
+  savedMediaIsFetching: false,
+  savedMediaIsStale: false,
   refetchGenerations: vi.fn(),
   refetchOwnerPosts: vi.fn(),
   refetchSavedMedia: vi.fn(),
@@ -154,7 +163,7 @@ vi.mock('@/lib/auth', () => ({
 
 // react-query mock
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: ({ queryKey, queryFn }: { queryKey: string[]; queryFn?: () => unknown }) => {
+  useQuery: ({ enabled = true, queryKey, queryFn }: { enabled?: boolean; queryKey: string[]; queryFn?: () => unknown }) => {
     if (queryKey[0] === 'profile') {
       return {
         data: queryState.profileData,
@@ -163,22 +172,28 @@ vi.mock('@tanstack/react-query', () => ({
       };
     }
     if (queryKey[0] === 'profile-generations') {
-      queryFn?.();
+      if (enabled) queryFn?.();
       return {
         data: {
           generations: queryState.generations,
         },
+        isFetched: queryState.generationsIsFetched,
+        isFetching: queryState.generationsIsFetching,
         isLoading: false,
+        isStale: queryState.generationsIsStale,
         refetch: queryState.refetchGenerations,
       };
     }
     if (queryKey[0] === 'profile-owner-posts') {
-      queryFn?.();
+      if (enabled) queryFn?.();
       return {
         data: {
           posts: queryState.ownerPosts,
         },
+        isFetched: queryState.ownerPostsIsFetched,
+        isFetching: queryState.ownerPostsIsFetching,
         isLoading: false,
+        isStale: queryState.ownerPostsIsStale,
         refetch: queryState.refetchOwnerPosts,
       };
     }
@@ -187,7 +202,10 @@ vi.mock('@tanstack/react-query', () => ({
         data: {
           items: queryState.savedItems,
         },
+        isFetched: queryState.savedMediaIsFetched,
+        isFetching: queryState.savedMediaIsFetching,
         isLoading: false,
+        isStale: queryState.savedMediaIsStale,
         refetch: queryState.refetchSavedMedia,
       };
     }
@@ -270,6 +288,15 @@ describe('ProfileDashboard media tiles routing', () => {
         saveCount: 5,
       },
     ];
+    queryState.generationsIsFetched = false;
+    queryState.generationsIsFetching = false;
+    queryState.generationsIsStale = false;
+    queryState.ownerPostsIsFetched = false;
+    queryState.ownerPostsIsFetching = false;
+    queryState.ownerPostsIsStale = false;
+    queryState.savedMediaIsFetched = false;
+    queryState.savedMediaIsFetching = false;
+    queryState.savedMediaIsStale = false;
     queryState.refetchGenerations.mockClear();
     queryState.refetchOwnerPosts.mockClear();
     queryState.refetchSavedMedia.mockClear();
@@ -379,15 +406,15 @@ describe('ProfileDashboard media tiles routing', () => {
 
   it('requests active non-archived generations for the Profile Creations grid', () => {
     renderer.act(() => {
-      renderer.create(<ProfileDashboard />);
+      renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(authState.api.listGenerations).toHaveBeenCalledWith(false);
+    expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { limit: 24 });
   });
 
   it('requests active non-archived owner posts for the Profile Posts grid', () => {
     renderer.act(() => {
-      renderer.create(<ProfileDashboard />);
+      renderer.create(<ProfileDashboard initialTab="Posts" />);
     });
 
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
@@ -398,14 +425,35 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
-  it('refreshes signed media URLs when the Profile tab is focused', () => {
+  it('does not refetch fresh Profile media just because the tab is focused', () => {
     renderer.act(() => {
       renderer.create(<ProfileDashboard />);
     });
 
-    expect(queryState.refetchGenerations).toHaveBeenCalledTimes(1);
-    expect(queryState.refetchOwnerPosts).toHaveBeenCalledTimes(1);
-    expect(queryState.refetchSavedMedia).toHaveBeenCalledTimes(1);
+    expect(queryState.refetchGenerations).not.toHaveBeenCalled();
+    expect(queryState.refetchOwnerPosts).not.toHaveBeenCalled();
+    expect(queryState.refetchSavedMedia).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only the visible stale Profile media tab', () => {
+    queryState.savedMediaIsStale = true;
+
+    renderer.act(() => {
+      renderer.create(<ProfileDashboard />);
+    });
+
+    expect(queryState.refetchGenerations).not.toHaveBeenCalled();
+    expect(queryState.refetchOwnerPosts).not.toHaveBeenCalled();
+    expect(queryState.refetchSavedMedia).toHaveBeenCalledOnce();
+  });
+
+  it('defers inactive Profile datasets until the visible dataset settles', () => {
+    renderer.act(() => {
+      renderer.create(<ProfileDashboard />);
+    });
+
+    expect(authState.api.listGenerations).not.toHaveBeenCalled();
+    expect(authState.api.listOwnerPosts).not.toHaveBeenCalled();
   });
 
   it('starts on the Posts tab when requested by route params', () => {

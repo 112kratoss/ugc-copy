@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const showcaseCacheMocks = vi.hoisted(() => ({
+  invalidate: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => ({
+  invalidateShowcaseFeedCache: showcaseCacheMocks.invalidate,
+}));
+
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn(async () => ({
   data: {
@@ -107,6 +115,7 @@ describe('/api/posts/[postId]/report route', () => {
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     createServiceClientFactory.mockImplementation(() => createServiceClientMock());
+    showcaseCacheMocks.invalidate.mockClear();
     rpcMock.mockReset();
     rpcMock.mockResolvedValue({
       data: {
@@ -211,6 +220,7 @@ describe('/api/posts/[postId]/report route', () => {
         details: null,
       },
     ]);
+    expect(showcaseCacheMocks.invalidate).toHaveBeenCalledOnce();
   });
 
   it('rate limits repeated post reports before inserting', async () => {
@@ -249,6 +259,7 @@ describe('/api/posts/[postId]/report route', () => {
       p_window_seconds: 600,
     });
     expect(insertedReports).toEqual([]);
+    expect(showcaseCacheMocks.invalidate).not.toHaveBeenCalled();
   });
 
   it('rejects unlock reports for bundles attached to another post', async () => {

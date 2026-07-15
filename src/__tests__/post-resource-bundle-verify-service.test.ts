@@ -175,12 +175,14 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
 
   it('completes an owned created bundle order after signature verification', async () => {
     const admin = createAdminSupabaseMock();
+    const invalidateMarketplaceResourceListCache = vi.fn();
 
     const result = await verifyPostResourceBundlePaymentForRoute({
       adminSupabase: admin.client,
       buyerUserId: 'buyer-1',
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
+      invalidateMarketplaceResourceListCache,
     });
 
     expect(result).toEqual({
@@ -198,6 +200,7 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
         p_razorpay_payment_id: 'pay_bundle_123',
       },
     });
+    expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
   });
 
   it('treats already paid orders as idempotently processed', async () => {
@@ -241,12 +244,14 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
 
   it('returns already processed when completion races with another verifier', async () => {
     const admin = createAdminSupabaseMock({ completionResult: false, refreshedStatus: 'paid' });
+    const invalidateMarketplaceResourceListCache = vi.fn();
 
     const result = await verifyPostResourceBundlePaymentForRoute({
       adminSupabase: admin.client,
       buyerUserId: 'buyer-1',
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
+      invalidateMarketplaceResourceListCache,
     });
 
     expect(result).toEqual({
@@ -257,6 +262,7 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
       'post_resource_bundle_orders',
       'post_resource_bundle_orders',
     ]);
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
   });
 
   it('maps unresolved completion attempts to a stable finalize error', async () => {

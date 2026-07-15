@@ -6,6 +6,7 @@ import {
   buildMobileExternalOrderId,
   completeMobileCreditPurchase,
   completeMobileMarketplaceUnlock,
+  completeMobilePurchase,
   completeMobilePostResourceUnlock,
   createMobilePurchaseIntent,
   normalizeMobileCommercePayload,
@@ -718,6 +719,7 @@ describe('mobile commerce helpers', () => {
   });
 
   it('uses one atomic database call for mobile post-resource cash unlocks', async () => {
+    const invalidateMarketplaceResourceListCache = vi.fn();
     const disallowedTables: string[] = [];
     const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
       expect(name).toBe('complete_mobile_purchase');
@@ -780,6 +782,7 @@ describe('mobile commerce helpers', () => {
       productId: 'magicbooklet.post.usd1200',
       provider: 'play_store',
       transactionId: 'GPA.1000-2000-3000',
+      invalidateMarketplaceResourceListCache,
     })).resolves.toMatchObject({
       success: true,
       entitlement: 'post_resource_unlock',
@@ -788,7 +791,48 @@ describe('mobile commerce helpers', () => {
     });
 
     expect(rpc).toHaveBeenCalledTimes(1);
+    expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledOnce();
     expect(disallowedTables).toEqual([]);
+  });
+
+  it('does not invalidate the marketplace list for an idempotent mobile post-resource replay', async () => {
+    const invalidateMarketplaceResourceListCache = vi.fn();
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'already_processed',
+        entitlement_type: 'post_resource_unlock',
+        product_id: 'magicbooklet.post.usd1200',
+        resource_id: 'post-1',
+        amount_subunits: 1200,
+        currency: 'USD',
+        bundle_id: 'bundle-1',
+        owner_user_id: 'owner-1',
+      },
+      error: null,
+    }));
+
+    await expect(completeMobilePurchase({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      authority: {
+        entitlementType: 'post_resource_unlock',
+        productId: 'magicbooklet.post.usd1200',
+        purchaseIntentId: 'intent-post-1',
+        resourceId: 'post-1',
+        amountSubunits: 1200,
+        currency: 'USD',
+        credits: null,
+      },
+      provider: 'play_store',
+      transactionId: 'GPA.1000-2000-3000',
+      invalidateMarketplaceResourceListCache,
+    })).resolves.toMatchObject({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      alreadyProcessed: true,
+    });
+
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
   });
 
   it('maps mobile post-resource cash unlock database statuses to user errors', async () => {

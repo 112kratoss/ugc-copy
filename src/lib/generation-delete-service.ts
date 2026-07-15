@@ -6,6 +6,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { getStoredMediaLocation, type MediaBucket } from '@/lib/media-urls';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 type RouteBody = Record<string, unknown>;
 type GenerationDeleteClient = SupabaseClient;
@@ -39,6 +40,7 @@ export interface GenerationDeleteRouteInput {
   createAdminSupabase: () => unknown;
   createUserSupabase: () => unknown;
   generationId: string;
+  invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
   request: Request;
 }
 
@@ -77,6 +79,7 @@ export async function deleteOwnerGenerationForRoute({
   createAdminSupabase,
   createUserSupabase,
   generationId,
+  invalidateFeedCache = invalidateShowcaseFeedCache,
 }: GenerationDeleteRouteInput): Promise<GenerationDeleteRouteResult> {
   const supabase = createUserSupabase() as GenerationDeleteClient;
   const userId = await getAuthenticatedUserId(supabase);
@@ -181,6 +184,7 @@ export async function deleteOwnerGenerationForRoute({
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
+    invalidateFeedCache();
     await removeStoragePaths(adminSupabase, removablePaths);
 
     return {

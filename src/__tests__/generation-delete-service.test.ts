@@ -163,6 +163,7 @@ describe('generation delete service', () => {
 
   it('maps rate limits before generation reads, deletes, or storage cleanup', async () => {
     const admin = createAdminSupabaseMock({ rateLimitAllowed: false });
+    const invalidateFeedCache = vi.fn();
     createAdminSupabase.mockReturnValueOnce(admin.client);
     const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
 
@@ -170,6 +171,7 @@ describe('generation delete service', () => {
       createAdminSupabase,
       createUserSupabase,
       generationId: 'gen-1',
+      invalidateFeedCache,
       request: new Request('http://localhost/api/generations/gen-1'),
     });
 
@@ -181,6 +183,7 @@ describe('generation delete service', () => {
     expect(admin.selects).toEqual([]);
     expect(admin.deletes).toEqual([]);
     expect(admin.storageRemovals).toEqual([]);
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 
   it('deletes the generation and only input media when linked posts must be retained', async () => {
@@ -191,6 +194,7 @@ describe('generation delete service', () => {
         { storage_path: 'generation_inputs/user-1/input-2.png' },
       ],
     });
+    const invalidateFeedCache = vi.fn();
     createAdminSupabase.mockReturnValueOnce(admin.client);
     const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
 
@@ -198,6 +202,7 @@ describe('generation delete service', () => {
       createAdminSupabase,
       createUserSupabase,
       generationId: 'gen-1',
+      invalidateFeedCache,
       request: new Request('http://localhost/api/generations/gen-1'),
     });
 
@@ -215,6 +220,7 @@ describe('generation delete service', () => {
       { bucket: 'generation_inputs', paths: ['user-1/input-1.png'] },
       { bucket: 'generation_inputs', paths: ['user-1/input-2.png'] },
     ]);
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('deletes unlinked generation input, output, and showcase media', async () => {
@@ -224,6 +230,7 @@ describe('generation delete service', () => {
         { storage_path: 'generation_inputs/user-1/input-1.png' },
       ],
     });
+    const invalidateFeedCache = vi.fn();
     createAdminSupabase.mockReturnValueOnce(admin.client);
     const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
 
@@ -231,6 +238,7 @@ describe('generation delete service', () => {
       createAdminSupabase,
       createUserSupabase,
       generationId: 'gen-1',
+      invalidateFeedCache,
       request: new Request('http://localhost/api/generations/gen-1'),
     });
 
@@ -248,5 +256,6 @@ describe('generation delete service', () => {
       { bucket: 'generated_images', paths: ['user-1/output.png'] },
       { bucket: 'showcase_media', paths: ['user-1/showcase.webp'] },
     ]);
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 });

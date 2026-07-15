@@ -212,12 +212,13 @@ function LoginContent() {
             <div className="flex items-center justify-between gap-4">
                 <Link
                     href="/"
+                    prefetch={false}
                     className="ui-focus-ring inline-flex min-h-12 w-fit items-center gap-2 rounded-full px-3 text-sm font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 >
                     <ArrowLeft className="h-4 w-4" aria-hidden />
                     Back home
                 </Link>
-                <Link href="/" className="ui-focus-ring flex items-center gap-2 rounded-xl text-[var(--ui-text-primary)]">
+                <Link href="/" prefetch={false} className="ui-focus-ring flex items-center gap-2 rounded-xl text-[var(--ui-text-primary)]">
                     <span className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
                         <WandSparkles className="h-4 w-4" aria-hidden />
                     </span>
@@ -486,9 +487,9 @@ function LoginContent() {
                 </div>
             </div>
             <footer className="mt-8 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-semibold text-[var(--ui-text-faint)]">
-                <Link href="/privacy" className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
-                <Link href="/terms" className="hover:text-[var(--ui-text-primary)]">Terms</Link>
-                <Link href="/contact" className="hover:text-[var(--ui-text-primary)]">Contact</Link>
+                <Link href="/privacy" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
+                <Link href="/terms" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Terms</Link>
+                <Link href="/contact" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Contact</Link>
             </footer>
         </div>
     );

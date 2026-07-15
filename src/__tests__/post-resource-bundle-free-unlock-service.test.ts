@@ -251,6 +251,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
   it('creates, completes, and notifies free unlock orders', async () => {
     const admin = createAdminSupabaseMock();
     const notifyPostResourceUnlockCompleted = vi.fn();
+    const invalidateMarketplaceResourceListCache = vi.fn();
     const idValues = ['order-id', 'order-payment-id', 'completion-payment-id'];
 
     const result = await unlockFreePostResourceBundleForRoute({
@@ -259,6 +260,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
       notifyPostResourceUnlockCompleted,
+      invalidateMarketplaceResourceListCache,
       createId: vi.fn(() => idValues.shift() ?? 'fallback-id'),
     });
 
@@ -298,11 +300,13 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       bundleId: 'bundle-1',
       alreadyProcessed: false,
     });
+    expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
   });
 
   it('marks concurrent completions as already processed in the notification and response', async () => {
     const admin = createAdminSupabaseMock({ completionResult: false });
     const notifyPostResourceUnlockCompleted = vi.fn();
+    const invalidateMarketplaceResourceListCache = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
       adminSupabase: admin.client,
@@ -310,6 +314,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
       notifyPostResourceUnlockCompleted,
+      invalidateMarketplaceResourceListCache,
       createId: vi.fn(() => 'id'),
     });
 
@@ -321,6 +326,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
         alreadyProcessed: true,
       },
     });
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
     expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(
       admin.client,
       expect.objectContaining({ alreadyProcessed: true })

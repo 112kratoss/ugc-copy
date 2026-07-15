@@ -5,11 +5,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   buildLegacyGenerationInputMedia,
   loadGenerationInputMediaMap,
+  type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { getStoredMediaLocation, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
+import { getStoredMediaLocation } from '@/lib/media-urls';
+import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 
 export type OwnerGenerationsRouteClient = SupabaseClient;
 
@@ -106,32 +108,31 @@ function inferVisualContentType(value: string | null): string | null {
   return null;
 }
 
-async function getPersistedOutputUrls(
+function getPersistedOutputStoragePaths(
   workflowSettings: Record<string, unknown> | null,
-  adminSupabase: OwnerGenerationsRouteClient,
-  ownerUserId: string,
-): Promise<string[]> {
+): string[] {
   const outputs = workflowSettings?.outputs;
   if (!Array.isArray(outputs)) {
     return [];
   }
 
-  const urls = await Promise.all(
-    outputs.map(async (output) => {
-      if (!output || typeof output !== 'object') {
-        return null;
-      }
+  return outputs.flatMap((output) => {
+    if (!output || typeof output !== 'object') {
+      return [];
+    }
 
-      const storagePath = (output as Record<string, unknown>).storagePath;
-      if (typeof storagePath !== 'string' || !storagePath) {
-        return null;
-      }
+    const storagePath = (output as Record<string, unknown>).storagePath;
+    return typeof storagePath === 'string' && storagePath ? [storagePath] : [];
+  });
+}
 
-      return resolveOwnedStoredMediaUrl(adminSupabase, storagePath, ownerUserId);
-    }),
-  );
-
-  return urls.filter((url): url is string => Boolean(url));
+function getPersistedOutputUrls(
+  workflowSettings: Record<string, unknown> | null,
+  resolvedMediaUrls: Map<string, string | null>,
+): string[] {
+  return getPersistedOutputStoragePaths(workflowSettings)
+    .map((storagePath) => resolvedMediaUrls.get(storagePath) ?? null)
+    .filter((url): url is string => Boolean(url));
 }
 
 function resolveShowcaseAssetUrl(
@@ -142,11 +143,11 @@ function resolveShowcaseAssetUrl(
   return data.publicUrl;
 }
 
-async function resolveGenerationOutputUrl(
+function resolveGenerationOutputUrl(
   adminSupabase: OwnerGenerationsRouteClient,
   generation: GenerationRow,
-  ownerUserId: string,
-): Promise<string | null> {
+  resolvedMediaUrls: Map<string, string | null>,
+): string | null {
   if (generation.showcase_asset_path) {
     return resolveShowcaseAssetUrl(adminSupabase, generation.showcase_asset_path);
   }
@@ -155,18 +156,17 @@ async function resolveGenerationOutputUrl(
     return null;
   }
 
-  return resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, ownerUserId);
+  return resolvedMediaUrls.get(generation.output_url) ?? null;
 }
 
-async function resolveGenerationPreviewUrl(
-  adminSupabase: OwnerGenerationsRouteClient,
+function resolveGenerationPreviewUrl(
   generation: GenerationRow,
   outputUrl: string | null,
-  ownerUserId: string,
-): Promise<string | null> {
+  resolvedMediaUrls: Map<string, string | null>,
+): string | null {
   const previewSource = generation.preview_url || generation.thumbnail_url || null;
   if (previewSource) {
-    return resolveOwnedStoredMediaUrl(adminSupabase, previewSource, ownerUserId);
+    return resolvedMediaUrls.get(previewSource) ?? null;
   }
 
   if (generation.category === 'image') {
@@ -174,6 +174,70 @@ async function resolveGenerationPreviewUrl(
   }
 
   return null;
+}
+
+function collectOwnerMediaUrlCandidates(
+  generations: GenerationRow[],
+  summaryOnly: boolean,
+): string[] {
+  const candidates = new Set<string>();
+
+  for (const generation of generations) {
+    if (!generation.showcase_asset_path && generation.output_url) {
+      candidates.add(generation.output_url);
+    }
+
+    const previewSource = generation.preview_url || generation.thumbnail_url || null;
+    if (previewSource) {
+      candidates.add(previewSource);
+    }
+
+    if (!summaryOnly) {
+      for (const storagePath of getPersistedOutputStoragePaths(
+        getWorkflowSettings(generation.workflow_settings),
+      )) {
+        candidates.add(storagePath);
+      }
+    }
+  }
+
+  return Array.from(candidates);
+}
+
+async function loadLinkedPostMap(params: {
+  supabase: OwnerGenerationsRouteClient;
+  generationIds: string[];
+  userId: string;
+  includeArchived: boolean;
+}): Promise<Map<string, LinkedPostRow>> {
+  const linkedPostMap = new Map<string, LinkedPostRow>();
+  if (params.generationIds.length === 0) {
+    return linkedPostMap;
+  }
+
+  let postsQuery = params.supabase
+    .from('posts')
+    .select('id, generation_id, title, visibility, archived_at')
+    .in('generation_id', params.generationIds)
+    .eq('user_id', params.userId);
+
+  if (!params.includeArchived) {
+    postsQuery = postsQuery.is('archived_at', null);
+  }
+
+  const postsResult = await postsQuery;
+  if (postsResult.error) {
+    console.error('Failed to load linked posts for generations:', postsResult.error);
+    return linkedPostMap;
+  }
+
+  for (const post of (postsResult.data ?? []) as LinkedPostRow[]) {
+    if (post.generation_id) {
+      linkedPostMap.set(post.generation_id, post);
+    }
+  }
+
+  return linkedPostMap;
 }
 
 type SupabaseSchemaError = {
@@ -435,44 +499,32 @@ export async function listOwnerGenerationsForRoute({
 
   const generationIds = generations.map((generation) => generation.id).filter(Boolean);
   const ordinaryGenerationIds = generationIds.filter((generationId) => !templateMetadata.has(generationId));
-  const linkedPostMap = new Map<string, LinkedPostRow>();
-
-  if (generationIds.length > 0) {
-    let postsQuery = supabase
-      .from('posts')
-      .select('id, generation_id, title, visibility, archived_at')
-      .in('generation_id', generationIds)
-      .eq('user_id', userId);
-
-    if (!includeArchived) {
-      postsQuery = postsQuery.is('archived_at', null);
-    }
-
-    const postsResult = await postsQuery;
-    if (postsResult.error) {
-      console.error('Failed to load linked posts for generations:', postsResult.error);
-    } else {
-      for (const post of (postsResult.data ?? []) as LinkedPostRow[]) {
-        if (post.generation_id) {
-          linkedPostMap.set(post.generation_id, post);
-        }
-      }
-    }
-  }
-
-  const inputMediaMap = summaryOnly
-    ? new Map()
-    : await loadGenerationInputMediaMap({
+  const [linkedPostMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
+    loadLinkedPostMap({
+      supabase,
+      generationIds,
+      userId,
+      includeArchived,
+    }),
+    summaryOnly
+      ? Promise.resolve(new Map<string, GenerationInputMediaItem[]>())
+      : loadGenerationInputMediaMap({
+        supabase: adminSupabase,
+        generationIds: ordinaryGenerationIds,
+        urlMode: 'signed',
+      }),
+    resolveOwnedStoredMediaUrlMap({
       supabase: adminSupabase,
-      generationIds: ordinaryGenerationIds,
-      urlMode: 'signed',
-    });
+      outputUrls: collectOwnerMediaUrlCandidates(generations, summaryOnly),
+      ownerUserId: userId,
+    }),
+  ]);
 
   const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
     const template = templateMetadata.get(generation.id) ?? null;
     const workflowSettings = template ? null : getWorkflowSettings(generation.workflow_settings);
     const outputCount = getWorkflowOutputCount(workflowSettings);
-    const outputUrls = summaryOnly ? [] : await getPersistedOutputUrls(workflowSettings, adminSupabase, userId);
+    const outputUrls = summaryOnly ? [] : getPersistedOutputUrls(workflowSettings, resolvedMediaUrls);
     const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
     const inputMedia = summaryOnly || template
       ? []
@@ -494,8 +546,8 @@ export async function listOwnerGenerationsForRoute({
         workflowSettings,
         inputMedia,
       });
-    const outputUrl = await resolveGenerationOutputUrl(adminSupabase, generation, userId);
-    const previewUrl = await resolveGenerationPreviewUrl(adminSupabase, generation, outputUrl, userId);
+    const outputUrl = resolveGenerationOutputUrl(adminSupabase, generation, resolvedMediaUrls);
+    const previewUrl = resolveGenerationPreviewUrl(generation, outputUrl, resolvedMediaUrls);
     const classification = classifyVisualMedia({
       category: generation.category,
       contentType: inferVisualContentType(generation.output_url),

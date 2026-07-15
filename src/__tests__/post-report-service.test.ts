@@ -146,6 +146,7 @@ describe('submitPostReportForRoute', () => {
   it('normalizes optional details and records post-only reports', async () => {
     const admin = createAdminSupabaseMock();
     const longDetails = `  ${'a'.repeat(1100)}  `;
+    const invalidateFeedCache = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
@@ -155,6 +156,7 @@ describe('submitPostReportForRoute', () => {
         details: longDetails,
       })),
       createAdminSupabase: vi.fn(() => admin.client),
+      invalidateFeedCache,
     });
 
     expect(result).toEqual({
@@ -170,6 +172,7 @@ describe('submitPostReportForRoute', () => {
         details: 'a'.repeat(1000),
       },
     ]);
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('returns not found when the post is missing or archived', async () => {
@@ -213,6 +216,7 @@ describe('submitPostReportForRoute', () => {
 
   it('records unlock reports only after validating the bundle belongs to the post', async () => {
     const admin = createAdminSupabaseMock();
+    const invalidateFeedCache = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
@@ -222,6 +226,7 @@ describe('submitPostReportForRoute', () => {
         bundleId: 'bundle-1',
       })),
       createAdminSupabase: vi.fn(() => admin.client),
+      invalidateFeedCache,
     });
 
     expect(result).toEqual({
@@ -237,6 +242,7 @@ describe('submitPostReportForRoute', () => {
         details: null,
       },
     ]);
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('maps bundle validation errors without inserting a report', async () => {
@@ -266,12 +272,14 @@ describe('submitPostReportForRoute', () => {
     const admin = createAdminSupabaseMock({
       insertError: { message: 'insert failed' },
     });
+    const invalidateFeedCache = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
       reporterUserId: 'reporter-1',
       readBody: vi.fn(async () => ({ reason: 'spam' })),
       createAdminSupabase: vi.fn(() => admin.client),
+      invalidateFeedCache,
     });
 
     expect(result).toEqual({
@@ -279,5 +287,6 @@ describe('submitPostReportForRoute', () => {
       status: 500,
       body: { error: 'Failed to submit report.' },
     });
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 });

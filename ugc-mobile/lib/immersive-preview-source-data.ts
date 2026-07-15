@@ -52,7 +52,10 @@ export interface ImmersivePreviewApi {
   getCreatorProfile: (username: string, params?: Record<string, QueryValue>) => Promise<CreatorProfileResponse>;
   getSavedMedia: (params?: Record<string, QueryValue>) => Promise<ShowcaseFeedResponse>;
   getShowcasePost: (postId: string) => Promise<ShowcasePostResponse>;
-  listGenerations: (includeCompleted?: boolean) => Promise<{ generations: GenerationListItem[] }>;
+  listGenerations: (
+    includeCompleted?: boolean,
+    options?: { limit?: number }
+  ) => Promise<{ generations: GenerationListItem[] }>;
   listOwnerPosts: (params?: Record<string, QueryValue>) => Promise<OwnerPostsResponse>;
 }
 
@@ -96,7 +99,7 @@ export async function loadImmersiveSourceData({
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
     const [generationResponse, ownerPostResponse] = await Promise.all([
-      api.listGenerations(true),
+      api.listGenerations(true, { limit: 48 }),
       api.listOwnerPosts({ includeArchived: true, limit: 48, visibility: 'all' }),
     ]);
     return {

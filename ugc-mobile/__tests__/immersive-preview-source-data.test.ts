@@ -67,6 +67,30 @@ function creatorProfile(items: ShowcaseFeedItem[]): CreatorProfileResponse {
 }
 
 describe('immersive preview source data', () => {
+  it('bounds generation viewer hydration to the visible preview window', async () => {
+    const api = {
+      getCreatorProfile: vi.fn(),
+      getSavedMedia: vi.fn(),
+      getShowcaseFeed: vi.fn(),
+      getShowcasePost: vi.fn(),
+      listGenerations: vi.fn(async () => ({ generations: [] })),
+      listOwnerPosts: vi.fn(async () => ({ success: true, posts: [] })),
+    };
+
+    await loadImmersiveSourceData({
+      api,
+      source: 'home-creations',
+      initialId: 'generation-1',
+    });
+
+    expect(api.listGenerations).toHaveBeenCalledWith(true, { limit: 48 });
+    expect(api.listOwnerPosts).toHaveBeenCalledWith({
+      includeArchived: true,
+      limit: 48,
+      visibility: 'all',
+    });
+  });
+
   it('loads creator profile source data from the creator profile endpoint', async () => {
     const item = showcaseItem('post-1');
     const api = {

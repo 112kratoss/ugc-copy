@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const showcaseCacheMocks = vi.hoisted(() => ({
+  invalidate: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => ({
+  invalidateShowcaseFeedCache: showcaseCacheMocks.invalidate,
+}));
+
 type ProfileRow = {
   id: string;
   username: string | null;
@@ -196,6 +204,7 @@ describe('/api/profile route', () => {
       },
       error: null,
     });
+    showcaseCacheMocks.invalidate.mockClear();
   });
 
   afterEach(() => {
@@ -306,6 +315,7 @@ describe('/api/profile route', () => {
       p_window_seconds: 600,
     });
     expect(profilesState[0].username).toBe('creator-name');
+    expect(showcaseCacheMocks.invalidate).toHaveBeenCalledOnce();
   });
 
   it('rate limits profile updates before validation and persistence', async () => {
@@ -350,6 +360,7 @@ describe('/api/profile route', () => {
       p_window_seconds: 600,
     });
     expect(profilesState[0].username).toBeNull();
+    expect(showcaseCacheMocks.invalidate).not.toHaveBeenCalled();
   });
 
   it('creates the profile row on first save if it is missing', async () => {

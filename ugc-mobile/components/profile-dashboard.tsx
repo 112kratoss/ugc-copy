@@ -79,6 +79,7 @@ export function ProfileDashboard({
   const { user, api, credits } = useAuth();
   const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
+  const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -92,34 +93,61 @@ export function ProfileDashboard({
     queryKey: ['profile', user?.id],
     enabled: Boolean(user),
     queryFn: api.getProfile,
+    staleTime: 1000 * 60 * 5,
   });
 
   const generationsQuery = useQuery({
     queryKey: ['profile-generations', user?.id],
-    enabled: Boolean(user),
-    queryFn: () => api.listGenerations(false),
+    enabled: Boolean(user && (activeTab === 'Creations' || backgroundMediaReady)),
+    queryFn: () => api.listGenerations(false, { limit: 24 }),
+    staleTime: 1000 * 60,
   });
 
   const postsQuery = useQuery({
     queryKey: ['profile-owner-posts', user?.id],
-    enabled: Boolean(user),
+    enabled: Boolean(user && (activeTab === 'Posts' || backgroundMediaReady)),
     queryFn: () => api.listOwnerPosts({ includeArchived: false, includeSummary: true, limit: 24, visibility: 'all' }),
+    staleTime: 1000 * 60,
   });
 
   const savedQuery = useQuery({
     queryKey: ['profile-saved-media', user?.id],
-    enabled: Boolean(user),
+    enabled: Boolean(user && (activeTab === 'Saved' || backgroundMediaReady)),
     queryFn: () => api.getSavedMedia({ limit: 24 }),
+    staleTime: 1000 * 60,
   });
 
+  const activeMediaQuery = activeTab === 'Saved'
+    ? savedQuery
+    : activeTab === 'Creations'
+      ? generationsQuery
+      : postsQuery;
+  const {
+    isFetched: activeMediaIsFetched,
+    isFetching: activeMediaIsFetching,
+    isStale: activeMediaIsStale,
+    refetch: refetchActiveMedia,
+  } = activeMediaQuery;
+
   useEffect(() => {
-    if (!isFocused || !user) return;
-    void Promise.all([
-      generationsQuery.refetch?.(),
-      postsQuery.refetch?.(),
-      savedQuery.refetch?.(),
-    ]);
-  }, [isFocused, user?.id]);
+    setBackgroundMediaReady(false);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user?.id && activeMediaIsFetched) {
+      setBackgroundMediaReady(true);
+    }
+  }, [activeMediaIsFetched, user?.id]);
+
+  useEffect(() => {
+    if (
+      !isFocused
+      || !user
+      || activeMediaIsFetching
+      || !activeMediaIsStale
+    ) return;
+    void refetchActiveMedia();
+  }, [activeMediaIsFetching, activeMediaIsStale, isFocused, refetchActiveMedia, user?.id]);
 
   const savedCards = useMemo(
     () => savedShowcaseToProfileMediaCards(savedQuery.data?.items),

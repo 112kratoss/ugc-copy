@@ -50,6 +50,15 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const CACHED_ACCESS_TOKEN_MIN_TTL_MS = 30 * 1000;
+
+function getUsableCachedAccessToken(session: Session | null, now = Date.now()): string | null {
+  if (!session?.access_token) return null;
+  if (typeof session.expires_at !== 'number') return session.access_token;
+  return session.expires_at * 1000 - now > CACHED_ACCESS_TOKEN_MIN_TTL_MS
+    ? session.access_token
+    : null;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -58,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const missingEnvKeys = useMemo(() => getMissingMobileEnvKeys(), []);
   const sessionUserIdRef = useRef<string | null>(null);
+  const sessionRef = useRef<Session | null>(null);
   const authStateVersionRef = useRef(0);
   const profileRefreshRef = useRef<{ promise: Promise<void>; userId: string; version: number } | null>(null);
 
@@ -69,6 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profileRefreshRef.current = null;
     }
     sessionUserIdRef.current = nextUserId;
+    sessionRef.current = nextSession;
     setSession(nextSession);
     if (userChanged || !nextUserId) setCredits(null);
     // Navigation can continue from the persisted local session. Profile and
@@ -85,6 +96,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
+    const cachedAccessToken = getUsableCachedAccessToken(sessionRef.current);
+    if (cachedAccessToken) {
+      return cachedAccessToken;
+    }
+
     try {
       await initializeSupabaseAuth();
       const { data, error } = await supabase.auth.getSession();
@@ -94,6 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         throw error;
       }
+      sessionRef.current = data.session ?? null;
       return data.session?.access_token ?? null;
     } catch (error) {
       if (await recoverInvalidAuthSession(error)) {
@@ -248,7 +265,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const syncPushRegistration = () => registerForMobilePushNotifications(api, { requestPermission: false }).catch((error) => {
+    const userId = session.user.id;
+    const syncPushRegistration = () => queryClient.fetchQuery({
+      queryKey: ['mobile-push-registration', userId],
+      queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
+      staleTime: 1000 * 30,
+    }).catch((error) => {
       console.error('Failed to register mobile push notifications', error);
     });
 
@@ -264,7 +286,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubscribePushTokenChanges();
       appStateSubscription.remove();
     };
-  }, [api, session?.user?.id]);
+  }, [api, queryClient, session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id) return;

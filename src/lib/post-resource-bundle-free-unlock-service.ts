@@ -9,6 +9,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { notifyPostResourceUnlockCompleted as defaultNotifyPostResourceUnlockCompleted } from '@/lib/mobile-notifications';
+import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
 import {
   getBundleForOrderByPostId as defaultGetBundleForOrderByPostId,
 } from '@/lib/post-resource-bundles-server';
@@ -58,6 +59,7 @@ export async function unlockFreePostResourceBundleForRoute({
   buyerUserId,
   getBundleForOrderByPostId = defaultGetBundleForOrderByPostId as GetBundleForOrderByPostId,
   notifyPostResourceUnlockCompleted = defaultNotifyPostResourceUnlockCompleted,
+  invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   createId = randomUUID,
 }: {
   adminSupabase: SupabaseClient;
@@ -65,6 +67,7 @@ export async function unlockFreePostResourceBundleForRoute({
   buyerUserId: string;
   getBundleForOrderByPostId?: GetBundleForOrderByPostId;
   notifyPostResourceUnlockCompleted?: NotifyPostResourceUnlockCompleted;
+  invalidateMarketplaceResourceListCache?: () => void;
   createId?: () => string;
 }): Promise<PostResourceBundleFreeUnlockRouteResult> {
   try {
@@ -139,6 +142,10 @@ export async function unlockFreePostResourceBundleForRoute({
   if (completionError) {
     console.error('Failed to complete free bundle unlock:', completionError);
     return { ok: false, status: 500, body: { error: 'Failed to open the free unlock.' } };
+  }
+
+  if (completed) {
+    invalidateMarketplaceResourceListCache();
   }
 
   await notifyPostResourceUnlockCompleted(adminSupabase, {

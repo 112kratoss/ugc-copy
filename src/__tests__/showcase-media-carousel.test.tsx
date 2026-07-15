@@ -3,15 +3,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 
-const observerCallbacks: IntersectionObserverCallback[] = [];
+interface ObserverRegistration {
+  callback: IntersectionObserverCallback;
+  options?: IntersectionObserverInit;
+}
+
+const observerRegistrations: ObserverRegistration[] = [];
+
+function getPlaybackObserver() {
+  return observerRegistrations.find(({ options }) => options?.rootMargin !== '320px 0px');
+}
+
+function getNearViewportObserver() {
+  return observerRegistrations.find(({ options }) => options?.rootMargin === '320px 0px');
+}
 
 class IntersectionObserverMock {
   readonly root = null;
-  readonly rootMargin = '0px';
-  readonly thresholds = [0, 0.45, 1];
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
 
-  constructor(callback: IntersectionObserverCallback) {
-    observerCallbacks.push(callback);
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    observerRegistrations.push({ callback, options });
+    this.rootMargin = options?.rootMargin ?? '0px';
+    this.thresholds = Array.isArray(options?.threshold)
+      ? options.threshold
+      : [options?.threshold ?? 0];
   }
 
   disconnect = vi.fn();
@@ -22,7 +39,7 @@ class IntersectionObserverMock {
 
 describe('ShowcaseMediaCarousel', () => {
   beforeEach(() => {
-    observerCallbacks.length = 0;
+    observerRegistrations.length = 0;
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
@@ -59,21 +76,22 @@ describe('ShowcaseMediaCarousel', () => {
 
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
     expect(video).not.toHaveAttribute('src');
-    expect(video).toHaveAttribute('poster', 'https://example.com/clip-preview.webp');
+    expect(video).not.toHaveAttribute('poster');
     expect(video).toHaveAttribute('preload', 'none');
-    expect(observerCallbacks).toHaveLength(1);
+    expect(observerRegistrations).toHaveLength(2);
 
     act(() => {
-      observerCallbacks[0]([
+      getPlaybackObserver()?.callback([
         { isIntersecting: true, intersectionRatio: 0.7 } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
     });
 
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
     expect(video).toHaveAttribute('src', 'https://example.com/clip.mp4');
+    expect(video).toHaveAttribute('poster', 'https://example.com/clip-preview.webp');
 
     act(() => {
-      observerCallbacks[0]([
+      getPlaybackObserver()?.callback([
         { isIntersecting: false, intersectionRatio: 0 } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
     });
@@ -106,7 +124,7 @@ describe('ShowcaseMediaCarousel', () => {
     const carousel = video?.parentElement?.parentElement;
 
     act(() => {
-      observerCallbacks[0]([
+      getPlaybackObserver()?.callback([
         { isIntersecting: true, intersectionRatio: 0.7 } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
     });
@@ -120,6 +138,72 @@ describe('ShowcaseMediaCarousel', () => {
 
     fireEvent.mouseLeave(carousel!);
     expect(video).not.toHaveAttribute('src');
+  });
+
+  it('loads a deferred feed poster near the viewport without attaching or playing the video', () => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        autoPlayVideo
+        mediaItems={[
+          {
+            id: 'video-1',
+            url: 'https://example.com/clip.mp4',
+            previewUrl: 'https://example.com/clip-preview.webp',
+            mediaKind: 'video',
+            contentType: 'video/mp4',
+            originalName: 'clip.mp4',
+            width: 1080,
+            height: 1350,
+            durationSeconds: 8,
+            sortOrder: 0,
+          },
+        ]}
+      />
+    );
+    const video = container.querySelector('video');
+
+    expect(video).not.toHaveAttribute('poster');
+    expect(video).not.toHaveAttribute('src');
+
+    act(() => {
+      getNearViewportObserver()?.callback([
+        { isIntersecting: true, intersectionRatio: 0 } as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+    });
+
+    expect(video).toHaveAttribute('poster', 'https://example.com/clip-preview.webp');
+    expect(video).not.toHaveAttribute('src');
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
+  it('eagerly attaches a priority feed video poster without loading the video', () => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        priority
+        mediaItems={[
+          {
+            id: 'video-1',
+            url: 'https://example.com/clip.mp4',
+            previewUrl: 'https://example.com/clip-preview.webp',
+            mediaKind: 'video',
+            contentType: 'video/mp4',
+            originalName: 'clip.mp4',
+            width: 1080,
+            height: 1350,
+            durationSeconds: 8,
+            sortOrder: 0,
+          },
+        ]}
+      />
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute(
+      'poster',
+      'https://example.com/clip-preview.webp'
+    );
+    expect(container.querySelector('video')).not.toHaveAttribute('src');
   });
 
   it('renders the lightweight preview for feed images while retaining the original fallback', () => {
@@ -143,7 +227,8 @@ describe('ShowcaseMediaCarousel', () => {
       />
     );
 
-    expect(screen.getByRole('img', { name: 'Campaign still' }))
-      .toHaveAttribute('src', 'https://example.com/preview.webp');
+    const image = screen.getByRole('img', { name: 'Campaign still' });
+    expect(image).toHaveAttribute('src', 'https://example.com/preview.webp');
+    expect(image).toHaveAttribute('loading', 'lazy');
   });
 });

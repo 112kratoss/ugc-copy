@@ -6,6 +6,7 @@ import {
   notifyReferralRewardSettlement,
   settleCreditPurchaseReferralRewards,
 } from '@/lib/credit-referral-integration';
+import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
 import { reconcileRazorpayCreditPurchaseAdjustment } from '@/lib/referral-reward-service';
 
 type CreditTransactionRow = {
@@ -68,6 +69,7 @@ type RazorpayWebhookEvent = {
 type ProcessRazorpayWebhookParams = {
   createAdminSupabase: () => SupabaseClient;
   rawBody: string;
+  invalidateMarketplaceResourceListCache?: () => void;
 };
 
 function parseWebhookEvent(rawBody: string): RazorpayWebhookEvent {
@@ -92,6 +94,7 @@ function nonNegativeInteger(value: unknown): number | null {
 export async function processRazorpayWebhookForRoute({
   createAdminSupabase,
   rawBody,
+  invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
 }: ProcessRazorpayWebhookParams): Promise<RazorpayWebhookRouteResult> {
   const event = parseWebhookEvent(rawBody);
   let supabaseAdmin: SupabaseClient | null = null;
@@ -412,6 +415,8 @@ export async function processRazorpayWebhookForRoute({
       console.error('Webhook: Post resource bundle order remained unresolved after completion attempt', orderId);
       return { handled: true, shouldRetry: true };
     }
+
+    invalidateMarketplaceResourceListCache();
 
     console.log(`Webhook: Post resource bundle purchase completed - buyer=${typedBundleOrder.buyer_user_id}, order=${orderId}`);
     return { handled: true, shouldRetry: false };

@@ -57,6 +57,7 @@ describe('account deletion route', () => {
   it('removes user-prefixed storage before deleting the auth account', async () => {
     const calls: string[] = [];
     const removed: Array<{ bucket: string; paths: string[] }> = [];
+    const invalidateShowcaseFeedCache = vi.fn();
     const deleteUser = vi.fn(async (userId: string) => {
       calls.push(`delete:${userId}`);
       return { data: null, error: null };
@@ -116,6 +117,7 @@ describe('account deletion route', () => {
           retryAfterSeconds: 0,
           resetAt: new Date().toISOString(),
         })),
+        invalidateShowcaseFeedCache,
         now: () => NOW,
       },
     });
@@ -135,6 +137,7 @@ describe('account deletion route', () => {
       paths: ['showcase/gen-1/output.webp'],
     });
     expect(calls).toContain('list:template_assets:2b2f4bb5-6ea8-4c44-a394-14cc777dcf52');
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
   });
 
   it('requires a recent sign-in before preparing destructive deletion work', async () => {
@@ -165,6 +168,7 @@ describe('account deletion route', () => {
 
   it('treats a durably completed concurrent deletion as idempotent success', async () => {
     const deleteUser = vi.fn();
+    const invalidateShowcaseFeedCache = vi.fn();
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
@@ -185,6 +189,7 @@ describe('account deletion route', () => {
           retryAfterSeconds: 0,
           resetAt: new Date().toISOString(),
         })),
+        invalidateShowcaseFeedCache,
         now: () => NOW,
       },
     });
@@ -196,6 +201,71 @@ describe('account deletion route', () => {
       alreadyDeleted: true,
     });
     expect(deleteUser).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates the feed when auth deletion reports the user is already missing', async () => {
+    const invalidateShowcaseFeedCache = vi.fn();
+    const deleteUser = vi.fn(async () => ({
+      data: null,
+      error: { status: 404, message: 'User not found' },
+    }));
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        createUserClient: (() => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
+        })) as never,
+        createServiceClient: (() => ({
+          auth: { admin: { deleteUser } },
+          rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+            if (name === 'prepare_account_deletion') {
+              return {
+                data: {
+                  status: 'prepared',
+                  storage_manifest: {
+                    user_prefix_buckets: [
+                      'profiles',
+                      'uploads',
+                      'generated_images',
+                      'generated_videos',
+                      'generated_audio',
+                      'generation_inputs',
+                      'post_resource_files',
+                      'template_inputs',
+                    ],
+                    showcase_media_paths: [],
+                    template_asset_prefixes: [],
+                  },
+                },
+                error: null,
+              };
+            }
+            return { data: { status: args.p_status }, error: null };
+          }),
+          storage: {
+            from: () => ({
+              list: vi.fn(async () => ({ data: [], error: null })),
+              remove: vi.fn(async () => ({ data: [], error: null })),
+            }),
+          },
+        })) as never,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 3,
+          remaining: 2,
+          retryAfterSeconds: 0,
+          resetAt: new Date().toISOString(),
+        })),
+        invalidateShowcaseFeedCache,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, deleted: true });
+    expect(deleteUser).toHaveBeenCalledWith('user-1');
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
   });
 
   it('rate limits repeated permanent deletion attempts before changing account data', async () => {

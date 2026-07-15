@@ -1,6 +1,6 @@
 'use client';
 
-import type { Session } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/supabase-js';
 import { ChevronDown, Gift, LogOut, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -14,6 +14,7 @@ import {
 import { supabase } from '@/lib/supabase';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
+import { OptimizedPreviewImage } from './OptimizedPreviewImage';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
 
 type ProfileSummary = {
@@ -37,21 +38,22 @@ function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
   const initials = getUserInitials(label);
   const className = size === 'sm' ? 'h-8 w-8 text-xs' : 'h-9 w-9 text-sm';
 
-  if (avatarUrl) {
-    return (
-      <span
-        aria-hidden="true"
-        className={`${className} rounded-full border border-[var(--ui-border-default)] bg-cover bg-center`}
-        style={{ backgroundImage: `url(${avatarUrl})` }}
-      />
-    );
-  }
-
   return (
     <span
-      className={`${className} inline-flex items-center justify-center rounded-full border border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary-soft)] font-extrabold text-[var(--ui-primary-strong)]`}
+      aria-hidden="true"
+      className={`${className} relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary-soft)] font-extrabold text-[var(--ui-primary-strong)]`}
     >
       {initials}
+      {avatarUrl ? (
+        <OptimizedPreviewImage
+          previewSrc={avatarUrl}
+          fallbackSrc={avatarUrl}
+          fallbackToUnoptimized
+          alt=""
+          sizes={size === 'sm' ? '32px' : '36px'}
+          className="object-cover"
+        />
+      ) : null}
     </span>
   );
 }
@@ -70,28 +72,82 @@ export default function AppShellAccount() {
 
   useEffect(() => {
     let mounted = true;
+    let authSequence = 0;
+    let acceptedAccessToken: string | null = null;
+    let acceptedUserId: string | null = null;
+    const pendingAccessTokens = new Set<string>();
+    const queuedUserUpdates = new Map<string, Session>();
+    const deferredAuthSyncIds = new Set<number>();
+
+    function clearAccountState() {
+      authSequence += 1;
+      acceptedAccessToken = null;
+      acceptedUserId = null;
+      pendingAccessTokens.clear();
+      queuedUserUpdates.clear();
+      deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      deferredAuthSyncIds.clear();
+      publishAppShellAuthentication(false);
+      if (mounted) {
+        setSession(null);
+        setProfile(null);
+      }
+    }
 
     async function loadProfile(nextSession: Session | null) {
-      publishAppShellAuthentication(Boolean(nextSession?.user?.id));
+      const sequence = ++authSequence;
       if (!nextSession?.user?.id) {
-        if (mounted) {
-          setSession(null);
-          setProfile(null);
-        }
+        clearAccountState();
         return;
       }
 
+      let verifiedUser: User | null = null;
+      let verificationFailed = false;
+      try {
+        const { data, error } = await supabase.auth.getUser(nextSession.access_token);
+        verifiedUser = data.user;
+        verificationFailed = Boolean(error);
+      } catch {
+        verificationFailed = true;
+      } finally {
+        pendingAccessTokens.delete(nextSession.access_token);
+        const queuedUserUpdate = queuedUserUpdates.get(nextSession.access_token);
+        if (queuedUserUpdate) {
+          queuedUserUpdates.delete(nextSession.access_token);
+          const timeoutId = window.setTimeout(() => {
+            deferredAuthSyncIds.delete(timeoutId);
+            if (mounted) {
+              handleAuthChange('USER_UPDATED', queuedUserUpdate);
+            }
+          }, 0);
+          deferredAuthSyncIds.add(timeoutId);
+        }
+      }
+
+      if (!mounted || sequence !== authSequence) {
+        return;
+      }
+
+      if (verificationFailed || !verifiedUser || verifiedUser.id !== nextSession.user.id) {
+        clearAccountState();
+        return;
+      }
+
+      const verifiedSession = { ...nextSession, user: verifiedUser };
+      acceptedAccessToken = nextSession.access_token;
+      acceptedUserId = verifiedUser.id;
+      publishAppShellAuthentication(true);
       if (mounted) {
-        setSession(nextSession);
+        setSession(verifiedSession);
       }
 
       const { data } = await supabase
         .from('profiles')
         .select('display_name, avatar_url, credits')
-        .eq('id', nextSession.user.id)
+        .eq('id', verifiedUser.id)
         .maybeSingle();
 
-      if (mounted) {
+      if (mounted && sequence === authSequence) {
         setProfile({
           display_name: data?.display_name ?? null,
           avatar_url: data?.avatar_url ?? null,
@@ -100,18 +156,49 @@ export default function AppShellAccount() {
       }
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      void loadProfile(data.session);
-    });
+    function handleAuthChange(event: string, nextSession: Session | null) {
+      if (!nextSession?.user?.id) {
+        clearAccountState();
+        return;
+      }
+
+      const accessToken = nextSession?.access_token ?? null;
+      if (event === 'TOKEN_REFRESHED' && acceptedUserId === nextSession.user.id) {
+        acceptedAccessToken = accessToken;
+        setSession(nextSession);
+        publishAppShellAuthentication(true);
+        return;
+      }
+
+      if (accessToken) {
+        if (pendingAccessTokens.has(accessToken)) {
+          if (event === 'USER_UPDATED') {
+            queuedUserUpdates.set(accessToken, nextSession);
+          }
+          return;
+        }
+        if (event !== 'USER_UPDATED' && accessToken === acceptedAccessToken) {
+          return;
+        }
+        pendingAccessTokens.add(accessToken);
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        deferredAuthSyncIds.delete(timeoutId);
+        void loadProfile(nextSession);
+      }, 0);
+      deferredAuthSyncIds.add(timeoutId);
+    }
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      void loadProfile(nextSession);
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      handleAuthChange(event, nextSession);
     });
 
     return () => {
       mounted = false;
+      deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
       subscription.unsubscribe();
     };
   }, []);
@@ -137,6 +224,8 @@ export default function AppShellAccount() {
   }, []);
 
   useEffect(() => {
+    let isActive = true;
+
     function refreshCredits() {
       const userId = session?.user?.id;
       if (!userId) return;
@@ -147,7 +236,7 @@ export default function AppShellAccount() {
         .eq('id', userId)
         .maybeSingle()
         .then(({ data }) => {
-          if (typeof data?.credits === 'number') {
+          if (isActive && typeof data?.credits === 'number') {
             setProfile((current) => ({
               ...(current ?? { display_name: null, avatar_url: null }),
               credits: data.credits,
@@ -157,7 +246,10 @@ export default function AppShellAccount() {
     }
 
     window.addEventListener('credits_updated', refreshCredits);
-    return () => window.removeEventListener('credits_updated', refreshCredits);
+    return () => {
+      isActive = false;
+      window.removeEventListener('credits_updated', refreshCredits);
+    };
   }, [session?.user?.id]);
 
   const handleSignOut = async () => {

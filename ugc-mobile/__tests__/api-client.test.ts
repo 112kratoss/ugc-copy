@@ -427,10 +427,10 @@ describe('mobile api client caching', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    const response = await api.listGenerations(true);
+    const response = await api.listGenerations(true, { limit: 12 });
 
     const [url] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
-    expect(url).toBe('https://magicbooklet.test/api/generations?includeArchived=true');
+    expect(url).toBe('https://magicbooklet.test/api/generations?detail=summary&includeArchived=true&limit=12');
     expect(response.generations[0].output_url).toBe(
       'https://storage.magicbooklet.test/generated_images/user-1/gen-1.jpg?token=signed'
     );

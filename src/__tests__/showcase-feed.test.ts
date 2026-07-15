@@ -2,12 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const nextCacheState = vi.hoisted(() => ({
   invocations: [] as unknown[][],
+  definitions: [] as Array<{
+    keyParts: string[];
+    options: { revalidate?: number; tags?: string[] } | undefined;
+  }>,
 }));
 
 vi.mock('next/cache', () => ({
-  unstable_cache: (fn: (...args: unknown[]) => unknown) => async (...args: unknown[]) => {
-    nextCacheState.invocations.push(args);
-    return fn(...args);
+  unstable_cache: (
+    fn: (...args: unknown[]) => unknown,
+    keyParts: string[],
+    options?: { revalidate?: number; tags?: string[] },
+  ) => {
+    nextCacheState.definitions.push({ keyParts, options });
+    return async (...args: unknown[]) => {
+      nextCacheState.invocations.push(args);
+      return fn(...args);
+    };
   },
 }));
 
@@ -532,6 +543,30 @@ describe('showcase feed', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('tags and versions both shared feed cache definitions', async () => {
+    await import('@/lib/showcase-feed');
+    const { SHOWCASE_FEED_CACHE_TAG } = await import('@/lib/showcase-feed-cache');
+    const { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } = await import('@/lib/marketplace-resource-list-cache');
+
+    expect(nextCacheState.definitions).toEqual([
+      {
+        keyParts: ['marketplace-resource-list-base-v1'],
+        options: {
+          revalidate: 60,
+          tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
+        },
+      },
+      {
+        keyParts: ['showcase-feed-base-v2'],
+        options: { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] },
+      },
+      {
+        keyParts: ['showcase-for-you-bootstrap-v2'],
+        options: { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] },
+      },
+    ]);
   });
 
   it('includes creator usernames and asset summaries on feed items', async () => {

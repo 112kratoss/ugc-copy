@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
 import { cache } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -69,6 +70,9 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getStoredMediaLocation } from '@/lib/media-urls';
+import { shouldCacheMarketplaceResourceListBasePage } from '@/lib/marketplace-resource-list-cache-policy';
+import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
+import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import {
   GENERATION_RECIPE_ASSET_ID_PREFIX,
   MAGICBOOKLET_SOURCE_KIND,
@@ -237,6 +241,16 @@ export interface MarketplaceResourceListItem {
   remixCapability: PostRemixCapability;
   remixTarget: PostRemixTarget;
 }
+
+type MarketplaceResourceListPage = {
+  items: MarketplaceResourceListItem[];
+  pageInfo: {
+    hasMore: boolean;
+    nextOffset: number | null;
+    offset: number;
+    limit: number;
+  };
+};
 
 export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
   status: PostResourceBundleStatus;
@@ -1292,8 +1306,10 @@ async function hydrateBundleRows(
   countryCode?: string | null,
   scope: LinkedPostScope = 'public'
 ): Promise<MarketplaceResourceListItem[]> {
-  const profilesMap = await loadProfileMap(rows.map((row) => row.owner_user_id));
-  const postMap = await loadLinkedPostMap(rows.map((row) => row.post_id), scope);
+  const [profilesMap, postMap] = await Promise.all([
+    loadProfileMap(rows.map((row) => row.owner_user_id)),
+    loadLinkedPostMap(rows.map((row) => row.post_id), scope),
+  ]);
 
   return Promise.all(
     rows.map(async (row) => {
@@ -1784,7 +1800,7 @@ async function getMarketplaceResourceListFallback(options: {
   };
 }
 
-export async function getMarketplaceResourceList(options?: {
+type MarketplaceResourceListOptions = {
   filter?: MarketplaceResourceFilter;
   resource?: MarketplaceResourceKindFilter;
   tool?: string | null;
@@ -1793,17 +1809,30 @@ export async function getMarketplaceResourceList(options?: {
   offset?: number;
   limit?: number;
   countryCode?: string | null;
-}) {
+};
+
+type MarketplaceResourceListBaseOptions = {
+  filter: MarketplaceResourceFilter;
+  resource: MarketplaceResourceKindFilter;
+  tool: string | null;
+  q: string | null;
+  sort: MarketplaceResourceSort;
+  offset: number;
+  limit: number;
+};
+
+async function getMarketplaceResourceListBase(
+  options: MarketplaceResourceListBaseOptions,
+): Promise<MarketplaceResourceListPage> {
   const {
-    filter = 'all',
-    resource = 'all',
-    tool = null,
-    q = null,
-    sort = 'recent',
-    offset = 0,
-    limit = 24,
-    countryCode = null,
-  } = options ?? {};
+    filter,
+    resource,
+    tool,
+    q,
+    sort,
+    offset,
+    limit,
+  } = options;
   const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
   const normalizedQuery = normalizeMarketplaceSearchQuery(q);
 
@@ -1828,7 +1857,7 @@ export async function getMarketplaceResourceList(options?: {
         sort,
         offset,
         limit,
-        countryCode,
+        countryCode: null,
       });
     }
 
@@ -1838,7 +1867,7 @@ export async function getMarketplaceResourceList(options?: {
 
   const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
   const hasMore = rows.length > limit;
-  const hydratedItems = await hydrateBundleRows(rows, countryCode);
+  const hydratedItems = await hydrateBundleRows(rows, null);
   const pageItems = hydratedItems.filter((item) => {
     if (!item.post) {
       return false;
@@ -1868,6 +1897,108 @@ export async function getMarketplaceResourceList(options?: {
       limit,
     },
   };
+}
+
+const getCachedMarketplaceResourceListBase = unstable_cache(
+  async (
+    filter: MarketplaceResourceFilter,
+    resource: MarketplaceResourceKindFilter,
+    sort: MarketplaceResourceSort,
+  ) => getMarketplaceResourceListBase({
+    filter,
+    resource,
+    tool: null,
+    q: null,
+    sort,
+    offset: 0,
+    limit: 24,
+  }),
+  ['marketplace-resource-list-base-v1'],
+  {
+    revalidate: 60,
+    tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
+  },
+);
+
+function isMissingIncrementalCacheError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('incrementalCache missing');
+}
+
+async function loadCachedMarketplaceResourceListBase(
+  filter: MarketplaceResourceFilter,
+  resource: MarketplaceResourceKindFilter,
+  sort: MarketplaceResourceSort,
+) {
+  try {
+    return await getCachedMarketplaceResourceListBase(filter, resource, sort);
+  } catch (error) {
+    if (isMissingIncrementalCacheError(error)) {
+      return getMarketplaceResourceListBase({
+        filter,
+        resource,
+        tool: null,
+        q: null,
+        sort,
+        offset: 0,
+        limit: 24,
+      });
+    }
+
+    throw error;
+  }
+}
+
+async function localizeMarketplaceResourceListPage(
+  page: MarketplaceResourceListPage,
+  countryCode: string | null,
+): Promise<MarketplaceResourceListPage> {
+  if (countryCode?.toUpperCase() !== 'IN') {
+    return page;
+  }
+
+  return {
+    ...page,
+    items: await Promise.all(page.items.map(async (item) => ({
+      ...item,
+      priceQuote: await buildPriceQuote(item.priceUsdCents, countryCode),
+    }))),
+  };
+}
+
+export async function getMarketplaceResourceList(
+  options?: MarketplaceResourceListOptions,
+): Promise<MarketplaceResourceListPage> {
+  const {
+    filter = 'all',
+    resource = 'all',
+    tool = null,
+    q = null,
+    sort = 'recent',
+    offset = 0,
+    limit = 24,
+    countryCode = null,
+  } = options ?? {};
+  const normalizedToolFilter = tool ? slugifySourceTool(tool) : '';
+  const normalizedQuery = normalizeMarketplaceSearchQuery(q);
+
+  const page = shouldCacheMarketplaceResourceListBasePage({
+    offset,
+    limit,
+    tool: normalizedToolFilter,
+    query: normalizedQuery,
+  })
+    ? await loadCachedMarketplaceResourceListBase(filter, resource, sort)
+    : await getMarketplaceResourceListBase({
+      filter,
+      resource,
+      tool: normalizedToolFilter || null,
+      q: normalizedQuery || null,
+      sort,
+      offset,
+      limit,
+    });
+
+  return localizeMarketplaceResourceListPage(page, countryCode);
 }
 
 export async function getPostResourceBundleDetailByPostId(

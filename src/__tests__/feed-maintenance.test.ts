@@ -31,8 +31,12 @@ describe('maintainFeedPersonalization', () => {
       },
     });
     const now = new Date('2026-07-11T07:20:00.000Z');
+    const invalidateFeedCache = vi.fn();
 
-    await expect(maintainFeedPersonalization(db.client as never, { now })).resolves.toEqual({
+    await expect(maintainFeedPersonalization(db.client as never, {
+      now,
+      invalidateFeedCache,
+    })).resolves.toEqual({
       asOf: '2026-07-11T07:20:00.000Z',
       postStatsRefreshed: 37,
       userInterestProfilesRefreshed: 12,
@@ -64,6 +68,7 @@ describe('maintainFeedPersonalization', () => {
         p_limit: 5000,
       }],
     ]);
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('stops before pruning when an aggregate refresh fails', async () => {
@@ -75,14 +80,17 @@ describe('maintainFeedPersonalization', () => {
       },
       prune_feed_personalization_data: { data: { skipped: false }, error: null },
     });
+    const invalidateFeedCache = vi.fn();
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
+      invalidateFeedCache,
     })).rejects.toThrow(
       'Feed maintenance RPC refresh_user_interest_weights failed: statement timeout',
     );
     expect(db.rpc).toHaveBeenCalledTimes(2);
     expect(db.rpc).not.toHaveBeenCalledWith('prune_feed_personalization_data', expect.anything());
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
   it('rejects invalid timestamps before querying Supabase', async () => {

@@ -7,6 +7,7 @@ import {
   POST_RESOURCE_ORDER_VERIFY_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
 import { verifyRazorpayPaymentSignature } from '@/lib/razorpay-signature';
 
 type PostResourceBundleOrderRow = {
@@ -49,12 +50,14 @@ export async function verifyPostResourceBundlePaymentForRoute({
   keySecret,
   readBody,
   verifySignature = verifyRazorpayPaymentSignature,
+  invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
 }: {
   adminSupabase: SupabaseClient;
   buyerUserId: string;
   keySecret?: string | null;
   readBody: () => Promise<unknown>;
   verifySignature?: typeof verifyRazorpayPaymentSignature;
+  invalidateMarketplaceResourceListCache?: () => void;
 }): Promise<PostResourceBundleVerifyRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -151,6 +154,8 @@ export async function verifyPostResourceBundlePaymentForRoute({
 
     return { ok: false, status: 500, body: { error: 'Unable to finalize purchase.' } };
   }
+
+  invalidateMarketplaceResourceListCache();
 
   return { ok: true, body: { success: true } };
 }

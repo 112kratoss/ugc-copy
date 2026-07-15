@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+const cacheMocks = vi.hoisted(() => ({
+  SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
+  invalidateShowcaseFeedCache: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import {
   getPostResourceBundleForRoute,
@@ -126,6 +133,10 @@ describe('getPostResourceBundleForRoute', () => {
 });
 
 describe('putPostResourceBundleForRoute', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('rate limits before parsing the request body or loading the post', async () => {
     const userSupabase = createUserSupabaseMock(privatePost());
     const adminSupabase = createAdminSupabaseMock(false);
@@ -177,6 +188,34 @@ describe('putPostResourceBundleForRoute', () => {
       postTitle: 'Draft post',
       postVisibility: 'private',
     }));
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('invalidates the feed after saving a public post resource bundle', async () => {
+    const userSupabase = createUserSupabaseMock(privatePost({ visibility: 'public' }));
+    const adminSupabase = createAdminSupabaseMock(true);
+    const savePostResourceBundle = vi.fn(async () => ({ id: 'bundle-1', status: 'published' }));
+
+    const result = await putPostResourceBundleForRoute({
+      postId: 'post-1',
+      ownerUserId: 'user-1',
+      userSupabase: userSupabase.client,
+      adminSupabase: adminSupabase.client,
+      readBody: vi.fn(async () => validBundleBody),
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        savePostResourceBundle,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: {
+        success: true,
+        bundle: { id: 'bundle-1', status: 'published' },
+      },
+    });
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('rejects public bundle saves that fail marketplace quality gates', async () => {

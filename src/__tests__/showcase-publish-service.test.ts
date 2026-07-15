@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+const cacheMocks = vi.hoisted(() => ({
+  SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
+  invalidateShowcaseFeedCache: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import {
   publishGenerationToShowcaseForRoute,
@@ -111,6 +118,10 @@ function createAdminClientMock() {
 }
 
 describe('publishGenerationToShowcaseForRoute', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('publishes a backend-private generation only when it is the canonical result of the owner\'s successful consumer run', async () => {
     const generation = {
       id: 'template-result-1',
@@ -335,6 +346,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       hasBundlePayload: false,
     }));
     expect(adminClient.removeMock).toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('returns an actionable profile repair response for public publishing', async () => {
@@ -382,6 +394,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       },
     });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('returns a retryable server failure when profile verification is unavailable', async () => {

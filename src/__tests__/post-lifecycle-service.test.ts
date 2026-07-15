@@ -1,5 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const cacheMocks = vi.hoisted(() => ({
+  invalidateShowcaseFeedCache: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import {
   archiveOwnerPostForRoute,
@@ -86,6 +92,10 @@ function createClient({
 }
 
 describe('archiveOwnerPostForRoute', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('rate limits before archive mutation work', async () => {
     const client = createClient({ allowed: false });
 
@@ -99,6 +109,7 @@ describe('archiveOwnerPostForRoute', () => {
     expect(result.ok).toBe(false);
     expect(result).toHaveProperty('rateLimitError');
     expect(client.from).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('archives owned active posts and synchronizes bundles and linked generations', async () => {
@@ -146,6 +157,7 @@ describe('archiveOwnerPostForRoute', () => {
         selectColumns: null,
       },
     ]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('returns not found without dependent mutations when no active owned post matches', async () => {
@@ -181,6 +193,10 @@ describe('archiveOwnerPostForRoute', () => {
 });
 
 describe('restoreOwnerPostForRoute', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('restores only archived posts owned by the caller', async () => {
     const client = createClient({
       postResult: { data: { id: 'post-1' }, error: null },
@@ -206,6 +222,7 @@ describe('restoreOwnerPostForRoute', () => {
       ],
       selectColumns: 'id',
     }]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('returns not found when no archived owned post matches', async () => {

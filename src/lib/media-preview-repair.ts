@@ -7,6 +7,7 @@ import {
   fetchWithProviderTimeout,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
@@ -161,7 +162,10 @@ async function repairPostMedia(supabase: SupabaseClient, row: PostMediaRepairRow
 
 export async function repairMediaPreviews(
   supabase: SupabaseClient,
-  options: { batchSize?: number } = {}
+  options: {
+    batchSize?: number;
+    invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  } = {}
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? 25, 500));
   const [generationsResult, postMediaResult] = await Promise.all([
@@ -195,6 +199,10 @@ export async function repairMediaPreviews(
     ...postMedia.filter((row) => canRepairPreview(row.preview_attempt_count)).map((row) => repairPostMedia(supabase, row)),
   ]);
   const completed = results.filter(Boolean).length;
+
+  if (completed > 0) {
+    (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
+  }
 
   return { attempted: results.length, completed, failed: results.length - completed };
 }

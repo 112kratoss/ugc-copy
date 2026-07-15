@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+const cacheMocks = vi.hoisted(() => ({
+  SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
+  invalidateShowcaseFeedCache: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import {
   updateOwnerPostForRoute,
@@ -88,6 +95,10 @@ function createSupabaseMock({
 }
 
 describe('updateOwnerPostForRoute', () => {
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
     const { client, rpcCalls } = createSupabaseMock();
     const dependencies = {
@@ -162,6 +173,7 @@ describe('updateOwnerPostForRoute', () => {
       }),
       hasBundlePayload: true,
     }));
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('rejects publishing an existing draft unlock unless the bundle payload is resubmitted', async () => {
@@ -198,6 +210,53 @@ describe('updateOwnerPostForRoute', () => {
     });
     expect(dependencies.getMarketplaceQualityErrorForPostBundle).not.toHaveBeenCalled();
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('invalidates the feed when follow-up metadata fails after the atomic post update commits', async () => {
+    const { client } = createSupabaseMock({ bundle: null });
+    const updatePostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically,
+      replacePostSourceTools: vi.fn(async () => {
+        throw new Error('source tool insert failed');
+      }),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        title: 'Updated before metadata failure',
+        visibility: 'private',
+        sourceTools: [{
+          toolLabel: 'magicbooklet',
+          toolSlug: 'magicbooklet',
+        }],
+      },
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: {
+        error: 'Failed to save source tool metadata.',
+        field: undefined,
+      },
+    });
+    expect(updatePostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('maps unavailable profile verification to a server failure', async () => {

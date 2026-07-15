@@ -19,6 +19,7 @@ import {
   type ProfileFieldErrors,
   type ProfileUpdatePayload,
 } from '@/lib/profile';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 export type ProfileRouteClient =
   Parameters<typeof enforceBackendRateLimit>[0]
@@ -135,10 +136,12 @@ export async function updateProfileForRoute({
   userId,
   body,
   client,
+  invalidateFeedCache = invalidateShowcaseFeedCache,
 }: {
   userId: string;
   body: unknown;
   client: ProfileRouteClientInput;
+  invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
 }): Promise<ProfileRouteResult> {
   const resolvedClient = resolveClient(client);
   try {
@@ -212,6 +215,8 @@ export async function updateProfileForRoute({
       error: 'Failed to update profile',
     };
   }
+
+  invalidateFeedCache();
 
   return {
     ok: true,

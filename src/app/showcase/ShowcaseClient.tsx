@@ -303,6 +303,9 @@ export default function ShowcaseClient({
             section,
         });
     const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
+    const priorityMediaItemId = items.find((item) => (
+        item.postFormat !== 'text' && getItemMediaItems(item).length > 0
+    ))?.id ?? null;
 
     useEffect(() => {
         const postParam = searchParams.get('post');
@@ -1106,6 +1109,7 @@ export default function ShowcaseClient({
                                                     <ShowcaseMediaCarousel
                                                         mediaItems={mediaItems}
                                                         title={item.title}
+                                                        priority={item.id === priorityMediaItemId}
                                                         onOpen={(mediaIndex) => openPreview(item, mediaIndex)}
                                                     />
                                                 ) : (
