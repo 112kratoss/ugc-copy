@@ -236,7 +236,8 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
-  it('hydrates only the first two cards and reveals the rest during idle periods', async () => {
+  it('hydrates only the first two cards and delays the first idle reveal', async () => {
+    vi.useFakeTimers();
     const idleCallbacks: IdleRequestCallback[] = [];
     vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
       idleCallbacks.push(callback);
@@ -255,6 +256,11 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getByText('Campaign 1')).toBeInTheDocument();
     expect(screen.getByText('Campaign 2')).toBeInTheDocument();
     expect(screen.queryByText('Campaign 3')).not.toBeInTheDocument();
+    expect(idleCallbacks).toHaveLength(0);
+
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
     expect(idleCallbacks).toHaveLength(1);
 
     act(() => {
@@ -306,6 +312,12 @@ describe('ShowcaseClient save actions', () => {
         sourceToolOptions={SOURCE_TOOL_OPTIONS}
       />
     );
+
+    expect(idleCallbacks).toHaveLength(0);
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(idleCallbacks).toHaveLength(1);
 
     for (let index = 0; index < 3; index += 1) {
       act(() => {

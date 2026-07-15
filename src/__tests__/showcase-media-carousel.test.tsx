@@ -206,6 +206,76 @@ describe('ShowcaseMediaCarousel', () => {
     expect(container.querySelector('video')).not.toHaveAttribute('src');
   });
 
+  it('keeps an exact priority poster override across feed rerenders', () => {
+    const mediaItems = [{
+      id: 'video-1',
+      url: 'https://example.com/clip.mp4',
+      previewUrl: 'https://example.com/clip-preview.webp',
+      mediaKind: 'video' as const,
+      contentType: 'video/mp4',
+      originalName: 'clip.mp4',
+      width: 1080,
+      height: 1350,
+      durationSeconds: 8,
+      sortOrder: 0,
+    }];
+    const priorityPoster = {
+      mediaId: 'video-1',
+      dataUrl: 'data:image/webp;base64,UklGRgAAAABXRUJQ',
+    };
+    const { container, rerender } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        priority
+        priorityPoster={priorityPoster}
+        mediaItems={mediaItems}
+      />
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute('poster', priorityPoster.dataUrl);
+
+    rerender(
+      <ShowcaseMediaCarousel
+        title="Campaign clip refreshed"
+        priority
+        priorityPoster={priorityPoster}
+        mediaItems={[{ ...mediaItems[0], previewUrl: 'https://example.com/refreshed.webp' }]}
+      />
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute('poster', priorityPoster.dataUrl);
+  });
+
+  it('ignores a priority poster override for a different media item', () => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        priority
+        priorityPoster={{
+          mediaId: 'other-video',
+          dataUrl: 'data:image/webp;base64,UklGRgAAAABXRUJQ',
+        }}
+        mediaItems={[{
+          id: 'video-1',
+          url: 'https://example.com/clip.mp4',
+          previewUrl: 'https://example.com/clip-preview.webp',
+          mediaKind: 'video',
+          contentType: 'video/mp4',
+          originalName: 'clip.mp4',
+          width: 1080,
+          height: 1350,
+          durationSeconds: 8,
+          sortOrder: 0,
+        }]}
+      />
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute(
+      'poster',
+      'https://example.com/clip-preview.webp'
+    );
+  });
+
   it('renders the lightweight preview for feed images while retaining the original fallback', () => {
     render(
       <ShowcaseMediaCarousel

@@ -13,9 +13,11 @@ import {
     normalizeShowcaseSort,
     normalizeShowcaseUnlockFilter,
     type ShowcaseFeedPage,
+    type ShowcasePriorityPosterData,
 } from '@/lib/showcase';
 import { createMetadata } from '@/lib/seo';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
+import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster';
 
 type ShowcasePageProps = {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -29,7 +31,12 @@ function getFirstValue(value: string | string[] | undefined): string | undefined
     return Array.isArray(value) ? value[0] : value;
 }
 
-function getPriorityVideoPoster(feed: ShowcaseFeedPage): string | null {
+function getPriorityVideoPoster(feed: ShowcaseFeedPage): {
+    postId: string;
+    mediaId: string;
+    sourceUrl: string;
+    preloadUrl: string;
+} | null {
     const priorityItem = feed.items.slice(0, SHOWCASE_INITIAL_RENDER_COUNT).find((item) => (
         item.postFormat !== 'text'
         && (Boolean(item.mediaItems?.length) || Boolean(item.mediaUrl && item.mediaKind))
@@ -42,7 +49,12 @@ function getPriorityVideoPoster(feed: ShowcaseFeedPage): string | null {
         ?.slice()
         .sort((left, right) => left.sortOrder - right.sortOrder)[0];
     return cover?.mediaKind === 'video' && cover.previewUrl
-        ? buildOptimizedPreviewImageUrl(cover.previewUrl)
+        ? {
+            postId: priorityItem.id,
+            mediaId: cover.id,
+            sourceUrl: cover.previewUrl,
+            preloadUrl: buildOptimizedPreviewImageUrl(cover.previewUrl),
+        }
         : null;
 }
 
@@ -93,8 +105,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
     );
     const initialLimit = offset === 0 ? SHOWCASE_INITIAL_PAGE_SIZE : SHOWCASE_PAGE_SIZE;
 
-    const [initialFeed, sourceToolOptions] = await Promise.all([
-      getShowcaseFeedPage({
+    const initialFeedPromise = getShowcaseFeedPage({
         category,
         sort,
         offset,
@@ -104,18 +115,31 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         unlock,
         resource,
         countryCode: null,
-      }),
-      listSourceToolsCatalog(),
-    ]);
+    });
+    const sourceToolOptionsPromise = listSourceToolsCatalog();
+    const initialFeed = await initialFeedPromise;
     const priorityVideoPoster = getPriorityVideoPoster(initialFeed);
+    const [sourceToolOptions, inlinePosterDataUrl] = await Promise.all([
+        sourceToolOptionsPromise,
+        priorityVideoPoster
+            ? getInlineShowcasePriorityPoster(priorityVideoPoster.sourceUrl)
+            : Promise.resolve(null),
+    ]);
+    const initialPriorityPoster: ShowcasePriorityPosterData | null = priorityVideoPoster && inlinePosterDataUrl
+        ? {
+            postId: priorityVideoPoster.postId,
+            mediaId: priorityVideoPoster.mediaId,
+            dataUrl: inlinePosterDataUrl,
+        }
+        : null;
 
     return (
         <>
-            {priorityVideoPoster ? (
+            {priorityVideoPoster && !initialPriorityPoster ? (
                 <link
                     rel="preload"
                     as="image"
-                    href={priorityVideoPoster}
+                    href={priorityVideoPoster.preloadUrl}
                     fetchPriority="high"
                 />
             ) : null}
@@ -127,6 +151,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
                 initialUnlock={unlock}
                 initialResource={resource}
                 sourceToolOptions={sourceToolOptions}
+                initialPriorityPoster={initialPriorityPoster}
             />
         </>
     );

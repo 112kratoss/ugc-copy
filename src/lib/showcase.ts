@@ -14,6 +14,12 @@ export const SHOWCASE_INITIAL_PAGE_SIZE = 6;
 // during browser idle periods so media-heavy feeds do not monopolize startup.
 export const SHOWCASE_INITIAL_RENDER_COUNT = 2;
 
+export interface ShowcasePriorityPosterData {
+    postId: string;
+    mediaId: string;
+    dataUrl: string;
+}
+
 export type ShowcaseCategory = 'all' | 'image' | 'video' | 'text';
 export type ShowcaseSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
 export type ShowcaseUnlockFilter = 'all' | 'with-unlock' | 'free' | 'paid';

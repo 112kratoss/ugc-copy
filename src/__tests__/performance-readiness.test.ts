@@ -20,16 +20,23 @@ describe('production performance readiness', () => {
     const nextConfig = readProjectFile('next.config.ts');
     const showcaseModel = readProjectFile('src/lib/showcase.ts');
     const showcaseClient = readProjectFile('src/app/showcase/ShowcaseClient.tsx');
+    const showcasePage = readProjectFile('src/app/showcase/page.tsx');
+    const priorityPoster = readProjectFile('src/lib/showcase-priority-poster.ts');
     const marketplacePolicy = readProjectFile('src/lib/marketplace-resource-list-cache-policy.ts');
 
     expect(showcaseModel).toContain('SHOWCASE_INITIAL_RENDER_COUNT = 2');
     expect(showcaseModel).toContain('SHOWCASE_INITIAL_PAGE_SIZE = 6');
     expect(showcaseClient).toContain('items.slice(0, renderedItemCount)');
     expect(showcaseClient).toContain('requestIdleCallback(callback, { timeout })');
+    expect(showcaseClient).toContain('hasDelayedFirstDeferredRevealRef');
+    expect(showcaseClient).toContain('scheduleDelayedIdleWork(() =>');
     expect(showcaseClient).toContain("rootMargin: '400px 0px'");
     expect(showcaseClient).toMatch(/href="\/post\/new"[\s\S]*?prefetch={false}/);
     expect(showcaseClient).toMatch(/href="\/marketplace"[\s\S]*?prefetch={false}/);
     expect(readProjectFile('src/lib/preview-images.ts')).toContain('if (isGeneratedPreviewImage(src))');
+    expect(showcasePage).toContain('getInlineShowcasePriorityPoster(priorityVideoPoster.sourceUrl)');
+    expect(priorityPoster).toContain('SHOWCASE_PRIORITY_POSTER_MAX_BYTES = 64 * 1024');
+    expect(priorityPoster).toContain("return `data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`");
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
     expect(nextConfig).toContain('{ source: "/showcase", headers: showcasePreconnectHeaders }');
     expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 12');

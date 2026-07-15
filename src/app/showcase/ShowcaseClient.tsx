@@ -27,6 +27,7 @@ import {
     type ShowcaseFeedItem,
     type ShowcaseFeedPage,
     type ShowcaseMediaItem,
+    type ShowcasePriorityPosterData,
     type ShowcaseResourceFilter,
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
@@ -151,6 +152,7 @@ interface ShowcaseClientProps {
     initialUnlock: ShowcaseUnlockFilter;
     initialResource: ShowcaseResourceFilter;
     sourceToolOptions: SourceToolOption[];
+    initialPriorityPoster?: ShowcasePriorityPosterData | null;
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
@@ -272,6 +274,7 @@ export default function ShowcaseClient({
     initialUnlock,
     initialResource,
     sourceToolOptions,
+    initialPriorityPoster = null,
 }: ShowcaseClientProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -337,12 +340,24 @@ export default function ShowcaseClient({
     const anonymousHiddenPostIdsRef = useRef(new Set<string>());
     const anonymousHiddenCreatorIdsRef = useRef(new Set<string>());
     const anonymousPersonalizationStartedRef = useRef(false);
+    const hasDelayedFirstDeferredRevealRef = useRef(
+        initialFeed.items.length <= SHOWCASE_INITIAL_RENDER_COUNT
+    );
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
     );
     const directPostRequestRef = useRef<string | null>(null);
     const selectedItemIdRef = useRef<string | null>(selectedItemId);
+    const initialSnapshotRef = useRef({
+        initialFeed,
+        initialCategory,
+        initialSort,
+        initialTool,
+        initialUnlock,
+        initialResource,
+        user,
+    });
 
     useEffect(() => {
         selectedItemIdRef.current = selectedItemId;
@@ -501,6 +516,27 @@ export default function ShowcaseClient({
     }, []);
 
     useEffect(() => {
+        const previousSnapshot = initialSnapshotRef.current;
+        const snapshotIsUnchanged = previousSnapshot.initialFeed === initialFeed
+            && previousSnapshot.initialCategory === initialCategory
+            && previousSnapshot.initialSort === initialSort
+            && previousSnapshot.initialTool === initialTool
+            && previousSnapshot.initialUnlock === initialUnlock
+            && previousSnapshot.initialResource === initialResource
+            && previousSnapshot.user === user;
+        initialSnapshotRef.current = {
+            initialFeed,
+            initialCategory,
+            initialSort,
+            initialTool,
+            initialUnlock,
+            initialResource,
+            user,
+        };
+        if (snapshotIsUnchanged) {
+            return;
+        }
+
         const visibleInitialItems = user
             ? initialFeed.items
             : filterSessionHiddenItems(
@@ -517,6 +553,9 @@ export default function ShowcaseClient({
         setLoadMoreError(null);
         isLoadingMoreRef.current = false;
         anonymousPersonalizationStartedRef.current = false;
+        hasDelayedFirstDeferredRevealRef.current = (
+            visibleInitialItems.length <= SHOWCASE_INITIAL_RENDER_COUNT
+        );
         setCategory(initialCategory);
         setSort(initialSort);
         setTool(initialTool ?? 'all');
@@ -530,10 +569,21 @@ export default function ShowcaseClient({
             return;
         }
 
-        return scheduleIdleWork(() => {
-            setRenderedItemCount((currentCount) => Math.min(currentCount + 1, items.length));
-        });
-    }, [hasDeferredItems, items.length, renderedItemCount]);
+        const revealNextItem = () => {
+            startTransition(() => {
+                setRenderedItemCount((currentCount) => Math.min(currentCount + 1, items.length));
+            });
+        };
+
+        if (!hasDelayedFirstDeferredRevealRef.current) {
+            return scheduleDelayedIdleWork(() => {
+                hasDelayedFirstDeferredRevealRef.current = true;
+                revealNextItem();
+            });
+        }
+
+        return scheduleIdleWork(revealNextItem);
+    }, [hasDeferredItems, items.length, renderedItemCount, startTransition]);
 
     useEffect(() => {
         if (isAuthLoading || sort !== DEFAULT_SHOWCASE_SORT) {
@@ -1217,6 +1267,12 @@ export default function ShowcaseClient({
                                                         mediaItems={mediaItems}
                                                         title={item.title}
                                                         priority={item.id === priorityMediaItemId}
+                                                        priorityPoster={item.id === initialPriorityPoster?.postId
+                                                            ? {
+                                                                mediaId: initialPriorityPoster.mediaId,
+                                                                dataUrl: initialPriorityPoster.dataUrl,
+                                                            }
+                                                            : null}
                                                         onOpen={(mediaIndex) => openPreview(item, mediaIndex)}
                                                     />
                                                 ) : (

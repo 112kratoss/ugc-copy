@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface SaveablePostItem {
   id: string;
@@ -92,10 +92,16 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   const [items, setItems] = useState<TItem[]>(initialItems);
   const [savedItemIds, setSavedItemIds] = useState<Set<string>>(() => deriveSavedIds(initialItems));
   const [savingItemIds, setSavingItemIds] = useState<Set<string>>(() => new Set());
+  const previousInitialItemsRef = useRef(initialItems);
   const savedStateLookupIds = useMemo(() => getSavedStateLookupIds(initialItems), [initialItems]);
   const savedStateLookupKey = savedStateLookupIds.join(',');
 
   useEffect(() => {
+    if (previousInitialItemsRef.current === initialItems) {
+      return;
+    }
+
+    previousInitialItemsRef.current = initialItems;
     // Server pagination/filter changes replace the optimistic snapshot.
     setItems(initialItems);
     setSavedItemIds(deriveSavedIds(initialItems));

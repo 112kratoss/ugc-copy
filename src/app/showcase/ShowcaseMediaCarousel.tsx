@@ -16,6 +16,10 @@ interface ShowcaseMediaCarouselProps {
   className?: string;
   autoPlayVideo?: boolean;
   priority?: boolean;
+  priorityPoster?: {
+    mediaId: string;
+    dataUrl: string;
+  } | null;
   onOpen?: (index: number) => void;
   onIndexChange?: (index: number) => void;
   onMediaReady?: (index: number) => void;
@@ -33,6 +37,7 @@ export default function ShowcaseMediaCarousel({
   className = '',
   autoPlayVideo,
   priority = false,
+  priorityPoster = null,
   onOpen,
   onIndexChange,
   onMediaReady,
@@ -137,9 +142,11 @@ export default function ShowcaseMediaCarousel({
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
   const feedPreviewUrl = mode === 'feed' ? activeItem.previewUrl ?? null : null;
-  const feedPosterUrl = feedPreviewUrl
-    ? buildOptimizedPreviewImageUrl(feedPreviewUrl)
-    : null;
+  const feedPosterUrl = priorityPoster?.mediaId === activeItem.id
+    ? priorityPoster.dataUrl
+    : feedPreviewUrl
+      ? buildOptimizedPreviewImageUrl(feedPreviewUrl)
+      : null;
   const shouldLoadFeedPoster = mode !== 'feed'
     || priority
     || isNearViewport
