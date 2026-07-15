@@ -1,7 +1,8 @@
 import type { Session, User } from '@supabase/supabase-js';
+import { useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
@@ -10,7 +11,6 @@ import { signInWithGoogleOAuth } from './google-auth';
 import { createApiClient, type MagicbookletApiClient } from './api-client';
 import { getFeedInstallationId } from './feed-installation-id';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
-import { getProfileCreditsOrNull } from './auth-profile';
 import { claimPendingReferral } from './referral-attribution';
 import {
   registerForMobilePushNotifications,
@@ -55,13 +55,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
   const missingEnvKeys = useMemo(() => getMissingMobileEnvKeys(), []);
+  const sessionUserIdRef = useRef<string | null>(null);
+  const authStateVersionRef = useRef(0);
+  const profileRefreshRef = useRef<{ promise: Promise<void>; userId: string; version: number } | null>(null);
 
-  const resetAuthState = useCallback(() => {
-    setSession(null);
-    setCredits(null);
+  const applySessionState = useCallback((nextSession: Session | null) => {
+    const nextUserId = nextSession?.user?.id ?? null;
+    const userChanged = sessionUserIdRef.current !== nextUserId;
+    if (userChanged) {
+      authStateVersionRef.current += 1;
+      profileRefreshRef.current = null;
+    }
+    sessionUserIdRef.current = nextUserId;
+    setSession(nextSession);
+    if (userChanged || !nextUserId) setCredits(null);
+    // Navigation can continue from the persisted local session. Profile and
+    // credit data refresh independently in the background.
     setIsLoading(false);
   }, []);
+
+  const resetAuthState = useCallback(() => {
+    applySessionState(null);
+  }, [applySessionState]);
 
   const getAccessToken = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -100,15 +117,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [getAccessToken]
   );
 
+  const refreshProfileForUser = useCallback((userId: string) => {
+    const existing = profileRefreshRef.current;
+    const version = authStateVersionRef.current;
+    if (existing?.userId === userId && existing.version === version) return existing.promise;
+
+    let promise: Promise<void>;
+    promise = queryClient.fetchQuery({
+      queryKey: ['profile', userId],
+      queryFn: api.getProfile,
+      // Explicit refreshes after purchases or generations must observe the
+      // latest credit balance, while React Query still deduplicates in-flight
+      // startup/profile requests that share this canonical key.
+      staleTime: 0,
+    })
+      .then((profile) => {
+        if (sessionUserIdRef.current === userId && authStateVersionRef.current === version) {
+          setCredits(profile.credits ?? null);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to refresh profile after auth', error);
+      })
+      .finally(() => {
+        if (profileRefreshRef.current?.promise === promise) {
+          profileRefreshRef.current = null;
+        }
+      });
+    profileRefreshRef.current = { promise, userId, version };
+    return promise;
+  }, [api, queryClient]);
+
   const refreshProfile = useCallback(async () => {
     if (!isSupabaseConfigured) {
-      setSession(null);
-      setCredits(null);
-      setIsLoading(false);
+      resetAuthState();
       return;
     }
 
-    let latestSession: Session | null = null;
+    let userId = sessionUserIdRef.current;
+    if (userId) {
+      await refreshProfileForUser(userId);
+      return;
+    }
 
     try {
       await initializeSupabaseAuth();
@@ -120,7 +170,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         throw error;
       }
-      latestSession = data.session ?? null;
+      const latestSession = data.session ?? null;
+      applySessionState(latestSession);
+      userId = latestSession?.user?.id ?? null;
     } catch (error) {
       if (await recoverInvalidAuthSession(error)) {
         resetAuthState();
@@ -131,17 +183,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    setSession(latestSession ?? null);
-
-    if (!latestSession?.user) {
+    if (!userId) {
       resetAuthState();
       return;
     }
 
-    const nextCredits = await getProfileCreditsOrNull(api);
-    setCredits(nextCredits);
-    setIsLoading(false);
-  }, [api, resetAuthState]);
+    await refreshProfileForUser(userId);
+  }, [applySessionState, refreshProfileForUser, resetAuthState]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -149,25 +197,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    void refreshProfile();
-
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession ?? null);
+      applySessionState(nextSession ?? null);
       if (nextSession?.user) {
-        void refreshProfile().catch((error) => {
+        void refreshProfileForUser(nextSession.user.id).catch((error) => {
           console.warn('Failed to refresh auth state', error);
-          setIsLoading(false);
         });
-      } else {
-        setCredits(null);
-        setIsLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [refreshProfile]);
+    let active = true;
+    void (async () => {
+      try {
+        await initializeSupabaseAuth();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (!active) return;
+        const latestSession = data.session ?? null;
+        applySessionState(latestSession);
+        if (latestSession?.user) {
+          void refreshProfileForUser(latestSession.user.id).catch((profileError) => {
+            console.warn('Failed to refresh hydrated profile', profileError);
+          });
+        }
+      } catch (error) {
+        if (!active) return;
+        if (await recoverInvalidAuthSession(error)) {
+          resetAuthState();
+          return;
+        }
+        console.warn('Failed to recover mobile auth session', error);
+        resetAuthState();
+      }
+    })();
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [applySessionState, refreshProfileForUser, resetAuthState]);
 
   useEffect(() => {
     if (Platform.OS !== 'ios' && Platform.OS !== 'android') {

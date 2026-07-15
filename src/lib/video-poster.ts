@@ -1,7 +1,11 @@
 import { spawn } from 'child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import ffmpegStaticPath from 'ffmpeg-static';
 import sharp from 'sharp';
@@ -11,10 +15,23 @@ const PREVIEW_MAX_SIZE = 720;
 export async function createVideoPosterBuffer(body: Blob) {
   const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'generation-poster-'));
   const inputPath = path.join(/* turbopackIgnore: true */ tempDir, 'input-video');
+
+  try {
+    await pipeline(
+      Readable.fromWeb(body.stream() as NodeReadableStream<Uint8Array>),
+      createWriteStream(inputPath, { flags: 'wx' }),
+    );
+    return createVideoPosterBufferFromFile(inputPath);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+export async function createVideoPosterBufferFromFile(inputPath: string) {
+  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'generation-frame-'));
   const framePath = path.join(/* turbopackIgnore: true */ tempDir, 'frame.jpg');
 
   try {
-    await writeFile(inputPath, Buffer.from(await body.arrayBuffer()));
     try {
       await runFfmpeg(inputPath, framePath, '00:00:01.000');
     } catch {

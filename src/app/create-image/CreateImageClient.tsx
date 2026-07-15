@@ -52,7 +52,11 @@ import {
 } from '@/lib/image-elements';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
-import { fetchGenerationStatus } from '@/lib/generation-status-client';
+import {
+    announceGenerationStarted,
+    fetchGenerationStatus,
+    waitForNextGenerationStatusPoll,
+} from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
@@ -196,6 +200,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const hasResolvedInitialCatalogModel = useRef(false);
     const hasRestoredPersistedMedia = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
+    const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
@@ -221,6 +226,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
     const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
     const nowMs = useTicker(isGenerating);
+
+    useEffect(() => () => {
+        generationPollAbortControllerRef.current?.abort();
+    }, []);
 
 
     useEffect(() => {
@@ -705,48 +714,59 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         startedAtMs: number,
         estimatedTotalMs: number | null
     ): Promise<{ output: string; outputs: string[]; timing: GenerationTiming | null }> => {
-        const maxAttempts = 60; // 5 minutes max (5s intervals)
-        let attempts = 0;
+        const pollController = new AbortController();
+        generationPollAbortControllerRef.current?.abort();
+        generationPollAbortControllerRef.current = pollController;
+        const pollingStartedAt = Date.now();
 
-        while (attempts < maxAttempts) {
-            const data = await fetchGenerationStatus({
-                url: `/api/generate-image?id=${predictionId}`,
-                accessToken,
-            });
-
-            if (data.timing) {
-                setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
-                    ...data.timing,
-                    estimatedTotalMs,
+        try {
+            while (Date.now() - pollingStartedAt < 5 * 60 * 1000) {
+                const data = await fetchGenerationStatus({
+                    url: `/api/generate-image?id=${predictionId}`,
+                    accessToken,
+                    signal: pollController.signal,
                 });
-            } else {
-                setGenerationTiming((current) => current ?? createLocalGenerationTiming({
-                    kind: 'image',
-                    phaseLabel: 'Waiting for provider',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
+
+                if (data.timing) {
+                    setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
+                        ...data.timing,
+                        estimatedTotalMs,
+                    });
+                } else {
+                    setGenerationTiming((current) => current ?? createLocalGenerationTiming({
+                        kind: 'image',
+                        phaseLabel: 'Waiting for provider',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                }
+
+                if (data.status === 'succeeded') {
+                    const outputs = Array.isArray(data.outputs) && data.outputs.length > 0
+                        ? data.outputs.filter((url): url is string => typeof url === 'string' && url.length > 0)
+                        : (data.output ? [data.output] : []);
+
+                    return {
+                        output: data.output || outputs[0] || '',
+                        outputs,
+                        timing: data.timing ?? null,
+                    };
+                }
+
+                if (data.status === 'failed') {
+                    throw new Error(data.error || 'Image generation failed');
+                }
+
+                await waitForNextGenerationStatusPoll(data.retryAfterMs, {
+                    signal: pollController.signal,
+                });
             }
-
-            if (data.status === 'succeeded') {
-                const outputs = Array.isArray(data.outputs) && data.outputs.length > 0
-                    ? data.outputs.filter((url): url is string => typeof url === 'string' && url.length > 0)
-                    : (data.output ? [data.output] : []);
-
-                return {
-                    output: data.output || outputs[0] || '',
-                    outputs,
-                    timing: data.timing ?? null,
-                };
+        } finally {
+            if (generationPollAbortControllerRef.current === pollController) {
+                generationPollAbortControllerRef.current = null;
             }
-
-            if (data.status === 'failed') {
-                throw new Error(data.error || 'Image generation failed');
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            attempts++;
         }
+
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
@@ -973,6 +993,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             }
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
+            announceGenerationStarted();
+            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
 
             const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
             setOutputImage(result.output);
@@ -980,8 +1002,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
-            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
-
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
             if (errorMessage === BACKGROUND_PROCESSING_ERROR) {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getGenerationOutput, isGenerationFinished, pollGenerationStatus } from '../lib/generation';
+import { getGenerationOutput, getPollDelayMs, isGenerationFinished, pollGenerationStatus } from '../lib/generation';
 
 describe('generation polling helpers', () => {
   afterEach(() => {
@@ -28,14 +28,40 @@ describe('generation polling helpers', () => {
     const onTick = vi.fn();
 
     const resultPromise = pollGenerationStatus(getStatus, {
-      intervalMs: 25,
-      timeoutMs: 1000,
+      intervalMs: 1000,
+      timeoutMs: 5000,
       onTick,
+      random: () => 0,
     });
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(1000);
 
     await expect(resultPromise).resolves.toEqual({ status: 'succeeded', outputs: ['done.png'] });
     expect(onTick).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors bounded server retry hints and adds only positive jitter', () => {
+    expect(getPollDelayMs(15_000, 4_000, () => 0)).toBe(15_000);
+    expect(getPollDelayMs(15_000, 4_000, () => 1)).toBe(16_000);
+    expect(getPollDelayMs(100, 4_000, () => 0)).toBe(1_000);
+    expect(getPollDelayMs(90_000, 4_000, () => 0)).toBe(30_000);
+    expect(getPollDelayMs(undefined, 4_000, () => 0)).toBe(4_000);
+  });
+
+  it('waits for the app readiness gate before making a status request', async () => {
+    const status = { status: 'succeeded', output: 'done.png' };
+    const getStatus = vi.fn(async () => status);
+    let release!: () => void;
+    const waitUntilReady = vi.fn(() => new Promise<void>((resolve) => {
+      release = resolve;
+    }));
+
+    const resultPromise = pollGenerationStatus(getStatus, { waitUntilReady });
+    await Promise.resolve();
+    expect(getStatus).not.toHaveBeenCalled();
+    release();
+
+    await expect(resultPromise).resolves.toEqual(status);
+    expect(waitUntilReady).toHaveBeenCalledTimes(1);
   });
 });

@@ -109,8 +109,17 @@ interface GenerationsApiResponse {
     };
 }
 
+interface OwnerPostsApiResponse {
+    posts?: OwnerPost[];
+    pageInfo?: {
+        hasMore?: boolean;
+        nextOffset?: number | null;
+    };
+}
+
 const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
+const CREATIONS_POSTS_PAGE_SIZE = 36;
 const SIGNED_MEDIA_URL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const STUDIO_GRID_CLASS = 'grid items-stretch gap-4 xl:gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,16rem),1fr))]';
 
@@ -274,6 +283,14 @@ function buildGenerationDetailUrl(generationId: string): string {
     }).toString()}`;
 }
 
+function buildGenerationStatusRefreshUrl(generationIds: string[]): string {
+    return `/api/generations?${new URLSearchParams({
+        detail: 'status',
+        ids: generationIds.join(','),
+        limit: String(Math.max(1, generationIds.length)),
+    }).toString()}`;
+}
+
 function hasFullGenerationDetails(generation: Generation): boolean {
     return generation.input_media !== undefined || generation.paywallPrefill !== undefined;
 }
@@ -339,6 +356,14 @@ function mergeGenerationAppend(previousGenerations: Generation[], incomingGenera
     ];
 }
 
+function mergePostAppend(previousPosts: OwnerPost[], incomingPosts: OwnerPost[]): OwnerPost[] {
+    const previousIds = new Set(previousPosts.map((post) => post.id));
+    return [
+        ...previousPosts,
+        ...incomingPosts.filter((post) => !previousIds.has(post.id)),
+    ];
+}
+
 export default function CreationsPage() {
     const router = useRouter();
     const pathname = usePathname();
@@ -362,9 +387,13 @@ export default function CreationsPage() {
     const [generationsNextCursor, setGenerationsNextCursor] = useState<string | null>(null);
     const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
+    const [postsNextOffset, setPostsNextOffset] = useState<number | null>(null);
+    const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
+    const [postsLoadMoreError, setPostsLoadMoreError] = useState<string | null>(null);
     const [generationDetailLoadingId, setGenerationDetailLoadingId] = useState<string | null>(null);
     const [generationDetailError, setGenerationDetailError] = useState<string | null>(null);
     const generationsRef = useRef<Generation[]>([]);
+    const generationStatusRefreshInFlightRef = useRef(false);
     const [filter, setFilter] = useState<FilterType>('all');
     const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
     const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
@@ -428,7 +457,7 @@ export default function CreationsPage() {
                 fetch(buildGenerationsPageUrl(), {
                     headers: { 'Authorization': `Bearer ${accessToken}` },
                 }),
-                fetch('/api/posts?scope=owner&includeArchived=true', {
+                fetch(`/api/posts?scope=owner&includeArchived=true&limit=${CREATIONS_POSTS_PAGE_SIZE}&offset=0`, {
                     headers: { 'Authorization': `Bearer ${accessToken}` },
                 }),
                 fetch('/api/profile', {
@@ -449,12 +478,16 @@ export default function CreationsPage() {
                 setGenerationsLoadMoreError(null);
             }
 
-            const postsData = await postsRes.json();
+            const postsData = await postsRes.json() as OwnerPostsApiResponse;
             let nextPosts: OwnerPost[] | null = null;
             if (postsRes.ok) {
                 const loadedPosts = (postsData.posts || []) as OwnerPost[];
                 nextPosts = loadedPosts;
                 setPosts(loadedPosts);
+                setPostsNextOffset(postsData.pageInfo?.hasMore
+                    ? postsData.pageInfo.nextOffset ?? null
+                    : null);
+                setPostsLoadMoreError(null);
             }
 
             let nextProfile: ProfileApiResponse | null = null;
@@ -519,6 +552,91 @@ export default function CreationsPage() {
             setIsLoadingMoreGenerations(false);
         }
     }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, router, userId]);
+
+    const refreshProcessingGenerationStatuses = useCallback(async () => {
+        if (!accessToken || generationStatusRefreshInFlightRef.current) return;
+
+        const activeIds = generationsRef.current
+            .filter((generation) => (
+                !generation.archived_at
+                && (generation.status === 'processing' || generation.status === 'waiting')
+            ))
+            .map((generation) => generation.id);
+        if (activeIds.length === 0) return;
+
+        generationStatusRefreshInFlightRef.current = true;
+        try {
+            const response = await fetch(buildGenerationStatusRefreshUrl(activeIds), {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            if (!response.ok) return;
+
+            const payload = await response.json() as GenerationsApiResponse;
+            const statuses = new Map(
+                (Array.isArray(payload.generations) ? payload.generations : [])
+                    .map((generation) => [generation.id, generation] as const)
+            );
+            const reachedTerminalState = activeIds.some((generationId) => {
+                const status = statuses.get(generationId)?.status;
+                return status === 'succeeded' || status === 'failed';
+            });
+
+            if (reachedTerminalState) {
+                await fetchCreations();
+                return;
+            }
+
+            const nextGenerations = generationsRef.current.map((generation) => {
+                const statusUpdate = statuses.get(generation.id);
+                return statusUpdate
+                    ? {
+                        ...generation,
+                        status: statusUpdate.status,
+                        completed_at: statusUpdate.completed_at ?? generation.completed_at,
+                    }
+                    : generation;
+            });
+            generationsRef.current = nextGenerations;
+            setGenerations(nextGenerations);
+        } catch (error) {
+            console.error('Failed to refresh processing generation statuses:', error);
+        } finally {
+            generationStatusRefreshInFlightRef.current = false;
+        }
+    }, [accessToken, fetchCreations]);
+
+    const loadMorePosts = useCallback(async () => {
+        if (!accessToken || !userId) {
+            router.push('/login');
+            return;
+        }
+        if (postsNextOffset === null || isLoadingMorePosts) return;
+
+        setIsLoadingMorePosts(true);
+        setPostsLoadMoreError(null);
+        try {
+            const response = await fetch(
+                `/api/posts?scope=owner&includeArchived=true&limit=${CREATIONS_POSTS_PAGE_SIZE}&offset=${postsNextOffset}`,
+                { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            const data = await response.json() as OwnerPostsApiResponse;
+            if (!response.ok) throw new Error('Failed to load more posts.');
+
+            const nextPosts = mergePostAppend(posts, Array.isArray(data.posts) ? data.posts : []);
+            setPosts(nextPosts);
+            setPostsNextOffset(data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null);
+            writeCreationsWorkspaceCache(userId, {
+                generations: generationsRef.current,
+                posts: nextPosts,
+                profile,
+            });
+        } catch (error) {
+            console.error('Failed to load more posts:', error);
+            setPostsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more posts.');
+        } finally {
+            setIsLoadingMorePosts(false);
+        }
+    }, [accessToken, isLoadingMorePosts, posts, postsNextOffset, profile, router, userId]);
 
     const cacheGenerations = useCallback((nextGenerations: Generation[]) => {
         generationsRef.current = nextGenerations;
@@ -630,13 +748,13 @@ export default function CreationsPage() {
                 return;
             }
 
-            void fetchCreations();
+            void refreshProcessingGenerationStatuses();
         }, 30000);
 
         return () => {
             window.clearInterval(intervalId);
         };
-    }, [fetchCreations, hasProcessingGenerations]);
+    }, [hasProcessingGenerations, refreshProcessingGenerationStatuses]);
 
     const openPreviewModal = async (generation: Generation) => {
         try {
@@ -2146,6 +2264,24 @@ export default function CreationsPage() {
                                 Publish a post from a generation or upload media in the post composer. Private and archived posts will show here once they exist.
                             </p>
                         </div>
+                        {postsNextOffset !== null ? (
+                            <button
+                                type="button"
+                                onClick={() => void loadMorePosts()}
+                                disabled={isLoadingMorePosts}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {isLoadingMorePosts ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                    <RotateCcw className="h-4 w-4" />
+                                )}
+                                {isLoadingMorePosts ? 'Loading older posts...' : 'Search older posts'}
+                            </button>
+                        ) : null}
+                        {postsLoadMoreError ? (
+                            <p className="text-sm text-rose-300">{postsLoadMoreError}</p>
+                        ) : null}
                         <Link
                             href="/post/new"
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]"
@@ -2396,6 +2532,26 @@ export default function CreationsPage() {
                                 );
                             })}
                         </div>
+                        {postsNextOffset !== null ? (
+                            <div className="mt-6 flex flex-col items-center gap-3">
+                                {postsLoadMoreError ? (
+                                    <p className="text-sm text-rose-300">{postsLoadMoreError}</p>
+                                ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => void loadMorePosts()}
+                                    disabled={isLoadingMorePosts}
+                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {isLoadingMorePosts ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <RotateCcw className="h-4 w-4" />
+                                    )}
+                                    {isLoadingMorePosts ? 'Loading more...' : 'Load more posts'}
+                                </button>
+                            </div>
+                        ) : null}
                     </div>
                 )}
             </div>

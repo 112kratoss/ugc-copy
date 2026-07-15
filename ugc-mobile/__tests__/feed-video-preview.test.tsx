@@ -125,8 +125,8 @@ describe('FeedVideoPreview', () => {
     expect(videoState.useVideoPlayer).not.toHaveBeenCalled();
     expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
     const images = tree!.root.findAll((node) => String(node.type) === 'image');
-    expect(images).toHaveLength(2);
-    expect(images.some((node) => node.props.contentFit === 'contain')).toBe(true);
+    expect(images).toHaveLength(1);
+    expect(images[0].props.contentFit).toBe('cover');
   });
 
   it('does not mount a video player while an inactive poster is unavailable', () => {

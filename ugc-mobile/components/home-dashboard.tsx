@@ -112,24 +112,24 @@ export function HomeDashboard() {
   });
 
   const profileQuery = useQuery({
-    queryKey: ['home-profile', user?.id],
+    queryKey: ['profile', user?.id],
     enabled: Boolean(user),
     queryFn: () => api.getProfile(),
+    staleTime: 1000 * 60 * 5,
   });
 
   const sellerPostsQuery = useQuery({
-    queryKey: ['home-seller-posts', user?.id],
-    enabled: Boolean(user),
-    queryFn: () => api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
+    queryKey: ['owner-posts-sales-summary', user?.id],
+    enabled: Boolean(user && menuVisible),
+    queryFn: () => api.listOwnerPosts({ includeArchived: true, includeSummary: true, limit: 1, visibility: 'all' }),
+    staleTime: 1000 * 60 * 2,
   });
 
   useEffect(() => {
     if (!isFocused || !user) return;
-    void Promise.all([
-      generationsQuery.refetch?.(),
-      sellerPostsQuery.refetch?.(),
-    ]);
-  }, [isFocused, user?.id]);
+    void generationsQuery.refetch?.();
+    if (menuVisible) void sellerPostsQuery.refetch?.();
+  }, [isFocused, menuVisible, user?.id]);
 
   const showcaseQuery = useInfiniteQuery({
     queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }, user?.id),
@@ -163,7 +163,7 @@ export function HomeDashboard() {
   );
 
   const salesSummary = useMemo(
-    () => getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
+    () => sellerPostsQuery.data?.summary ?? getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
     [sellerPostsQuery.data]
   );
 
@@ -711,9 +711,10 @@ function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width:
           <FeedMediaFrame
             kind="image"
             url={item.previewUrl || item.mediaUrl as string}
-            backdropUrl={item.previewUrl}
             cacheKey={item.previewCacheKey}
             thumbhash={item.previewThumbhash}
+            imageBackdrop="none"
+            imageContentFit="cover"
             recyclingKey={`home-community:${item.id}`}
             style={{ position: 'absolute', inset: 0 }}
           />

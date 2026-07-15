@@ -129,7 +129,6 @@ export function EditProfileScreen() {
     onSuccess: async () => {
       await refreshProfile();
       await queryClient.invalidateQueries({ queryKey: ['profile'] });
-      await queryClient.invalidateQueries({ queryKey: ['home-profile'] });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (router.canGoBack()) {
         router.back();

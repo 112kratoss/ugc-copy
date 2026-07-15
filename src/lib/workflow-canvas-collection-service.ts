@@ -14,11 +14,14 @@ import {
   type WorkflowCanvasGraph,
 } from '@/lib/workflow-canvas';
 import { createWorkflowCanvasLibrarySummary } from '@/lib/workflow-canvas-preview';
+import type { WorkflowCanvasLibrarySummary } from '@/lib/workflow-canvas-preview';
 import {
   isMissingWorkflowCanvasHistorySchemaError,
+  isMissingWorkflowLibrarySummaryColumnError,
   isMissingWorkflowLifecycleColumnsError,
   withWorkflowCanvasLifecycleDefaults,
   WORKFLOW_CANVAS_LIST_SELECT,
+  WORKFLOW_CANVAS_LIST_SELECT_WITH_GRAPH,
   WORKFLOW_CANVAS_LIST_SELECT_LEGACY,
   WORKFLOW_CANVAS_SELECT,
   WORKFLOW_CANVAS_SELECT_LEGACY,
@@ -27,7 +30,8 @@ import {
 type WorkflowCanvasListRow = {
   id: string;
   title: string;
-  graph: Partial<WorkflowCanvasGraph> | null;
+  graph?: Partial<WorkflowCanvasGraph> | null;
+  library_summary?: WorkflowCanvasLibrarySummary | null;
   updated_at: string;
   revision: number;
   status?: string | null;
@@ -87,6 +91,17 @@ export async function listWorkflowCanvasesForRoute({
     error = result.error;
   }
 
+  if (error && isMissingWorkflowLibrarySummaryColumnError(error)) {
+    const graphResult = await supabase
+      .from('workflow_canvases')
+      .select(WORKFLOW_CANVAS_LIST_SELECT_WITH_GRAPH)
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false });
+
+    data = (graphResult.data as WorkflowCanvasListRow[] | null) ?? null;
+    error = graphResult.error;
+  }
+
   if (error && isMissingWorkflowLifecycleColumnsError(error)) {
     const legacyResult = await supabase
       .from('workflow_canvases')
@@ -107,10 +122,10 @@ export async function listWorkflowCanvasesForRoute({
     ok: true,
     body: {
       canvases: (data || []).map((canvas) => {
-        const { graph, ...metadata } = canvas;
+        const { graph, library_summary: librarySummary, ...metadata } = canvas;
         return {
           ...withWorkflowCanvasLifecycleDefaults(metadata),
-          ...createWorkflowCanvasLibrarySummary(graph),
+          ...(librarySummary ?? createWorkflowCanvasLibrarySummary(graph)),
         };
       }),
     },

@@ -147,7 +147,7 @@ describe('showcase feed route adapter service', () => {
     expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
       anonymousKeyHash: null,
-      bypassCache: true,
+      bypassCache: false,
       category: 'video',
       resource: 'prompt',
       sort: 'top-sales',

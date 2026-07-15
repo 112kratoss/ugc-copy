@@ -47,11 +47,14 @@ describe('mobile backend boundary', () => {
 
   it('allows only server-authorized signed Supabase uploads from mobile', () => {
     const mediaSource = readFileSync(path.join(mobileRoot, 'lib/media.ts'), 'utf8');
+    const uploadSource = readFileSync(path.join(mobileRoot, 'lib/upload-file.ts'), 'utf8');
 
     expect(mediaSource).toContain('createMediaUpload');
     expect(mediaSource).toContain('createMediaReadUrl');
     expect(mediaSource).toContain('createProfileMediaUpload');
-    expect(mediaSource.match(/uploadToSignedUrl/g)).toHaveLength(3);
+    expect(mediaSource.match(/await uploadUriToSignedUrl/g)).toHaveLength(3);
+    expect(uploadSource).toContain("httpMethod: 'PUT'");
+    expect(uploadSource).not.toContain('.arrayBuffer()');
     expect(mediaSource).not.toMatch(/\.upload\s*\(/);
     expect(mediaSource).not.toMatch(/createSignedUrl\s*\(/);
     expect(mediaSource).not.toMatch(/\.download\s*\(/);

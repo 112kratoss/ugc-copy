@@ -48,12 +48,16 @@ function createUserSupabaseMock() {
               eq() {
                 return query;
               },
-              async order() {
+              order() {
                 return {
-                  data: null,
-                  error: {
-                    code: '42P01',
-                    message: 'relation "workflow_canvas_assistant_messages" does not exist',
+                  async limit() {
+                    return {
+                      data: null,
+                      error: {
+                        code: '42P01',
+                        message: 'relation "workflow_canvas_assistant_messages" does not exist',
+                      },
+                    };
                   },
                 };
               },

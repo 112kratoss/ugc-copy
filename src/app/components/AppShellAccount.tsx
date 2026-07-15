@@ -14,6 +14,7 @@ import {
 import { supabase } from '@/lib/supabase';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
+import { publishAppShellAuthentication } from './app-shell-auth-state';
 
 type ProfileSummary = {
   display_name: string | null;
@@ -71,6 +72,7 @@ export default function AppShellAccount() {
     let mounted = true;
 
     async function loadProfile(nextSession: Session | null) {
+      publishAppShellAuthentication(Boolean(nextSession?.user?.id));
       if (!nextSession?.user?.id) {
         if (mounted) {
           setSession(null);
@@ -160,6 +162,7 @@ export default function AppShellAccount() {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    publishAppShellAuthentication(false);
     setSession(null);
     setProfile(null);
     setAccountOpen(false);

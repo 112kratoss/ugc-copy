@@ -6,7 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getStoredMediaLocation, type MediaBucket } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/models';
-import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
+import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
 
 export type GeneratedMediaBucket = Extract<MediaBucket, 'generated_images' | 'generated_videos' | 'generated_audio'>;
@@ -91,10 +91,27 @@ function inferExtension(sourceName: string, contentType: string, kind: Generatio
   return 'mp4';
 }
 
-export async function persistGenerationMediaBlob(params: {
+function inferContentType(sourceName: string, kind: GenerationMediaKind): string {
+  const extension = path.extname(sourceName).toLowerCase();
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.gif') return 'image/gif';
+  if (extension === '.mov') return 'video/quicktime';
+  if (extension === '.webm') return kind === 'audio' ? 'audio/webm' : 'video/webm';
+  if (extension === '.mp4' || extension === '.m4v') return kind === 'audio' ? 'audio/mp4' : 'video/mp4';
+  if (extension === '.mp3') return 'audio/mpeg';
+  if (extension === '.wav') return 'audio/wav';
+  if (extension === '.ogg') return 'audio/ogg';
+  if (kind === 'image') return 'image/jpeg';
+  if (kind === 'audio') return 'audio/mpeg';
+  return 'video/mp4';
+}
+
+async function persistGenerationMediaBody(params: {
   supabase: SupabaseClient;
   generation: Pick<DurableGenerationMediaRecord, 'id' | 'userId' | 'model' | 'category'>;
-  blob: Blob;
+  body: Blob | ReadableStream<Uint8Array>;
   sourceName: string;
   contentType?: string | null;
 }): Promise<{
@@ -103,13 +120,15 @@ export async function persistGenerationMediaBlob(params: {
 }> {
   const bucket = getGenerationMediaBucket(params.generation);
   const kind = getGenerationMediaKind(params.generation);
-  const contentType = params.blob.type || params.contentType || '';
+  const contentType = params.contentType
+    || (params.body instanceof Blob ? params.body.type : '')
+    || inferContentType(params.sourceName, kind);
   const extension = inferExtension(params.sourceName, contentType, kind);
   const filePath = `${params.generation.userId}/restored_${params.generation.id}_${randomUUID()}.${extension}`;
   const { error } = await params.supabase.storage
     .from(bucket)
-    .upload(filePath, params.blob, {
-      contentType: contentType || undefined,
+    .upload(filePath, params.body, {
+      contentType,
       upsert: false,
     });
 
@@ -126,24 +145,43 @@ export async function persistGenerationMediaBlob(params: {
   };
 }
 
+export async function persistGenerationMediaBlob(params: {
+  supabase: SupabaseClient;
+  generation: Pick<DurableGenerationMediaRecord, 'id' | 'userId' | 'model' | 'category'>;
+  blob: Blob;
+  sourceName: string;
+  contentType?: string | null;
+}): Promise<{
+  outputUrl: string;
+  createdLocation: CreatedGenerationMediaLocation;
+}> {
+  return persistGenerationMediaBody({
+    ...params,
+    body: params.blob,
+  });
+}
+
 async function loadShowcaseDerivative(
   supabase: SupabaseClient,
   showcaseAssetPath: string,
   generationId: string,
-): Promise<{ blob: Blob; sourceName: string } | null> {
+  kind: GenerationMediaKind,
+): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; sourceName: string } | null> {
   if (!showcaseAssetPath.startsWith(`showcase/${generationId}/`)) {
     return null;
   }
   const { data, error } = await supabase.storage
     .from('showcase_media')
-    .download(showcaseAssetPath);
+    .download(showcaseAssetPath)
+    .asStream();
 
   if (error || !data) {
     return null;
   }
 
   return {
-    blob: data,
+    body: data,
+    contentType: inferContentType(showcaseAssetPath, kind),
     sourceName: path.basename(showcaseAssetPath),
   };
 }
@@ -153,7 +191,8 @@ async function loadOutputSource(
   outputUrl: string,
   userId: string,
   kind: GenerationMediaKind,
-): Promise<{ blob: Blob; sourceName: string } | null> {
+): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; sourceName: string } | null> {
+  const sourceName = path.basename(outputUrl);
   const storedLocation = getStoredMediaLocation(outputUrl);
   if (storedLocation) {
     if (!isStorageObjectOwnedByUser(storedLocation.filePath, userId)) {
@@ -161,14 +200,16 @@ async function loadOutputSource(
     }
     const { data, error } = await supabase.storage
       .from(storedLocation.bucket)
-      .download(storedLocation.filePath);
+      .download(storedLocation.filePath)
+      .asStream();
 
     if (error || !data) {
       return null;
     }
 
     return {
-      blob: data,
+      body: data,
+      contentType: inferContentType(storedLocation.filePath, kind),
       sourceName: path.basename(storedLocation.filePath),
     };
   }
@@ -178,7 +219,12 @@ async function loadOutputSource(
   }
 
   try {
-    return await downloadAllowlistedRemoteMedia({ url: outputUrl, kind });
+    const media = await openAllowlistedRemoteMedia({ url: outputUrl, kind });
+    return {
+      body: media.body,
+      contentType: media.contentType,
+      sourceName: media.sourceName || sourceName,
+    };
   } catch {
     return null;
   }
@@ -211,6 +257,7 @@ export async function ensureDurableGenerationMedia(params: {
         params.supabase,
         params.generation.showcaseAssetPath,
         params.generation.id,
+        getGenerationMediaKind(params.generation),
       )
     : null;
   const source = showcaseSource ?? (
@@ -228,10 +275,11 @@ export async function ensureDurableGenerationMedia(params: {
     throw new Error('Generation media could not be loaded from its showcase derivative or original source.');
   }
 
-  return persistGenerationMediaBlob({
+  return persistGenerationMediaBody({
     supabase: params.supabase,
     generation: params.generation,
-    blob: source.blob,
+    body: source.body,
+    contentType: source.contentType,
     sourceName: source.sourceName,
   });
 }

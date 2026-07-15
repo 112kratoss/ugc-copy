@@ -50,7 +50,11 @@ import {
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
-import { fetchGenerationStatus } from '@/lib/generation-status-client';
+import {
+    announceGenerationStarted,
+    fetchGenerationStatus,
+    waitForNextGenerationStatusPoll,
+} from '@/lib/generation-status-client';
 import {
     buildElementHandle,
     createElementHandleReplacementMap,
@@ -453,6 +457,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
+    const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const startImageInputRef = useRef<HTMLInputElement>(null);
     const endImageInputRef = useRef<HTMLInputElement>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
@@ -488,6 +493,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const nowMs = useTicker(isGenerating);
+
+    useEffect(() => () => {
+        generationPollAbortControllerRef.current?.abort();
+    }, []);
 
     useEffect(() => {
         if (remixId) return;
@@ -2052,42 +2061,52 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         startedAtMs: number,
         estimatedTotalMs: number | null
     ): Promise<{ output: string; timing: GenerationTiming | null }> => {
-        const maxAttempts = 120;
-        let attempts = 0;
+        const pollController = new AbortController();
+        generationPollAbortControllerRef.current?.abort();
+        generationPollAbortControllerRef.current = pollController;
+        const pollingStartedAt = Date.now();
 
-        while (attempts < maxAttempts) {
-            const data = await fetchGenerationStatus({
-                url: `/api/generate-video?id=${predictionId}`,
-                accessToken,
-            });
-
-            if (data.timing) {
-                setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
-                    ...data.timing,
-                    estimatedTotalMs,
+        try {
+            while (Date.now() - pollingStartedAt < 10 * 60 * 1000) {
+                const data = await fetchGenerationStatus({
+                    url: `/api/generate-video?id=${predictionId}`,
+                    accessToken,
+                    signal: pollController.signal,
                 });
-            } else {
-                setGenerationTiming((current) => current ?? createLocalGenerationTiming({
-                    kind: 'video',
-                    phaseLabel: 'Waiting for provider',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-            }
 
-            if (data.status === 'succeeded') {
-                return {
-                    output: data.output || '',
-                    timing: data.timing ?? null,
-                };
-            }
+                if (data.timing) {
+                    setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
+                        ...data.timing,
+                        estimatedTotalMs,
+                    });
+                } else {
+                    setGenerationTiming((current) => current ?? createLocalGenerationTiming({
+                        kind: 'video',
+                        phaseLabel: 'Waiting for provider',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                }
 
-            if (data.status === 'failed') {
-                throw new Error(data.error || 'Video generation failed');
-            }
+                if (data.status === 'succeeded') {
+                    return {
+                        output: data.output || '',
+                        timing: data.timing ?? null,
+                    };
+                }
 
-            await new Promise((resolve) => setTimeout(resolve, 5000));
-            attempts++;
+                if (data.status === 'failed') {
+                    throw new Error(data.error || 'Video generation failed');
+                }
+
+                await waitForNextGenerationStatusPoll(data.retryAfterMs, {
+                    signal: pollController.signal,
+                });
+            }
+        } finally {
+            if (generationPollAbortControllerRef.current === pollController) {
+                generationPollAbortControllerRef.current = null;
+            }
         }
 
         throw new Error(BACKGROUND_PROCESSING_ERROR);
@@ -2594,13 +2613,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
+            announceGenerationStarted();
+            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
 
             const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
-            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
         } catch (generationError) {
             const errorMessage = generationError instanceof Error ? generationError.message : 'Something went wrong';
             if (errorMessage === BACKGROUND_PROCESSING_ERROR) {

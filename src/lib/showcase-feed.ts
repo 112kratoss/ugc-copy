@@ -237,10 +237,12 @@ async function fetchPostRows(
   return (result.data ?? []) as PostRow[];
 }
 
-async function fetchPostRowsByIds(postIds: string[]): Promise<PostRow[] | null> {
+async function fetchPostRowsByIds(
+  postIds: string[],
+  adminSupabase = createServiceClient()
+): Promise<PostRow[] | null> {
   if (postIds.length === 0) return [];
 
-  const adminSupabase = createServiceClient();
   const result = await adminSupabase
     .from('posts')
     .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
@@ -344,6 +346,63 @@ function compareByTopSales(left: ShowcaseFeedItem, right: ShowcaseFeedItem) {
     || right.id.localeCompare(left.id);
 }
 
+function isMissingShowcaseTopSalesRpcError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: string; message?: string };
+  return (
+    candidate.code === '42883'
+    || candidate.code === 'PGRST202'
+    || Boolean(candidate.message?.includes('list_showcase_top_sales_post_ids'))
+  );
+}
+
+async function getShowcaseTopSalesPage(params: {
+  adminSupabase: ReturnType<typeof createServiceClient>;
+  category: ShowcaseCategory;
+  limit: number;
+  offset: number;
+  toolSlug: string | null;
+}): Promise<ShowcaseFeedPage | null> {
+  const { adminSupabase, category, limit, offset, toolSlug } = params;
+  if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc !== 'function') return null;
+  const { data, error } = await adminSupabase.rpc('list_showcase_top_sales_post_ids', {
+    p_category: category,
+    p_tool_slug: toolSlug,
+    p_offset: offset,
+    p_limit: limit + 1,
+  });
+
+  if (error) {
+    if (isMissingShowcaseTopSalesRpcError(error)) return null;
+    throw error;
+  }
+
+  const postIds = ((data ?? []) as Array<{ post_id?: string | null }>)
+    .map((row) => row.post_id)
+    .filter((postId): postId is string => Boolean(postId));
+  const hasMore = postIds.length > limit;
+  const pagePostIds = postIds.slice(0, limit);
+  const rows = await fetchPostRowsByIds(pagePostIds, adminSupabase);
+  if (rows === null) return null;
+
+  const resolvedItems = await resolvePostRowsToFeedItems(rows, adminSupabase);
+  const itemById = new Map(resolvedItems.map((item) => [item.id, item]));
+  const items = pagePostIds.flatMap((postId) => {
+    const item = itemById.get(postId);
+    return item ? [item] : [];
+  });
+  return {
+    items,
+    availableTools: buildAvailableTools(items),
+    pageInfo: {
+      hasMore,
+      nextOffset: hasMore ? offset + limit : null,
+      limit,
+      offset,
+    },
+  };
+}
+
 function buildAvailableTools(items: ShowcaseFeedItem[]) {
   const availableToolCounts = new Map<string, number>();
   for (const item of items) {
@@ -367,8 +426,10 @@ export async function resolvePostRowsToFeedItems(
   const userIds = Array.from(new Set(visibleRows.map((row) => row.user_id).filter(Boolean))) as string[];
   const generationIds = Array.from(new Set(visibleRows.map((row) => row.generation_id).filter(Boolean))) as string[];
 
-  const profilesMap: Record<string, ProfileSummary> = {};
-  if (userIds.length > 0) {
+  const loadProfiles = async () => {
+    const profilesMap: Record<string, ProfileSummary> = {};
+    if (userIds.length === 0) return profilesMap;
+
     const { data: profiles, error: profilesError } = await adminSupabase
       .from('profiles')
       .select('id, username, display_name, avatar_url')
@@ -381,10 +442,13 @@ export async function resolvePostRowsToFeedItems(
         profilesMap[profile.id] = profile;
       }
     }
-  }
+    return profilesMap;
+  };
 
-  const generationInfoMap = new Map<string, { model: string; previewUrl: string | null }>();
-  if (generationIds.length > 0) {
+  const loadGenerationInfo = async () => {
+    const generationInfoMap = new Map<string, { model: string; previewUrl: string | null }>();
+    if (generationIds.length === 0) return generationInfoMap;
+
     type GenerationInfoRow = {
       id: string;
       model: string;
@@ -412,44 +476,34 @@ export async function resolvePostRowsToFeedItems(
     if (modelsError) {
       console.error('Error fetching showcase generation models:', modelsError);
     } else {
-      for (const generation of models ?? []) {
-        if (typeof generation.id === 'string' && typeof generation.model === 'string') {
-          const previewSource =
-            typeof generation.preview_url === 'string' && generation.preview_url
-              ? generation.preview_url
-              : typeof generation.thumbnail_url === 'string' && generation.thumbnail_url
-                ? generation.thumbnail_url
-                : null;
-          generationInfoMap.set(generation.id, {
-            model: generation.model,
-            previewUrl: previewSource ? await resolveStoredMediaUrl(adminSupabase, previewSource) : null,
-          });
-        }
+      const entries = await Promise.all((models ?? []).flatMap((generation) => {
+        if (typeof generation.id !== 'string' || typeof generation.model !== 'string') return [];
+        const previewSource =
+          typeof generation.preview_url === 'string' && generation.preview_url
+            ? generation.preview_url
+            : typeof generation.thumbnail_url === 'string' && generation.thumbnail_url
+              ? generation.thumbnail_url
+              : null;
+        return [Promise.resolve(previewSource ? resolveStoredMediaUrl(adminSupabase, previewSource) : null)
+          .then((previewUrl) => [generation.id, { model: generation.model, previewUrl }] as const)];
+      }));
+      for (const [generationId, generationInfo] of entries) {
+        generationInfoMap.set(generationId, generationInfo);
       }
     }
-  }
+    return generationInfoMap;
+  };
 
-  const assetMap = await getMarketplaceAssetSummaryMap(
-    visibleRows.map((row) => row.id),
-    adminSupabase
-  );
-  const recipeAssetMap = await getPublicGenerationRecipeAssetSummaryMap(
-    visibleRows.filter((row) => !assetMap.has(row.id)),
-    adminSupabase
-  );
-  const mediaItemsMap = await loadPostMediaItemsMap(
-    adminSupabase,
-    visibleRows.map((row) => row.id)
-  );
-
-  const sourceToolsMap = new Map<string, Array<{
-    toolLabel: string;
-    toolSlug?: string | null;
-    modelLabel?: string | null;
-    modelSlug?: string | null;
-  }>>();
-  try {
+  const loadSourceTools = async () => {
+    const sourceToolsMap = new Map<string, Array<{
+      toolLabel: string;
+      toolSlug?: string | null;
+      modelLabel?: string | null;
+      modelSlug?: string | null;
+    }>>();
+    try {
     const postIds = visibleRows.map((row) => row.id);
+    if (postIds.length === 0) return sourceToolsMap;
     const { data: sourceToolsRows, error: sourceToolsError } = await adminSupabase
       .from('post_source_tools')
       .select('post_id, tool_label, tool_slug, model_label, model_slug')
@@ -474,9 +528,35 @@ export async function resolvePostRowsToFeedItems(
         }
       }
     }
-  } catch {
-    // Non-critical; fall back to no source tools.
-  }
+    } catch {
+      // Non-critical; fall back to no source tools.
+    }
+    return sourceToolsMap;
+  };
+
+  const postIds = visibleRows.map((row) => row.id);
+  const assetMapPromise = getMarketplaceAssetSummaryMap(postIds, adminSupabase);
+  const recipeAssetMapPromise = assetMapPromise.then((assetMap) =>
+    getPublicGenerationRecipeAssetSummaryMap(
+      visibleRows.filter((row) => !assetMap.has(row.id)),
+      adminSupabase
+    )
+  );
+  const [
+    profilesMap,
+    generationInfoMap,
+    assetMap,
+    recipeAssetMap,
+    mediaItemsMap,
+    sourceToolsMap,
+  ] = await Promise.all([
+    loadProfiles(),
+    loadGenerationInfo(),
+    assetMapPromise,
+    recipeAssetMapPromise,
+    loadPostMediaItemsMap(adminSupabase, postIds),
+    loadSourceTools(),
+  ]);
 
   const resolvedItems = await Promise.all(
     visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
@@ -637,6 +717,17 @@ async function getShowcaseFeedPageBase(
   resourceFilter: ShowcaseResourceFilter
 ): Promise<ShowcaseFeedPage> {
   const adminSupabase = createServiceClient();
+  if (sort === 'top-sales' && unlockFilter === 'all' && resourceFilter === 'all') {
+    const topSalesPage = await getShowcaseTopSalesPage({
+      adminSupabase,
+      category,
+      limit,
+      offset,
+      toolSlug,
+    });
+    if (topSalesPage) return topSalesPage;
+  }
+
   const needsFilteredScan =
     sort === 'top-sales' ||
     unlockFilter !== 'all' ||
@@ -956,36 +1047,6 @@ async function attachViewerStateToFeed(
     return feed;
   }
 
-  let savedItems: Array<{ post_id?: string; generation_id?: string }> | null = null;
-  const { data: postSavedItems, error } = await adminSupabase
-    .from('post_saves')
-    .select('post_id')
-    .eq('user_id', viewerUserId)
-    .in('post_id', feed.items.map((item) => item.id));
-
-  if (error && isMissingPostsSchemaError(error)) {
-    const legacySavedResult = await adminSupabase
-      .from('showcase_saves')
-      .select('generation_id')
-      .eq('user_id', viewerUserId)
-      .in('generation_id', feed.items.map((item) => item.generationId ?? item.id));
-
-    if (legacySavedResult.error) {
-      console.error('Error fetching legacy showcase saved state for feed page:', legacySavedResult.error);
-      return feed;
-    }
-
-    savedItems = legacySavedResult.data as Array<{ generation_id: string }> | null;
-  } else if (error) {
-    console.error('Error fetching showcase saved state for feed page:', error);
-    return feed;
-  } else {
-    savedItems = postSavedItems as Array<{ post_id: string }> | null;
-  }
-
-  const savedIdSet = new Set(
-    (savedItems ?? []).map((row) => row.post_id ?? row.generation_id).filter(Boolean)
-  );
   const remixEligibleBundleIds = Array.from(
     new Set(
       feed.items
@@ -994,9 +1055,42 @@ async function attachViewerStateToFeed(
         .filter((bundleId): bundleId is string => Boolean(bundleId) && !isGenerationRecipeAssetId(bundleId))
     )
   );
-  let purchasedBundleIdSet = new Set<string>();
+  const loadSavedIds = async () => {
+    let savedItems: Array<{ post_id?: string; generation_id?: string }> | null = null;
+    const { data: postSavedItems, error } = await adminSupabase
+      .from('post_saves')
+      .select('post_id')
+      .eq('user_id', viewerUserId)
+      .in('post_id', feed.items.map((item) => item.id));
 
-  if (remixEligibleBundleIds.length > 0) {
+    if (error && isMissingPostsSchemaError(error)) {
+      const legacySavedResult = await adminSupabase
+        .from('showcase_saves')
+        .select('generation_id')
+        .eq('user_id', viewerUserId)
+        .in('generation_id', feed.items.map((item) => item.generationId ?? item.id));
+
+      if (legacySavedResult.error) {
+        console.error('Error fetching legacy showcase saved state for feed page:', legacySavedResult.error);
+        return new Set<string>();
+      }
+      savedItems = legacySavedResult.data as Array<{ generation_id: string }> | null;
+    } else if (error) {
+      console.error('Error fetching showcase saved state for feed page:', error);
+      return new Set<string>();
+    } else {
+      savedItems = postSavedItems as Array<{ post_id: string }> | null;
+    }
+
+    return new Set(
+      (savedItems ?? [])
+        .map((row) => row.post_id ?? row.generation_id)
+        .filter((itemId): itemId is string => Boolean(itemId))
+    );
+  };
+
+  const loadPurchasedBundleIds = async () => {
+    if (remixEligibleBundleIds.length === 0) return new Set<string>();
     const { data: purchaseRows, error: purchaseError } = await adminSupabase
       .from('post_resource_bundle_purchases')
       .select('bundle_id')
@@ -1005,14 +1099,20 @@ async function attachViewerStateToFeed(
 
     if (purchaseError) {
       console.error('Error fetching post resource bundle purchase state for feed page:', purchaseError);
-    } else {
-      purchasedBundleIdSet = new Set(
-        ((purchaseRows ?? []) as Array<{ bundle_id?: string | null }>)
-          .map((row) => row.bundle_id)
-          .filter((bundleId): bundleId is string => Boolean(bundleId))
-      );
+      return new Set<string>();
     }
-  }
+
+    return new Set(
+      ((purchaseRows ?? []) as Array<{ bundle_id?: string | null }>)
+        .map((row) => row.bundle_id)
+        .filter((bundleId): bundleId is string => Boolean(bundleId))
+    );
+  };
+
+  const [savedIdSet, purchasedBundleIdSet] = await Promise.all([
+    loadSavedIds(),
+    loadPurchasedBundleIds(),
+  ]);
 
   return {
     ...feed,
@@ -1125,9 +1225,12 @@ async function attachLocalizedAssetPrices(
   feed: ShowcaseFeedPage,
   countryCode?: string | null
 ): Promise<ShowcaseFeedPage> {
-  const assets = feed.items
-    .map((item) => item.asset)
-    .filter((asset): asset is NonNullable<ShowcaseFeedItem['asset']> => Boolean(asset));
+  const assets = Array.from(new Map(
+    feed.items
+      .map((item) => item.asset)
+      .filter((asset): asset is NonNullable<ShowcaseFeedItem['asset']> => Boolean(asset))
+      .map((asset) => [asset.id, asset] as const)
+  ).values());
 
   if (assets.length === 0) {
     return feed;

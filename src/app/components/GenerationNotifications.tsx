@@ -11,6 +11,7 @@ import {
   getGenerationNotificationCopy,
   type GenerationKind,
 } from '@/lib/generation-feedback';
+import { subscribeToGenerationStarted } from '@/lib/generation-status-client';
 import { supabase } from '@/lib/supabase';
 
 const STATUS_CACHE_STORAGE_KEY = 'magicbooklet:generation-status-cache:v1';
@@ -154,6 +155,20 @@ export default function GenerationNotifications() {
 
     knownStatusesRef.current = readStatusCache();
     let isActive = true;
+    let syncInFlight = false;
+    let hasCompletedInitialSync = false;
+    let pollingRequested = false;
+    let pollingRequestVersion = 0;
+    let shouldFetchFullList = true;
+    let activeGenerationIds = new Set<string>();
+    let pollTimeoutId: number | null = null;
+
+    const clearScheduledPoll = () => {
+      if (pollTimeoutId !== null) {
+        window.clearTimeout(pollTimeoutId);
+        pollTimeoutId = null;
+      }
+    };
 
     const dismissNotification = (notificationId: string) => {
       setNotifications((current) => current.filter((item) => item.id !== notificationId));
@@ -191,18 +206,28 @@ export default function GenerationNotifications() {
 
     const syncGenerations = async () => {
       if (document.visibilityState === 'hidden') {
+        pollingRequested = true;
         return;
       }
+      if (syncInFlight) return;
+
+      clearScheduledPoll();
+      syncInFlight = true;
+      const requestVersionAtStart = pollingRequestVersion;
+      const fetchingFullList = shouldFetchFullList || activeGenerationIds.size === 0;
+      const pollUrl = fetchingFullList
+        ? GENERATION_STATUS_POLL_URL
+        : `${GENERATION_STATUS_POLL_URL}&ids=${encodeURIComponent(Array.from(activeGenerationIds).join(','))}`;
 
       try {
-        const response = await fetch(GENERATION_STATUS_POLL_URL, {
+        const response = await fetch(pollUrl, {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
           },
         });
 
         if (!response.ok) {
-          return;
+          throw new Error(`Generation notification sync failed (${response.status}).`);
         }
 
         const data = await response.json();
@@ -234,19 +259,57 @@ export default function GenerationNotifications() {
 
         knownStatusesRef.current = nextStatuses;
         writeStatusCache(nextStatuses);
+        hasCompletedInitialSync = true;
+        activeGenerationIds = new Set(
+          generations
+            .filter((generation) => generation.status === 'processing' || generation.status === 'waiting')
+            .map((generation) => generation.id),
+        );
+        shouldFetchFullList = pollingRequestVersion !== requestVersionAtStart;
+        pollingRequested = pollingRequestVersion !== requestVersionAtStart
+          || activeGenerationIds.size > 0;
+
+        if (pollingRequested && isActive) {
+          pollTimeoutId = window.setTimeout(() => {
+            void syncGenerations();
+          }, POLL_INTERVAL_MS);
+        }
       } catch (error) {
         console.error('Failed to sync generation notifications:', error);
+        if (isActive && (!hasCompletedInitialSync || pollingRequested)) {
+          pollTimeoutId = window.setTimeout(() => {
+            void syncGenerations();
+          }, POLL_INTERVAL_MS * 2);
+        }
+      } finally {
+        syncInFlight = false;
+      }
+    };
+
+    const requestPolling = () => {
+      pollingRequestVersion += 1;
+      pollingRequested = true;
+      shouldFetchFullList = true;
+      clearScheduledPoll();
+      void syncGenerations();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && pollingRequested) {
+        clearScheduledPoll();
+        void syncGenerations();
       }
     };
 
     void syncGenerations();
-    const intervalId = window.setInterval(() => {
-      void syncGenerations();
-    }, POLL_INTERVAL_MS);
+    const unsubscribeGenerationStarted = subscribeToGenerationStarted(requestPolling);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       isActive = false;
-      window.clearInterval(intervalId);
+      clearScheduledPoll();
+      unsubscribeGenerationStarted();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       Object.values(timeoutMapRef.current).forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
       });

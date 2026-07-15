@@ -33,10 +33,16 @@ describe('durable generation media', () => {
   });
 
   it('copies a working showcase derivative into private generated storage', async () => {
-    const download = vi.fn(async () => ({
-      data: new Blob(['image-bytes'], { type: 'image/jpeg' }),
+    const asStream = vi.fn(async () => ({
+      data: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('image-bytes'));
+          controller.close();
+        },
+      }),
       error: null,
     }));
+    const download = vi.fn(() => ({ asStream }));
     const upload = vi.fn(async () => ({ data: null, error: null }));
     const storageFrom = vi.fn((bucket: string) => {
       if (bucket === 'showcase_media') {
@@ -70,7 +76,7 @@ describe('durable generation media', () => {
     expect(download).toHaveBeenCalledWith('showcase/gen-1/working.jpg');
     expect(upload).toHaveBeenCalledWith(
       expect.stringMatching(/^user-1\/restored_gen-1_.+\.jpg$/),
-      expect.any(Blob),
+      expect.any(ReadableStream),
       expect.objectContaining({
         contentType: 'image/jpeg',
         upsert: false,
@@ -87,10 +93,11 @@ describe('durable generation media', () => {
     const timeoutSignal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     let requestInit: RequestInit | undefined;
-    const download = vi.fn(async () => ({
+    const asStream = vi.fn(async () => ({
       data: null,
       error: { message: 'missing' },
     }));
+    const download = vi.fn(() => ({ asStream }));
     const upload = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       requestInit = init;

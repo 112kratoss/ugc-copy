@@ -216,7 +216,7 @@ export default async function Home() {
           />
 
           <div className="ui-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {CREATOR_TOOLS.map((tool) => (
+            {CREATOR_TOOLS.map((tool, index) => (
               <CreatorToolCard
                 key={tool.id}
                 tool={tool}
@@ -227,6 +227,7 @@ export default async function Home() {
                       item={previewByTool[tool.id]}
                       alt={tool.label}
                       className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"
+                      priority={index === 0}
                     />
                   ) : undefined
                 }

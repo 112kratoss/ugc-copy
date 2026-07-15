@@ -664,6 +664,54 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).toContain('2 slots left');
   });
 
+  it('keeps completed uploads and retries only failed media without reopening the picker', async () => {
+    paramsState.params = {};
+    vi.mocked(pickMediaList).mockResolvedValue([
+      { uri: 'file:///ready.png', fileName: 'ready.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      { uri: 'file:///retry.png', fileName: 'retry.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+    ]);
+    let retryAttempts = 0;
+    vi.mocked(uploadPickedMedia).mockImplementation(async (uri, options) => {
+      options?.onProgress?.({ bytesSent: 1024, totalBytes: 1024, fraction: 1 });
+      if (uri.endsWith('retry.png') && retryAttempts++ === 0) {
+        throw new Error('Temporary upload failure');
+      }
+      return {
+        signedUrl: uri,
+        storagePath: `uploads/${options?.fileName ?? 'media.png'}`,
+        mimeType: options?.mimeType ?? 'image/png',
+        fileName: options?.fileName ?? 'media.png',
+        kind: 'image',
+        durationSeconds: null,
+        sizeBytes: options?.sizeBytes ?? null,
+      };
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+    renderer.act(() => {
+      findPressableByText(tree!.root, 'Media').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Add media').props.onPress();
+    });
+
+    expect(collectText(tree!.root)).toContain('1 media upload failed');
+    expect(collectText(tree!.root)).toContain('ready.png');
+    expect(pickMediaList).toHaveBeenCalledTimes(1);
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Retry 1 media upload').props.onPress();
+    });
+
+    expect(collectText(tree!.root)).toContain('retry.png');
+    expect(collectText(tree!.root)).not.toContain('1 media upload failed');
+    expect(pickMediaList).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(uploadPickedMedia).mock.calls.filter(([uri]) => uri === 'file:///retry.png')).toHaveLength(2);
+  });
+
   it('reorders gallery media by pressing and holding the card', async () => {
     vi.useFakeTimers();
     paramsState.params = {};

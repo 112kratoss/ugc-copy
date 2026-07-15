@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchGenerationStatus } from '@/lib/generation-status-client';
+import {
+  fetchGenerationStatus,
+  getGenerationStatusRetryDelayMs,
+  waitForNextGenerationStatusPoll,
+} from '@/lib/generation-status-client';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('fetchGenerationStatus', () => {
   it('throws the API error immediately for a non-success response', async () => {
@@ -81,5 +89,58 @@ describe('fetchGenerationStatus', () => {
     expect(fetchImpl).toHaveBeenCalledWith('/api/generate-image?id=prediction-4', {
       headers: { Authorization: 'Bearer token' },
     });
+  });
+
+  it('forwards cancellation to the underlying request', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'processing', retryAfterMs: 15_000 }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    await fetchGenerationStatus({
+      url: '/api/generate-image?id=prediction-5',
+      accessToken: 'token',
+      signal: controller.signal,
+      fetchImpl,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith('/api/generate-image?id=prediction-5', {
+      headers: { Authorization: 'Bearer token' },
+      signal: controller.signal,
+    });
+  });
+
+  it('honors server retry hints with bounded positive jitter', () => {
+    expect(getGenerationStatusRetryDelayMs(15_000, () => 0)).toBe(15_000);
+    expect(getGenerationStatusRetryDelayMs(15_000, () => 1)).toBe(16_000);
+    expect(getGenerationStatusRetryDelayMs(100, () => 0)).toBe(1_000);
+    expect(getGenerationStatusRetryDelayMs(90_000, () => 0)).toBe(30_000);
+    expect(getGenerationStatusRetryDelayMs(undefined, () => 0)).toBe(15_000);
+  });
+
+  it('waits for the retry hint and can be cancelled', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const completed = vi.fn();
+    const waiting = waitForNextGenerationStatusPoll(2_000, {
+      signal: controller.signal,
+      random: () => 0,
+      documentRef: null,
+    }).then(completed);
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(completed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await waiting;
+    expect(completed).toHaveBeenCalledTimes(1);
+
+    const cancelled = waitForNextGenerationStatusPoll(2_000, {
+      signal: controller.signal,
+      random: () => 0,
+      documentRef: null,
+    });
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

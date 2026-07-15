@@ -27,7 +27,7 @@ import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showc
 import {
   fetchWithProviderTimeout,
 } from '@/lib/provider-fetch';
-import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
+import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
 import {
   validatePostResourceBundleInput,
@@ -79,7 +79,7 @@ export type ShowcasePublishRequestBody = {
 export type ShowcasePublishServiceDependencies = {
   ensureDurableGenerationMedia: typeof ensureDurableGenerationMedia;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
-  downloadAllowlistedRemoteMedia: typeof downloadAllowlistedRemoteMedia;
+  openAllowlistedRemoteMedia: typeof openAllowlistedRemoteMedia;
   getStoredMediaLocation: typeof getStoredMediaLocation;
   buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
   buildFreeGenerationReferenceBundle: typeof buildFreeGenerationReferenceBundle;
@@ -125,8 +125,8 @@ function resolveDependencies(
   return {
     ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
-    downloadAllowlistedRemoteMedia:
-      dependencies?.downloadAllowlistedRemoteMedia ?? downloadAllowlistedRemoteMedia,
+    openAllowlistedRemoteMedia:
+      dependencies?.openAllowlistedRemoteMedia ?? openAllowlistedRemoteMedia,
     getStoredMediaLocation: dependencies?.getStoredMediaLocation ?? getStoredMediaLocation,
     buildGenerationReferenceResourceItems:
       dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
@@ -181,6 +181,46 @@ function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean):
   return legacyIsPublic ? 'public' : 'private';
 }
 
+function inferShowcaseContentType(sourceName: string, category: ShowcaseCategory) {
+  const extension = path.extname(sourceName).toLowerCase();
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.gif') return 'image/gif';
+  if (extension === '.mov') return 'video/quicktime';
+  if (extension === '.webm') return 'video/webm';
+  if (extension === '.mp4' || extension === '.m4v') return 'video/mp4';
+  return category === 'image' ? 'image/jpeg' : 'video/mp4';
+}
+
+async function downloadStoredShowcaseSource(
+  adminSupabase: SupabaseClient,
+  bucket: string,
+  filePath: string,
+): Promise<{ body: Blob | ReadableStream<Uint8Array>; contentType: string | null }> {
+  const builder = adminSupabase.storage.from(bucket).download(filePath);
+  const streamBuilder = builder as typeof builder & {
+    asStream?: () => PromiseLike<{
+      data: ReadableStream<Uint8Array> | null;
+      error: { message?: string } | null;
+    }>;
+  };
+
+  if (typeof streamBuilder.asStream === 'function') {
+    const { data, error } = await streamBuilder.asStream();
+    if (error || !data) {
+      throw new Error(`Failed to load source media from ${bucket}/${filePath}`);
+    }
+    return { body: data, contentType: null };
+  }
+
+  const { data, error } = await builder;
+  if (error || !data) {
+    throw new Error(`Failed to load source media from ${bucket}/${filePath}`);
+  }
+  return { body: data, contentType: data.type || null };
+}
+
 async function createShowcaseDerivative({
   adminSupabase,
   category,
@@ -197,7 +237,7 @@ async function createShowcaseDerivative({
   outputUrl: string;
 }) {
   const storedLocation = dependencies.getStoredMediaLocation(outputUrl);
-  let fileBlob: Blob;
+  let fileBody: Blob | ReadableStream<Uint8Array>;
   let sourceName: string;
   let contentType: string | null = null;
 
@@ -206,24 +246,21 @@ async function createShowcaseDerivative({
       throw new Error('Generation media path does not belong to its owner.');
     }
     sourceName = storedLocation.filePath.split('/').pop() || `${generationId}.${inferExtension(outputUrl, category)}`;
-    const { data, error } = await adminSupabase.storage
-      .from(storedLocation.bucket)
-      .download(storedLocation.filePath);
-
-    if (error || !data) {
-      throw new Error(`Failed to load source media from ${storedLocation.bucket}/${storedLocation.filePath}`);
-    }
-
-    fileBlob = data;
-    contentType = data.type || null;
+    const source = await downloadStoredShowcaseSource(
+      adminSupabase,
+      storedLocation.bucket,
+      storedLocation.filePath,
+    );
+    fileBody = source.body;
+    contentType = source.contentType;
   } else if (outputUrl.startsWith('http')) {
-    const downloaded = await dependencies.downloadAllowlistedRemoteMedia({
+    const downloaded = await dependencies.openAllowlistedRemoteMedia({
       url: outputUrl,
       kind: category,
     });
     sourceName = downloaded.sourceName || `${generationId}.${inferExtension(outputUrl, category)}`;
-    fileBlob = downloaded.blob;
-    contentType = downloaded.blob.type || null;
+    fileBody = downloaded.body;
+    contentType = downloaded.contentType;
   } else {
     throw new Error('Unsupported media source for showcase publishing');
   }
@@ -233,9 +270,9 @@ async function createShowcaseDerivative({
 
   const { error: uploadError } = await adminSupabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
-    .upload(showcaseAssetPath, fileBlob, {
+    .upload(showcaseAssetPath, fileBody, {
       cacheControl: '3600',
-      contentType: contentType || (category === 'image' ? 'image/jpeg' : 'video/mp4'),
+      contentType: contentType || inferShowcaseContentType(sourceName, category),
       upsert: true,
     });
 

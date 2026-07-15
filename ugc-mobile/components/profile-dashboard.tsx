@@ -103,7 +103,7 @@ export function ProfileDashboard({
   const postsQuery = useQuery({
     queryKey: ['profile-owner-posts', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.listOwnerPosts({ includeArchived: false, visibility: 'all' }),
+    queryFn: () => api.listOwnerPosts({ includeArchived: false, includeSummary: true, limit: 24, visibility: 'all' }),
   });
 
   const savedQuery = useQuery({
@@ -150,7 +150,7 @@ export function ProfileDashboard({
     [allPostCards]
   );
   const salesSummary = useMemo(
-    () => getOwnerPostSalesSummary(postsQuery.data?.posts),
+    () => postsQuery.data?.summary ?? getOwnerPostSalesSummary(postsQuery.data?.posts),
     [postsQuery.data]
   );
   const profile = profileQuery.data;

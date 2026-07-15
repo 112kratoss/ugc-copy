@@ -43,6 +43,8 @@ type WorkflowAssistantMessageBody = {
   content?: unknown;
 };
 
+const WORKFLOW_ASSISTANT_PROMPT_HISTORY_LIMIT = 6;
+
 export type WorkflowAssistantMessageRouteResult =
   | {
       ok: true;
@@ -90,7 +92,8 @@ async function loadRecentAssistantMessages({
       .select('id, canvas_id, role, content, proposal_id, created_at')
       .eq('canvas_id', canvasId)
       .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(WORKFLOW_ASSISTANT_PROMPT_HISTORY_LIMIT);
 
     if (messageHistoryResult.error) {
       if (isMissingWorkflowCanvasAssistantSchemaError(messageHistoryResult.error)) {
@@ -117,7 +120,7 @@ async function loadRecentAssistantMessages({
 
     return {
       kind: 'ready' as const,
-      recentMessages: normalizeAssistantMessages(messageHistoryResult.data ?? []).slice(-6),
+      recentMessages: normalizeAssistantMessages([...(messageHistoryResult.data ?? [])].reverse()),
     };
   } catch (error) {
     console.error('Failed to preflight workflow assistant persistence:', error);

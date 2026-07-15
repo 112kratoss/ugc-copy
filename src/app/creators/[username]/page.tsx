@@ -14,7 +14,7 @@ import {
   Twitter,
 } from 'lucide-react';
 
-import { getCreatorProfilePageData } from '@/lib/creator-profile';
+import { getCreatorProfilePageData, getCreatorProfileSummary } from '@/lib/creator-profile';
 import { buildCreatorProfilePath } from '@/lib/profile';
 import { createMetadata } from '@/lib/seo';
 import { OptionalAuth } from '@/app/components/RouteAuthBoundary';
@@ -27,17 +27,17 @@ type CreatorPageProps = {
 
 export async function generateMetadata({ params }: CreatorPageProps): Promise<Metadata> {
   const { username } = await params;
-  const data = await getCreatorProfilePageData(username);
+  const profile = await getCreatorProfileSummary(username);
 
-  if (!data) {
+  if (!profile) {
     return { title: 'Creator Not Found' };
   }
 
   return createMetadata({
-    title: `${data.profile.displayName} (@${data.profile.username})`,
-    description: data.profile.bio || `Browse @${data.profile.username}'s public creations on Magicbooklet.`,
-    path: buildCreatorProfilePath(data.profile.username),
-    image: data.profile.coverUrl || data.profile.avatarUrl || undefined,
+    title: `${profile.displayName} (@${profile.username})`,
+    description: profile.bio || `Browse @${profile.username}'s public creations on Magicbooklet.`,
+    path: buildCreatorProfilePath(profile.username),
+    image: profile.coverUrl || profile.avatarUrl || undefined,
   });
 }
 

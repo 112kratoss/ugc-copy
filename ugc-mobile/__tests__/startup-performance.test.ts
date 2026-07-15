@@ -17,4 +17,30 @@ describe('mobile startup performance contracts', () => {
     expect(authSource).not.toContain('configureIapForUser');
     expect(pricingSource).toContain('configureIapForUser');
   });
+
+  it('unblocks navigation from the persisted session before profile credits finish refreshing', () => {
+    const authSource = readProjectFile('lib/auth.tsx');
+    const applySessionStart = authSource.indexOf('const applySessionState');
+    const applySessionEnd = authSource.indexOf('const resetAuthState', applySessionStart);
+    const applySessionSource = authSource.slice(applySessionStart, applySessionEnd);
+    const hydrationStart = authSource.indexOf('const latestSession = data.session ?? null;', authSource.indexOf('useEffect(() =>'));
+    const hydrationEnd = authSource.indexOf('} catch (error)', hydrationStart);
+    const hydrationSource = authSource.slice(hydrationStart, hydrationEnd);
+
+    expect(applySessionSource).toContain('setIsLoading(false)');
+    expect(hydrationSource.indexOf('applySessionState(latestSession)'))
+      .toBeLessThan(hydrationSource.indexOf('refreshProfileForUser(latestSession.user.id)'));
+    expect(authSource).toContain('profileRefreshRef.current');
+    expect(authSource).toContain('existing?.userId === userId && existing.version === version');
+  });
+
+  it('does not fetch seller history until a hidden side menu is opened', () => {
+    const homeSource = readProjectFile('components/home-dashboard.tsx');
+    const workspaceMenuSource = readProjectFile('components/workspace-side-menu-gesture-layer.tsx');
+
+    expect(homeSource).toContain("queryKey: ['owner-posts-sales-summary', user?.id]");
+    expect(homeSource).toContain('enabled: Boolean(user && menuVisible)');
+    expect(workspaceMenuSource).toContain("queryKey: ['owner-posts-sales-summary', user?.id]");
+    expect(workspaceMenuSource).toContain('enabled: Boolean(user && menuVisible)');
+  });
 });

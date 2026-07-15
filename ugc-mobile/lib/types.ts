@@ -412,6 +412,7 @@ export interface GenerationStatusResponse {
   outputs?: string[];
   error?: string | null;
   timing?: unknown;
+  retryAfterMs?: number | null;
 }
 
 export interface GenerationElementDescriptor {
@@ -965,6 +966,17 @@ export interface OwnerPostListItem {
 export interface OwnerPostsResponse {
   success: boolean;
   posts: OwnerPostListItem[];
+  pageInfo?: {
+    hasMore: boolean;
+    limit: number | null;
+    nextOffset: number | null;
+    offset: number;
+  };
+  summary?: {
+    earningsUsdCents: number;
+    listingCount: number;
+    salesCount: number;
+  };
 }
 
 export interface CreatePostResponse {

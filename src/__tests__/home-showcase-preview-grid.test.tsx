@@ -33,8 +33,8 @@ vi.mock('framer-motion', () => ({
 }));
 
 vi.mock('@/app/components/HoverVideo', () => ({
-  HoverVideo: ({ src, className }: { src: string; className?: string }) => (
-    <video data-testid="hover-video" src={src} className={className} />
+  HoverVideo: ({ src, poster, className }: { src: string; poster?: string | null; className?: string }) => (
+    <video data-testid="hover-video" data-original-src={src} poster={poster ?? undefined} className={className} />
   ),
 }));
 
@@ -200,5 +200,59 @@ describe('HomeShowcasePreviewGrid', () => {
     const image = screen.getByRole('img', { name: 'Campaign Frame' });
     expect(image).toHaveAttribute('loading', 'lazy');
     expect(image).toHaveAttribute('decoding', 'async');
+  });
+
+  it('renders existing preview media in cards while retaining the original for detail', () => {
+    render(<HomeShowcasePreviewGrid items={[createShowcaseItem({
+      mediaUrl: 'https://example.com/original.jpg',
+      mediaItems: [{
+        id: 'media-1',
+        url: 'https://example.com/original.jpg',
+        previewUrl: 'https://example.com/preview.webp',
+        mediaKind: 'image',
+        contentType: 'image/jpeg',
+        originalName: 'original.jpg',
+        width: 1080,
+        height: 1350,
+        durationSeconds: null,
+        sortOrder: 0,
+      }],
+    })]} />);
+
+    expect(screen.getByRole('img', { name: 'Campaign Frame' }))
+      .toHaveAttribute('src', 'https://example.com/preview.webp');
+
+    fireEvent.click(screen.getByRole('button', { name: /preview campaign frame/i }));
+    expect(within(screen.getByRole('dialog')).getByRole('img', { name: 'Campaign Frame' }))
+      .toHaveAttribute('src', 'https://example.com/original.jpg');
+  });
+
+  it('uses the preview as a video poster without replacing the detail source', () => {
+    render(<HomeShowcasePreviewGrid items={[createShowcaseItem({
+      mediaUrl: 'https://example.com/original.mp4',
+      mediaKind: 'video',
+      category: 'video',
+      mediaItems: [{
+        id: 'media-1',
+        url: 'https://example.com/original.mp4',
+        previewUrl: 'https://example.com/preview.webp',
+        mediaKind: 'video',
+        contentType: 'video/mp4',
+        originalName: 'original.mp4',
+        width: 1080,
+        height: 1350,
+        durationSeconds: 8,
+        sortOrder: 0,
+      }],
+    })]} />);
+
+    const previewVideo = screen.getByTestId('hover-video');
+    expect(previewVideo).toHaveAttribute('poster', 'https://example.com/preview.webp');
+    expect(previewVideo).toHaveAttribute('data-original-src', 'https://example.com/original.mp4');
+    expect(previewVideo).not.toHaveAttribute('src');
+
+    fireEvent.click(screen.getByRole('button', { name: /preview campaign frame/i }));
+    expect(screen.getByRole('dialog').querySelector('video'))
+      .toHaveAttribute('src', 'https://example.com/original.mp4');
   });
 });

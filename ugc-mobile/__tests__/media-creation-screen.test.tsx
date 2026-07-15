@@ -55,6 +55,10 @@ vi.mock('expo-haptics', () => ({
 
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  AppState: {
+    currentState: 'active',
+    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+  },
   Platform: {
     OS: 'ios',
     select: (obj: Record<string, unknown>) => obj.ios || obj.default,
@@ -848,9 +852,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     await renderer.act(async () => {
-      findPressableByText(tree!.root, 'Generate Image').props.onPress();
+      await findPressableByText(tree!.root, 'Generate Image').props.onPress();
     });
 
+    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.getImageGeneration).toHaveBeenCalledTimes(1);
     const text = collectText(tree!.root);
     expect(text).toContain('Post this');
 

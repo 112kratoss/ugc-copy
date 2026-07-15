@@ -17,6 +17,7 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Modal,
   Pressable,
   ScrollView,
@@ -105,6 +106,42 @@ const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subt
     subtitle: 'Character image plus motion video',
   },
 };
+
+function waitUntilAppActive(signal?: AbortSignal) {
+  // React Native can briefly report null during startup. Only pause polling for
+  // states that are explicitly known to be offscreen.
+  const currentState = AppState?.currentState;
+  if (currentState !== 'background' && currentState !== 'inactive') {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const abortError = () => {
+      const error = new Error('Generation status check cancelled.');
+      error.name = 'AbortError';
+      return error;
+    };
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+
+    const cleanup = () => {
+      subscription.remove();
+      signal?.removeEventListener('abort', handleAbort);
+    };
+    const handleAbort = () => {
+      cleanup();
+      reject(abortError());
+    };
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      cleanup();
+      resolve();
+    });
+    signal?.addEventListener('abort', handleAbort, { once: true });
+  });
+}
 
 const FLOATING_REVIEW_BAR_HEIGHT = 96;
 
@@ -679,7 +716,7 @@ export function MediaCreationScreen({
         );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        finalStatus = await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal });
+        finalStatus = await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       } else if (currentDraft.tool === 'video') {
         started = await api.startVideoGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
@@ -687,7 +724,7 @@ export function MediaCreationScreen({
         );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        finalStatus = await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal });
+        finalStatus = await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       } else {
         started = await api.startMotionGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
@@ -695,7 +732,7 @@ export function MediaCreationScreen({
         );
         setLastGenerationId(started.generationId ?? null);
         if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        finalStatus = await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal });
+        finalStatus = await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       }
       setStatus(finalStatus);
       if (finalStatus.status === 'failed') {

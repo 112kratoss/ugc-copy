@@ -32,6 +32,10 @@ import {
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { useReducedMotion } from '@/lib/motion';
+import {
+  IMMERSIVE_HORIZONTAL_LIST_TUNING,
+  IMMERSIVE_VERTICAL_LIST_TUNING,
+} from '@/lib/media-performance';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import {
   applyShowcaseSaveStateToFeedResponse,
@@ -123,7 +127,7 @@ export function ProfileMediaFeedScreen() {
       queryClient.invalidateQueries({ queryKey: ['profile-generations', user?.id] }),
       queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', user?.id] }),
       queryClient.invalidateQueries({ queryKey: ['home-generations', user?.id] }),
-      queryClient.invalidateQueries({ queryKey: ['home-seller-posts', user?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', user?.id] }),
     ]);
     await sourceQuery.refetch();
   };
@@ -355,8 +359,10 @@ export function ProfileMediaFeedScreen() {
         data={items}
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: pageHeight, offset: pageHeight * index, index })}
+        initialNumToRender={IMMERSIVE_VERTICAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={initialIndex}
         keyExtractor={(item) => `${item.source}-${item.id}`}
+        maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / pageHeight);
           setActiveIndex(Math.max(0, Math.min(items.length - 1, nextIndex)));
@@ -392,6 +398,7 @@ export function ProfileMediaFeedScreen() {
         snapToInterval={pageHeight}
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         testID="profile-media-feed-list"
+        windowSize={IMMERSIVE_VERTICAL_LIST_TUNING.windowSize}
       />
       {activeItem ? (
         <>
@@ -652,12 +659,15 @@ function ProfileFeedMediaCarousel({ active, item, width }: { active: boolean; it
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
         horizontal
+        initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
         keyExtractor={(mediaItem) => mediaItem.id}
+        maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.x / width);
           setCurrentIndex(Math.max(0, Math.min(pages.length - 1, nextIndex)));
         }}
         pagingEnabled
+        removeClippedSubviews={Platform.OS === 'android'}
         renderItem={({ item: mediaItem, index }) => (
           <View style={{ width, alignItems: 'center', backgroundColor: appTheme.colors.surfaceInset }}>
             <ProfileFeedMediaFrame
@@ -669,6 +679,7 @@ function ProfileFeedMediaCarousel({ active, item, width }: { active: boolean; it
           </View>
         )}
         showsHorizontalScrollIndicator={false}
+        windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
       />
       {pages.length > 1 ? (
         <>

@@ -97,7 +97,7 @@ export async function loadImmersiveSourceData({
   if (isGenerationSource(source)) {
     const [generationResponse, ownerPostResponse] = await Promise.all([
       api.listGenerations(true),
-      api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
+      api.listOwnerPosts({ includeArchived: true, limit: 48, visibility: 'all' }),
     ]);
     return {
       generations: generationResponse.generations,
@@ -106,7 +106,7 @@ export async function loadImmersiveSourceData({
   }
 
   if (source === 'profile-posts') {
-    const response = await api.listOwnerPosts({ includeArchived: true, visibility: 'all' });
+    const response = await api.listOwnerPosts({ includeArchived: true, limit: 48, visibility: 'all' });
     return { ownerPosts: response.posts };
   }
 
@@ -190,8 +190,7 @@ export function readCachedImmersiveSourceData(
 }
 
 export function readCachedProfile(queryClient: QueryClient, userId: string | undefined): ProfileResponse | undefined {
-  return queryClient.getQueryData<ProfileResponse>(['profile', userId])
-    ?? queryClient.getQueryData<ProfileResponse>(['home-profile', userId]);
+  return queryClient.getQueryData<ProfileResponse>(['profile', userId]);
 }
 
 function cachedShowcaseItems(
@@ -260,7 +259,7 @@ function cachedGenerations(queryClient: QueryClient, userId: string | undefined)
 
 function cachedOwnerPosts(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
   const all: OwnerPostsResponse['posts'] = [];
-  for (const key of [['profile-owner-posts', userId], ['home-seller-posts', userId]] as const) {
+  for (const key of [['profile-owner-posts', userId], ['owner-posts-sales-summary', userId]] as const) {
     const data = queryClient.getQueryData<OwnerPostsResponse>(key);
     if (data?.posts.length) all.push(...data.posts);
   }

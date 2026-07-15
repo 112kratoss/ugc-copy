@@ -36,21 +36,21 @@ export function WorkspaceSideMenuGestureLayer({
   const touchStartRef = useRef<WorkspaceSideMenuTouchPoint | null>(null);
 
   const profileQuery = useQuery({
-    queryKey: ['workspace-menu-profile', user?.id],
-    enabled: Boolean(user),
+    queryKey: ['profile', user?.id],
+    enabled: Boolean(user && menuVisible),
     queryFn: () => api.getProfile(),
     staleTime: 1000 * 60 * 5,
   });
 
   const sellerPostsQuery = useQuery({
-    queryKey: ['workspace-menu-seller-posts', user?.id],
-    enabled: Boolean(user),
-    queryFn: () => api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
+    queryKey: ['owner-posts-sales-summary', user?.id],
+    enabled: Boolean(user && menuVisible),
+    queryFn: () => api.listOwnerPosts({ includeArchived: true, includeSummary: true, limit: 1, visibility: 'all' }),
     staleTime: 1000 * 60 * 2,
   });
 
   const salesSummary = useMemo(
-    () => getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
+    () => sellerPostsQuery.data?.summary ?? getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
     [sellerPostsQuery.data]
   );
 

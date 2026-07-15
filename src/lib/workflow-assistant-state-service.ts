@@ -26,6 +26,7 @@ export type WorkflowAssistantStateRouteResult =
     };
 
 type LogError = typeof console.error;
+const WORKFLOW_ASSISTANT_STATE_MESSAGE_LIMIT = 100;
 
 export async function getWorkflowAssistantStateForRoute({
   canvasId,
@@ -52,7 +53,8 @@ export async function getWorkflowAssistantStateForRoute({
       .select('id, canvas_id, role, content, proposal_id, created_at')
       .eq('canvas_id', canvasId)
       .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(WORKFLOW_ASSISTANT_STATE_MESSAGE_LIMIT);
 
     if (messagesResult.error) {
       if (isMissingWorkflowCanvasAssistantSchemaError(messagesResult.error)) {
@@ -66,7 +68,9 @@ export async function getWorkflowAssistantStateForRoute({
       throw messagesResult.error;
     }
 
-    messagesData = messagesResult.data ?? [];
+    // The database returns the newest bounded window; the client contract is
+    // chronological so reverse only that small result set in memory.
+    messagesData = [...(messagesResult.data ?? [])].reverse();
 
     const proposalResult = await supabase
       .from('workflow_canvas_assistant_proposals')

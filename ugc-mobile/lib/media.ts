@@ -1,9 +1,13 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 
-import { getMissingMobileEnvKeys } from './env';
-import { supabase } from './supabase';
-import { getUploadExtension, readUriUploadBody } from './upload-file';
+import { env, getMissingMobileEnvKeys } from './env';
+import {
+  getUploadExtension,
+  inspectUriUpload,
+  uploadUriToSignedUrl,
+  type UriUploadProgress,
+} from './upload-file';
 import type { MagicbookletApiClient } from './api-client';
 import type { MediaUploadKind } from './types';
 
@@ -111,6 +115,8 @@ export async function uploadPickedMedia(
     kind?: MediaUploadKind;
     durationSeconds?: number | null;
     sizeBytes?: number | null;
+    signal?: AbortSignal;
+    onProgress?: (progress: UriUploadProgress) => void;
   } = {}
 ): Promise<UploadedMedia> {
   const bucket = options.bucket ?? 'uploads';
@@ -121,11 +127,11 @@ export async function uploadPickedMedia(
     throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
   }
 
-  const uploadBody = await readUriUploadBody(uri, {
+  const upload = await inspectUriUpload(uri, {
     mimeType: options.mimeType,
     sizeBytes: options.sizeBytes,
   });
-  const mimeType = uploadBody.mimeType;
+  const mimeType = upload.mimeType;
   const kind = options.kind ?? (mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('audio/') ? 'audio' : 'image');
   const extension = getUploadExtension(mimeType, options.fileName);
   const fileName = sanitizeUploadFileName(options.fileName, `${Date.now()}.${extension || 'bin'}`);
@@ -138,17 +144,16 @@ export async function uploadPickedMedia(
     fileName,
     mimeType,
     kind,
-    sizeBytes: uploadBody.sizeBytes,
+    sizeBytes: upload.sizeBytes,
   });
   assertClientUploadBucket(uploadIntent.bucket);
 
-  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(uploadIntent.path, uploadIntent.token, uploadBody.body, {
-    contentType: mimeType,
+  await uploadUriToSignedUrl(uri, resolveSignedUploadUrl(uploadIntent), {
+    mimeType,
+    onProgress: options.onProgress,
+    signal: options.signal,
+    sizeBytes: upload.sizeBytes,
   });
-
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
 
   const readUrl = await options.api.createMediaReadUrl({
     storagePath: uploadIntent.storagePath,
@@ -161,7 +166,7 @@ export async function uploadPickedMedia(
     fileName,
     kind,
     durationSeconds: options.durationSeconds ?? null,
-    sizeBytes: uploadBody.sizeBytes,
+    sizeBytes: upload.sizeBytes,
   };
 }
 
@@ -175,6 +180,8 @@ export async function uploadTemplateRunInput(
     fileName?: string | null;
     mimeType?: string | null;
     sizeBytes?: number | null;
+    signal?: AbortSignal;
+    onProgress?: (progress: UriUploadProgress) => void;
   }
 ) {
   const missingEnvKeys = getMissingMobileEnvKeys();
@@ -182,17 +189,17 @@ export async function uploadTemplateRunInput(
     throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
   }
 
-  const uploadBody = await readUriUploadBody(uri, {
+  const upload = await inspectUriUpload(uri, {
     mimeType: options.mimeType,
     sizeBytes: options.sizeBytes,
     defaultMimeType: options.kind === 'video' ? 'video/mp4' : 'image/jpeg',
   });
   const expectedKind = options.kind ?? 'image';
-  if (!uploadBody.mimeType.startsWith(`${expectedKind}/`)) {
+  if (!upload.mimeType.startsWith(`${expectedKind}/`)) {
     throw new Error(`Choose a ${expectedKind} file.`);
   }
 
-  const extension = getUploadExtension(uploadBody.mimeType, options.fileName);
+  const extension = getUploadExtension(upload.mimeType, options.fileName);
   const fileName = sanitizeUploadFileName(
     options.fileName,
     `${options.slotKey}.${extension || (expectedKind === 'video' ? 'mp4' : 'jpg')}`
@@ -200,23 +207,20 @@ export async function uploadTemplateRunInput(
   const uploadIntent = await options.api.signTemplateRunInput(options.runId, {
     slotKey: options.slotKey,
     fileName,
-    mimeType: uploadBody.mimeType,
-    sizeBytes: uploadBody.sizeBytes,
+    mimeType: upload.mimeType,
+    sizeBytes: upload.sizeBytes,
   });
 
   if (uploadIntent.bucket !== TEMPLATE_INPUT_BUCKET) {
     throw new Error('Unsupported template input upload bucket.');
   }
 
-  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(
-    uploadIntent.path,
-    uploadIntent.token,
-    uploadBody.body,
-    { contentType: uploadBody.mimeType }
-  );
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
+  await uploadUriToSignedUrl(uri, resolveSignedUploadUrl(uploadIntent), {
+    mimeType: upload.mimeType,
+    onProgress: options.onProgress,
+    signal: options.signal,
+    sizeBytes: upload.sizeBytes,
+  });
 
   return options.api.finalizeTemplateRunInput(options.runId, {
     inputs: [{ slotKey: options.slotKey, storagePath: uploadIntent.storagePath }],
@@ -231,6 +235,8 @@ export async function uploadProfileImage(
     fileName?: string | null;
     mimeType?: string | null;
     sizeBytes?: number | null;
+    signal?: AbortSignal;
+    onProgress?: (progress: UriUploadProgress) => void;
   }
 ) {
   const missingEnvKeys = getMissingMobileEnvKeys();
@@ -238,13 +244,13 @@ export async function uploadProfileImage(
     throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
   }
 
-  const uploadBody = await readUriUploadBody(uri, {
+  const upload = await inspectUriUpload(uri, {
     mimeType: options.mimeType,
     sizeBytes: options.sizeBytes,
     defaultMimeType: 'image/jpeg',
   });
-  const mimeType = uploadBody.mimeType;
-  const sizeBytes = uploadBody.sizeBytes;
+  const mimeType = upload.mimeType;
+  const sizeBytes = upload.sizeBytes;
 
   if (!mimeType.startsWith('image/')) {
     throw new Error('Choose an image file.');
@@ -272,17 +278,55 @@ export async function uploadProfileImage(
     throw new Error('Unsupported profile upload bucket.');
   }
 
-  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(uploadIntent.path, uploadIntent.token, uploadBody.body, {
-    contentType: mimeType,
+  await uploadUriToSignedUrl(uri, resolveSignedUploadUrl(uploadIntent), {
+    mimeType,
+    onProgress: options.onProgress,
+    signal: options.signal,
+    sizeBytes,
   });
-
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
 
   if (!uploadIntent.publicUrl) {
     throw new Error('Could not create profile image URL.');
   }
 
   return uploadIntent.publicUrl;
+}
+
+function resolveSignedUploadUrl(intent: {
+  bucket: string;
+  path: string;
+  signedUploadUrl: string | null;
+  token: string;
+}) {
+  let storageOrigin: URL;
+  try {
+    storageOrigin = new URL(env.supabaseUrl);
+  } catch {
+    throw new Error('Mobile storage is not configured correctly.');
+  }
+
+  const encodedObjectPath = [intent.bucket, ...intent.path.split('/')]
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  const basePath = storageOrigin.pathname.replace(/\/$/, '');
+  const expectedPath = `${basePath}/storage/v1/object/upload/sign/${encodedObjectPath}`;
+  const signedUrl = intent.signedUploadUrl
+    ? new URL(intent.signedUploadUrl)
+    : new URL(expectedPath, storageOrigin.origin);
+
+  if (
+    signedUrl.origin !== storageOrigin.origin
+    || signedUrl.pathname !== expectedPath
+    || signedUrl.username
+    || signedUrl.password
+  ) {
+    throw new Error('The upload destination returned by the server is invalid.');
+  }
+
+  const signedToken = signedUrl.searchParams.get('token');
+  if (signedToken && signedToken !== intent.token) {
+    throw new Error('The upload authorization returned by the server is invalid.');
+  }
+  signedUrl.searchParams.set('token', intent.token);
+  return signedUrl.toString();
 }

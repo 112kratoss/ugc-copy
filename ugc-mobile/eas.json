@@ -7,12 +7,18 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "MAGICBOOKLET_INCLUDE_DEV_CLIENT": "true"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "MAGICBOOKLET_INCLUDE_DEV_CLIENT": "false"
+      },
       "android": {
         "buildType": "apk"
       }
@@ -20,6 +26,9 @@
     "production": {
       "environment": "production",
       "autoIncrement": true,
+      "env": {
+        "MAGICBOOKLET_INCLUDE_DEV_CLIENT": "false"
+      },
       "android": {
         "buildType": "app-bundle"
       }

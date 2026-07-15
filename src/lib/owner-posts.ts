@@ -69,14 +69,15 @@ type BundleSummaryRow = {
   price_usd_cents: number;
   sales_count: number;
   earnings_usd_cents: number;
-  prompt_text: string | null;
-  notes_markdown: string | null;
-  workflow_share_url: string | null;
-  workflow_snapshot: unknown;
-  attachments: unknown;
+  prompt_text?: string | null;
+  notes_markdown?: string | null;
+  workflow_share_url?: string | null;
+  workflow_snapshot?: unknown;
+  attachments?: unknown;
   resource_sections?: unknown;
   resource_items?: unknown;
-  allow_remix: boolean;
+  allow_remix?: boolean;
+  resource_kinds?: PostResourceKind[] | null;
 };
 
 type PostSourceToolRow = {
@@ -173,8 +174,14 @@ function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleReso
 async function fetchOwnerPostRows(
   adminSupabase: ServiceClient,
   userId: string,
-  includeArchived: boolean
+  options: {
+    includeArchived: boolean;
+    limit?: number;
+    offset?: number;
+    visibility: OwnerPostVisibilityFilter;
+  }
 ): Promise<OwnerPostRow[]> {
+  const { includeArchived, limit, offset = 0, visibility } = options;
   let query = adminSupabase
     .from('posts')
     .select(
@@ -183,8 +190,16 @@ async function fetchOwnerPostRows(
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
-  if (!includeArchived) {
+  if (visibility === 'archived') {
+    query = query.not('archived_at', 'is', null);
+  } else if (visibility !== 'all') {
+    query = query.is('archived_at', null).eq('visibility', visibility);
+  } else if (!includeArchived) {
     query = query.is('archived_at', null);
+  }
+
+  if (typeof limit === 'number') {
+    query = query.range(offset, offset + Math.max(0, limit - 1));
   }
 
   const result = await query;
@@ -198,9 +213,18 @@ async function fetchOwnerPostRows(
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    const withoutSourceToolSlugResult = includeArchived
-      ? await withoutSourceToolSlugQuery
-      : await withoutSourceToolSlugQuery.is('archived_at', null);
+    let compatibleQuery = withoutSourceToolSlugQuery;
+    if (visibility === 'archived') {
+      compatibleQuery = compatibleQuery.not('archived_at', 'is', null);
+    } else if (visibility !== 'all') {
+      compatibleQuery = compatibleQuery.is('archived_at', null).eq('visibility', visibility);
+    } else if (!includeArchived) {
+      compatibleQuery = compatibleQuery.is('archived_at', null);
+    }
+    if (typeof limit === 'number') {
+      compatibleQuery = compatibleQuery.range(offset, offset + Math.max(0, limit - 1));
+    }
+    const withoutSourceToolSlugResult = await compatibleQuery;
 
     if (withoutSourceToolSlugResult.error) {
       throw withoutSourceToolSlugResult.error;
@@ -221,7 +245,16 @@ async function fetchOwnerPostRows(
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    const legacyResult = await legacyQuery;
+    let compatibleLegacyQuery = legacyQuery;
+    if (visibility !== 'all' && visibility !== 'archived') {
+      compatibleLegacyQuery = compatibleLegacyQuery.eq('visibility', visibility);
+    }
+    if (typeof limit === 'number') {
+      compatibleLegacyQuery = compatibleLegacyQuery.range(offset, offset + Math.max(0, limit - 1));
+    }
+    const legacyResult = visibility === 'archived'
+      ? { data: [], error: null }
+      : await compatibleLegacyQuery;
     if (legacyResult.error) {
       throw legacyResult.error;
     }
@@ -322,6 +355,25 @@ async function loadBundleMap(adminSupabase: ServiceClient, postIds: string[]) {
     return new Map<string, BundleSummaryRow>();
   }
 
+  if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc === 'function') {
+    const compactResult = await adminSupabase.rpc('get_owner_post_bundle_summaries', {
+      p_post_ids: postIds,
+    });
+    if (!compactResult.error) {
+      return new Map(
+        ((compactResult.data ?? []) as unknown as BundleSummaryRow[]).map((row) => [row.post_id, row])
+      );
+    }
+
+    const compactError = compactResult.error as { code?: string; message?: string };
+    const isMissingCompactRpc = compactError.code === '42883'
+      || compactError.code === 'PGRST202'
+      || Boolean(compactError.message?.includes('get_owner_post_bundle_summaries'));
+    if (!isMissingCompactRpc) {
+      throw compactResult.error;
+    }
+  }
+
   const selectWithItems =
     'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, resource_sections, resource_items, allow_remix';
   const selectLegacy =
@@ -415,7 +467,9 @@ async function toOwnerPostListItem(
   const sourceKind = normalizeShowcaseSourceKind(row.source_kind);
   const canShare = isShareablePost(row);
   const bundleRow = bundleMap.get(row.id) ?? null;
-  const normalizedBundleResources = bundleRow ? normalizeBundleResources(bundleRow) : null;
+  const normalizedBundleResources = bundleRow && !bundleRow.resource_kinds
+    ? normalizeBundleResources(bundleRow)
+    : null;
 
   return {
     id: row.id,
@@ -453,7 +507,7 @@ async function toOwnerPostListItem(
           priceUsdCents: bundleRow.price_usd_cents,
           salesCount: bundleRow.sales_count,
           earningsUsdCents: bundleRow.earnings_usd_cents,
-          resourceKinds: getPostResourceKinds(normalizedBundleResources),
+          resourceKinds: bundleRow.resource_kinds ?? getPostResourceKinds(normalizedBundleResources),
         }
       : null,
   } satisfies OwnerPostListItem;
@@ -463,13 +517,20 @@ export async function getOwnerPostList(
   userId: string,
   options?: {
     includeArchived?: boolean;
+    limit?: number;
+    offset?: number;
     visibility?: OwnerPostVisibilityFilter;
   }
 ): Promise<OwnerPostListItem[]> {
   const includeArchived = options?.includeArchived ?? false;
   const visibility = options?.visibility ?? 'all';
   const adminSupabase = createServiceClient();
-  const rows = await fetchOwnerPostRows(adminSupabase, userId, includeArchived);
+  const rows = await fetchOwnerPostRows(adminSupabase, userId, {
+    includeArchived,
+    limit: options?.limit,
+    offset: options?.offset,
+    visibility,
+  });
   const postIds = rows.map((row) => row.id);
   const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
     loadBundleMap(adminSupabase, postIds),

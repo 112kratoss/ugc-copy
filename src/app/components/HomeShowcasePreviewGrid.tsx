@@ -8,6 +8,7 @@ import { Heart, ShoppingBag, Wand2 } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import { HoverVideo } from '@/app/components/HoverVideo';
 import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
+import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
@@ -18,6 +19,20 @@ import { buildShowcaseDetailPath } from '@/lib/share';
 
 interface HomeShowcasePreviewGridProps {
   items: ShowcaseFeedItem[];
+}
+
+function getCoverMedia(item: ShowcaseFeedItem) {
+  return item.mediaItems?.reduce(
+    (cover, media) => media.sortOrder < cover.sortOrder ? media : cover
+  ) ?? null;
+}
+
+function getCoverAspectRatio(coverMedia: ReturnType<typeof getCoverMedia>): string {
+  if (coverMedia?.width && coverMedia.height) {
+    return `${coverMedia.width} / ${coverMedia.height}`;
+  }
+
+  return '4 / 5';
 }
 
 function getItemSummary(item: ShowcaseFeedItem) {
@@ -115,58 +130,69 @@ export default function HomeShowcasePreviewGrid({
   return (
     <>
       <div className="columns-2 gap-4 space-y-4 md:columns-3 xl:columns-4 2xl:columns-5">
-        {feedItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            aria-label={`Preview ${item.title}`}
-            onClick={() => setSelectedItemId(item.id)}
-            className="group relative block w-full break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215] text-left"
-          >
-            {item.postFormat === 'text' ? (
-              <TextPostPreviewCard
-                title={item.title}
-                summary={getItemSummary(item)}
-                sourceLabel={item.sourceTool || item.model}
-                dateLabel={formatHomeDate(item.createdAt)}
-                saveCount={item.saveCount}
-                remixCount={item.remixCount}
-                unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
-                resourceKinds={getItemResourceKinds(item)}
-                className="rounded-none border-0 shadow-none"
-              />
-            ) : item.mediaKind === 'video' && item.mediaUrl ? (
-              <HoverVideo
-                src={item.mediaUrl}
-                className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
-              />
-            ) : item.mediaUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={item.mediaUrl}
-                alt={item.title}
-                loading="lazy"
-                decoding="async"
-                className="block h-auto w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
-              />
-            ) : (
-              <div className="flex min-h-[280px] items-center justify-center bg-zinc-950 text-zinc-500">
-                No media preview
-              </div>
-            )}
-            {item.postFormat !== 'text' ? (
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
-                <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
-                {item.asset ? (
-                  <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
-                    <ShoppingBag className="h-3.5 w-3.5" />
-                    {getAssetAccessLabel(item.asset)}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </button>
-        ))}
+        {feedItems.map((item) => {
+          const coverMedia = getCoverMedia(item);
+          const mediaUrl = coverMedia?.url ?? item.mediaUrl;
+          const mediaKind = coverMedia?.mediaKind ?? item.mediaKind;
+          const previewUrl = coverMedia?.previewUrl ?? null;
+
+          return (
+            <button
+              key={item.id}
+              type="button"
+              aria-label={`Preview ${item.title}`}
+              onClick={() => setSelectedItemId(item.id)}
+              className="group relative block w-full break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215] text-left"
+            >
+              {item.postFormat === 'text' ? (
+                <TextPostPreviewCard
+                  title={item.title}
+                  summary={getItemSummary(item)}
+                  sourceLabel={item.sourceTool || item.model}
+                  dateLabel={formatHomeDate(item.createdAt)}
+                  saveCount={item.saveCount}
+                  remixCount={item.remixCount}
+                  unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
+                  resourceKinds={getItemResourceKinds(item)}
+                  className="rounded-none border-0 shadow-none"
+                />
+              ) : mediaKind === 'video' && mediaUrl ? (
+                <div className="relative w-full" style={{ aspectRatio: getCoverAspectRatio(coverMedia) }}>
+                  <HoverVideo
+                    src={mediaUrl}
+                    poster={previewUrl}
+                    className="absolute inset-0 h-full w-full object-cover opacity-90 transition-opacity group-hover:opacity-100"
+                  />
+                </div>
+              ) : mediaUrl ? (
+                <div className="relative w-full" style={{ aspectRatio: getCoverAspectRatio(coverMedia) }}>
+                  <OptimizedPreviewImage
+                    previewSrc={previewUrl ?? mediaUrl}
+                    fallbackSrc={mediaUrl}
+                    alt={item.title}
+                    sizes="(min-width: 1536px) 20vw, (min-width: 1280px) 25vw, (min-width: 768px) 33vw, 50vw"
+                    className="object-cover opacity-90 transition-opacity group-hover:opacity-100"
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-[280px] items-center justify-center bg-zinc-950 text-zinc-500">
+                  No media preview
+                </div>
+              )}
+              {item.postFormat !== 'text' ? (
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
+                  <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
+                  {item.asset ? (
+                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
+                      <ShoppingBag className="h-3.5 w-3.5" />
+                      {getAssetAccessLabel(item.asset)}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       <MediaDetailsPreviewModal

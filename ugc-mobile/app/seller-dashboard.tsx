@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { BarChart3, ChevronRight, DollarSign, PackageCheck } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
@@ -10,10 +10,26 @@ import { appTheme } from '@/lib/theme';
 
 export default function SellerDashboardScreen() {
   const { user, api } = useAuth();
-  const { data, isLoading, error, refetch } = useQuery({
+  const {
+    data,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    refetch,
+  } = useInfiniteQuery({
     queryKey: ['seller-dashboard-posts', user?.id],
     enabled: Boolean(user),
-    queryFn: () => api.listOwnerPosts({ includeArchived: true, visibility: 'all' }),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.listOwnerPosts({
+      includeArchived: true,
+      includeSummary: pageParam === 0,
+      limit: 30,
+      offset: pageParam,
+      visibility: 'all',
+    }),
+    getNextPageParam: (lastPage) => lastPage.pageInfo?.nextOffset ?? undefined,
   });
 
   if (!user) {
@@ -25,8 +41,8 @@ export default function SellerDashboardScreen() {
     );
   }
 
-  const posts = data?.posts ?? [];
-  const summary = getOwnerPostSalesSummary(posts);
+  const posts = data?.pages.flatMap((page) => page.posts) ?? [];
+  const summary = data?.pages[0]?.summary ?? getOwnerPostSalesSummary(posts);
   const listings = posts.filter((post) => post.bundle);
 
   return (
@@ -84,6 +100,14 @@ export default function SellerDashboardScreen() {
               </Pressable>
             ))}
           </View>
+
+          {hasNextPage ? (
+            <SecondaryButton
+              label={isFetchingNextPage ? 'Loading more listings...' : 'Load more listings'}
+              disabled={isFetchingNextPage}
+              onPress={() => void fetchNextPage()}
+            />
+          ) : null}
 
           {listings.length === 0 ? (
             <View style={{ gap: appTheme.spacing.gap }}>
