@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DeferredAppShellAccount from '@/app/components/DeferredAppShellAccount';
 import DeferredGenerationNotifications from '@/app/components/DeferredGenerationNotifications';
 import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowcasePreviewGrid';
+import { publishAppShellAuthentication } from '@/app/components/app-shell-auth-state';
 
 vi.mock('next/dynamic', () => ({
   default: () => function DynamicIslandStub() {
@@ -16,6 +17,7 @@ describe('deferred app shell islands', () => {
 
   beforeEach(() => {
     idleCallbacks = [];
+    publishAppShellAuthentication(false);
 
     vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
       idleCallbacks.push(callback);
@@ -47,6 +49,7 @@ describe('deferred app shell islands', () => {
   });
 
   it('keeps generation notifications out of the first render', () => {
+    publishAppShellAuthentication(true);
     render(<DeferredGenerationNotifications />);
 
     expect(screen.queryByTestId('dynamic-island')).not.toBeInTheDocument();
@@ -54,6 +57,14 @@ describe('deferred app shell islands', () => {
     flushIdleCallbacks();
 
     expect(screen.getByTestId('dynamic-island')).toBeInTheDocument();
+  });
+
+  it('does not load generation notifications for signed-out visitors', () => {
+    render(<DeferredGenerationNotifications />);
+
+    flushIdleCallbacks();
+
+    expect(screen.queryByTestId('dynamic-island')).not.toBeInTheDocument();
   });
 
   it('loads the homepage showcase island immediately so save state can resolve', () => {

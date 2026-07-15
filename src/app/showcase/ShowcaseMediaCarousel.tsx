@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Images, Play } from 'lucide-react';
 
+import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 
 interface ShowcaseMediaCarouselProps {
@@ -27,7 +29,7 @@ export default function ShowcaseMediaCarousel({
   initialIndex = 0,
   mode = 'feed',
   className = '',
-  autoPlayVideo = true,
+  autoPlayVideo,
   onOpen,
   onIndexChange,
   onMediaReady,
@@ -42,21 +44,22 @@ export default function ShowcaseMediaCarousel({
     return cover?.width && cover?.height ? cover.width / cover.height : null;
   });
   const [isInViewport, setIsInViewport] = useState(mode !== 'feed');
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-  const [failedPreviewIds, setFailedPreviewIds] = useState<Set<string>>(() => new Set());
+  const [isInteracting, setIsInteracting] = useState(false);
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const shouldAutoPlayVideo = autoPlayVideo && !prefersReducedMotion && (mode !== 'feed' || isInViewport);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
-    updatePreference();
-    mediaQuery.addEventListener?.('change', updatePreference);
-    return () => mediaQuery.removeEventListener?.('change', updatePreference);
-  }, []);
+  const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
+  const requestedAutoPlay = autoPlayVideo ?? mode !== 'feed';
+  const canPlayMotion = !prefersReducedMotion && !saveData;
+  const shouldPlayVideo = canPlayMotion && (
+    mode === 'feed'
+      ? isInteracting || (requestedAutoPlay && isInViewport)
+      : requestedAutoPlay
+  );
+  const shouldAttachVideo = mode !== 'feed' || (
+    canPlayMotion
+    && (isInteracting || (requestedAutoPlay && isInViewport))
+  );
 
   useEffect(() => {
     const carousel = carouselRef.current;
@@ -83,7 +86,7 @@ export default function ShowcaseMediaCarousel({
       return;
     }
 
-    if (shouldAutoPlayVideo) {
+    if (shouldPlayVideo) {
       const playResult = video.play();
       void playResult?.catch(() => {
         // Browsers can decline autoplay until the page has received interaction.
@@ -95,7 +98,7 @@ export default function ShowcaseMediaCarousel({
     return () => {
       video.pause();
     };
-  }, [activeIndex, shouldAutoPlayVideo]);
+  }, [activeIndex, shouldPlayVideo, shouldAttachVideo]);
 
   const selectIndex = (nextIndex: number) => {
     const clamped = clampIndex(nextIndex, items.length);
@@ -115,9 +118,7 @@ export default function ShowcaseMediaCarousel({
   const isDetail = mode === 'detail';
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
-  const feedPreviewUrl = mode === 'feed' && activeItem.previewUrl && !failedPreviewIds.has(activeItem.id)
-    ? activeItem.previewUrl
-    : null;
+  const feedPreviewUrl = mode === 'feed' ? activeItem.previewUrl ?? null : null;
 
   return (
     <div ref={carouselRef} className={className}>
@@ -151,6 +152,26 @@ export default function ShowcaseMediaCarousel({
 
           selectIndex(activeIndex + (deltaX < 0 ? 1 : -1));
         }}
+        onMouseEnter={() => {
+          if (mode === 'feed') {
+            setIsInteracting(true);
+          }
+        }}
+        onMouseLeave={() => {
+          if (mode === 'feed') {
+            setIsInteracting(false);
+          }
+        }}
+        onFocusCapture={() => {
+          if (mode === 'feed') {
+            setIsInteracting(true);
+          }
+        }}
+        onBlurCapture={(event) => {
+          if (mode === 'feed' && !event.currentTarget.contains(event.relatedTarget)) {
+            setIsInteracting(false);
+          }
+        }}
       >
         <div className="absolute inset-0 z-[1] h-full w-full">
           {activeItem.mediaKind === 'video' ? (
@@ -158,14 +179,14 @@ export default function ShowcaseMediaCarousel({
               <video
                 ref={activeVideoRef}
                 key={activeItem.id}
-                src={activeItem.url}
+                src={shouldAttachVideo ? activeItem.url : undefined}
                 poster={feedPreviewUrl ?? undefined}
                 muted={!showControls}
                 controls={showControls}
-                autoPlay={shouldAutoPlayVideo}
+                autoPlay={shouldPlayVideo}
                 loop
                 playsInline
-                preload="metadata"
+                preload={mode === 'feed' ? 'none' : 'metadata'}
                 onLoadedMetadata={(event) => {
                   if (activeIndex === 0 && event.currentTarget.videoWidth && event.currentTarget.videoHeight) {
                     setCoverAspectRatio(event.currentTarget.videoWidth / event.currentTarget.videoHeight);
@@ -180,26 +201,31 @@ export default function ShowcaseMediaCarousel({
                 </span>
               ) : null}
             </>
+          ) : mode === 'feed' ? (
+            <OptimizedPreviewImage
+              key={activeItem.id}
+              previewSrc={feedPreviewUrl ?? activeItem.url}
+              fallbackSrc={activeItem.url}
+              alt={title}
+              sizes="(min-width: 1280px) 25vw, (min-width: 768px) 33vw, 100vw"
+              onLoad={() => onMediaReady?.(activeIndex)}
+              className="object-cover"
+            />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={activeItem.id}
-              src={feedPreviewUrl ?? activeItem.url}
+              src={activeItem.url}
               alt={title}
               loading={isDetail ? 'eager' : 'lazy'}
               decoding="async"
               onLoad={(event) => {
-                if (mode !== 'feed' && activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
+                if (activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
                   setCoverAspectRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
                 }
                 onMediaReady?.(activeIndex);
               }}
-              onError={() => {
-                if (feedPreviewUrl) {
-                  setFailedPreviewIds((current) => new Set(current).add(activeItem.id));
-                }
-              }}
-              className={`h-full w-full ${mode === 'feed' ? 'object-cover' : 'object-contain'}`}
+              className="h-full w-full object-contain"
             />
           )}
         </div>
@@ -287,10 +313,26 @@ export default function ShowcaseMediaCarousel({
               }`}
             >
               {item.mediaKind === 'video' ? (
-                <video src={item.url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                item.previewUrl ? (
+                  <OptimizedPreviewImage
+                    previewSrc={item.previewUrl}
+                    alt=""
+                    sizes="64px"
+                    className="object-cover"
+                  />
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center text-white/70">
+                    <Play className="h-5 w-5 fill-current" />
+                  </span>
+                )
               ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.url} alt="" className="h-full w-full object-cover" />
+                <OptimizedPreviewImage
+                  previewSrc={item.previewUrl ?? item.url}
+                  fallbackSrc={item.url}
+                  alt=""
+                  sizes="64px"
+                  className="object-cover"
+                />
               )}
             </button>
           ))}

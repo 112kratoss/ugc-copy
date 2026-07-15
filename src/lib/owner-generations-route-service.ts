@@ -65,6 +65,8 @@ export type OwnerGenerationsRoutePayload = {
 
 const DEFAULT_GENERATIONS_PAGE_LIMIT = 80;
 const MAX_GENERATIONS_PAGE_LIMIT = 100;
+const MAX_GENERATION_STATUS_IDS = 50;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(value: T): Omit<T, 'workflow_settings'> {
   const nextValue = { ...value };
@@ -204,11 +206,23 @@ function parsePositiveInteger(value: string | null, fallback: number): number {
   return parsed;
 }
 
+function parseRequestedGenerationIds(value: string | null) {
+  if (value === null) return null;
+
+  return Array.from(new Set(
+    value
+      .split(',')
+      .map((candidate) => candidate.trim())
+      .filter((candidate) => UUID_PATTERN.test(candidate)),
+  )).slice(0, MAX_GENERATION_STATUS_IDS);
+}
+
 async function fetchOwnerGenerations({
   supabase,
   userId,
   includeArchived,
   requestedGenerationId,
+  requestedGenerationIds,
   statusOnly,
   cursorOffset,
   pageLimit,
@@ -217,6 +231,7 @@ async function fetchOwnerGenerations({
   userId: string;
   includeArchived: boolean;
   requestedGenerationId: string | null;
+  requestedGenerationIds: string[] | null;
   statusOnly: boolean;
   cursorOffset: number;
   pageLimit: number;
@@ -247,6 +262,8 @@ async function fetchOwnerGenerations({
 
     if (requestedGenerationId) {
       query = query.eq('id', requestedGenerationId).range(0, 0);
+    } else if (requestedGenerationIds) {
+      query = query.in('id', requestedGenerationIds).range(0, Math.max(0, requestedGenerationIds.length - 1));
     } else {
       query = query.range(cursorOffset, cursorOffset + pageLimit);
     }
@@ -263,7 +280,7 @@ async function fetchOwnerGenerations({
     }
 
     const rows = (result.data || []) as unknown as GenerationRow[];
-    const hasMore = requestedGenerationId ? false : rows.length > pageLimit;
+    const hasMore = requestedGenerationId || requestedGenerationIds ? false : rows.length > pageLimit;
     return {
       rows: hasMore ? rows.slice(0, pageLimit) : rows,
       hasMore,
@@ -361,6 +378,9 @@ export async function listOwnerGenerationsForRoute({
 }): Promise<OwnerGenerationsRoutePayload> {
   const includeArchived = searchParams.get('includeArchived') === 'true';
   const requestedGenerationId = searchParams.get('id')?.trim() || null;
+  const requestedGenerationIds = requestedGenerationId
+    ? null
+    : parseRequestedGenerationIds(searchParams.get('ids'));
   const detailMode = searchParams.get('detail');
   const summaryOnly = detailMode === 'summary';
   const statusOnly = detailMode === 'status';
@@ -368,12 +388,19 @@ export async function listOwnerGenerationsForRoute({
   const pageLimit = Math.min(requestedLimit, MAX_GENERATIONS_PAGE_LIMIT);
   const cursorOffset = Math.max(0, parsePositiveInteger(searchParams.get('cursor'), 0));
 
+  if (requestedGenerationIds?.length === 0) {
+    return {
+      generations: [],
+      pagination: buildPagination(pageLimit, false, 0),
+    };
+  }
   const adminSupabase = getAdminSupabase();
   const { rows: candidateGenerations, hasMore } = await fetchOwnerGenerations({
     supabase: adminSupabase,
     userId,
     includeArchived,
     requestedGenerationId,
+    requestedGenerationIds,
     statusOnly,
     cursorOffset,
     pageLimit,

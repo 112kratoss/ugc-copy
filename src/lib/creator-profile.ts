@@ -94,6 +94,22 @@ const CREATOR_ASSET_BATCH_SIZE = 100;
 type CreatorServiceClient = ReturnType<typeof createServiceClient>;
 type CreatorPostQueryMode = 'page' | 'stats';
 
+const loadCreatorProfileRow = cache(async (username: string): Promise<CreatorProfileRow | null> => {
+  const adminSupabase = createServiceClient();
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location')
+    .eq('username', username)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Failed to fetch creator profile:', error);
+    throw error;
+  }
+
+  return data as unknown as CreatorProfileRow | null;
+});
+
 function resolveItemCategory(category: string | null): ShowcaseItemCategory {
   if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
   if (category === 'text') return 'text';
@@ -392,6 +408,54 @@ async function summarizeCreatorPosts(
   };
 }
 
+function isMissingCreatorStatsRpcError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: string; message?: string };
+  return candidate.code === '42883'
+    || candidate.code === 'PGRST202'
+    || Boolean(candidate.message?.includes('get_creator_profile_stats'));
+}
+
+async function loadCreatorStats(
+  adminSupabase: CreatorServiceClient,
+  profileId: string
+): Promise<CreatorProfilePageData['stats'] | null> {
+  if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc !== 'function') return null;
+  const { data, error } = await adminSupabase.rpc('get_creator_profile_stats', {
+    p_creator_id: profileId,
+  });
+  if (error) {
+    if (isMissingCreatorStatsRpcError(error)) return null;
+    throw error;
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  const nonNegativeNumber = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+  const toolsUsed = Array.isArray(record.toolsUsed)
+    ? record.toolsUsed.flatMap((tool): CreatorProfilePageData['stats']['toolsUsed'] => {
+        if (!tool || typeof tool !== 'object') return [];
+        const candidate = tool as Record<string, unknown>;
+        if (typeof candidate.slug !== 'string' || typeof candidate.label !== 'string') return [];
+        return [{
+          slug: candidate.slug,
+          label: candidate.label,
+          count: nonNegativeNumber(candidate.count),
+        }];
+      })
+    : [];
+
+  return {
+    publicCreations: nonNegativeNumber(record.publicCreations),
+    totalSaves: nonNegativeNumber(record.totalSaves),
+    totalRemixes: nonNegativeNumber(record.totalRemixes),
+    unlocks: nonNegativeNumber(record.unlocks),
+    totalUnlockSales: nonNegativeNumber(record.totalUnlockSales),
+    toolsUsed,
+  };
+}
+
 function creatorPageInfo({
   hasMore,
   limit,
@@ -429,6 +493,13 @@ function profileSummary(profile: CreatorProfileRow, fallbackUsername: string) {
   };
 }
 
+export const getCreatorProfileSummary = cache(async (rawUsername: string) => {
+  const username = normalizeUsername(rawUsername);
+  if (!username) return null;
+  const profile = await loadCreatorProfileRow(username);
+  return profile ? profileSummary(profile, username) : null;
+});
+
 export const getCreatorProfilePageData = cache(async (
   rawUsername: string,
   options?: { limit?: number; offset?: number; countryCode?: string | null }
@@ -443,28 +514,21 @@ export const getCreatorProfilePageData = cache(async (
   const limit = Math.min(CREATOR_PAGE_SIZE_MAX, Math.max(1, requestedLimit));
   const offset = Math.max(0, requestedOffset);
 
-  const adminSupabase = createServiceClient();
-  const { data, error: profileError } = await adminSupabase
-    .from('profiles')
-    .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location')
-    .eq('username', username)
-    .maybeSingle();
-
-  if (profileError) {
-    console.error('Failed to fetch creator profile:', profileError);
-    throw profileError;
-  }
-
-  const profile = data as unknown as CreatorProfileRow | null;
+  const profile = await loadCreatorProfileRow(username);
   if (!profile) return null;
 
-  const pageRows = await fetchCreatorPostRows({
-    adminSupabase,
-    mode: 'page',
-    offset,
-    profileId: profile.id,
-    take: limit + 1,
-  });
+  const adminSupabase = createServiceClient();
+
+  const [pageRows, aggregateStats] = await Promise.all([
+    fetchCreatorPostRows({
+      adminSupabase,
+      mode: 'page',
+      offset,
+      profileId: profile.id,
+      take: limit + 1,
+    }),
+    loadCreatorStats(adminSupabase, profile.id),
+  ]);
 
   if (pageRows === null) {
     const [legacyPageRows, legacyMetricRows] = await Promise.all([
@@ -537,11 +601,11 @@ export const getCreatorProfilePageData = cache(async (
 
   const hasMore = pageRows.length > limit;
   const visibleRows = pageRows.slice(0, limit);
-  const metricRows = await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows;
-  const [items, stats] = await Promise.all([
-    resolvePostRowsToFeedItems(visibleRows, adminSupabase),
-    summarizeCreatorPosts(metricRows, adminSupabase),
-  ]);
+  const items = await resolvePostRowsToFeedItems(visibleRows, adminSupabase);
+  const stats = aggregateStats ?? await summarizeCreatorPosts(
+    await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows,
+    adminSupabase
+  );
 
   const localizedAssets = new Map<string, NonNullable<ShowcaseFeedItem['asset']>>();
   for (const item of items) {

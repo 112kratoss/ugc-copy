@@ -373,6 +373,9 @@ describe('ProfileMediaFeedScreen', () => {
 
     const list = tree.root.findByProps({ testID: 'profile-media-feed-list' });
     expect(list.props.initialScrollIndex).toBe(1);
+    expect(list.props.initialNumToRender).toBe(1);
+    expect(list.props.maxToRenderPerBatch).toBe(2);
+    expect(list.props.windowSize).toBe(3);
     expect(tree.root.findByProps({ children: 'Creations' })).toBeTruthy();
     expect(tree.root.findByProps({ children: 'Video creation' })).toBeTruthy();
 

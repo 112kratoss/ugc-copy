@@ -495,4 +495,65 @@ describe('generation completion jobs', () => {
       p_retry_delay_seconds: 900,
     });
   });
+
+  it('processes completion batches with bounded parallelism', async () => {
+    const jobs = Array.from({ length: 7 }, (_, index) => ({
+      id: `job-${index + 1}`,
+      prediction_id: `task-${index + 1}`,
+      payload: { data: { taskId: `task-${index + 1}`, state: 'success' } },
+      status: 'processing',
+      attempt_count: 1,
+      next_attempt_at: '2026-06-21T10:00:00.000Z',
+      locked_at: '2026-06-21T10:00:00.000Z',
+      locked_by: 'worker-1',
+      last_error: null,
+      created_at: '2026-06-21T10:00:00.000Z',
+      updated_at: '2026-06-21T10:00:00.000Z',
+      completed_at: null,
+    }));
+    const client = {
+      rpc: vi.fn(async (functionName: string) => functionName === 'claim_generation_completion_jobs'
+        ? { data: jobs, error: null }
+        : { data: 'succeeded', error: null }),
+    };
+    let active = 0;
+    let peakActive = 0;
+    vi.mocked(syncGenerationStatusByPredictionId).mockImplementation(async ({ predictionId }) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return {
+        found: true,
+        status: 'succeeded',
+        generation: {
+          id: `generation-${predictionId}`,
+          user_id: 'user-1',
+          prediction_id: predictionId,
+          status: 'succeeded',
+          output_url: null,
+          category: 'image',
+          model: 'nanobanana',
+          workflow_settings: null,
+          created_at: '2026-06-21T10:00:00.000Z',
+          completed_at: '2026-06-21T10:01:00.000Z',
+        },
+      };
+    });
+
+    await expect(processGenerationCompletionJobs({
+      supabase: client as never,
+      creditSupabase: client as never,
+      lockedBy: 'worker-1',
+      limit: jobs.length,
+    })).resolves.toEqual({
+      claimed: 7,
+      completed: 7,
+      retried: 0,
+      failed: 0,
+    });
+
+    expect(peakActive).toBe(4);
+    expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(7);
+  });
 });

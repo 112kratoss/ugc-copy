@@ -1,9 +1,10 @@
 import { Images } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { AccessibilityInfo, Pressable, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, FlatList, Platform, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
+import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import { getShowcaseMediaPreviewUrl, getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
@@ -82,20 +83,17 @@ function ShowcaseMediaCarousel({
 
   return (
     <View style={{ height, width, overflow: 'hidden' }}>
-      <ScrollView
+      <FlatList
+        data={mediaItems}
+        decelerationRate="fast"
+        getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
         horizontal
+        initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
+        keyExtractor={(mediaItem) => mediaItem.id}
+        maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
         pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onScrollBeginDrag={() => onScrollToggle?.(true)}
-        onScrollEndDrag={() => onScrollToggle?.(false)}
-        onMomentumScrollEnd={(event) => {
-          const index = Math.round(event.nativeEvent.contentOffset.x / width);
-          setCurrentIndex(Math.max(0, Math.min(mediaItems.length - 1, index)));
-          onScrollToggle?.(false);
-        }}
-        style={{ flex: 1 }}
-      >
-        {mediaItems.map((mediaItem, index) => {
+        removeClippedSubviews={Platform.OS === 'android'}
+        renderItem={({ item: mediaItem, index }) => {
           const slide = (
             <ShowcaseMediaSlide
               accent={accent}
@@ -109,16 +107,26 @@ function ShowcaseMediaCarousel({
           );
 
           return onPress ? (
-            <Pressable key={mediaItem.id} onPress={onPress} style={{ width, height }}>
+            <Pressable onPress={onPress} style={{ width, height }}>
               {slide}
             </Pressable>
           ) : (
-            <View key={mediaItem.id} style={{ width, height }}>
+            <View style={{ width, height }}>
               {slide}
             </View>
           );
-        })}
-      </ScrollView>
+        }}
+        showsHorizontalScrollIndicator={false}
+        onScrollBeginDrag={() => onScrollToggle?.(true)}
+        onScrollEndDrag={() => onScrollToggle?.(false)}
+        onMomentumScrollEnd={(event) => {
+          const index = Math.round(event.nativeEvent.contentOffset.x / width);
+          setCurrentIndex(Math.max(0, Math.min(mediaItems.length - 1, index)));
+          onScrollToggle?.(false);
+        }}
+        style={{ flex: 1 }}
+        windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
+      />
 
       <View
         pointerEvents="none"
@@ -219,9 +227,10 @@ function ShowcaseMediaSlide({
     <FeedMediaFrame
       kind="image"
       url={usablePreviewUrl ?? item.url}
-      backdropUrl={usablePreviewUrl ?? item.url}
       cacheKey={previewCacheKey}
       thumbhash={previewThumbhash}
+      imageBackdrop="none"
+      imageContentFit="cover"
       onImageError={() => {
         if (usablePreviewUrl) setFailedPreviewUrl(usablePreviewUrl);
       }}

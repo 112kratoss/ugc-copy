@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const uploadState = vi.hoisted(() => ({
-  getUser: vi.fn(),
-  upload: vi.fn(),
-  uploadToSignedUrl: vi.fn(),
-  createSignedUrl: vi.fn(),
-  getPublicUrl: vi.fn(),
-  readUriUploadBody: vi.fn(),
+  inspectUriUpload: vi.fn(),
+  uploadUriToSignedUrl: vi.fn(),
 }));
 
 vi.mock('expo-document-picker', () => ({
@@ -18,63 +14,31 @@ vi.mock('expo-image-picker', () => ({
 }));
 
 vi.mock('../lib/env', () => ({
+  env: { supabaseUrl: 'https://storage.example.com' },
   getMissingMobileEnvKeys: () => [],
-}));
-
-vi.mock('../lib/supabase', () => ({
-  supabase: {
-    auth: {
-      getUser: uploadState.getUser,
-    },
-    storage: {
-      from: (bucket: string) => ({
-        upload: (path: string, body: unknown, options: unknown) =>
-          uploadState.upload(bucket, path, body, options),
-        uploadToSignedUrl: (path: string, token: string, body: unknown, options: unknown) =>
-          uploadState.uploadToSignedUrl(bucket, path, token, body, options),
-        createSignedUrl: (path: string, expiresIn: number) =>
-          uploadState.createSignedUrl(bucket, path, expiresIn),
-        getPublicUrl: (path: string) =>
-          uploadState.getPublicUrl(bucket, path),
-      }),
-    },
-  },
 }));
 
 vi.mock('../lib/upload-file', async () => {
   const actual = await vi.importActual<typeof import('../lib/upload-file')>('../lib/upload-file');
   return {
     ...actual,
-    readUriUploadBody: (...args: unknown[]) => uploadState.readUriUploadBody(...args),
+    inspectUriUpload: (...args: unknown[]) => uploadState.inspectUriUpload(...args),
+    uploadUriToSignedUrl: (...args: unknown[]) => uploadState.uploadUriToSignedUrl(...args),
   };
 });
 
 describe('mobile media uploads', () => {
   beforeEach(() => {
-    uploadState.getUser.mockReset();
-    uploadState.upload.mockReset();
-    uploadState.uploadToSignedUrl.mockReset();
-    uploadState.createSignedUrl.mockReset();
-    uploadState.getPublicUrl.mockReset();
-    uploadState.readUriUploadBody.mockReset();
-    uploadState.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } } });
-    uploadState.readUriUploadBody.mockResolvedValue({
-      body: new Uint8Array([1, 2, 3]).buffer,
+    uploadState.inspectUriUpload.mockReset();
+    uploadState.uploadUriToSignedUrl.mockReset();
+    uploadState.inspectUriUpload.mockResolvedValue({
       mimeType: 'image/png',
       sizeBytes: 3,
     });
-    uploadState.upload.mockResolvedValue({ error: null });
-    uploadState.uploadToSignedUrl.mockResolvedValue({ data: null, error: null });
-    uploadState.createSignedUrl.mockResolvedValue({
-      data: { signedUrl: 'https://storage.example.com/uploads/user-1/signed.png' },
-      error: null,
-    });
-    uploadState.getPublicUrl.mockReturnValue({
-      data: { publicUrl: 'https://storage.example.com/profiles/user-1/avatar.png' },
-    });
+    uploadState.uploadUriToSignedUrl.mockResolvedValue(undefined);
   });
 
-  it('rejects unsupported client upload buckets before auth or storage work', async () => {
+  it('rejects unsupported client upload buckets before file or storage work', async () => {
     const { uploadPickedMedia } = await import('../lib/media');
 
     await expect(uploadPickedMedia('file:///image.png', {
@@ -83,19 +47,18 @@ describe('mobile media uploads', () => {
       mimeType: 'image/png',
     })).rejects.toThrow('Unsupported mobile upload bucket.');
 
-    expect(uploadState.getUser).not.toHaveBeenCalled();
-    expect(uploadState.readUriUploadBody).not.toHaveBeenCalled();
-    expect(uploadState.upload).not.toHaveBeenCalled();
+    expect(uploadState.inspectUriUpload).not.toHaveBeenCalled();
+    expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
   });
 
-  it('uploads picked media with a server-issued signed upload token', async () => {
+  it('streams picked media to an exact server-issued signed upload target', async () => {
     const createMediaUpload = vi.fn(async () => ({
       success: true,
       bucket: 'uploads' as const,
       path: 'user-1/server-issued-reference.png',
       storagePath: 'uploads/user-1/server-issued-reference.png',
       token: 'upload-token',
-      signedUploadUrl: 'https://storage.example.com/upload-token',
+      signedUploadUrl: 'https://storage.example.com/storage/v1/object/upload/sign/uploads/user-1/server-issued-reference.png?token=upload-token',
       expiresInSeconds: 7200,
     }));
     const createMediaReadUrl = vi.fn(async () => ({
@@ -103,6 +66,8 @@ describe('mobile media uploads', () => {
       signedUrl: 'https://storage.example.com/uploads/user-1/signed.png',
       expiresInSeconds: 3600,
     }));
+    const onProgress = vi.fn();
+    const controller = new AbortController();
     const { uploadPickedMedia } = await import('../lib/media');
 
     await expect(uploadPickedMedia('file:///image.png', {
@@ -111,7 +76,9 @@ describe('mobile media uploads', () => {
       mimeType: 'image/png',
       kind: 'image',
       sizeBytes: 3,
-    } as never)).resolves.toMatchObject({
+      signal: controller.signal,
+      onProgress,
+    })).resolves.toMatchObject({
       fileName: 'reference-image-.png',
       storagePath: 'uploads/user-1/server-issued-reference.png',
       signedUrl: 'https://storage.example.com/uploads/user-1/signed.png',
@@ -124,90 +91,88 @@ describe('mobile media uploads', () => {
       kind: 'image',
       sizeBytes: 3,
     });
+    expect(uploadState.uploadUriToSignedUrl).toHaveBeenCalledWith(
+      'file:///image.png',
+      'https://storage.example.com/storage/v1/object/upload/sign/uploads/user-1/server-issued-reference.png?token=upload-token',
+      {
+        mimeType: 'image/png',
+        onProgress,
+        signal: controller.signal,
+        sizeBytes: 3,
+      }
+    );
     expect(createMediaReadUrl).toHaveBeenCalledWith({
       storagePath: 'uploads/user-1/server-issued-reference.png',
     });
-    expect(uploadState.uploadToSignedUrl).toHaveBeenCalledWith(
-      'uploads',
-      'user-1/server-issued-reference.png',
-      'upload-token',
-      expect.any(ArrayBuffer),
-      { contentType: 'image/png' },
-    );
-    expect(uploadState.createSignedUrl).not.toHaveBeenCalled();
-    expect(uploadState.upload).not.toHaveBeenCalled();
   });
 
-  it('sanitizes picked media file names before creating storage paths', async () => {
+  it('constructs a scoped signed target when an older API omits its redundant URL', async () => {
     const createMediaUpload = vi.fn(async () => ({
       success: true,
       bucket: 'uploads' as const,
-      path: 'user-1/server-issued-bad-name-.png',
-      storagePath: 'uploads/user-1/server-issued-bad-name-.png',
+      path: 'user-1/server-issued.png',
+      storagePath: 'uploads/user-1/server-issued.png',
       token: 'upload-token',
-      signedUploadUrl: 'https://storage.example.com/upload-token',
+      signedUploadUrl: null,
       expiresInSeconds: 7200,
     }));
     const createMediaReadUrl = vi.fn(async () => ({
       success: true,
-      signedUrl: 'https://storage.example.com/uploads/user-1/signed-bad-name.png',
+      signedUrl: 'https://storage.example.com/read',
       expiresInSeconds: 3600,
     }));
     const { uploadPickedMedia } = await import('../lib/media');
 
-    await expect(uploadPickedMedia('file:///image.png', {
+    await uploadPickedMedia('file:///image.png', {
       api: { createMediaUpload, createMediaReadUrl },
-      fileName: '../bad name?.png',
+      fileName: 'image.png',
       mimeType: 'image/png',
-    } as never)).resolves.toMatchObject({
-      fileName: 'bad-name-.png',
-      storagePath: 'uploads/user-1/server-issued-bad-name-.png',
-    });
-
-    expect(createMediaUpload).toHaveBeenCalledWith(expect.objectContaining({
-      fileName: 'bad-name-.png',
-      mimeType: 'image/png',
-    }));
-    expect(uploadState.upload).not.toHaveBeenCalled();
-  });
-
-  it('uploads video template inputs with the run-scoped signed upload contract', async () => {
-    uploadState.readUriUploadBody.mockResolvedValueOnce({
-      body: new Uint8Array([1, 2, 3]).buffer,
-      mimeType: 'video/mp4',
       sizeBytes: 3,
     });
+
+    expect(uploadState.uploadUriToSignedUrl).toHaveBeenCalledWith(
+      'file:///image.png',
+      'https://storage.example.com/storage/v1/object/upload/sign/uploads/user-1/server-issued.png?token=upload-token',
+      expect.any(Object)
+    );
+  });
+
+  it('rejects a signed target on a different origin before native upload', async () => {
+    const { uploadPickedMedia } = await import('../lib/media');
+
+    await expect(uploadPickedMedia('file:///image.png', {
+      api: {
+        createMediaUpload: vi.fn(async () => ({
+          success: true,
+          bucket: 'uploads' as const,
+          path: 'user-1/file.png',
+          storagePath: 'uploads/user-1/file.png',
+          token: 'upload-token',
+          signedUploadUrl: 'https://evil.example/storage/v1/object/upload/sign/uploads/user-1/file.png?token=upload-token',
+          expiresInSeconds: 7200,
+        })),
+        createMediaReadUrl: vi.fn(),
+      },
+      fileName: 'file.png',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    } as never)).rejects.toThrow('upload destination');
+
+    expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('uploads video template inputs with the run-scoped streaming contract', async () => {
+    uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'video/mp4', sizeBytes: 3 });
     const signTemplateRunInput = vi.fn(async () => ({
       success: true,
       bucket: 'template_inputs' as const,
       path: 'user-1/run-1/reference/server-issued.mp4',
       storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4',
       token: 'template-upload-token',
-      signedUploadUrl: 'https://storage.example.com/template-upload-token',
+      signedUploadUrl: 'https://storage.example.com/storage/v1/object/upload/sign/template_inputs/user-1/run-1/reference/server-issued.mp4?token=template-upload-token',
       expiresInSeconds: 900,
     }));
-    const finalizeTemplateRunInput = vi.fn(async () => ({
-      success: true,
-      run: {
-        id: 'run-1',
-        templateId: 'template-1',
-        templateSlug: 'rider',
-        templateTitle: 'Rider',
-        templateCreator: null,
-        status: 'collecting_inputs' as const,
-        inputSlots: [],
-        inputs: [{ slotKey: 'reference', status: 'uploaded', previewUrl: null, fileName: 'reference.mp4' }],
-        steps: [],
-        result: null,
-        estimatedTotalCredits: null,
-        estimatedRemainingCredits: null,
-        creditsUsed: 0,
-        errorMessage: null,
-        isTest: false,
-        createdAt: null,
-        updatedAt: null,
-      },
-    }));
+    const finalizeTemplateRunInput = vi.fn(async () => ({ success: true, run: {} }));
     const { uploadTemplateRunInput } = await import('../lib/media');
 
     await uploadTemplateRunInput('file:///reference.mp4', {
@@ -226,25 +191,23 @@ describe('mobile media uploads', () => {
       mimeType: 'video/mp4',
       sizeBytes: 3,
     });
-    expect(uploadState.uploadToSignedUrl).toHaveBeenCalledWith(
-      'template_inputs',
-      'user-1/run-1/reference/server-issued.mp4',
-      'template-upload-token',
-      expect.any(ArrayBuffer),
-      { contentType: 'video/mp4' },
+    expect(uploadState.uploadUriToSignedUrl).toHaveBeenCalledWith(
+      'file:///reference.mp4',
+      expect.stringContaining('/storage/v1/object/upload/sign/template_inputs/'),
+      expect.objectContaining({ mimeType: 'video/mp4', sizeBytes: 3 })
     );
     expect(finalizeTemplateRunInput).toHaveBeenCalledWith('run-1', {
       inputs: [{ slotKey: 'reference', storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4' }],
     });
   });
 
-  it('sanitizes profile image file names before public profile uploads', async () => {
+  it('streams sanitized profile images to a profile-scoped signed target', async () => {
     const createProfileMediaUpload = vi.fn(async () => ({
       success: true,
       bucket: 'profiles' as const,
       path: 'user-1/avatar-server-issued-avatar-image-.png',
       token: 'profile-upload-token',
-      signedUploadUrl: 'https://storage.example.com/profile-upload-token',
+      signedUploadUrl: 'https://storage.example.com/storage/v1/object/upload/sign/profiles/user-1/avatar-server-issued-avatar-image-.png?token=profile-upload-token',
       publicUrl: 'https://storage.example.com/profiles/user-1/avatar.png',
       expiresInSeconds: 7200,
     }));
@@ -256,7 +219,7 @@ describe('mobile media uploads', () => {
       fileName: '../avatar image?.png',
       mimeType: 'image/png',
       sizeBytes: 3,
-    } as never)).resolves.toBe('https://storage.example.com/profiles/user-1/avatar.png');
+    })).resolves.toBe('https://storage.example.com/profiles/user-1/avatar.png');
 
     expect(createProfileMediaUpload).toHaveBeenCalledWith({
       role: 'avatar',
@@ -264,13 +227,10 @@ describe('mobile media uploads', () => {
       mimeType: 'image/png',
       sizeBytes: 3,
     });
-    expect(uploadState.uploadToSignedUrl).toHaveBeenCalledWith(
-      'profiles',
-      'user-1/avatar-server-issued-avatar-image-.png',
-      'profile-upload-token',
-      expect.any(ArrayBuffer),
-      { contentType: 'image/png' },
+    expect(uploadState.uploadUriToSignedUrl).toHaveBeenCalledWith(
+      'file:///avatar.png',
+      expect.stringContaining('/storage/v1/object/upload/sign/profiles/'),
+      expect.objectContaining({ mimeType: 'image/png', sizeBytes: 3 })
     );
-    expect(uploadState.upload).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,7 @@ function createStatusClient(
   const filters: Array<{ column: string; value: unknown }> = [];
   const nullFilters: string[] = [];
   const orFilters: string[] = [];
+  const inFilters: Array<{ column: string; values: unknown[] }> = [];
   const ranges: Array<{ from: number; to: number }> = [];
 
   const from = vi.fn((table: string) => {
@@ -53,7 +54,8 @@ function createStatusClient(
             orFilters.push(value);
             return query;
           },
-          in() {
+          in(column: string, values: unknown[]) {
+            inFilters.push({ column, values });
             return query;
           },
           range(fromIndex: number, toIndex: number) {
@@ -88,6 +90,7 @@ function createStatusClient(
   return {
     selectedColumns,
     filters,
+    inFilters,
     nullFilters,
     orFilters,
     ranges,
@@ -153,6 +156,67 @@ describe('listOwnerGenerationsForRoute', () => {
         nextCursor: '1',
       },
     });
+  });
+
+  it('filters active-status refreshes to a validated bounded id set', async () => {
+    const firstId = '10000000-0000-4000-8000-000000000001';
+    const secondId = '10000000-0000-4000-8000-000000000002';
+    const database = createStatusClient([
+      {
+        id: firstId,
+        status: 'processing',
+        created_at: '2026-06-22T08:00:00.000Z',
+        completed_at: null,
+        model: 'nano-banana-2',
+        category: 'image',
+      },
+      {
+        id: secondId,
+        status: 'waiting',
+        created_at: '2026-06-22T07:00:00.000Z',
+        completed_at: null,
+        model: 'kling-3.0-video',
+        category: 'video',
+      },
+    ]);
+
+    const payload = await listOwnerGenerationsForRoute({
+      userId: 'user-1',
+      supabase: database.client,
+      getAdminSupabase: () => database.client,
+      searchParams: new URLSearchParams(
+        `detail=status&ids=${firstId},invalid,${secondId},${firstId}`,
+      ),
+    });
+
+    expect(database.inFilters).toContainEqual({
+      column: 'id',
+      values: [firstId, secondId],
+    });
+    expect(database.ranges).toEqual([{ from: 0, to: 1 }]);
+    expect(payload.generations.map((generation) => generation.id)).toEqual([firstId, secondId]);
+    expect(payload.pagination.hasMore).toBe(false);
+  });
+
+  it('rejects an ids filter with no valid identifiers before querying', async () => {
+    const database = createStatusClient([]);
+    const getAdminSupabase = vi.fn(() => database.client);
+
+    await expect(listOwnerGenerationsForRoute({
+      userId: 'user-1',
+      supabase: database.client,
+      getAdminSupabase,
+      searchParams: new URLSearchParams('detail=status&ids=invalid,also-invalid'),
+    })).resolves.toEqual({
+      generations: [],
+      pagination: {
+        limit: 80,
+        hasMore: false,
+        nextCursor: null,
+      },
+    });
+
+    expect(getAdminSupabase).not.toHaveBeenCalled();
   });
 
   it('returns only an owned canonical non-test template result', async () => {

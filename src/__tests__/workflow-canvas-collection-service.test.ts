@@ -191,7 +191,7 @@ describe('workflow canvas collection service', () => {
     expect(JSON.stringify(result)).not.toContain('UGC creator in a warmly lit room');
     expect(JSON.stringify(result)).not.toContain('imageUrl');
     expect(supabase.listSelects).toEqual([
-      'id,title,graph,updated_at,revision,status,published_at',
+      'id,title,library_summary,updated_at,revision,status,published_at',
       'id,title,graph,updated_at,revision',
     ]);
   });

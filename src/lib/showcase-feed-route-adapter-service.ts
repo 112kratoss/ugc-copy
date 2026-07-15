@@ -137,7 +137,10 @@ async function handleShowcaseFeedGET(
       unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
       resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
       countryCode: request.headers.get('x-vercel-ip-country'),
-      bypassCache: hasAuthorizationHeader || sort === 'for-you' || Boolean(cursor),
+      // The cached feed contains viewer-neutral data. Saved/purchased state is
+      // attached after the cache read, so authenticated readers can safely
+      // share the same base page instead of rebuilding it per request.
+      bypassCache: sort === 'for-you' || Boolean(cursor),
     });
     const cacheControl = getViewerAwareApiCacheControl(hasAuthorizationHeader || sort === 'for-you');
 

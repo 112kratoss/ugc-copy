@@ -166,20 +166,28 @@ function createWorkflowSupabaseMock() {
                 filters[column] = value;
                 return query;
               },
-              order() {
-                if (simulateMissingAssistantSchema) {
-                  return Promise.resolve({
-                    data: null,
-                    error: { code: '42P01', message: 'relation "workflow_canvas_assistant_messages" does not exist' },
-                  });
-                }
+              order(_column: string, options?: { ascending?: boolean }) {
+                const rows = assistantMessages
+                  .filter((row) => (
+                    (filters.canvas_id === undefined || row.canvas_id === filters.canvas_id) &&
+                    (filters.user_id === undefined || row.user_id === filters.user_id)
+                  ))
+                  .sort((left, right) => options?.ascending === false
+                    ? right.created_at.localeCompare(left.created_at)
+                    : left.created_at.localeCompare(right.created_at));
 
-                const rows = assistantMessages.filter((row) => (
-                  (filters.canvas_id === undefined || row.canvas_id === filters.canvas_id) &&
-                  (filters.user_id === undefined || row.user_id === filters.user_id)
-                ));
+                return {
+                  async limit(count: number) {
+                    if (simulateMissingAssistantSchema) {
+                      return {
+                        data: null,
+                        error: { code: '42P01', message: 'relation "workflow_canvas_assistant_messages" does not exist' },
+                      };
+                    }
 
-                return Promise.resolve({ data: rows, error: null });
+                    return { data: rows.slice(0, count), error: null };
+                  },
+                };
               },
             };
 

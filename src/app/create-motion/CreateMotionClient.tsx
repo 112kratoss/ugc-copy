@@ -36,7 +36,11 @@ import {
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
-import { fetchGenerationStatus } from '@/lib/generation-status-client';
+import {
+    announceGenerationStarted,
+    fetchGenerationStatus,
+    waitForNextGenerationStatusPoll,
+} from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
     estimateGenerationDurationMs,
@@ -114,6 +118,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
+    const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const characterImageInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
 
@@ -151,6 +156,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const nowMs = useTicker(isGenerating);
+
+    useEffect(() => () => {
+        generationPollAbortControllerRef.current?.abort();
+    }, []);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -491,42 +500,52 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         startedAtMs: number,
         estimatedTotalMs: number | null
     ): Promise<{ output: string; timing: GenerationTiming | null }> {
-        const maxAttempts = 240;
-        let attempts = 0;
+        const pollController = new AbortController();
+        generationPollAbortControllerRef.current?.abort();
+        generationPollAbortControllerRef.current = pollController;
+        const pollingStartedAt = Date.now();
 
-        while (attempts < maxAttempts) {
-            const data = await fetchGenerationStatus({
-                url: `/api/generate?id=${predictionId}`,
-                accessToken,
-            });
-
-            if (data.timing) {
-                setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
-                    ...data.timing,
-                    estimatedTotalMs,
+        try {
+            while (Date.now() - pollingStartedAt < 20 * 60 * 1000) {
+                const data = await fetchGenerationStatus({
+                    url: `/api/generate?id=${predictionId}`,
+                    accessToken,
+                    signal: pollController.signal,
                 });
-            } else {
-                setGenerationTiming((current) => current ?? createLocalGenerationTiming({
-                    kind: 'motion',
-                    phaseLabel: 'Waiting for provider',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-            }
 
-            if (data.status === 'succeeded') {
-                return {
-                    output: data.output || '',
-                    timing: data.timing ?? null,
-                };
-            }
+                if (data.timing) {
+                    setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
+                        ...data.timing,
+                        estimatedTotalMs,
+                    });
+                } else {
+                    setGenerationTiming((current) => current ?? createLocalGenerationTiming({
+                        kind: 'motion',
+                        phaseLabel: 'Waiting for provider',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                }
 
-            if (data.status === 'failed') {
-                throw new Error(data.error || 'Generation failed');
-            }
+                if (data.status === 'succeeded') {
+                    return {
+                        output: data.output || '',
+                        timing: data.timing ?? null,
+                    };
+                }
 
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            attempts++;
+                if (data.status === 'failed') {
+                    throw new Error(data.error || 'Generation failed');
+                }
+
+                await waitForNextGenerationStatusPoll(data.retryAfterMs, {
+                    signal: pollController.signal,
+                });
+            }
+        } finally {
+            if (generationPollAbortControllerRef.current === pollController) {
+                generationPollAbortControllerRef.current = null;
+            }
         }
 
         throw new Error(BACKGROUND_PROCESSING_ERROR);
@@ -638,6 +657,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             }
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
+            announceGenerationStarted();
+            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
 
             const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);

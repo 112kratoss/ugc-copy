@@ -33,6 +33,13 @@ type RemoteMediaDownloadDependencies = {
   allowedHosts?: Iterable<string>;
 };
 
+export type AllowlistedRemoteMediaStream = {
+  body: ReadableStream<Uint8Array>;
+  contentLength: number | null;
+  contentType: string;
+  sourceName: string;
+};
+
 function normalizeHost(value: string): string {
   return value.trim().toLowerCase().replace(/\.$/, '');
 }
@@ -289,9 +296,20 @@ function readPrefix(chunks: Uint8Array[], maxBytes = 32): Uint8Array {
   return prefix;
 }
 
-async function readBoundedBody(response: Response, maxBytes: number, contentType: string): Promise<Blob> {
+function parseContentLength(response: Response): number | null {
   const contentLengthHeader = readResponseHeader(response, 'content-length');
-  const contentLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
+  if (contentLengthHeader === null) return null;
+
+  const contentLength = Number(contentLengthHeader);
+  return Number.isSafeInteger(contentLength) && contentLength >= 0 ? contentLength : null;
+}
+
+async function openBoundedBody(
+  response: Response,
+  maxBytes: number,
+  contentType: string,
+): Promise<{ body: ReadableStream<Uint8Array>; contentLength: number | null }> {
+  const contentLength = parseContentLength(response);
   if (contentLength !== null && Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new RemoteMediaSecurityError('Remote media exceeds the allowed size.');
   }
@@ -300,10 +318,10 @@ async function readBoundedBody(response: Response, maxBytes: number, contentType
   }
 
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const prefixChunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
-    while (true) {
+    while (totalBytes < 32) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
@@ -312,21 +330,65 @@ async function readBoundedBody(response: Response, maxBytes: number, contentType
         await reader.cancel('Remote media exceeds the allowed size.');
         throw new RemoteMediaSecurityError('Remote media exceeds the allowed size.');
       }
-      chunks.push(value);
+      prefixChunks.push(value);
     }
-  } finally {
+  } catch (error) {
     reader.releaseLock();
+    throw error;
   }
 
-  if (!hasMediaSignature(readPrefix(chunks), contentType)) {
+  if (!hasMediaSignature(readPrefix(prefixChunks), contentType)) {
+    await reader.cancel('Remote media signature validation failed.').catch(() => undefined);
+    reader.releaseLock();
     throw new RemoteMediaSecurityError('Remote media bytes do not match the declared content type.');
   }
 
-  const parts = chunks.map((chunk) => chunk.buffer.slice(
-    chunk.byteOffset,
-    chunk.byteOffset + chunk.byteLength,
-  ) as ArrayBuffer);
-  return new Blob(parts, { type: contentType });
+  let prefixIndex = 0;
+  let released = false;
+  const releaseReader = () => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+  };
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (prefixIndex < prefixChunks.length) {
+          controller.enqueue(prefixChunks[prefixIndex]);
+          prefixIndex += 1;
+          return;
+        }
+
+        const { done, value } = await reader.read();
+        if (done) {
+          releaseReader();
+          controller.close();
+          return;
+        }
+        if (!value) return;
+
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel('Remote media exceeds the allowed size.').catch(() => undefined);
+          releaseReader();
+          controller.error(new RemoteMediaSecurityError('Remote media exceeds the allowed size.'));
+          return;
+        }
+
+        controller.enqueue(value);
+      } catch (error) {
+        releaseReader();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => undefined);
+      releaseReader();
+    },
+  });
+
+  return { body, contentLength };
 }
 
 export function isAllowlistedRemoteMediaUrl(
@@ -341,7 +403,7 @@ export function isAllowlistedRemoteMediaUrl(
   }
 }
 
-export async function downloadAllowlistedRemoteMedia({
+export async function openAllowlistedRemoteMedia({
   url: rawUrl,
   kind,
   fetcher = fetch,
@@ -350,7 +412,7 @@ export async function downloadAllowlistedRemoteMedia({
 }: {
   url: string;
   kind: RemoteMediaKind;
-} & RemoteMediaDownloadDependencies): Promise<{ blob: Blob; sourceName: string }> {
+} & RemoteMediaDownloadDependencies): Promise<AllowlistedRemoteMediaStream> {
   let url = parseAndValidateRemoteUrl(rawUrl, allowedHosts);
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
@@ -367,6 +429,7 @@ export async function downloadAllowlistedRemoteMedia({
       if (!location || redirectCount === MAX_REDIRECTS) {
         throw new RemoteMediaSecurityError('Remote media redirect could not be followed safely.');
       }
+      await response.body?.cancel().catch(() => undefined);
       url = parseAndValidateRemoteUrl(new URL(location, url).toString(), allowedHosts);
       continue;
     }
@@ -375,12 +438,31 @@ export async function downloadAllowlistedRemoteMedia({
       throw new RemoteMediaSecurityError(`Remote media request failed with status ${response.status}.`);
     }
     const contentType = validateContentType(response, kind);
-    const blob = await readBoundedBody(response, MAX_REMOTE_MEDIA_BYTES[kind], contentType);
+    const { body, contentLength } = await openBoundedBody(
+      response,
+      MAX_REMOTE_MEDIA_BYTES[kind],
+      contentType,
+    );
     return {
-      blob,
+      body,
+      contentLength,
+      contentType,
       sourceName: url.pathname.split('/').pop() || `remote-${kind}`,
     };
   }
 
   throw new RemoteMediaSecurityError('Remote media redirect limit exceeded.');
+}
+
+export async function downloadAllowlistedRemoteMedia(
+  params: {
+    url: string;
+    kind: RemoteMediaKind;
+  } & RemoteMediaDownloadDependencies,
+): Promise<{ blob: Blob; sourceName: string }> {
+  const media = await openAllowlistedRemoteMedia(params);
+  const blob = await new Response(media.body, {
+    headers: { 'content-type': media.contentType },
+  }).blob();
+  return { blob, sourceName: media.sourceName };
 }

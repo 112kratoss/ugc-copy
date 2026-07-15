@@ -47,6 +47,29 @@ export async function createGenerationImagePreview({
   return uploadGenerationPreview({ preview, storagePath, supabase });
 }
 
+export async function createGenerationImagePreviewFromFile({
+  filePath,
+  storagePath,
+  supabase,
+}: {
+  filePath: string;
+  storagePath: string;
+  supabase: SupabaseClient;
+}) {
+  const preview = await sharp(filePath)
+    .rotate()
+    .resize({
+      width: PREVIEW_MAX_SIZE,
+      height: PREVIEW_MAX_SIZE,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .webp({ quality: 72 })
+    .toBuffer();
+
+  return uploadGenerationPreview({ preview, storagePath, supabase });
+}
+
 export async function uploadGenerationPreview({
   preview,
   storagePath,

@@ -1,7 +1,7 @@
 import { Image, type ImageProps } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { ImageOff } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
@@ -73,10 +73,6 @@ export function StableMediaImage({
   transition?: number;
 }) {
   const [failedCacheKey, setFailedCacheKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    void Image.prefetch(url, 'memory-disk');
-  }, [cacheKey, url]);
 
   if (failedCacheKey === cacheKey) {
     return <MediaFallback radius={0} label="Preview unavailable" />;

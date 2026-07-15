@@ -35,20 +35,21 @@ export function FeedVideoPreview({
   if (!active) {
     if (usablePreviewUrl) {
       return (
-      <FeedMediaFrame
-        kind="image"
-        url={usablePreviewUrl}
-        backdropUrl={usablePreviewUrl}
-        cacheKey={previewCacheKey}
-        thumbhash={previewThumbhash}
-        onImageError={() => setFailedPosterUrl(usablePreviewUrl)}
-        radius={radius}
-        borderWidth={1}
-        borderColor={`${accent}4d`}
-        backgroundColor="#050506"
-        recyclingKey={`${url}:poster`}
-        style={{ height }}
-      />
+        <FeedMediaFrame
+          kind="image"
+          url={usablePreviewUrl}
+          cacheKey={previewCacheKey}
+          thumbhash={previewThumbhash}
+          imageBackdrop="none"
+          imageContentFit="cover"
+          onImageError={() => setFailedPosterUrl(usablePreviewUrl)}
+          radius={radius}
+          borderWidth={1}
+          borderColor={`${accent}4d`}
+          backgroundColor="#050506"
+          recyclingKey={`${url}:poster`}
+          style={{ height }}
+        />
       );
     }
 

@@ -30,7 +30,7 @@ export default async function CreateHubPage() {
         </section>
 
         <section className="ui-stagger mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {CREATOR_TOOLS.map((tool) => (
+          {CREATOR_TOOLS.map((tool, index) => (
             <CreatorToolCard
               key={tool.id}
               tool={tool}
@@ -41,6 +41,7 @@ export default async function CreateHubPage() {
                     item={previewByTool[tool.id]}
                     alt={tool.label}
                     className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"
+                    priority={index === 0}
                   />
                 ) : undefined
               }

@@ -113,27 +113,33 @@ function createSupabaseMock({
                 filters[column] = value;
                 return query;
               },
-              async order() {
-                if (missingMessagesSchema) {
-                  return {
-                    data: null,
-                    error: {
-                      code: '42P01',
-                      message: 'relation "workflow_canvas_assistant_messages" does not exist',
-                    },
-                  };
-                }
-
-                if (messageError) {
-                  return { data: null, error: messageError };
-                }
-
-                return {
-                  data: messages.filter((row) => (
+              order(_column: string, options?: { ascending?: boolean }) {
+                const ordered = messages
+                  .filter((row) => (
                     row.canvas_id === filters.canvas_id &&
                     row.user_id === filters.user_id
-                  )),
-                  error: null,
+                  ))
+                  .sort((left, right) => options?.ascending === false
+                    ? right.created_at.localeCompare(left.created_at)
+                    : left.created_at.localeCompare(right.created_at));
+                return {
+                  async limit(count: number) {
+                    if (missingMessagesSchema) {
+                      return {
+                        data: null,
+                        error: {
+                          code: '42P01',
+                          message: 'relation "workflow_canvas_assistant_messages" does not exist',
+                        },
+                      };
+                    }
+
+                    if (messageError) {
+                      return { data: null, error: messageError };
+                    }
+
+                    return { data: ordered.slice(0, count), error: null };
+                  },
                 };
               },
             };

@@ -54,7 +54,7 @@ export function ViewerActionSheet({
       queryClient.invalidateQueries({ queryKey: ['profile-generations', user?.id] }),
       queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', user?.id] }),
       queryClient.invalidateQueries({ queryKey: ['home-generations', user?.id] }),
-      queryClient.invalidateQueries({ queryKey: ['home-seller-posts', user?.id] }),
+      queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', user?.id] }),
     ]);
     onSourceRefresh();
   };
@@ -68,7 +68,7 @@ export function ViewerActionSheet({
         : data;
 
     queryClient.setQueryData<OwnerPostsResponse>(['profile-owner-posts', user?.id], removeFromOwnerPosts);
-    queryClient.setQueryData<OwnerPostsResponse>(['home-seller-posts', user?.id], removeFromOwnerPosts);
+    queryClient.setQueryData<OwnerPostsResponse>(['owner-posts-sales-summary', user?.id], removeFromOwnerPosts);
     queryClient.setQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] }, removeFromSource);
   };
 

@@ -7,6 +7,8 @@ import {
   setGradleCleartextPlaceholders,
   setManifestCleartextPlaceholder,
 } from '../plugins/withAndroidLocalCleartextDebug';
+import { setReleaseOptimizationProperties } from '../plugins/withAndroidReleaseOptimization';
+import { withBuildProfileAutolinking } from '../app.config';
 
 const projectRoot = join(__dirname, '..');
 
@@ -15,6 +17,44 @@ describe('Android native network config', () => {
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
 
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
+  });
+
+  it('enables R8 code and resource shrinking for regenerated release builds', () => {
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+    const properties = setReleaseOptimizationProperties([
+      { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'false' },
+    ]);
+
+    expect(appJson.expo.plugins).toContain('./plugins/withAndroidReleaseOptimization');
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'android.enableMinifyInReleaseBuilds',
+      value: 'true',
+    });
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'android.enableShrinkResourcesInReleaseBuilds',
+      value: 'true',
+    });
+  });
+
+  it('keeps the development launcher out of runtime dependencies', () => {
+    const packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+    const easJson = JSON.parse(readFileSync(join(projectRoot, 'eas.json'), 'utf8'));
+    const productionConfig = withBuildProfileAutolinking({ name: 'Magic Booklet' }, false);
+    const developmentConfig = withBuildProfileAutolinking({ name: 'Magic Booklet' }, true);
+
+    expect(packageJson.dependencies['expo-dev-client']).toBeUndefined();
+    expect(packageJson.devDependencies['expo-dev-client']).toBe('6.0.21');
+    expect(easJson.build.development.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('true');
+    expect(easJson.build.preview.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
+    expect(easJson.build.production.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
+    expect(productionConfig.autolinking?.exclude).toEqual(expect.arrayContaining([
+      'expo-dev-client',
+      'expo-dev-launcher',
+      'expo-dev-menu',
+    ]));
+    expect(developmentConfig.autolinking).toBeUndefined();
   });
 
   it('enables native Sign in with Apple for iOS builds', () => {

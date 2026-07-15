@@ -390,7 +390,12 @@ describe('ProfileDashboard media tiles routing', () => {
       renderer.create(<ProfileDashboard />);
     });
 
-    expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({ includeArchived: false, visibility: 'all' });
+    expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
+      includeArchived: false,
+      includeSummary: true,
+      limit: 24,
+      visibility: 'all',
+    });
   });
 
   it('refreshes signed media URLs when the Profile tab is focused', () => {

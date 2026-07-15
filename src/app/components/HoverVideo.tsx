@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
 
 function safePlay(video: HTMLVideoElement) {
   try {
@@ -15,49 +17,81 @@ function safePlay(video: HTMLVideoElement) {
 
 export function HoverVideo({
   src,
+  poster,
   className,
   autoPlay = false,
 }: {
   src: string;
+  poster?: string | null;
   className?: string;
   autoPlay?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const wasPlayingRef = useRef(false);
+  const [isNearViewport, setIsNearViewport] = useState(false);
+  const [isHovering, setIsHovering] = useState(false);
+  const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !autoPlay) {
+    if (!video) {
       return;
     }
 
-    safePlay(video);
-  }, [autoPlay, src]);
+    if (typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsNearViewport(Boolean(entry?.isIntersecting)),
+      { rootMargin: '320px 0px', threshold: 0 }
+    );
+    observer.observe(video);
+    return () => observer.disconnect();
+  }, []);
+
+  const shouldPlay = (isNearViewport || isHovering)
+    && !prefersReducedMotion
+    && !saveData
+    && (autoPlay || isHovering);
+  const attachedSrc = shouldPlay ? src : undefined;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    if (shouldPlay) {
+      wasPlayingRef.current = true;
+      safePlay(video);
+      return;
+    }
+
+    if (!wasPlayingRef.current) {
+      return;
+    }
+    wasPlayingRef.current = false;
+    video.pause();
+    if (video.currentTime) {
+      video.currentTime = 0;
+    }
+  }, [attachedSrc, shouldPlay]);
 
   return (
     <video
       ref={videoRef}
-      src={src}
+      src={attachedSrc}
+      poster={poster ?? undefined}
       muted
       loop
       playsInline
-      preload="metadata"
-      autoPlay={autoPlay}
+      preload="none"
+      autoPlay={shouldPlay}
+      aria-hidden="true"
       className={className}
-      onMouseEnter={(e) => {
-        if (autoPlay) {
-          return;
-        }
-
-        safePlay(e.currentTarget);
-      }}
-      onMouseLeave={(e) => {
-        if (autoPlay) {
-          return;
-        }
-
-        e.currentTarget.pause();
-        e.currentTarget.currentTime = 0;
-      }}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
     />
   );
 }

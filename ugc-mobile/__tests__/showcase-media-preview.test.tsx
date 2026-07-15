@@ -9,8 +9,16 @@ vi.mock('react-native', () => ({
     isReduceMotionEnabled: vi.fn(async () => false),
     addEventListener: vi.fn(() => ({ remove: vi.fn() })),
   },
+  FlatList: ({ data, renderItem, ...props }: MockProps & {
+    data?: unknown[];
+    renderItem?: (info: { item: unknown; index: number }) => React.ReactNode;
+  }) => React.createElement(
+    'flat-list',
+    props,
+    data?.map((entry, index) => renderItem?.({ item: entry, index }))
+  ),
+  Platform: { OS: 'ios' },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
-  ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
@@ -204,7 +212,11 @@ describe('ShowcaseMediaPreview', () => {
 
     expect(findAllByNodeType(tree, 'feed-media-frame')).toHaveLength(1);
     expect(findAllByNodeType(tree, 'feed-video-preview')).toHaveLength(1);
-    expect(findAllByNodeType(tree, 'scrollview')).toHaveLength(1);
+    expect(findAllByNodeType(tree, 'flat-list')).toHaveLength(1);
+    const [list] = findAllByNodeType(tree, 'flat-list');
+    expect(list.props.initialNumToRender).toBe(1);
+    expect(list.props.maxToRenderPerBatch).toBe(2);
+    expect(list.props.windowSize).toBe(3);
   });
 
   it('synthesizes an image preview from a post-level media URL', () => {

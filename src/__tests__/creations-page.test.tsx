@@ -168,7 +168,7 @@ describe('CreationsPage', () => {
       });
     });
 
-    expect(fetch).toHaveBeenCalledWith('/api/posts?scope=owner&includeArchived=true', {
+    expect(fetch).toHaveBeenCalledWith('/api/posts?scope=owner&includeArchived=true&limit=36&offset=0', {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
     expect(fetch).toHaveBeenCalledWith('/api/profile', {
@@ -198,7 +198,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ generations: [notificationGeneration] }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({ posts: [] }));
       }
 
@@ -300,7 +300,7 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({ posts: [] }));
       }
 
@@ -336,7 +336,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ generations: [] }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({
           posts: [
             {
@@ -447,7 +447,7 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({ posts: [] }));
       }
 
@@ -506,7 +506,7 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({
           posts: [
             {
@@ -611,7 +611,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ generations: [] }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({
           posts: [
             {
@@ -726,7 +726,7 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({ posts: [] }));
       }
 
@@ -1046,7 +1046,7 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/posts?scope=owner&includeArchived=true') {
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
         return Promise.resolve(jsonResponse({ posts: [] }));
       }
 

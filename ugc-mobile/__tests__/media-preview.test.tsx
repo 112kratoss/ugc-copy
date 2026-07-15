@@ -58,10 +58,7 @@ describe('StableMediaImage', () => {
     });
     expect(image.props.placeholder).toEqual({ thumbhash: 'thumbhash-base64' });
     expect(image.props.recyclingKey).toBe('generated_images/user-1/preview.hash.webp');
-    expect(imageState.prefetch).toHaveBeenCalledWith(
-      'https://signed.example.com/preview.webp?token=one',
-      'memory-disk'
-    );
+    expect(imageState.prefetch).not.toHaveBeenCalled();
   });
 
   it('resets an errored recycled cell when its stable cache key changes', () => {

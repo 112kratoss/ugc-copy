@@ -10,6 +10,7 @@ import { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket } from '@/lib
 import {
   downloadAllowlistedRemoteMedia,
   isAllowlistedRemoteMediaUrl,
+  openAllowlistedRemoteMedia,
 } from '@/lib/remote-media-security';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
@@ -171,25 +172,69 @@ function isFetchableUrl(value: string | null | undefined): value is string {
   return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
 }
 
-async function downloadCandidateBlob(
+function inferCandidateContentType(
+  sourceName: string | null | undefined,
+  mediaType: GenerationInputMediaType,
+) {
+  const extension = sourceName?.split('?')[0]?.split('.').pop()?.toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+  if (extension === 'webp') return 'image/webp';
+  if (extension === 'gif') return 'image/gif';
+  if (extension === 'mov') return 'video/quicktime';
+  if (extension === 'webm') return mediaType === 'audio' ? 'audio/webm' : 'video/webm';
+  if (extension === 'mp4' || extension === 'm4v') return mediaType === 'audio' ? 'audio/mp4' : 'video/mp4';
+  if (extension === 'mp3') return 'audio/mpeg';
+  if (extension === 'wav') return 'audio/wav';
+  if (extension === 'ogg') return 'audio/ogg';
+  if (mediaType === 'image') return 'image/jpeg';
+  if (mediaType === 'audio') return 'audio/mpeg';
+  return 'video/mp4';
+}
+
+async function loadCandidateMedia(
   supabase: SupabaseClient,
   candidate: PersistGenerationInputCandidate,
   userId: string,
-  downloadRemoteMedia: typeof downloadAllowlistedRemoteMedia,
-): Promise<{ blob: Blob; sourceName: string | null } | null> {
+  downloadRemoteMedia?: typeof downloadAllowlistedRemoteMedia,
+): Promise<{
+  body: Blob | ReadableStream<Uint8Array>;
+  contentType: string;
+  sourceName: string | null;
+} | null> {
   const storageLocation = normalizeStoragePath(candidate.sourceStoragePath);
 
   if (storageLocation && isStorageObjectOwnedByUser(storageLocation.filePath, userId)) {
     try {
-      const { data, error } = await supabase.storage
+      const builder = supabase.storage
         .from(storageLocation.bucket)
         .download(storageLocation.filePath);
+      const streamBuilder = builder as typeof builder & {
+        asStream?: () => PromiseLike<{
+          data: ReadableStream<Uint8Array> | null;
+          error: { message?: string } | null;
+        }>;
+      };
 
-      if (!error && data) {
-        return {
-          blob: data,
-          sourceName: storageLocation.filePath,
-        };
+      if (typeof streamBuilder.asStream === 'function') {
+        const { data, error } = await streamBuilder.asStream();
+        if (!error && data) {
+          return {
+            body: data,
+            contentType: inferCandidateContentType(storageLocation.filePath, candidate.mediaType),
+            sourceName: storageLocation.filePath,
+          };
+        }
+      } else {
+        const { data, error } = await builder;
+
+        if (!error && data) {
+          return {
+            body: data,
+            contentType: data.type || inferCandidateContentType(storageLocation.filePath, candidate.mediaType),
+            sourceName: storageLocation.filePath,
+          };
+        }
       }
     } catch (error) {
       console.warn('Failed to download generation input from storage, falling back to URL:', error);
@@ -200,10 +245,27 @@ async function downloadCandidateBlob(
     return null;
   }
 
-  return downloadRemoteMedia({
+  if (downloadRemoteMedia) {
+    const downloaded = await downloadRemoteMedia({
+      url: candidate.sourceUrl,
+      kind: candidate.mediaType,
+    });
+    return {
+      body: downloaded.blob,
+      contentType: downloaded.blob.type || inferCandidateContentType(downloaded.sourceName, candidate.mediaType),
+      sourceName: downloaded.sourceName,
+    };
+  }
+
+  const media = await openAllowlistedRemoteMedia({
     url: candidate.sourceUrl,
     kind: candidate.mediaType,
   });
+  return {
+    body: media.body,
+    contentType: media.contentType,
+    sourceName: media.sourceName,
+  };
 }
 
 export async function persistGenerationInputMedia(params: {
@@ -214,7 +276,6 @@ export async function persistGenerationInputMedia(params: {
   downloadRemoteMedia?: typeof downloadAllowlistedRemoteMedia;
 }) {
   const { supabase, generationId, userId } = params;
-  const downloadRemoteMedia = params.downloadRemoteMedia ?? downloadAllowlistedRemoteMedia;
   const candidates = params.candidates.filter(
     (candidate) => candidate.sourceStoragePath || isFetchableUrl(candidate.sourceUrl)
   );
@@ -225,7 +286,12 @@ export async function persistGenerationInputMedia(params: {
 
   for (const [index, candidate] of candidates.entries()) {
     try {
-      const downloaded = await downloadCandidateBlob(supabase, candidate, userId, downloadRemoteMedia);
+      const downloaded = await loadCandidateMedia(
+        supabase,
+        candidate,
+        userId,
+        params.downloadRemoteMedia,
+      );
       if (!downloaded) {
         continue;
       }
@@ -233,7 +299,7 @@ export async function persistGenerationInputMedia(params: {
       const sortOrder = candidate.sortOrder ?? index;
       const extension = inferExtension(
         candidate.sourceStoragePath ?? candidate.sourceUrl,
-        downloaded.blob.type,
+        downloaded.contentType,
         candidate.mediaType
       );
       const roleSegment = sanitizePathSegment(candidate.role);
@@ -241,8 +307,8 @@ export async function persistGenerationInputMedia(params: {
 
       const { error: uploadError } = await supabase.storage
         .from(GENERATION_INPUTS_BUCKET)
-        .upload(filePath, downloaded.blob, {
-          contentType: downloaded.blob.type || undefined,
+        .upload(filePath, downloaded.body, {
+          contentType: downloaded.contentType || undefined,
           upsert: true,
         });
 

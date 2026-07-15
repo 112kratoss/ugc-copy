@@ -151,7 +151,7 @@ describe('MarketplacePage', () => {
     expect(screen.queryByText('Text-only attached post')).not.toBeInTheDocument();
   });
 
-  it('renders marketplace media previews with lazy image loading and metadata-only video loading', async () => {
+  it('renders lazy images without attaching video bytes before interaction', async () => {
     headersMock.mockResolvedValue({
       get: vi.fn(() => null),
     });
@@ -205,9 +205,10 @@ describe('MarketplacePage', () => {
     expect(image).toHaveAttribute('loading', 'lazy');
     expect(image).toHaveAttribute('decoding', 'async');
 
-    const video = container.querySelector('video[src="https://example.com/video.mp4"]');
+    const video = container.querySelector('video');
     expect(video).not.toBeNull();
-    expect(video).toHaveAttribute('preload', 'metadata');
+    expect(video).not.toHaveAttribute('src');
+    expect(video).toHaveAttribute('preload', 'none');
     expect(video).not.toHaveAttribute('autoplay');
   });
 });

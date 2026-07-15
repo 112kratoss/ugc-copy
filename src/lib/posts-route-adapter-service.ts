@@ -92,6 +92,8 @@ async function handlePostsGET(
     return NextResponse.json({
       success: true,
       posts: result.posts,
+      pageInfo: result.pageInfo,
+      ...(result.summary ? { summary: result.summary } : {}),
     });
   } catch (error) {
     dependencies.logError('Failed to fetch owner posts:', error);

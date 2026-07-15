@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   buildElementHandle,
@@ -69,7 +70,8 @@ import {
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
-import { downloadAllowlistedRemoteMedia, type RemoteMediaKind } from '@/lib/remote-media-security';
+import type { RemoteMediaKind } from '@/lib/remote-media-security';
+import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
@@ -937,26 +939,36 @@ function getKieImageModelId(model: ImageModelId, referenceCount: number): string
 
 async function createGenerationPreviewQuietly({
   body,
+  filePath,
   category,
   contentType,
   storagePath,
   supabase,
 }: {
-  body: Blob;
+  body?: Blob;
+  filePath?: string;
   category: string | null | undefined;
   contentType: string | null | undefined;
   storagePath: string;
   supabase: SupabaseClient;
 }) {
   try {
-    const resolvedContentType = contentType || body.type || null;
+    const resolvedContentType = contentType || body?.type || null;
     const preview = category === 'image' || resolvedContentType?.startsWith('image/')
-      ? await import('@/lib/generation-media-preview').then(({ createGenerationImagePreview }) => (
-        createGenerationImagePreview({ body, storagePath, supabase })
+      ? await import('@/lib/generation-media-preview').then((previewModule) => (
+        filePath
+          ? previewModule.createGenerationImagePreviewFromFile({ filePath, storagePath, supabase })
+          : body
+            ? previewModule.createGenerationImagePreview({ body, storagePath, supabase })
+            : null
       ))
       : category === 'video' || category === 'motion' || resolvedContentType?.startsWith('video/')
-        ? await import('@/lib/generation-video-preview').then(({ createGenerationVideoPoster }) => (
-          createGenerationVideoPoster({ body, storagePath, supabase })
+        ? await import('@/lib/generation-video-preview').then((previewModule) => (
+          filePath
+            ? previewModule.createGenerationVideoPosterFromFile({ filePath, storagePath, supabase })
+            : body
+              ? previewModule.createGenerationVideoPoster({ body, storagePath, supabase })
+              : null
         ))
         : null;
     return {
@@ -999,54 +1011,63 @@ async function persistGeneratedOutput(
   const settledAt = completedAt ?? new Date().toISOString();
 
   try {
-    const downloaded = await downloadAllowlistedRemoteMedia({
+    const stagedMedia = await stageAllowlistedRemoteMedia({
       url: tempUrl,
       kind: getRemoteMediaKindForBucket(bucket),
     });
-    const mediaBlob = downloaded.blob;
-    const extension = inferOutputExtension(downloaded.sourceName, mediaBlob.type, generation.category);
-    const fileName = `${generation.user_id}/generated_${generation.prediction_id}.${extension}`;
+    try {
+      const extension = inferOutputExtension(
+        stagedMedia.sourceName,
+        stagedMedia.contentType,
+        generation.category,
+      );
+      const fileName = `${generation.user_id}/generated_${generation.prediction_id}.${extension}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from(bucket)
-      .upload(fileName, mediaBlob, {
-        contentType: mediaBlob.type || undefined,
-        upsert: true,
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(fileName, createReadStream(stagedMedia.filePath), {
+          contentType: stagedMedia.contentType || undefined,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error('Upload to Supabase Storage failed:', uploadError);
+        return settleGenerationSucceeded(settlementSupabase, {
+          predictionId: generation.prediction_id!,
+          outputUrl: tempUrl,
+          previewUrl: getFallbackPreviewUrl(generation.category, stagedMedia.contentType, tempUrl),
+          previewStatus: 'failed',
+          previewAttemptCount: 1,
+          previewError: 'Generated output could not be persisted for preview processing.',
+          completedAt: settledAt,
+        });
+      }
+
+      const storagePath = `${bucket}/${fileName}`;
+      const preview = await createGenerationPreviewQuietly({
+        filePath: stagedMedia.filePath,
+        category: generation.category,
+        contentType: stagedMedia.contentType,
+        storagePath,
+        supabase,
       });
 
-    if (uploadError) {
-      console.error('Upload to Supabase Storage failed:', uploadError);
       return settleGenerationSucceeded(settlementSupabase, {
         predictionId: generation.prediction_id!,
-        outputUrl: tempUrl,
-        previewUrl: getFallbackPreviewUrl(generation.category, mediaBlob.type, tempUrl),
-        previewStatus: 'failed',
+        outputUrl: storagePath,
+        previewUrl: preview.previewUrl,
+        previewThumbhash: preview.previewThumbhash,
+        previewStatus: preview.previewStatus,
         previewAttemptCount: 1,
-        previewError: 'Generated output could not be persisted for preview processing.',
+        previewError: preview.previewError,
+        previewGeneratedAt: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
         completedAt: settledAt,
       });
+    } finally {
+      await stagedMedia.cleanup().catch((cleanupError) => {
+        console.error('Failed to clean up staged generated output:', cleanupError);
+      });
     }
-
-    const storagePath = `${bucket}/${fileName}`;
-    const preview = await createGenerationPreviewQuietly({
-      body: mediaBlob,
-      category: generation.category,
-      contentType: mediaBlob.type,
-      storagePath,
-      supabase,
-    });
-
-    return settleGenerationSucceeded(settlementSupabase, {
-      predictionId: generation.prediction_id!,
-      outputUrl: storagePath,
-      previewUrl: preview.previewUrl,
-      previewThumbhash: preview.previewThumbhash,
-      previewStatus: preview.previewStatus,
-      previewAttemptCount: 1,
-      previewError: preview.previewError,
-      previewGeneratedAt: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
-      completedAt: settledAt,
-    });
   } catch (error) {
     console.error('Error persisting generated output:', error);
     return settleGenerationSucceeded(settlementSupabase, {
@@ -1079,38 +1100,47 @@ export async function persistGeneratedOutputList(
 
   for (const [index, tempUrl] of tempUrls.entries()) {
     try {
-      const downloaded = await downloadAllowlistedRemoteMedia({
+      const stagedMedia = await stageAllowlistedRemoteMedia({
         url: tempUrl,
         kind: getRemoteMediaKindForBucket(bucket),
       });
-      const mediaBlob = downloaded.blob;
-      const extension = inferOutputExtension(downloaded.sourceName, mediaBlob.type, generation.category);
-      const suffix = tempUrls.length > 1 ? `_${index}` : '';
-      const fileName = `${generation.user_id}/generated_${generation.prediction_id}${suffix}.${extension}`;
+      try {
+        const extension = inferOutputExtension(
+          stagedMedia.sourceName,
+          stagedMedia.contentType,
+          generation.category,
+        );
+        const suffix = tempUrls.length > 1 ? `_${index}` : '';
+        const fileName = `${generation.user_id}/generated_${generation.prediction_id}${suffix}.${extension}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from(bucket)
-        .upload(fileName, mediaBlob, {
-          contentType: mediaBlob.type || undefined,
-          upsert: true,
+        const { error: uploadError } = await supabase.storage
+          .from(bucket)
+          .upload(fileName, createReadStream(stagedMedia.filePath), {
+            contentType: stagedMedia.contentType || undefined,
+            upsert: true,
+          });
+
+        if (uploadError) {
+          throw uploadError;
+        }
+
+        outputs.push({
+          index,
+          storagePath: `${bucket}/${fileName}`,
         });
 
-      if (uploadError) {
-        throw uploadError;
-      }
-
-      outputs.push({
-        index,
-        storagePath: `${bucket}/${fileName}`,
-      });
-
-      if (index === 0) {
-        primaryPreview = await createGenerationPreviewQuietly({
-          body: mediaBlob,
-          category: generation.category,
-          contentType: mediaBlob.type,
-          storagePath: `${bucket}/${fileName}`,
-          supabase,
+        if (index === 0) {
+          primaryPreview = await createGenerationPreviewQuietly({
+            filePath: stagedMedia.filePath,
+            category: generation.category,
+            contentType: stagedMedia.contentType,
+            storagePath: `${bucket}/${fileName}`,
+            supabase,
+          });
+        }
+      } finally {
+        await stagedMedia.cleanup().catch((cleanupError) => {
+          console.error(`Failed to clean up staged generated output ${index}:`, cleanupError);
         });
       }
     } catch (error) {

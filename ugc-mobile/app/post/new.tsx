@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ImageIcon, Lock, Play, Plus, Sparkles, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
@@ -44,6 +45,7 @@ import {
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme, type ToolAccent } from '@/lib/theme';
+import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, SourceToolOption } from '@/lib/types';
 
 const getDefaultResourceDraft = () => ({
@@ -81,6 +83,14 @@ const MINIMAL_COMPOSER_SECTION_STYLE = {
   gap: 12,
 } as const;
 
+interface MediaUploadBatchProgress {
+  bytesSent: number;
+  completed: number;
+  percent: number;
+  total: number;
+  totalBytes: number;
+}
+
 export default function NewPostScreen() {
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
@@ -107,7 +117,11 @@ export default function NewPostScreen() {
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
   const [pendingPublishVisibility, setPendingPublishVisibility] = useState<PostComposerDraft['visibility'] | null>(null);
+  const [mediaUploadProgress, setMediaUploadProgress] = useState<MediaUploadBatchProgress | null>(null);
+  const [pendingRetryMedia, setPendingRetryMedia] = useState<ImagePickerAsset[]>([]);
   const scrollRef = useRef<ScrollView>(null);
+  const mediaUploadAbortRef = useRef<AbortController | null>(null);
+  const mediaUploadIdRef = useRef(0);
   const [unlockSectionY, setUnlockSectionY] = useState(0);
   const didApplyFocusRef = useRef(false);
 
@@ -287,6 +301,10 @@ export default function NewPostScreen() {
     didApplyFocusRef.current = false;
   }, [focusTarget, postId]);
 
+  useEffect(() => () => {
+    mediaUploadAbortRef.current?.abort();
+  }, []);
+
   useEffect(() => {
     if (focusTarget !== 'resources' || unlockSectionY <= 0 || didApplyFocusRef.current) return;
     if (isEditMode && !hasPrefilledEdit) return;
@@ -437,55 +455,159 @@ export default function NewPostScreen() {
     }));
   };
 
-  const chooseMedia = async (kind: 'image' | 'video' | 'mixed') => {
-    if (isFieldsLocked) return;
-    setMessage(null);
+  const applyUploadedMedia = (uploadedItems: PostComposerMediaItem[]) => {
+    if (uploadedItems.length === 0) return;
+    setDraft((current) => {
+      const mediaItems = [...current.mediaItems, ...uploadedItems].slice(0, 5);
+      const cover = mediaItems[0];
+      return {
+        ...current,
+        mode: 'upload',
+        proofMode: 'media',
+        category: cover?.mediaKind === 'video' ? 'video' : 'image',
+        upload: cover
+          ? {
+              uri: cover.uri,
+              name: cover.name,
+              type: cover.type,
+            }
+          : current.upload,
+        mediaItems,
+      };
+    });
+  };
+
+  const uploadSelectedMedia = async (assets: ImagePickerAsset[]) => {
+    if (assets.length === 0) return;
+    const controller = new AbortController();
+    mediaUploadAbortRef.current = controller;
     setIsPickingMedia(true);
+    setPendingRetryMedia([]);
+    setMessage(null);
+
+    const progressByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
+    let completed = 0;
+    const updateBatchProgress = () => {
+      const totals = [...progressByIndex.values()].reduce(
+        (sum, progress) => ({
+          bytesSent: sum.bytesSent + progress.bytesSent,
+          totalBytes: sum.totalBytes + progress.totalBytes,
+        }),
+        { bytesSent: 0, totalBytes: 0 }
+      );
+      setMediaUploadProgress({
+        ...totals,
+        completed,
+        percent: totals.totalBytes > 0 ? Math.round((totals.bytesSent / totals.totalBytes) * 100) : 0,
+        total: assets.length,
+      });
+    };
+    assets.forEach((asset, index) => {
+      const size = asset.fileSize && asset.fileSize > 0 ? asset.fileSize : 0;
+      progressByIndex.set(index, { bytesSent: 0, totalBytes: size });
+    });
+    updateBatchProgress();
+
     try {
-      const picked = await pickMediaList(kind, { allowsMultipleSelection: true });
-      if (picked.length === 0) return;
-      const availableSlots = Math.max(0, 5 - draft.mediaItems.length);
-      const uploadedItems = await Promise.all(
-        picked.slice(0, availableSlots).map(async (asset, index): Promise<PostComposerMediaItem> => {
+      const result = await runWeightedUploadQueue(
+        assets.map((asset) => ({ item: asset, kind: getPickedAssetKind(asset) })),
+        async (asset, index) => {
           const uploaded = await uploadPickedMedia(asset.uri, {
             api,
             fileName: asset.fileName,
             mimeType: asset.mimeType,
-            ...(kind === 'mixed' ? {} : { kind }),
+            kind: getPickedAssetKind(asset),
             durationSeconds: asset.duration ?? null,
             sizeBytes: asset.fileSize ?? null,
+            signal: controller.signal,
+            onProgress: (progress) => {
+              progressByIndex.set(index, {
+                bytesSent: progress.bytesSent,
+                totalBytes: progress.totalBytes,
+              });
+              updateBatchProgress();
+            },
           });
-
+          completed += 1;
+          progressByIndex.set(index, {
+            bytesSent: uploaded.sizeBytes ?? progressByIndex.get(index)?.totalBytes ?? 0,
+            totalBytes: uploaded.sizeBytes ?? progressByIndex.get(index)?.totalBytes ?? 0,
+          });
+          updateBatchProgress();
+          mediaUploadIdRef.current += 1;
           return {
-            id: `picked-${Date.now()}-${index}`,
+            id: `picked-${Date.now()}-${mediaUploadIdRef.current}`,
             uri: asset.uri,
             previewUrl: asset.uri,
             name: uploaded.fileName,
             type: uploaded.mimeType,
-            mediaKind: uploaded.kind === 'video' ? 'video' : 'image',
+            mediaKind: uploaded.kind === 'video' ? 'video' as const : 'image' as const,
             storagePath: uploaded.storagePath,
-          };
-        })
+          } satisfies PostComposerMediaItem;
+        },
+        { signal: controller.signal }
       );
-      setDraft((current) => ({
-        ...current,
-        mode: 'upload',
-        proofMode: 'media',
-        category: uploadedItems[0]?.mediaKind === 'video' ? 'video' : 'image',
-        upload: uploadedItems[0]
-          ? {
-              uri: uploadedItems[0].uri,
-              name: uploadedItems[0].name,
-              type: uploadedItems[0].type,
-            }
-          : current.upload,
-        mediaItems: [...current.mediaItems, ...uploadedItems].slice(0, 5),
-      }));
+      applyUploadedMedia(result.successes.map((entry) => entry.result));
+
+      const retryAssets = result.failures.map((entry) => entry.item);
+      setPendingRetryMedia(retryAssets);
+      if (retryAssets.length > 0) {
+        const cancelled = result.failures.every((entry) => isUploadCancelledError(entry.error));
+        const firstError = result.failures.find((entry) => !isUploadCancelledError(entry.error))?.error;
+        setMessage({
+          tone: 'danger',
+          title: cancelled ? 'Upload cancelled' : `${retryAssets.length} media upload${retryAssets.length === 1 ? '' : 's'} failed`,
+          body: cancelled
+            ? 'Completed uploads were kept. Retry the remaining media when you are ready.'
+            : firstError instanceof Error
+              ? firstError.message
+              : 'Completed uploads were kept. Retry the remaining media.',
+        });
+      }
+    } catch (error) {
+      setPendingRetryMedia(assets);
+      setMessage({
+        tone: 'danger',
+        title: isUploadCancelledError(error) ? 'Upload cancelled' : 'Could not upload media',
+        body: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      if (mediaUploadAbortRef.current === controller) {
+        mediaUploadAbortRef.current = null;
+      }
+      setMediaUploadProgress(null);
+      setIsPickingMedia(false);
+    }
+  };
+
+  const chooseMedia = async (kind: 'image' | 'video' | 'mixed') => {
+    if (isFieldsLocked || isPickingMedia) return;
+    setMessage(null);
+    setPendingRetryMedia([]);
+    setIsPickingMedia(true);
+    try {
+      const picked = await pickMediaList(kind, { allowsMultipleSelection: true });
+      const availableSlots = Math.max(0, 5 - draft.mediaItems.length);
+      const selected = picked.slice(0, availableSlots);
+      if (selected.length === 0) return;
+      setIsPickingMedia(false);
+      await uploadSelectedMedia(selected);
     } catch (error) {
       setMessage({ tone: 'danger', title: 'Could not pick media', body: error instanceof Error ? error.message : 'Try again.' });
     } finally {
-      setIsPickingMedia(false);
+      if (!mediaUploadAbortRef.current) setIsPickingMedia(false);
     }
+  };
+
+  const retryPendingMediaUploads = async () => {
+    if (pendingRetryMedia.length === 0 || isPickingMedia) return;
+    const retryAssets = pendingRetryMedia;
+    setPendingRetryMedia([]);
+    await uploadSelectedMedia(retryAssets);
+  };
+
+  const cancelMediaUploads = () => {
+    mediaUploadAbortRef.current?.abort();
   };
 
   const chooseGeneration = (item: GenerationListItem) => {
@@ -729,6 +851,22 @@ export default function NewPostScreen() {
       >
         {message ? (
           <StatusBlock tone={message.tone} title={message.title} body={message.body} />
+        ) : null}
+
+        {mediaUploadProgress ? (
+          <View style={{ gap: 8 }}>
+            <StatusBlock
+              tone="neutral"
+              title={`Uploading media · ${mediaUploadProgress.percent}%`}
+              body={`${mediaUploadProgress.completed} of ${mediaUploadProgress.total} complete${mediaUploadProgress.totalBytes > 0 ? ` · ${formatUploadBytes(mediaUploadProgress.bytesSent)} of ${formatUploadBytes(mediaUploadProgress.totalBytes)}` : ''}`}
+            />
+            <SecondaryButton label="Cancel upload" onPress={cancelMediaUploads} />
+          </View>
+        ) : pendingRetryMedia.length > 0 ? (
+          <SecondaryButton
+            label={`Retry ${pendingRetryMedia.length} media upload${pendingRetryMedia.length === 1 ? '' : 's'}`}
+            onPress={() => void retryPendingMediaUploads()}
+          />
         ) : null}
 
         <TitleSection
@@ -2104,7 +2242,7 @@ function UploadContent({
           })}
         >
           <ImageIcon size={30} color={appTheme.colors.muted} />
-          <AppText variant="label" color="muted">{isPicking ? 'Opening library...' : 'Add media'}</AppText>
+          <AppText variant="label" color="muted">{isPicking ? 'Preparing media...' : 'Add media'}</AppText>
         </Pressable>
       )}
     </View>
@@ -2160,7 +2298,7 @@ function AddMediaGalleryCard({
         >
           <Plus size={22} color={appTheme.colors.image} strokeWidth={2.8} />
         </View>
-        <AppText variant="caption" color="muted">{isPicking ? 'Opening...' : 'Add media'}</AppText>
+        <AppText variant="caption" color="muted">{isPicking ? 'Preparing...' : 'Add media'}</AppText>
       </View>
       <View style={{ padding: 9, gap: 7 }}>
         <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
@@ -2623,6 +2761,16 @@ function slugifyMobileValue(value: string | null | undefined) {
   return normalized || null;
 }
 
+function getPickedAssetKind(asset: ImagePickerAsset): 'image' | 'video' {
+  return asset.type === 'video' || asset.mimeType?.startsWith('video/') ? 'video' : 'image';
+}
+
+function formatUploadBytes(value: number) {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
 function deriveResourceSelections(bundle: any): PostComposerDraft['resource']['selectedKinds'] {
   const resources = bundle?.resources ?? {};
   const attachments = resources.attachments ?? [];
@@ -2643,7 +2791,7 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
     queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['home-seller-posts', userId] }),
+    queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', userId] }),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
   ]);

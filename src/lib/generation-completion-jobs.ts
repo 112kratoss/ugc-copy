@@ -13,6 +13,7 @@ const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_PRUNE_LIMIT = 500;
 const DEFAULT_PRUNE_WINDOW_MINUTES = 5;
+const GENERATION_COMPLETION_CONCURRENCY = 4;
 
 type SupabaseRpcResult = {
   data: unknown;
@@ -309,6 +310,74 @@ async function syncCompletionJobGenerationStatus(params: {
   });
 }
 
+type GenerationCompletionJobOutcome = 'completed' | 'retried' | 'failed';
+
+async function processGenerationCompletionJob(params: {
+  supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
+  job: GenerationCompletionJob;
+  lockedBy: string;
+  retryDelaySeconds?: number;
+}): Promise<GenerationCompletionJobOutcome> {
+  let result: GenerationSyncResult | null = null;
+  let failureReason: string | null = null;
+
+  try {
+    result = await syncCompletionJobGenerationStatus({
+      supabase: params.supabase,
+      creditSupabase: params.creditSupabase,
+      job: params.job,
+    });
+  } catch (error) {
+    failureReason = errorMessage(error);
+  }
+
+  if (failureReason) {
+    const status = await finishUnsuccessfulCompletionJob({
+      ...params,
+      error: failureReason,
+    });
+    return status === 'failed' ? 'failed' : 'retried';
+  }
+
+  if (result && isTerminalGenerationSync(result)) {
+    await finishGenerationCompletionJob(params.supabase, {
+      id: params.job.id,
+      lockedBy: params.lockedBy,
+      succeeded: true,
+    });
+    return 'completed';
+  }
+
+  const status = await finishUnsuccessfulCompletionJob({
+    ...params,
+    error: result ? retryReason(result) : 'Generation completion status could not be determined.',
+  });
+  return status === 'failed' ? 'failed' : 'retried';
+}
+
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (items.length === 0) return [];
+
+  const results = new Array<TResult>(items.length);
+  let cursor = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index]);
+    }
+  }));
+
+  return results;
+}
+
 export async function processGenerationCompletionJobs(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -329,54 +398,19 @@ export async function processGenerationCompletionJobs(params: {
     failed: 0,
   };
 
-  for (const job of jobs) {
-    let result: GenerationSyncResult | null = null;
-    let failureReason: string | null = null;
-
-    try {
-      result = await syncCompletionJobGenerationStatus({
-        supabase: params.supabase,
-        creditSupabase: params.creditSupabase,
-        job,
-      });
-    } catch (error) {
-      failureReason = errorMessage(error);
-    }
-
-    if (failureReason) {
-      const status = await finishUnsuccessfulCompletionJob({
-        supabase: params.supabase,
-        creditSupabase: params.creditSupabase,
-        job,
-        lockedBy: params.lockedBy,
-        error: failureReason,
-        retryDelaySeconds: params.retryDelaySeconds,
-      });
-      if (status === 'failed') summary.failed += 1;
-      else summary.retried += 1;
-      continue;
-    }
-
-    if (result && isTerminalGenerationSync(result)) {
-      await finishGenerationCompletionJob(params.supabase, {
-        id: job.id,
-        lockedBy: params.lockedBy,
-        succeeded: true,
-      });
-      summary.completed += 1;
-      continue;
-    }
-
-    const status = await finishUnsuccessfulCompletionJob({
+  const outcomes = await mapWithConcurrency(
+    jobs,
+    GENERATION_COMPLETION_CONCURRENCY,
+    (job) => processGenerationCompletionJob({
       supabase: params.supabase,
       creditSupabase: params.creditSupabase,
       job,
       lockedBy: params.lockedBy,
-      error: result ? retryReason(result) : 'Generation completion status could not be determined.',
       retryDelaySeconds: params.retryDelaySeconds,
-    });
-    if (status === 'failed') summary.failed += 1;
-    else summary.retried += 1;
+    }),
+  );
+  for (const outcome of outcomes) {
+    summary[outcome] += 1;
   }
 
   return summary;
