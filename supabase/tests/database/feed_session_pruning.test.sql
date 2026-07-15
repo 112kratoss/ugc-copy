@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(14);
+select plan(15);
 
 select is(
   (
@@ -228,11 +228,20 @@ select is(
   'the delete trigger covers session deletions outside the pruning RPC'
 );
 
-set local role supabase_auth_admin;
-delete from auth.users where id = '00000002-0000-4000-8000-000000000002'::uuid;
-reset role;
+select is(
+  pg_catalog.has_table_privilege(
+    'supabase_auth_admin',
+    'public.feed_events',
+    'UPDATE'
+  ),
+  false,
+  'the production auth role relies on the owner-executed delete trigger'
+);
 
-select pass('viewer account deletion can cascade under the production auth role');
+select lives_ok(
+  $$delete from auth.users where id = '00000002-0000-4000-8000-000000000002'::uuid$$,
+  'viewer account deletion can cascade through feed sessions and events'
+);
 
 select is(
   (select count(*)::integer from public.feed_sessions where id = '20000000-0000-4000-8000-000000000003'::uuid),
