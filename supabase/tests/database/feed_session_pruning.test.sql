@@ -48,7 +48,7 @@ select is(
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
   (
-    '00000000-0000-4000-8000-000000000001'::uuid,
+    '00000001-0000-4000-8000-000000000001'::uuid,
     'feed-prune-creator@example.invalid',
     'authenticated',
     'authenticated',
@@ -56,7 +56,7 @@ values
     '{}'::jsonb
   ),
   (
-    '00000000-0000-4000-8000-000000000002'::uuid,
+    '00000002-0000-4000-8000-000000000002'::uuid,
     'feed-prune-viewer@example.invalid',
     'authenticated',
     'authenticated',
@@ -67,7 +67,7 @@ values
 insert into public.posts (id, user_id, category, source_kind, post_format, body)
 values (
   '10000000-0000-4000-8000-000000000001'::uuid,
-  '00000000-0000-4000-8000-000000000001'::uuid,
+  '00000001-0000-4000-8000-000000000001'::uuid,
   'text',
   'external',
   'text',
@@ -101,7 +101,7 @@ values
   ),
   (
     '20000000-0000-4000-8000-000000000003'::uuid,
-    '00000000-0000-4000-8000-000000000002'::uuid,
+    '00000002-0000-4000-8000-000000000002'::uuid,
     null,
     (select id from public.feed_algorithm_versions where status = 'active' limit 1),
     now(),
@@ -156,7 +156,7 @@ select
   sessions.viewer_user_id,
   sessions.anonymous_key_hash,
   items.post_id,
-  '00000000-0000-4000-8000-000000000001'::uuid,
+  '00000001-0000-4000-8000-000000000001'::uuid,
   'impression',
   'showcase',
   items.position,
@@ -229,7 +229,7 @@ select is(
 );
 
 set local role supabase_auth_admin;
-delete from auth.users where id = '00000000-0000-4000-8000-000000000002'::uuid;
+delete from auth.users where id = '00000002-0000-4000-8000-000000000002'::uuid;
 reset role;
 
 select pass('viewer account deletion can cascade under the production auth role');
